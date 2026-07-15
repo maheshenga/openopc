@@ -98,7 +98,7 @@
 - Produces `StudioProviderDefinition`, `StudioProviderSubmission`, `StudioProviderCallError`, replayable-within-attempt assets, `StudioCredentialResolver`, and the expanded `StudioObjectStore` port.
 - Keeps the fake provider asynchronous so the existing Task 8 worker remains functional while production completed-result handling is added in Task 8 of this plan.
 
-- [ ] **Step 1: Extract the credential binding wire type and add failing contract tests**
+- [x] **Step 1: Extract the credential binding wire type and add failing contract tests**
 
 Add an exported schema instead of keeping the union inline:
 
@@ -121,7 +121,7 @@ pnpm --filter @kortix/api-contract test
 
 Expected RED: the named schema/type is not exported.
 
-- [ ] **Step 2: Write failing runtime tests for the new provider contract**
+- [x] **Step 2: Write failing runtime tests for the new provider contract**
 
 The tests must construct both submission variants and assert shared error identity:
 
@@ -146,7 +146,7 @@ pnpm --filter @kortix/studio-runtime test
 
 Expected RED: `StudioProviderSubmission` and `StudioProviderCallError` are missing from runtime exports.
 
-- [ ] **Step 3: Implement the provider definition and invocation types**
+- [x] **Step 3: Implement the provider definition and invocation types**
 
 Use these exact public shapes in `provider.ts`:
 
@@ -225,7 +225,7 @@ export class StudioProviderCallError extends Error {
 
 Remove `capabilities`, `validate`, and `estimate` from the credential-bound `StudioProviderAdapter`; change `submit` to return `StudioProviderSubmission`. Move the worker-owned error class into runtime and update imports. The fake provider returns `{ kind: 'async', handle }` and exposes PNGs through `openBody()`.
 
-- [ ] **Step 4: Write failing credential-resolver tests and implement the port**
+- [x] **Step 4: Write failing credential-resolver tests and implement the port**
 
 Create `credentials.ts`:
 
@@ -247,7 +247,7 @@ export interface StudioCredentialResolver {
 
 The port contains no SQL, API config, or decryption implementation.
 
-- [ ] **Step 5: Write failing object-store conformance tests**
+- [x] **Step 5: Write failing object-store conformance tests**
 
 Cover bound namespace, metadata, constrained presign, head, conditional delete, and readiness:
 
@@ -271,7 +271,7 @@ await expect(store.headObject({ key: written.key })).rejects.toMatchObject({ cod
 
 Run the focused test and verify it fails because the methods and fields are absent.
 
-- [ ] **Step 6: Implement the bound-bucket object-store port**
+- [x] **Step 6: Implement the bound-bucket object-store port**
 
 Use inputs without a caller-controlled bucket:
 
@@ -335,7 +335,7 @@ CRUD methods do not call `assertReady()` internally; API/worker services call th
 
 Move the reusable assertions into `runStudioObjectStoreConformance(name, createStore)` in `conformance.ts`. The in-memory test calls it here; the MinIO test in Task 3 calls the same suite so the fake and production drivers cannot drift.
 
-- [ ] **Step 7: Run the Task 1 gate**
+- [x] **Step 7: Run the Task 1 gate**
 
 ```powershell
 pnpm --filter @kortix/api-contract test
@@ -349,7 +349,7 @@ git diff --check
 
 Expected: all commands pass; fake jobs still complete once.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add packages/api-contract/src/studio packages/studio-runtime apps/studio-worker/src/worker.ts apps/studio-worker/src/worker.test.ts
@@ -379,7 +379,7 @@ git commit -m "refactor: evolve studio provider and storage contracts"
 
 - Produces `parseStudioAdapterEnvironment`, `validateStudioOrigin`, `safeStudioFetch`, and `validateStudioImage` for Tasks 3, 4, 6, and 9.
 
-- [ ] **Step 1: Add the package manifest and direct dependencies**
+- [x] **Step 1: Add the package manifest and direct dependencies**
 
 Use:
 
@@ -416,7 +416,7 @@ Use:
 
 Run `pnpm install` once to update the lockfile. Do not rely on Daytona's transitive AWS SDK.
 
-- [ ] **Step 2: Write RED tests for environment parsing**
+- [x] **Step 2: Write RED tests for environment parsing**
 
 Cover disabled mode, fake+memory, fake+s3, production+s3, forbidden production+memory, incomplete static credentials, KMS without a key, insecure endpoint outside test mode, and secret-safe errors.
 
@@ -466,11 +466,11 @@ pnpm --filter @kortix/studio-adapters test src/config.test.ts
 
 Expected RED: package/config module does not exist.
 
-- [ ] **Step 3: Implement configuration parsing with Zod**
+- [x] **Step 3: Implement configuration parsing with Zod**
 
 Parse the exact environment variables in the approved design. Error messages may name missing fields but must never include field values. `STUDIO_ENABLED=false` returns before validating S3/provider variables. Reject OpenAI-compatible+memory unless the caller passes `{ test: true }` to the parser.
 
-- [ ] **Step 4: Write RED tests for address and origin policy**
+- [x] **Step 4: Write RED tests for address and origin policy**
 
 Use table tests for IPv4, IPv6, IPv4-mapped IPv6, localhost, RFC1918, carrier-grade NAT, link-local, multicast, documentation ranges, userinfo, base-URL query strings, HTTP downgrade, exact private-origin allowlist, and multiple DNS answers. No test calls a public network.
 
@@ -485,7 +485,7 @@ export async function validateStudioOrigin(input: {
 }): Promise<readonly { address: string; family: 4 | 6 }[]>;
 ```
 
-- [ ] **Step 5: Implement DNS-pinned, redirect-bounded fetch**
+- [x] **Step 5: Implement DNS-pinned, redirect-bounded fetch**
 
 `safeStudioFetch` validates each URL, constructs an Undici `Agent` whose lookup callback returns only the validated addresses, always sets Undici `redirect: 'manual'`, and enforces connect/total timeout plus a streamed byte ceiling. It follows redirects only for a credential-free output GET under the explicit `output-get` policy. Provider submit uses `error`; a 3xx is returned to the adapter without forwarding method, body, prompt, Authorization, cookies, or provider headers to another request.
 
@@ -502,11 +502,11 @@ export interface SafeStudioFetchOptions {
 
 Reject `redirectPolicy: 'output-get'` unless the request method is GET and the outbound request has no Authorization, cookie, or body. Tests run local HTTP servers and injected resolvers to prove output redirect revalidation and to prove a submit redirect sends zero method/body/header/prompt bytes to the second origin.
 
-- [ ] **Step 6: Implement bounded image validation**
+- [x] **Step 6: Implement bounded image validation**
 
 `validateStudioImage` accepts only PNG, JPEG, or WebP, compares supplied MIME with magic detection, calls `sharp(..., { limitInputPixels: 100_000_000 }).metadata()`, and rejects width/height above 16,384, decoded pixel count above 100 million, or bytes above 32 MiB. SVG/XML/HTML are rejected before Sharp.
 
-- [ ] **Step 7: Run the Task 2 gate and commit**
+- [x] **Step 7: Run the Task 2 gate and commit**
 
 ```powershell
 pnpm --filter @kortix/studio-adapters test

@@ -1527,6 +1527,40 @@ importers:
         specifier: ^5.0.0
         version: 5.9.3
 
+  packages/studio-adapters:
+    dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1079.0
+        version: 3.1079.0
+      '@aws-sdk/s3-request-presigner':
+        specifier: ^3.1079.0
+        version: 3.1088.0
+      '@kortix/api-contract':
+        specifier: workspace:*
+        version: link:../api-contract
+      '@kortix/studio-runtime':
+        specifier: workspace:*
+        version: link:../studio-runtime
+      ipaddr.js:
+        specifier: ^2.2.0
+        version: 2.4.0
+      sharp:
+        specifier: ^0.34.5
+        version: 0.34.5
+      undici:
+        specifier: ^6.27.0
+        version: 6.27.0
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+    devDependencies:
+      '@types/bun':
+        specifier: ^1.3.12
+        version: 1.3.14
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
   packages/studio-runtime:
     dependencies:
       '@kortix/api-contract':
@@ -1644,6 +1678,20 @@ packages:
       '@smithy/core': 3.29.1
       '@smithy/signature-v4': 5.6.2
       '@smithy/types': 4.15.1
+      bowser: 2.14.1
+      tslib: 2.8.1
+    dev: false
+
+  /@aws-sdk/core@3.975.3:
+    resolution: {integrity: sha512-7ur3kCKuvPLqlsZ2XlvnNBVQ7KkpSu6Y6dOTwSPHLrFpTEfZM8isLBJc4cgv96WB7GifeVM436mpycwxBd2vEA==}
+    engines: {node: '>=20.0.0'}
+    dependencies:
+      '@aws-sdk/types': 3.974.2
+      '@aws-sdk/xml-builder': 3.972.36
+      '@aws/lambda-invoke-store': 0.3.0
+      '@smithy/core': 3.29.4
+      '@smithy/signature-v4': 5.6.5
+      '@smithy/types': 4.16.1
       bowser: 2.14.1
       tslib: 2.8.1
     dev: false
@@ -1797,6 +1845,18 @@ packages:
       tslib: 2.8.1
     dev: false
 
+  /@aws-sdk/s3-request-presigner@3.1088.0:
+    resolution: {integrity: sha512-NEv9O5q+IrsDNKPmNhTlZ3hjtomgfL1OEJRCmDSF06dbmZ6IUJfrLQTLO7LWbM4sxvYui1LRAFCdO2TM3Hdq4A==}
+    engines: {node: '>=20.0.0'}
+    dependencies:
+      '@aws-sdk/core': 3.975.3
+      '@aws-sdk/signature-v4-multi-region': 3.996.41
+      '@aws-sdk/types': 3.974.2
+      '@smithy/core': 3.29.4
+      '@smithy/types': 4.16.1
+      tslib: 2.8.1
+    dev: false
+
   /@aws-sdk/signature-v4-multi-region@3.996.38:
     resolution: {integrity: sha512-C379Sk+MiFZCfWZphKlMyLHKxV22OjoGM5KJjj5IJNJcOCWL4IGIpnEGzv1FQiRwhYXfq55SJMfxlqPE08JJ9g==}
     engines: {node: '>=20.0.0'}
@@ -1804,6 +1864,16 @@ packages:
       '@aws-sdk/types': 3.973.15
       '@smithy/signature-v4': 5.6.2
       '@smithy/types': 4.15.1
+      tslib: 2.8.1
+    dev: false
+
+  /@aws-sdk/signature-v4-multi-region@3.996.41:
+    resolution: {integrity: sha512-QMUytg+FQMGouc8gHS00KoYih3+N6cqmVI/pQGOIo7Nr7OpQaiXjSYOuL+vsPZ1tymY4LAQ8MYcHJmws5LRxng==}
+    engines: {node: '>=20.0.0'}
+    dependencies:
+      '@aws-sdk/types': 3.974.2
+      '@smithy/signature-v4': 5.6.5
+      '@smithy/types': 4.16.1
       tslib: 2.8.1
     dev: false
 
@@ -1827,11 +1897,27 @@ packages:
       tslib: 2.8.1
     dev: false
 
+  /@aws-sdk/types@3.974.2:
+    resolution: {integrity: sha512-3W6IUtSxFbH6X7Wb7DzGCV5QiFQsd0g8bOfntpmDxQlzBoKWUMBu/JPQR0DwkE+Hpnxd6db1tXbOwdeHddG6cA==}
+    engines: {node: '>=20.0.0'}
+    dependencies:
+      '@smithy/types': 4.16.1
+      tslib: 2.8.1
+    dev: false
+
   /@aws-sdk/xml-builder@3.972.33:
     resolution: {integrity: sha512-ezbwz9WpuLctm6o7P2t2naDhVVPI5jFGrVefVybhcKGjU57VIyT46pQVO0RI2RYkUdhdj2Z9uSIlAzGZE9NW9A==}
     engines: {node: '>=20.0.0'}
     dependencies:
       '@smithy/types': 4.15.1
+      tslib: 2.8.1
+    dev: false
+
+  /@aws-sdk/xml-builder@3.972.36:
+    resolution: {integrity: sha512-RdGmS1GLrtaTOLE1ElSluMldNrpk9Emq6uYs8SS8iHlu5xTAmM9rRkM91o48+rIRryBtyO9t+uLYCoMG6jVMVA==}
+    engines: {node: '>=20.0.0'}
+    dependencies:
+      '@smithy/types': 4.16.1
       tslib: 2.8.1
     dev: false
 
@@ -4917,7 +5003,6 @@ packages:
     engines: {node: '>=18'}
     requiresBuild: true
     dev: false
-    optional: true
 
   /@img/sharp-darwin-arm64@0.34.5:
     resolution: {integrity: sha512-imtQ3WMJXbMY4fxb/Ndp6HBTNVtWCUI0WdobyheGf5+ad6xX8VIDO8u2xE4qc/fr08CKG/7dDseFtn6M6g/r3w==}
@@ -9781,6 +9866,14 @@ packages:
       tslib: 2.8.1
     dev: false
 
+  /@smithy/core@3.29.4:
+    resolution: {integrity: sha512-G1GRglAabzEhqghJMBAd54FkRS7SAFGHEwbhcI9r+O+LIMuFsLyXkLZkCoFSgAglRu8s/URVXJB0hglq3ZipIg==}
+    engines: {node: '>=18.0.0'}
+    dependencies:
+      '@smithy/types': 4.16.1
+      tslib: 2.8.1
+    dev: false
+
   /@smithy/credential-provider-imds@4.4.6:
     resolution: {integrity: sha512-B2WQ/PV/H6Jeg3lrIq6bKUfa6Hy01mtK7CGs6lhjzHA6k4aagldH6T6eEjnzKl4HI0cJnAsxfJ19pgb5PV+CVQ==}
     engines: {node: '>=18.0.0'}
@@ -9817,8 +9910,24 @@ packages:
       tslib: 2.8.1
     dev: false
 
+  /@smithy/signature-v4@5.6.5:
+    resolution: {integrity: sha512-MO5VEhwVl0BN7xVoVeNrZfiUFoQtqxUbgl6/RwOTlMMxCSjblG8twSrVTwz3J4w9WZxd2rBfBAUXjH77agspBg==}
+    engines: {node: '>=18.0.0'}
+    dependencies:
+      '@smithy/core': 3.29.4
+      '@smithy/types': 4.16.1
+      tslib: 2.8.1
+    dev: false
+
   /@smithy/types@4.15.1:
     resolution: {integrity: sha512-x3L0XSACF6UYzKpa9biqiRMgvH5+wnFFew9Tm/grFYqgaupPwx/+ojDPpPJM8dZON3S9tjz5U+PQYsCBd1Mw5Q==}
+    engines: {node: '>=18.0.0'}
+    dependencies:
+      tslib: 2.8.1
+    dev: false
+
+  /@smithy/types@4.16.1:
+    resolution: {integrity: sha512-0JFs3V2y2M9tKW5na/qxe69Zv+uxLMO7QBbhxF/FHu/Gp2NFZAAL9tWl9PU02xxo07pb3G9FTyjNc6D5uZrJIg==}
     engines: {node: '>=18.0.0'}
     dependencies:
       tslib: 2.8.1
@@ -17688,6 +17797,11 @@ packages:
     engines: {node: '>= 12'}
     dev: true
 
+  /ipaddr.js@2.4.0:
+    resolution: {integrity: sha512-9VGk3HGanVE6JoZXHiCpnGy5X0jYDnN4EA4lntFPj+1vIWlFhIylq2CrrCOJH9EAhc5CYhq18F2Av2tgoAPsYQ==}
+    engines: {node: '>= 10'}
+    dev: false
+
   /is-alphabetical@2.0.1:
     resolution: {integrity: sha512-FWyyY60MeTNyeSRpkM2Iry0G9hpr7/9kD40mD/cGQEuilcZYS4okz8SN2Q6rLCJ8gbCt6fN+rC+6tMGS99LaxQ==}
     dev: false
@@ -23522,7 +23636,6 @@ packages:
       '@img/sharp-win32-ia32': 0.34.5
       '@img/sharp-win32-x64': 0.34.5
     dev: false
-    optional: true
 
   /shebang-command@2.0.0:
     resolution: {integrity: sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==}

@@ -2156,6 +2156,286 @@ export const creditUsage = kortixSchema.table('credit_usage', {
   metadata: jsonb().default({}),
 });
 
+export const studioJobStatusEnum = kortixSchema.enum('studio_job_status', [
+  'queued',
+  'running',
+  'succeeded',
+  'failed',
+  'cancelled',
+]);
+
+export const studioAttemptStatusEnum = kortixSchema.enum('studio_attempt_status', [
+  'created',
+  'submitting',
+  'submitted',
+  'polling',
+  'reconciling',
+  'succeeded',
+  'failed',
+  'cancelled',
+]);
+
+export const studioProviderConfigs = kortixSchema.table(
+  'studio_provider_configs',
+  {
+    providerConfigId: uuid('provider_config_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    provider: text('provider').notNull(),
+    displayName: text('display_name').notNull(),
+    baseUrl: text('base_url'),
+    region: text('region'),
+    credentialBinding: jsonb('credential_binding').default({}).notNull().$type<Record<string, unknown>>(),
+    capabilityMap: jsonb('capability_map').default({}).notNull().$type<Record<string, unknown>>(),
+    enabled: boolean('enabled').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index('idx_studio_provider_configs_project').on(table.projectId),
+    index('idx_studio_provider_configs_account').on(table.accountId),
+  ],
+);
+
+export const studioJobs = kortixSchema.table(
+  'studio_jobs',
+  {
+    jobId: uuid('job_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    actorUserId: uuid('actor_user_id'),
+    actorType: text('actor_type').default('user').notNull(),
+    actingTokenId: uuid('acting_token_id').references(() => accountTokens.tokenId, {
+      onDelete: 'set null',
+    }),
+    agentName: text('agent_name'),
+    sessionId: text('session_id').references(() => projectSessions.sessionId, {
+      onDelete: 'set null',
+    }),
+    parentJobId: uuid('parent_job_id'),
+    capability: text('capability').notNull(),
+    providerConfigId: uuid('provider_config_id')
+      .notNull()
+      .references(() => studioProviderConfigs.providerConfigId, { onDelete: 'restrict' }),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    input: jsonb('input').default({}).notNull().$type<Record<string, unknown>>(),
+    status: studioJobStatusEnum('status').default('queued').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    attemptCount: integer('attempt_count').default(0).notNull(),
+    providerHandle: text('provider_handle'),
+    cancellationRequestedAt: timestamp('cancellation_requested_at', {
+      withTimezone: true,
+      mode: 'string',
+    }),
+    reservedCredits: numeric('reserved_credits', { precision: 12, scale: 4 }).default('0').notNull(),
+    actualCredits: numeric('actual_credits', { precision: 12, scale: 4 }),
+    errorCode: text('error_code'),
+    errorMessage: text('error_message'),
+    leaseOwner: text('lease_owner'),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true, mode: 'string' }),
+    availableAt: timestamp('available_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+    completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    index('idx_studio_jobs_account_created').on(table.accountId, table.createdAt),
+    index('idx_studio_jobs_project_created').on(table.projectId, table.createdAt),
+    index('idx_studio_jobs_claimable')
+      .on(table.status, table.availableAt, table.leaseExpiresAt)
+      .where(sql`${table.status} in ('queued', 'running')`),
+    index('idx_studio_jobs_provider_handle').on(table.provider, table.providerHandle),
+    index('idx_studio_jobs_parent_job').on(table.parentJobId),
+    uniqueIndex('idx_studio_jobs_idempotency').on(table.accountId, table.idempotencyKey),
+  ],
+);
+
+export const studioJobAttempts = kortixSchema.table(
+  'studio_job_attempts',
+  {
+    attemptId: uuid('attempt_id').defaultRandom().primaryKey(),
+    jobId: uuid('job_id').notNull().references(() => studioJobs.jobId, { onDelete: 'cascade' }),
+    submissionKey: text('submission_key').notNull(),
+    providerRequestId: text('provider_request_id'),
+    adapterVersion: text('adapter_version').notNull(),
+    status: studioAttemptStatusEnum('status').default('created').notNull(),
+    retryClassification: text('retry_classification'),
+    diagnostic: jsonb('diagnostic').default({}).notNull().$type<Record<string, unknown>>(),
+    upstreamUsage: jsonb('upstream_usage').default({}).notNull().$type<Record<string, unknown>>(),
+    upstreamCostCredits: numeric('upstream_cost_credits', { precision: 12, scale: 4 }),
+    startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    endedAt: timestamp('ended_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    uniqueIndex('idx_studio_job_attempts_submission_key').on(table.submissionKey),
+    index('idx_studio_job_attempts_job').on(table.jobId),
+  ],
+);
+
+export const studioJobEvents = kortixSchema.table(
+  'studio_job_events',
+  {
+    eventId: uuid('event_id').defaultRandom().primaryKey(),
+    jobId: uuid('job_id').notNull().references(() => studioJobs.jobId, { onDelete: 'cascade' }),
+    cursor: bigint('cursor', { mode: 'number' }).notNull(),
+    eventType: text('event_type').notNull(),
+    payload: jsonb('payload').default({}).notNull().$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('idx_studio_job_events_job_cursor').on(table.jobId, table.cursor),
+    index('idx_studio_job_events_created').on(table.createdAt),
+  ],
+);
+
+export const studioAssets = kortixSchema.table(
+  'studio_assets',
+  {
+    assetId: uuid('asset_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    creatorUserId: uuid('creator_user_id'),
+    sourceJobId: uuid('source_job_id').references(() => studioJobs.jobId, { onDelete: 'set null' }),
+    kind: text('kind').notNull(),
+    mimeType: text('mime_type').notNull(),
+    bucket: text('bucket').notNull(),
+    objectKey: text('object_key').notNull(),
+    checksumSha256: text('checksum_sha256').notNull(),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    width: integer('width'),
+    height: integer('height'),
+    durationMs: integer('duration_ms'),
+    frameRate: numeric('frame_rate', { precision: 8, scale: 3 }),
+    metadata: jsonb('metadata').default({}).notNull().$type<Record<string, unknown>>(),
+    versionParentAssetId: uuid('version_parent_asset_id'),
+    visibility: text('visibility').default('project').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index('idx_studio_assets_project_created').on(table.projectId, table.createdAt),
+    index('idx_studio_assets_source_job').on(table.sourceJobId),
+    uniqueIndex('idx_studio_assets_object').on(table.bucket, table.objectKey),
+  ],
+);
+
+export const studioJobAssets = kortixSchema.table(
+  'studio_job_assets',
+  {
+    jobId: uuid('job_id').notNull().references(() => studioJobs.jobId, { onDelete: 'cascade' }),
+    assetId: uuid('asset_id').notNull().references(() => studioAssets.assetId, {
+      onDelete: 'cascade',
+    }),
+    role: text('role').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.jobId, table.assetId, table.role] }),
+    index('idx_studio_job_assets_asset').on(table.assetId),
+  ],
+);
+
+export const studioAssetUploads = kortixSchema.table(
+  'studio_asset_uploads',
+  {
+    uploadId: uuid('upload_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    actorUserId: uuid('actor_user_id'),
+    objectKey: text('object_key').notNull(),
+    declaredMimeType: text('declared_mime_type').notNull(),
+    expectedSizeBytes: bigint('expected_size_bytes', { mode: 'number' }).notNull(),
+    expectedChecksumSha256: text('expected_checksum_sha256').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    status: text('status').default('pending').notNull(),
+    finalizedAssetId: uuid('finalized_asset_id').references(() => studioAssets.assetId, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index('idx_studio_asset_uploads_project').on(table.projectId),
+    index('idx_studio_asset_uploads_expiry').on(table.expiresAt, table.status),
+  ],
+);
+
+export const studioCreditReservations = kortixSchema.table(
+  'studio_credit_reservations',
+  {
+    reservationId: uuid('reservation_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => creditAccounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    jobId: uuid('job_id').notNull().references(() => studioJobs.jobId, { onDelete: 'cascade' }),
+    amountCredits: numeric('amount_credits', { precision: 12, scale: 4 }).notNull(),
+    status: text('status').default('active').notNull(),
+    settlementKey: text('settlement_key'),
+    releaseKey: text('release_key'),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    settledAt: timestamp('settled_at', { withTimezone: true, mode: 'string' }),
+    releasedAt: timestamp('released_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index('idx_studio_credit_reservations_active_account')
+      .on(table.accountId)
+      .where(sql`${table.status} = 'active'`),
+    uniqueIndex('idx_studio_credit_reservations_job').on(table.jobId),
+    uniqueIndex('idx_studio_credit_reservations_settlement_key')
+      .on(table.settlementKey)
+      .where(sql`${table.settlementKey} IS NOT NULL`),
+    uniqueIndex('idx_studio_credit_reservations_release_key')
+      .on(table.releaseKey)
+      .where(sql`${table.releaseKey} IS NOT NULL`),
+  ],
+);
+
+export const studioUsageEvents = kortixSchema.table(
+  'studio_usage_events',
+  {
+    usageEventId: uuid('usage_event_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    jobId: uuid('job_id').notNull().references(() => studioJobs.jobId, { onDelete: 'cascade' }),
+    capability: text('capability').notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    upstreamCostCredits: numeric('upstream_cost_credits', { precision: 12, scale: 4 }).default('0').notNull(),
+    finalCostCredits: numeric('final_cost_credits', { precision: 12, scale: 4 }).default('0').notNull(),
+    ledgerId: uuid('ledger_id').references(() => creditLedger.id, { onDelete: 'set null' }),
+    metadata: jsonb('metadata').default({}).notNull().$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+  },
+  (table) => [
+    index('idx_studio_usage_events_account_created').on(table.accountId, table.createdAt),
+    index('idx_studio_usage_events_job').on(table.jobId),
+  ],
+);
+
 export const accountDeletionRequests = kortixSchema.table('account_deletion_requests', {
   id: uuid().defaultRandom().primaryKey().notNull(),
   accountId: uuid('account_id').notNull(),

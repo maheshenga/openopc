@@ -16,6 +16,17 @@ import {
   tunnelStatusEnum,
   platformRoleEnum,
   changeRequestStatusEnum,
+  studioJobStatusEnum,
+  studioAttemptStatusEnum,
+  studioProviderConfigs,
+  studioJobs,
+  studioJobAttempts,
+  studioJobEvents,
+  studioAssets,
+  studioJobAssets,
+  studioAssetUploads,
+  studioCreditReservations,
+  studioUsageEvents,
   accounts,
   accountMembers,
   projects,
@@ -383,5 +394,63 @@ describe('kortixApiKeys table', () => {
       (i) => i.config.name === 'idx_kortix_api_keys_public_key',
     );
     expect(unique?.config.unique).toBe(true);
+  });
+});
+
+describe('studio durable schema', () => {
+  test('declares phase 1 Studio enums without future public job states', () => {
+    expect(studioJobStatusEnum.enumName).toBe('studio_job_status');
+    expect(studioJobStatusEnum.enumValues).toEqual([
+      'queued',
+      'running',
+      'succeeded',
+      'failed',
+      'cancelled',
+    ]);
+    expect(studioAttemptStatusEnum.enumValues).toEqual([
+      'created',
+      'submitting',
+      'submitted',
+      'polling',
+      'reconciling',
+      'succeeded',
+      'failed',
+      'cancelled',
+    ]);
+  });
+
+  test('declares the Studio table family in the kortix schema', () => {
+    for (const table of [
+      studioProviderConfigs,
+      studioJobs,
+      studioJobAttempts,
+      studioJobEvents,
+      studioAssets,
+      studioJobAssets,
+      studioAssetUploads,
+      studioCreditReservations,
+      studioUsageEvents,
+    ]) {
+      expect(getTableConfig(table).schema).toBe('kortix');
+    }
+    expect(getTableConfig(studioJobs).name).toBe('studio_jobs');
+    expect(primaryColumn(studioJobs)).toBe('job_id');
+  });
+
+  test('indexes claim, idempotency, event cursor, provider handle, uploads, and reservations', () => {
+    expect(indexNames(studioJobs)).toEqual(expect.arrayContaining([
+      'idx_studio_jobs_account_created',
+      'idx_studio_jobs_project_created',
+      'idx_studio_jobs_claimable',
+      'idx_studio_jobs_provider_handle',
+      'idx_studio_jobs_parent_job',
+      'idx_studio_jobs_idempotency',
+    ]));
+    expect(indexNames(studioJobAttempts)).toContain('idx_studio_job_attempts_submission_key');
+    expect(indexNames(studioJobEvents)).toContain('idx_studio_job_events_job_cursor');
+    expect(indexNames(studioAssetUploads)).toContain('idx_studio_asset_uploads_expiry');
+    expect(indexNames(studioCreditReservations)).toContain(
+      'idx_studio_credit_reservations_active_account',
+    );
   });
 });

@@ -11,7 +11,7 @@ import {
   computeTokenScope,
   type CustomAction,
 } from '../iam/engine-v2';
-import { agentMayPerform } from '../iam/agent-scope';
+import { agentMayPerform, agentMayUseConnector, agentMayUseEnv } from '../iam/agent-scope';
 import { ACCOUNT_ACTIONS, PROJECT_ACTIONS } from '../iam/actions';
 
 describe('scopeForActionV2', () => {
@@ -205,6 +205,8 @@ describe('agent grant central fold (userRole ∩ agentGrant)', () => {
     // on it (a regression adding it to AGENT_GRANT_EXEMPT_ACTIONS would reopen
     // the scoped-agent connector-admin bypass).
     expect(agentGrantGates('project', PROJECT_ACTIONS.PROJECT_CONNECTOR_WRITE)).toBe(true);
+    expect(agentGrantGates('project', PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_RUN)).toBe(true);
+    expect(agentGrantGates('project', PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_USE)).toBe(true);
     // exempt — these are membership-tier gates a leaf-scoped agent must still pass
     expect(agentGrantGates('project', PROJECT_ACTIONS.PROJECT_READ)).toBe(false);
     expect(agentGrantGates('project', PROJECT_ACTIONS.PROJECT_WRITE)).toBe(false);
@@ -231,5 +233,21 @@ describe('agent grant central fold (userRole ∩ agentGrant)', () => {
     const all = { agent: 'kortix', kortixCli: 'all' as const, connectors: 'all' as const };
     expect(agentMayPerform(all, PROJECT_ACTIONS.PROJECT_GITOPS_PUSH)).toBe(true);
     expect(agentMayPerform(null, PROJECT_ACTIONS.PROJECT_GITOPS_PUSH)).toBe(true);
+  });
+
+  test('Studio agent jobs require Studio action plus provider secret and connector grants', () => {
+    const grant = {
+      agent: 'image-agent',
+      kortixCli: [PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_RUN, PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_USE],
+      connectors: ['openai-compatible'],
+      env: ['studio-openai-key'],
+    };
+
+    expect(agentMayPerform(grant, PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_RUN)).toBe(true);
+    expect(agentMayPerform(grant, PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_CANCEL)).toBe(false);
+    expect(agentMayUseConnector(grant, 'openai-compatible')).toBe(true);
+    expect(agentMayUseConnector(grant, 'ungranted-provider')).toBe(false);
+    expect(agentMayUseEnv(grant, 'STUDIO-OPENAI-KEY')).toBe(true);
+    expect(agentMayUseEnv(grant, 'UNGRANTED-PROVIDER-KEY')).toBe(false);
   });
 });

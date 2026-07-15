@@ -69,7 +69,7 @@ describe('IAM V2 — project role table', () => {
     // producing output for a human to decide on, not a project customization —
     // see PROJECT_REVIEW_SUBMIT vs PROJECT_REVIEW_ACT in actions.ts.)
     for (const a of PROJECT_ROLE_PERMS.member) {
-      expect(a).toMatch(/\.(read|start|stop|fire|submit)$/);
+      expect(a).toMatch(/\.(read|start|stop|fire|submit|run|use)$/);
     }
     // Can start / run / stop sessions (the floor role must be able to USE Kortix).
     expect(projectRoleAllows('member', PROJECT_ACTIONS.PROJECT_SESSION_START)).toBe(true);
@@ -96,6 +96,32 @@ describe('IAM V2 — project role table', () => {
     expect(projectRoleAllows('manager', PROJECT_ACTIONS.PROJECT_MEMBERS_MANAGE)).toBe(true);
     expect(projectRoleAllows('editor', PROJECT_ACTIONS.PROJECT_DELETE)).toBe(false);
     expect(projectRoleAllows('member', PROJECT_ACTIONS.PROJECT_MEMBERS_MANAGE)).toBe(false);
+  });
+
+  test('Studio Phase 1 actions split use, edit, and provider management by project role', () => {
+    for (const action of [
+      PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_READ,
+      PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_RUN,
+      PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_READ,
+      PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_USE,
+    ]) {
+      expect(projectRoleAllows('member', action)).toBe(true);
+      expect(projectRoleAllows('editor', action)).toBe(true);
+      expect(projectRoleAllows('manager', action)).toBe(true);
+    }
+
+    for (const action of [
+      PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_CANCEL,
+      PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_WRITE,
+    ]) {
+      expect(projectRoleAllows('member', action)).toBe(false);
+      expect(projectRoleAllows('editor', action)).toBe(true);
+      expect(projectRoleAllows('manager', action)).toBe(true);
+    }
+
+    expect(projectRoleAllows('member', PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_MANAGE)).toBe(false);
+    expect(projectRoleAllows('editor', PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_MANAGE)).toBe(false);
+    expect(projectRoleAllows('manager', PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_MANAGE)).toBe(true);
   });
 });
 

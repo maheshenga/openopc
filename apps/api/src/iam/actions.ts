@@ -127,6 +127,14 @@ export const PROJECT_ACTIONS = {
   PROJECT_REVIEW_READ: 'project.review.read',
   PROJECT_REVIEW_SUBMIT: 'project.review.submit',
   PROJECT_REVIEW_ACT: 'project.review.act',
+
+  PROJECT_STUDIO_JOBS_READ: 'project.studio.jobs.read',
+  PROJECT_STUDIO_JOBS_RUN: 'project.studio.jobs.run',
+  PROJECT_STUDIO_JOBS_CANCEL: 'project.studio.jobs.cancel',
+  PROJECT_STUDIO_ASSETS_READ: 'project.studio.assets.read',
+  PROJECT_STUDIO_ASSETS_WRITE: 'project.studio.assets.write',
+  PROJECT_STUDIO_PROVIDERS_USE: 'project.studio.providers.use',
+  PROJECT_STUDIO_PROVIDERS_MANAGE: 'project.studio.providers.manage',
 } as const;
 
 // ─── Trigger-scoped actions (when scoped to an individual trigger) ─────────

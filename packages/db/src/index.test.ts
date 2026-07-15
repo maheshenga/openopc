@@ -25,6 +25,24 @@ describe('package index re-exports', () => {
     }
   });
 
+  test('re-exports the Studio durable tables used by API and worker packages', () => {
+    const expected = [
+      'studioProviderConfigs',
+      'studioJobs',
+      'studioJobAttempts',
+      'studioJobEvents',
+      'studioAssets',
+      'studioJobAssets',
+      'studioAssetUploads',
+      'studioCreditReservations',
+      'studioUsageEvents',
+    ] as const;
+
+    for (const name of expected) {
+      expect(db[name]).toBeDefined();
+    }
+  });
+
   test('re-exports the kortix enums', () => {
     const expected = [
       'sandboxStatusEnum',

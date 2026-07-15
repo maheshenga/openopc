@@ -85,6 +85,7 @@ const MANAGER_ONLY: readonly string[] = [
   PROJECT_ACTIONS.PROJECT_GATEWAY_KEYS_MANAGE,
   PROJECT_ACTIONS.PROJECT_SESSION_BINDINGS_WRITE,
   PROJECT_ACTIONS.PROJECT_CONNECTOR_PROFILES_MANAGE,
+  PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_MANAGE,
 ];
 
 /** Actions an editor gets on top of member. Editing the project and triggers
@@ -123,6 +124,9 @@ const EDITOR_EXTRAS: readonly string[] = [
   // Acting on a review item (approve / reject / answer) is a decision on agent
   // work — editor-tier, alongside gitops.
   PROJECT_ACTIONS.PROJECT_REVIEW_ACT,
+
+  PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_CANCEL,
+  PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_WRITE,
 ];
 
 /** Baseline for the floor project role. `member` is the base *usable* role:
@@ -162,6 +166,11 @@ const PROJECT_MEMBER_BASELINE: readonly string[] = [
   // outputs/decisions for review. Acting on them is editor-tier (EDITOR_EXTRAS).
   PROJECT_ACTIONS.PROJECT_REVIEW_READ,
   PROJECT_ACTIONS.PROJECT_REVIEW_SUBMIT,
+
+  PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_READ,
+  PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_RUN,
+  PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_READ,
+  PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_USE,
 ];
 
 /** What the floor `member` role gets on top of the read+run baseline: manually

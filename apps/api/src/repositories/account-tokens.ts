@@ -73,6 +73,17 @@ export interface AccountTokenListEntry {
   revokedAt: Date | null;
 }
 
+export interface AccountTokenLifecycleRow {
+  status: string | null;
+  revokedAt: Date | null;
+  expiresAt: Date | null;
+  projectId: string | null;
+}
+
+export type AccountTokenLifecycleCheck =
+  | { active: true }
+  | { active: false; reason: 'missing' | 'inactive' | 'revoked' | 'expired' | 'project_mismatch' };
+
 // ─── Throttle for last_used_at updates ───────────────────────────────────────
 
 const THROTTLE_MS = 15 * 60 * 1000;
@@ -354,6 +365,64 @@ export async function validateAccountToken(
 }
 
 // ─── Internal ────────────────────────────────────────────────────────────────
+
+export function isAccountTokenLifecycleActive(
+  row: AccountTokenLifecycleRow | null | undefined,
+  projectId: string,
+  now = new Date(),
+): AccountTokenLifecycleCheck {
+  if (!row) return { active: false, reason: 'missing' };
+  if (row.status !== 'active') return { active: false, reason: 'inactive' };
+  if (row.revokedAt) return { active: false, reason: 'revoked' };
+  if (row.expiresAt && row.expiresAt <= now) return { active: false, reason: 'expired' };
+  if (row.projectId !== projectId) return { active: false, reason: 'project_mismatch' };
+  return { active: true };
+}
+
+export async function validateActiveProjectTokenForWorker(
+  tokenId: string,
+  projectId: string,
+  now = new Date(),
+): Promise<
+  AccountTokenLifecycleCheck & {
+    tokenId?: string;
+    accountId?: string;
+    userId?: string;
+    sessionId?: string | null;
+    agentGrant?: AgentGrant | null;
+    serviceAccountId?: string | null;
+  }
+> {
+  const [row] = await db
+    .select({
+      tokenId: accountTokens.tokenId,
+      accountId: accountTokens.accountId,
+      userId: accountTokens.userId,
+      projectId: accountTokens.projectId,
+      sessionId: accountTokens.sessionId,
+      status: accountTokens.status,
+      revokedAt: accountTokens.revokedAt,
+      expiresAt: accountTokens.expiresAt,
+      agentGrant: accountTokens.agentGrant,
+      serviceAccountId: accountTokens.serviceAccountId,
+    })
+    .from(accountTokens)
+    .where(eq(accountTokens.tokenId, tokenId))
+    .limit(1);
+
+  const lifecycle = isAccountTokenLifecycleActive(row, projectId, now);
+  if (!lifecycle.active) return lifecycle;
+
+  return {
+    active: true,
+    tokenId: row.tokenId,
+    accountId: row.accountId,
+    userId: row.userId,
+    sessionId: row.sessionId ?? null,
+    agentGrant: row.agentGrant ?? null,
+    serviceAccountId: row.serviceAccountId ?? null,
+  };
+}
 
 async function updateLastUsedThrottled(tokenId: string): Promise<void> {
   const now = Date.now();

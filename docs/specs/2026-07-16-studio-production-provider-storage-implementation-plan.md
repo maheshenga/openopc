@@ -533,21 +533,23 @@ git commit -m "feat: add studio production adapter foundation"
 
 - Produces `S3StudioObjectStore`, `createS3StudioObjectStore`, and `createCachedStudioReadinessProbe` for API/worker assembly.
 
-- [ ] **Step 1: Write RED unit tests against an injected S3 client seam**
+- [x] **Step 1: Write RED unit tests against an injected S3 client seam**
 
 Use a seam with `send(command)` and assert exact commands for Put, Head, Get, Delete, signed upload, signed download, SSE, KMS, checksum, content disposition, configured bucket, fixed prefix, and a distinct public signing endpoint. Include 403/404/5xx mapping, verify callers cannot choose a bucket, and prove errors redact `X-Amz-Credential`, `X-Amz-Signature`, session tokens, and the complete signed query string.
 
-- [ ] **Step 2: Implement the driver**
+- [x] **Step 2: Implement the driver**
 
 Use `S3Client`, `PutObjectCommand`, `HeadObjectCommand`, `GetObjectCommand`, and `DeleteObjectCommand`. Convert web streams with `Readable.fromWeb`, pass known content length, set `ChecksumSHA256`, use `ServerSideEncryption`, and return normalized metadata. The driver exposes the configured bucket through `namespace` but never accepts a bucket in method inputs.
 
 Presigned uploads bind `ContentType`, `ContentLength`, and checksum headers. Presigned downloads set an attachment-only `ResponseContentDisposition` using the sanitized filename. Clamp upload/download TTL to 60-900 seconds.
 
-- [ ] **Step 3: Write RED readiness tests**
+Conditional deletion performs an `If-Match` head preflight and still sends `IfMatch` on `DeleteObject`. The preflight preserves wrong-ETag rejection on compatible stores that ignore conditional DELETE; atomic delete semantics remain provided by targets that implement S3 conditional DELETE and must be rechecked by each provider compatibility smoke.
+
+- [x] **Step 3: Write RED readiness tests**
 
 Use a deterministic clock/client and assert one-byte put, head, get/verify, delete, 60-second success cache, failure without cache extension, role-prefixed keys, and best-effort cleanup after a failed intermediate operation.
 
-- [ ] **Step 4: Implement active readiness**
+- [x] **Step 4: Implement active readiness**
 
 Expose:
 
@@ -564,14 +566,14 @@ The object body is one byte, the checksum is known, and the key starts `_studio-
 
 `S3StudioObjectStore.assertReady()` delegates to this cached probe. The probe calls CRUD methods directly; those methods never call `assertReady()` recursively.
 
-- [ ] **Step 5: Add a real MinIO integration test**
+- [x] **Step 5: Add a real MinIO integration test**
 
-The test reads `STUDIO_S3_INTEGRATION_URL`, creates `studio-test` with `CreateBucketCommand`, runs the shared conformance suite, proves direct anonymous GET fails, validates signed upload/download, and deletes all test objects/bucket in `afterAll`.
+The test reads `STUDIO_S3_INTEGRATION_URL`, creates `studio-test` with `CreateBucketCommand`, runs the shared conformance suite, proves direct anonymous GET fails, validates signed upload/download plus rejected MIME/size/checksum mutations, confirms server-side AES256 with `HeadObject`, and deletes all test objects/bucket in `afterAll`. The browser request reconstructs required SSE/KMS headers from signed reserved-metadata query markers while the actual encryption headers remain in `X-Amz-SignedHeaders`; omitting them is rejected and leaves no object.
 
 Local RED/GREEN command:
 
 ```powershell
-docker run --rm -d --name kortix-studio-minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+docker run --rm -d --name kortix-studio-minio -p 9000:9000 -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin -e MINIO_KMS_SECRET_KEY=studio-key:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
 $env:STUDIO_S3_INTEGRATION_URL='http://127.0.0.1:9000'
 $env:STUDIO_S3_ACCESS_KEY_ID='minioadmin'
 $env:STUDIO_S3_SECRET_ACCESS_KEY='minioadmin'
@@ -581,7 +583,7 @@ docker stop kortix-studio-minio
 
 Expected GREEN: conformance passes and container cleanup succeeds.
 
-- [ ] **Step 6: Run the Task 3 gate and commit**
+- [x] **Step 6: Run the Task 3 gate and commit**
 
 ```powershell
 pnpm --filter @kortix/studio-adapters test

@@ -1,0 +1,24 @@
+{
+  "name": "@kortix/studio-runtime",
+  "version": "1.0.0",
+  "description": "Shared Studio runtime rules for jobs, providers, retries, idempotency, storage, and leases.",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src"
+  },
+  "dependencies": {
+    "@kortix/api-contract": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.0.0"
+  }
+}

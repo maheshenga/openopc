@@ -1,6 +1,6 @@
 {
   "generatedAt": "static",
-  "count": 490,
+  "count": 498,
   "routes": [
     {
       "method": "GET",
@@ -1601,6 +1601,38 @@
     {
       "method": "POST",
       "path": "/v1/projects/:projectId/snapshots/rebuild"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/studio/capabilities"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/studio/estimates"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/studio/jobs"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/studio/jobs"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/studio/jobs/:jobId"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/studio/jobs/:jobId/cancel"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/studio/jobs/:jobId/events"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/studio/providers"
     },
     {
       "method": "GET",

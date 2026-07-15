@@ -1,5 +1,4 @@
 import type { StudioCapabilityDescriptor, StudioJobInput } from '@kortix/api-contract';
-import { studioPhase1Capabilities } from '@kortix/api-contract';
 
 export const STUDIO_MAX_PROVIDER_ATTEMPTS = 3;
 
@@ -21,6 +20,41 @@ export interface StudioCostEstimate {
   platform_credits: number;
 }
 
+export interface StudioPricingSnapshot {
+  pricing_catalog_id: string;
+  version: number;
+  provider: string;
+  model: string;
+  unit: 'image';
+  rate_credits: number;
+  max_provider_credits: number;
+  markup_credits: number;
+}
+
+export interface StudioProviderDefinitionConfig {
+  provider_config_id: string;
+  provider: string;
+  base_url: string | null;
+  region: string | null;
+  capability_map: Record<string, unknown>;
+  version_token: string;
+}
+
+export interface StudioProviderDefinition {
+  readonly id: string;
+  capabilities(config: StudioProviderDefinitionConfig): readonly StudioCapabilityDescriptor[];
+  validate(
+    config: StudioProviderDefinitionConfig,
+    model: string,
+    input: StudioJobInput,
+  ): StudioValidationResult;
+  estimate(
+    config: StudioProviderDefinitionConfig,
+    pricing: StudioPricingSnapshot,
+    input: StudioJobInput,
+  ): StudioCostEstimate;
+}
+
 export interface StudioProviderHandle {
   provider: string;
   id: string;
@@ -34,9 +68,18 @@ export interface StudioProviderStatus {
 
 export interface StudioProviderAsset {
   kind: 'image';
-  mime_type: string;
-  bytes: Uint8Array;
   filename: string;
+  mime_type: string;
+  size_bytes: number;
+  replayable_within_attempt: boolean;
+  openBody(): Promise<ReadableStream<Uint8Array>>;
+}
+
+export interface StudioReferenceAssetResolver {
+  resolve(input: {
+    projectId: string;
+    assetIds: readonly string[];
+  }): Promise<readonly StudioProviderAsset[]>;
 }
 
 export interface StudioProviderResult {
@@ -44,12 +87,29 @@ export interface StudioProviderResult {
   usage?: Record<string, unknown>;
 }
 
+export type StudioProviderSubmission =
+  | {
+      kind: 'completed';
+      provider: string;
+      submission_key: string;
+      result: StudioProviderResult;
+    }
+  | { kind: 'async'; handle: StudioProviderHandle };
+
+export class StudioProviderCallError extends Error {
+  constructor(
+    readonly classification: StudioRetryClassification,
+    message: string,
+    readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = 'StudioProviderCallError';
+  }
+}
+
 export interface StudioProviderAdapter {
   readonly id: string;
-  capabilities(): readonly StudioCapabilityDescriptor[];
-  validate(input: StudioJobInput): StudioValidationResult;
-  estimate(ctx: StudioProviderContext, input: StudioJobInput): Promise<StudioCostEstimate>;
-  submit(ctx: StudioProviderContext, input: StudioJobInput): Promise<StudioProviderHandle>;
+  submit(ctx: StudioProviderContext, input: StudioJobInput): Promise<StudioProviderSubmission>;
   poll(ctx: StudioProviderContext, handle: StudioProviderHandle): Promise<StudioProviderStatus>;
   cancel(ctx: StudioProviderContext, handle: StudioProviderHandle): Promise<void>;
   reconcile?(
@@ -121,27 +181,14 @@ export function classifyProviderRetry(input: RetryClassificationInput): RetryCla
 export function createFakeStudioProvider(): StudioProviderAdapter {
   return {
     id: 'fake',
-    capabilities() {
-      return studioPhase1Capabilities;
-    },
-    validate(input) {
-      return input.capability === 'image.generate'
-        ? { ok: true }
-        : { ok: false, code: 'STUDIO_MODEL_UNSUPPORTED', message: 'Unsupported capability' };
-    },
-    async estimate(_ctx, input) {
-      const outputCount = input.capability === 'image.generate' ? input.image.output_count : 1;
-      return {
-        max_credits: outputCount,
-        provider_credits: 0,
-        platform_credits: outputCount,
-      };
-    },
     async submit(_ctx, input) {
       return {
-        provider: 'fake',
-        id: `fake-${input.capability}-outputs-${input.image.output_count}`,
-        submission_key: _ctx.submissionKey,
+        kind: 'async',
+        handle: {
+          provider: 'fake',
+          id: `fake-${input.capability}-outputs-${input.image.output_count}`,
+          submission_key: _ctx.submissionKey,
+        },
       };
     },
     async poll() {
@@ -155,15 +202,31 @@ export function createFakeStudioProvider(): StudioProviderAdapter {
       const outputCountMatch = /^fake-image\.generate-outputs-([1-8])$/.exec(handle.id);
       const outputCount = Number(outputCountMatch?.[1] ?? 1);
       return {
-        assets: Array.from({ length: outputCount }, (_, index) => ({
-          kind: 'image',
-          mime_type: 'image/png',
-          bytes: fakePngBytes(),
-          filename: `fake-studio-image-${index + 1}.png`,
-        })),
+        assets: Array.from({ length: outputCount }, (_, index) => {
+          const bytes = fakePngBytes();
+          return {
+            kind: 'image',
+            filename: `fake-studio-image-${index + 1}.png`,
+            mime_type: 'image/png',
+            size_bytes: bytes.byteLength,
+            replayable_within_attempt: true,
+            async openBody() {
+              return byteStream(bytes);
+            },
+          };
+        }),
       };
     },
   };
+}
+
+function byteStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
 }
 
 function fakePngBytes(): Uint8Array {

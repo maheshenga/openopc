@@ -214,6 +214,13 @@ export const StudioUploadSchema = z
   .strict();
 export type StudioUpload = z.infer<typeof StudioUploadSchema>;
 
+export const StudioCredentialBindingSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('secret'), identifier: z.string().trim().min(1) }).strict(),
+  z.object({ kind: z.literal('connector'), slug: z.string().trim().min(1) }).strict(),
+  z.object({ kind: z.literal('none') }).strict(),
+]);
+export type StudioCredentialBinding = z.infer<typeof StudioCredentialBindingSchema>;
+
 export const StudioProviderConfigSchema = z
   .object({
     provider_config_id: z.string().uuid(),
@@ -222,11 +229,7 @@ export const StudioProviderConfigSchema = z
     display_name: z.string().min(1),
     base_url: z.string().url().nullable(),
     region: z.string().nullable(),
-    credential_binding: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('secret'), identifier: z.string().min(1) }),
-      z.object({ kind: z.literal('connector'), slug: z.string().min(1) }),
-      z.object({ kind: z.literal('none') }),
-    ]),
+    credential_binding: StudioCredentialBindingSchema,
     capabilities: z.array(StudioCapabilitySchema),
     enabled: z.boolean(),
     created_at: z.string(),

@@ -1,10 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import type { StudioProviderAdapter, StudioProviderHandle } from '@kortix/studio-runtime';
-import { InMemoryStudioObjectStore } from '@kortix/studio-runtime';
+import { InMemoryStudioObjectStore, StudioProviderCallError } from '@kortix/studio-runtime';
 import { createMemoryStudioWorkerRepository } from './memory-repository';
 import {
   type StudioAssetWriter,
-  StudioProviderCallError,
   type StudioSubmissionAuthorization,
   StudioWorker,
   createObjectStoreAssetWriter,
@@ -29,13 +28,13 @@ function imageInput(prompt = 'A professional product photograph') {
 function provider(overrides: Partial<StudioProviderAdapter> = {}): StudioProviderAdapter {
   return {
     id: 'fake',
-    capabilities: () => [],
-    validate: () => ({ ok: true }),
-    estimate: async () => ({ max_credits: 1, provider_credits: 0, platform_credits: 1 }),
     submit: async (ctx) => ({
-      provider: 'fake',
-      id: `handle-${ctx.submissionKey}`,
-      submission_key: ctx.submissionKey,
+      kind: 'async',
+      handle: {
+        provider: 'fake',
+        id: `handle-${ctx.submissionKey}`,
+        submission_key: ctx.submissionKey,
+      },
     }),
     poll: async () => ({ status: 'succeeded', progress: 1 }),
     cancel: async () => {},
@@ -44,9 +43,13 @@ function provider(overrides: Partial<StudioProviderAdapter> = {}): StudioProvide
       assets: [
         {
           kind: 'image',
-          mime_type: 'image/png',
-          bytes: new Uint8Array([137, 80, 78, 71]),
           filename: 'result.png',
+          mime_type: 'image/png',
+          size_bytes: 4,
+          replayable_within_attempt: true,
+          async openBody() {
+            return new Blob([new Uint8Array([137, 80, 78, 71])]).stream();
+          },
         },
       ],
       usage: { actual_credits: 1 },
@@ -68,7 +71,7 @@ function makeWorker(input: {
   assets?: StudioAssetWriter;
   now?: () => Date;
 }) {
-  const objectStore = new InMemoryStudioObjectStore({ ready: true });
+  const objectStore = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
   return {
     worker: new StudioWorker({
       config: {
@@ -80,7 +83,7 @@ function makeWorker(input: {
       repository: input.repository,
       providers: { get: () => input.adapter ?? provider() },
       authorization: input.authorization ?? allow,
-      assets: input.assets ?? createObjectStoreAssetWriter(objectStore, { bucket: 'studio-test' }),
+      assets: input.assets ?? createObjectStoreAssetWriter(objectStore),
       now: input.now ?? (() => NOW),
       random: () => 0,
     }),
@@ -88,6 +91,10 @@ function makeWorker(input: {
 }
 
 describe('StudioWorker', () => {
+  test('binds the asset writer to the store namespace without a bucket argument', () => {
+    expect(createObjectStoreAssetWriter.length).toBe(1);
+  });
+
   test('redacts credential-shaped values from durable diagnostics', () => {
     const message = redactStudioDiagnostic(
       'request failed Authorization: Bearer sk-live-secret api_key=another-secret {"access_token":"json-secret"}',
@@ -111,6 +118,25 @@ describe('StudioWorker', () => {
     expect(message).toContain('[REDACTED]');
   });
 
+  test('redacts complete provider output and signed storage URLs', () => {
+    const signedStorageUrl = [
+      'https://bucket.example.invalid/generated.png',
+      [
+        'X-Amz-Credential=test-only',
+        'X-Amz-Signature=test-only',
+        'X-Amz-Security-Token=test-only',
+      ].join('&'),
+    ].join('?');
+    const message = redactStudioDiagnostic(
+      `provider output https://provider.example.invalid/output.png storage ${signedStorageUrl}`,
+    );
+
+    expect(message).not.toContain('provider.example.invalid');
+    expect(message).not.toContain('bucket.example.invalid');
+    expect(message).not.toContain('X-Amz-');
+    expect(message).toContain('[REDACTED_URL]');
+  });
+
   test('concurrent workers claim each job only once', async () => {
     const repository = createMemoryStudioWorkerRepository();
     const first = repository.seedJob({ input: imageInput('first') });
@@ -121,9 +147,12 @@ describe('StudioWorker', () => {
         submissions.push(input.image.prompt);
         await Promise.resolve();
         return {
-          provider: 'fake',
-          id: `handle-${ctx.submissionKey}`,
-          submission_key: ctx.submissionKey,
+          kind: 'async',
+          handle: {
+            provider: 'fake',
+            id: `handle-${ctx.submissionKey}`,
+            submission_key: ctx.submissionKey,
+          },
         };
       },
     });
@@ -210,9 +239,12 @@ describe('StudioWorker', () => {
         expect(attempt?.submissionKey).toBe(ctx.submissionKey);
         expect(attempt?.status).toBe('submitting');
         return {
-          provider: 'fake',
-          id: 'accepted',
-          submission_key: ctx.submissionKey,
+          kind: 'async',
+          handle: {
+            provider: 'fake',
+            id: 'accepted',
+            submission_key: ctx.submissionKey,
+          },
         };
       },
     });
@@ -220,6 +252,30 @@ describe('StudioWorker', () => {
     await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
 
     expect(submittedKey).toMatch(new RegExp(`^${job.jobId}:1:`));
+  });
+
+  test('fails closed on completed submissions until result finalization is enabled', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob();
+    let reconcileCalls = 0;
+    const adapter = provider({
+      submit: async (ctx) => ({
+        kind: 'completed',
+        provider: 'fake',
+        submission_key: ctx.submissionKey,
+        result: { assets: [], usage: {} },
+      }),
+      reconcile: async () => {
+        reconcileCalls += 1;
+        return 'not-found';
+      },
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'failed' });
+    expect(reconcileCalls).toBe(0);
+    expect(repository.getJob(job.jobId)?.errorCode).toBe('STUDIO_PROVIDER_REJECTED');
   });
 
   test('releases the claim when the provider-config prepare fence loses a race', async () => {
@@ -251,7 +307,10 @@ describe('StudioWorker', () => {
     const adapter = provider({
       submit: async (ctx) => {
         await Bun.sleep(35);
-        return { provider: 'fake', id: 'slow', submission_key: ctx.submissionKey };
+        return {
+          kind: 'async',
+          handle: { provider: 'fake', id: 'slow', submission_key: ctx.submissionKey },
+        };
       },
     });
 
@@ -297,7 +356,10 @@ describe('StudioWorker', () => {
     const adapter = provider({
       submit: async (ctx) => {
         submitCalls += 1;
-        return { provider: 'fake', id: 'accepted', submission_key: ctx.submissionKey };
+        return {
+          kind: 'async',
+          handle: { provider: 'fake', id: 'accepted', submission_key: ctx.submissionKey },
+        };
       },
       reconcile: async (_ctx, submissionKey) => {
         reconciled.push(submissionKey);
@@ -455,6 +517,131 @@ describe('StudioWorker', () => {
 
     expect(result).toMatchObject({ kind: 'error', jobId: job.jobId });
     expect(repository.getJob(job.jobId)?.status).toBe('running');
+  });
+
+  test('rejects non-replayable provider assets before opening their body', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob();
+    let openBodyCalls = 0;
+    const adapter = provider({
+      fetchResult: async () => ({
+        assets: [
+          {
+            kind: 'image',
+            filename: 'single-use.png',
+            mime_type: 'image/png',
+            size_bytes: 4,
+            replayable_within_attempt: false,
+            async openBody() {
+              openBodyCalls += 1;
+              return new Blob([new Uint8Array([137, 80, 78, 71])]).stream();
+            },
+          },
+        ],
+        usage: { actual_credits: 1 },
+      }),
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'failed' });
+    expect(openBodyCalls).toBe(0);
+    expect(repository.getJob(job.jobId)?.errorCode).toBe('STUDIO_ASSET_INVALID');
+  });
+
+  test('fails terminally when a replayable provider asset declares the wrong size', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob();
+    let openBodyCalls = 0;
+    const adapter = provider({
+      fetchResult: async () => ({
+        assets: [
+          {
+            kind: 'image',
+            filename: 'wrong-size.png',
+            mime_type: 'image/png',
+            size_bytes: 5,
+            replayable_within_attempt: true,
+            async openBody() {
+              openBodyCalls += 1;
+              return new Blob([new Uint8Array([137, 80, 78, 71])]).stream();
+            },
+          },
+        ],
+        usage: { actual_credits: 1 },
+      }),
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'failed' });
+    expect(openBodyCalls).toBe(1);
+    expect(repository.getJob(job.jobId)?.errorCode).toBe('STUDIO_ASSET_INVALID');
+  });
+
+  test('fails terminally when a replayable provider asset returns different bytes', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob();
+    let openBodyCalls = 0;
+    const adapter = provider({
+      fetchResult: async () => ({
+        assets: [
+          {
+            kind: 'image',
+            filename: 'unstable.png',
+            mime_type: 'image/png',
+            size_bytes: 4,
+            replayable_within_attempt: true,
+            async openBody() {
+              openBodyCalls += 1;
+              const lastByte = openBodyCalls === 1 ? 71 : 72;
+              return new Blob([new Uint8Array([137, 80, 78, lastByte])]).stream();
+            },
+          },
+        ],
+        usage: { actual_credits: 1 },
+      }),
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'failed' });
+    expect(openBodyCalls).toBe(2);
+    expect(repository.getJob(job.jobId)?.errorCode).toBe('STUDIO_ASSET_INVALID');
+  });
+
+  test('fails terminally when a replayable provider asset changes size between reads', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob();
+    let openBodyCalls = 0;
+    const adapter = provider({
+      fetchResult: async () => ({
+        assets: [
+          {
+            kind: 'image',
+            filename: 'unstable-size.png',
+            mime_type: 'image/png',
+            size_bytes: 4,
+            replayable_within_attempt: true,
+            async openBody() {
+              openBodyCalls += 1;
+              const bytes =
+                openBodyCalls === 1
+                  ? new Uint8Array([137, 80, 78, 71])
+                  : new Uint8Array([137, 80, 78]);
+              return new Blob([bytes]).stream();
+            },
+          },
+        ],
+        usage: { actual_credits: 1 },
+      }),
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'failed' });
+    expect(openBodyCalls).toBe(2);
+    expect(repository.getJob(job.jobId)?.errorCode).toBe('STUDIO_ASSET_INVALID');
   });
 
   test('fails terminal provider rejections without resubmitting', async () => {
@@ -626,9 +813,13 @@ describe('StudioWorker', () => {
           assets: [
             {
               kind: 'image',
-              mime_type: 'image/png',
-              bytes: new Uint8Array([137, 80, 78, 71]),
               filename: 'late-result.png',
+              mime_type: 'image/png',
+              size_bytes: 4,
+              replayable_within_attempt: true,
+              async openBody() {
+                return new Blob([new Uint8Array([137, 80, 78, 71])]).stream();
+              },
             },
           ],
           usage: { actual_credits: 1 },

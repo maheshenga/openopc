@@ -153,7 +153,10 @@ async function main(): Promise<void> {
     },
   });
   const fakeProvider = createFakeStudioProvider();
-  const objectStore = new InMemoryStudioObjectStore({ ready: true });
+  const objectStore = new InMemoryStudioObjectStore({
+    namespace: 'studio-fake-ephemeral',
+    ready: true,
+  });
   const worker = new StudioWorker({
     config: {
       workerId: env.workerId,
@@ -164,7 +167,7 @@ async function main(): Promise<void> {
     repository,
     providers: { get: (job) => (job.provider === 'fake' ? fakeProvider : null) },
     authorization,
-    assets: createObjectStoreAssetWriter(objectStore, { bucket: 'studio-fake-ephemeral' }),
+    assets: createObjectStoreAssetWriter(objectStore),
   });
   const maintenance = new StudioMaintenanceCoordinator({
     repository: maintenanceRepository,

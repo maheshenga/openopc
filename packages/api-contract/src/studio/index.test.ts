@@ -4,6 +4,7 @@ import {
   StudioAssetSchema,
   StudioCapabilityDescriptorSchema,
   StudioCreateJobRequestSchema,
+  StudioCredentialBindingSchema,
   StudioErrorCodeSchema,
   StudioEstimateRequestSchema,
   StudioEstimateResponseSchema,
@@ -86,5 +87,15 @@ describe('studio phase 1 contracts', () => {
         studioProviderConfigFixture({ capabilities: ['image.generate', 'voice.dialogue'] as never }),
       ).success,
     ).toBe(false);
+  });
+
+  test('validates reusable provider credential bindings', () => {
+    expect(
+      StudioCredentialBindingSchema.safeParse({ kind: 'secret', identifier: '   ' }).success,
+    ).toBe(false);
+    expect(
+      StudioCredentialBindingSchema.safeParse({ kind: 'connector', slug: '\t' }).success,
+    ).toBe(false);
+    expect(StudioCredentialBindingSchema.safeParse({ kind: 'none' }).success).toBe(true);
   });
 });

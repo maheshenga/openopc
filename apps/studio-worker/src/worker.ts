@@ -6,7 +6,11 @@ import type {
   StudioProviderResult,
   StudioRetryClassification,
 } from '@kortix/studio-runtime';
-import { STUDIO_MAX_PROVIDER_ATTEMPTS } from '@kortix/studio-runtime';
+import {
+  STUDIO_MAX_PROVIDER_ATTEMPTS,
+  StudioObjectStoreError,
+  StudioProviderCallError,
+} from '@kortix/studio-runtime';
 import { assertStudioTransition } from '@kortix/studio-runtime';
 import {
   type StoredStudioAsset,
@@ -21,17 +25,6 @@ import {
 
 const RETRY_JITTER_BOUNDS_MS = [5_000, 30_000, 120_000] as const;
 const MAX_RETRY_AFTER_MS = 15 * 60_000;
-
-export class StudioProviderCallError extends Error {
-  constructor(
-    readonly classification: StudioRetryClassification,
-    message: string,
-    readonly retryAfterMs?: number,
-  ) {
-    super(message);
-    this.name = 'StudioProviderCallError';
-  }
-}
 
 export interface StudioProviderRegistry {
   get(job: StudioWorkerJob): StudioProviderAdapter | null;
@@ -213,7 +206,14 @@ export class StudioWorker {
     const ctx = this.providerContext(job, attempt);
     let handle: StudioProviderHandle;
     try {
-      handle = await this.withLeaseHeartbeat(job, () => adapter.submit(ctx, job.input));
+      const submission = await this.withLeaseHeartbeat(job, () => adapter.submit(ctx, job.input));
+      if (submission.kind !== 'async') {
+        throw new StudioProviderCallError(
+          'terminal',
+          'Completed provider submissions are not enabled in this worker version',
+        );
+      }
+      handle = submission.handle;
       if (handle.submission_key !== submissionKey) {
         throw new StudioProviderCallError(
           'unknown_outcome',
@@ -410,9 +410,25 @@ export class StudioWorker {
     ) {
       return this.cancel(job, attempt, adapter, this.now());
     }
-    const stored = await this.withLeaseHeartbeat(job, () =>
-      this.deps.assets.persist({ job, attempt, assets: result.assets }),
-    );
+    let stored: StoredStudioAsset[];
+    try {
+      stored = await this.withLeaseHeartbeat(job, () =>
+        this.deps.assets.persist({ job, attempt, assets: result.assets }),
+      );
+    } catch (error) {
+      if (error instanceof StudioProviderCallError && error.classification === 'terminal') {
+        await this.fail(
+          job,
+          attempt,
+          'STUDIO_ASSET_INVALID',
+          error.message,
+          error.classification,
+          this.now(),
+        );
+        return { kind: 'processed', jobId: job.jobId, status: 'failed' };
+      }
+      throw error;
+    }
     const actualCredits = actualCreditsFrom(result, job.reservedCredits);
     const outcome = await this.deps.repository.finalizeSuccess({
       jobId: job.jobId,
@@ -684,31 +700,49 @@ export class StudioWorker {
   }
 }
 
-export function createObjectStoreAssetWriter(
-  store: StudioObjectStore,
-  options: { bucket: string },
-): StudioAssetWriter {
+export function createObjectStoreAssetWriter(store: StudioObjectStore): StudioAssetWriter {
   return {
     async persist({ job, attempt, assets }) {
       await store.assertReady();
       const stored: StoredStudioAsset[] = [];
       for (const [index, asset] of assets.entries()) {
+        if (!asset.replayable_within_attempt) {
+          throw new StudioProviderCallError(
+            'terminal',
+            'Studio provider assets must be replayable within an attempt',
+          );
+        }
         const filename = safeFilename(asset.filename, index);
         const objectKey = `jobs/${job.jobId}/${attempt.attemptId}/${index}-${filename}`;
-        await store.putObject({
-          bucket: options.bucket,
-          key: objectKey,
-          body: byteStream(asset.bytes),
-          content_type: asset.mime_type,
-          size_bytes: asset.bytes.byteLength,
-        });
+        const checksumSha256 = await hashBody(await asset.openBody(), asset.size_bytes);
+        try {
+          await store.putObject({
+            key: objectKey,
+            body: await asset.openBody(),
+            content_type: asset.mime_type,
+            size_bytes: asset.size_bytes,
+            checksum_sha256: checksumSha256,
+            metadata: { project_id: job.projectId, attempt_id: attempt.attemptId },
+          });
+        } catch (error) {
+          if (
+            error instanceof StudioObjectStoreError &&
+            (error.code === 'CHECKSUM_MISMATCH' || error.code === 'SIZE_MISMATCH')
+          ) {
+            throw new StudioProviderCallError(
+              'terminal',
+              'Studio provider asset body changed between replayable reads',
+            );
+          }
+          throw error;
+        }
         stored.push({
           kind: asset.kind,
           mimeType: asset.mime_type,
-          bucket: options.bucket,
+          bucket: store.namespace,
           objectKey,
-          checksumSha256: new Bun.CryptoHasher('sha256').update(asset.bytes).digest('hex'),
-          sizeBytes: asset.bytes.byteLength,
+          checksumSha256,
+          sizeBytes: asset.size_bytes,
           filename,
         });
       }
@@ -717,13 +751,26 @@ export function createObjectStoreAssetWriter(
   };
 }
 
-function byteStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(bytes);
-      controller.close();
-    },
-  });
+async function hashBody(
+  body: ReadableStream<Uint8Array>,
+  expectedSizeBytes: number,
+): Promise<string> {
+  const hasher = new Bun.CryptoHasher('sha256');
+  const reader = body.getReader();
+  let sizeBytes = 0;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) break;
+    sizeBytes += next.value.byteLength;
+    hasher.update(next.value);
+  }
+  if (sizeBytes !== expectedSizeBytes) {
+    throw new StudioProviderCallError(
+      'terminal',
+      `Studio provider asset size mismatch: expected ${expectedSizeBytes}, got ${sizeBytes}`,
+    );
+  }
+  return hasher.digest('hex');
 }
 
 function actualCreditsFrom(result: StudioProviderResult, reservedCredits: number): number {
@@ -778,6 +825,7 @@ function safeFilename(value: string, index: number): string {
 
 export function redactStudioDiagnostic(value: string): string {
   return value
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[REDACTED_URL]')
     .replace(/(authorization\s*:\s*bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
     .replace(/(authorization\s*:\s*basic\s+)[^\s,;]+/gi, '$1[REDACTED]')
     .replace(

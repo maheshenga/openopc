@@ -1,6 +1,6 @@
 {
   "generatedAt": "static",
-  "count": 498,
+  "count": 503,
   "routes": [
     {
       "method": "GET",
@@ -1604,6 +1604,18 @@
     },
     {
       "method": "GET",
+      "path": "/v1/projects/:projectId/studio/assets"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/studio/assets/:assetId"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/studio/assets/:assetId/download-url"
+    },
+    {
+      "method": "GET",
       "path": "/v1/projects/:projectId/studio/capabilities"
     },
     {
@@ -1633,6 +1645,14 @@
     {
       "method": "GET",
       "path": "/v1/projects/:projectId/studio/providers"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/studio/uploads"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/studio/uploads/:uploadId/finalize"
     },
     {
       "method": "GET",

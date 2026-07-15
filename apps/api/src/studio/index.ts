@@ -7,6 +7,7 @@ import type { StudioEstimateResponse, StudioJob } from '@kortix/api-contract';
 import { canonicalStudioRequestHash } from '../../../../packages/studio-runtime/src/idempotency';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { z } from 'zod';
 import { PROJECT_ACTIONS } from '../iam/actions';
 import { createMemoryStudioRepository } from './repositories/memory';
 import type { StudioLoadedProject, StudioRepository } from './types';
@@ -36,6 +37,12 @@ export type StudioProjectRouteDeps = {
 
 const DEFAULT_JOB_LIMIT = 50;
 const MAX_JOB_LIMIT = 100;
+const StudioCreateUploadRequestSchema = z.object({
+  declared_mime_type: z.string().min(1),
+  expected_size_bytes: z.number().int().positive(),
+  expected_checksum_sha256: z.string().min(32),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+}).strict();
 
 function limitFromQuery(raw: string | undefined): number {
   return Math.min(Math.max(Number(raw) || DEFAULT_JOB_LIMIT, 1), MAX_JOB_LIMIT);
@@ -263,6 +270,97 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
     const job = await deps.repository.getJob(projectId, c.req.param('jobId'));
     if (!job) return c.json({ error: 'Not found' }, 404);
     return c.json(await deps.repository.listEvents(projectId, job.job_id, c.req.query('cursor')));
+  });
+
+  app.post('/:projectId/studio/uploads', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_WRITE,
+    );
+    const parsed = StudioCreateUploadRequestSchema.safeParse(await c.req.json());
+    if (!parsed.success) return badRequest(c, parsed.error.flatten());
+    const upload = await deps.repository.createUpload({
+      account_id: loaded.row.accountId,
+      project_id: projectId,
+      actor_user_id: loaded.userId,
+      declared_mime_type: parsed.data.declared_mime_type,
+      expected_size_bytes: parsed.data.expected_size_bytes,
+      expected_checksum_sha256: parsed.data.expected_checksum_sha256,
+      metadata: parsed.data.metadata ?? {},
+    });
+    return c.json(upload, 201);
+  });
+
+  app.post('/:projectId/studio/uploads/:uploadId/finalize', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_WRITE,
+    );
+    const asset = await deps.repository.finalizeUpload(projectId, c.req.param('uploadId'));
+    if (!asset) return c.json({ error: 'Not found' }, 404);
+    return c.json(asset);
+  });
+
+  app.get('/:projectId/studio/assets', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_READ,
+    );
+    return c.json(await deps.repository.listAssets(projectId, limitFromQuery(c.req.query('limit')), c.req.query('cursor')));
+  });
+
+  app.get('/:projectId/studio/assets/:assetId', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_READ,
+    );
+    const asset = await deps.repository.getAsset(projectId, c.req.param('assetId'));
+    if (!asset) return c.json({ error: 'Not found' }, 404);
+    return c.json(asset);
+  });
+
+  app.post('/:projectId/studio/assets/:assetId/download-url', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_READ,
+    );
+    const asset = await deps.repository.getAsset(projectId, c.req.param('assetId'));
+    if (!asset) return c.json({ error: 'Not found' }, 404);
+    return c.json({
+      asset_id: asset.asset_id,
+      signed_download_url: `https://studio.local/download/${asset.asset_id}`,
+      expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+    });
   });
 
   return app;

@@ -207,4 +207,71 @@ describe('Studio project API', () => {
     expect(assertedActions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_READ);
     expect(assertedActions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_CANCEL);
   });
+
+  test('creates uploads, finalizes assets, lists assets, and hides cross-project assets', async () => {
+    const { app, assertedActions } = createApp();
+    const uploadRequest = {
+      declared_mime_type: 'image/png',
+      expected_size_bytes: 42,
+      expected_checksum_sha256: 'a'.repeat(64),
+      metadata: { label: 'reference' },
+    };
+
+    const uploadRes = await app.request(`/v1/projects/${PROJECT_ID}/studio/uploads`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(uploadRequest),
+    });
+    expect(uploadRes.status).toBe(201);
+    const upload = await uploadRes.json();
+    expect(upload).toMatchObject({
+      project_id: PROJECT_ID,
+      asset_id: null,
+      declared_mime_type: 'image/png',
+      expected_size_bytes: 42,
+      expected_checksum_sha256: 'a'.repeat(64),
+      status: 'pending',
+    });
+    expect(upload.signed_upload_url).toStartWith('https://studio.local/upload/');
+
+    const assetRes = await app.request(
+      `/v1/projects/${PROJECT_ID}/studio/uploads/${upload.upload_id}/finalize`,
+      { method: 'POST' },
+    );
+    expect(assetRes.status).toBe(200);
+    const asset = await assetRes.json();
+    expect(asset).toMatchObject({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      source_job_id: null,
+      kind: 'image',
+      mime_type: 'image/png',
+      checksum_sha256: 'a'.repeat(64),
+      size_bytes: 42,
+      metadata: { label: 'reference' },
+    });
+
+    const assets = await app.request(`/v1/projects/${PROJECT_ID}/studio/assets`);
+    expect(assets.status).toBe(200);
+    expect((await assets.json()).items.map((item: any) => item.asset_id)).toEqual([asset.asset_id]);
+
+    const read = await app.request(`/v1/projects/${PROJECT_ID}/studio/assets/${asset.asset_id}`);
+    expect(read.status).toBe(200);
+    expect((await read.json()).asset_id).toBe(asset.asset_id);
+
+    const hidden = await app.request(`/v1/projects/${OTHER_PROJECT_ID}/studio/assets/${asset.asset_id}`);
+    expect(hidden.status).toBe(404);
+
+    const download = await app.request(`/v1/projects/${PROJECT_ID}/studio/assets/${asset.asset_id}/download-url`, {
+      method: 'POST',
+    });
+    expect(download.status).toBe(200);
+    expect(await download.json()).toMatchObject({
+      asset_id: asset.asset_id,
+      signed_download_url: `https://studio.local/download/${asset.asset_id}`,
+    });
+
+    expect(assertedActions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_WRITE);
+    expect(assertedActions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_READ);
+  });
 });

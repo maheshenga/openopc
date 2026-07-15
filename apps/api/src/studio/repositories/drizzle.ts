@@ -2,9 +2,11 @@ import { and, desc, eq, gt, lt } from 'drizzle-orm';
 import {
   studioJobEvents,
   studioJobs,
+  studioAssets,
+  studioAssetUploads,
   studioProviderConfigs,
 } from '@kortix/db';
-import type { StudioJob, StudioJobEvent, StudioProviderConfig } from '@kortix/api-contract';
+import type { StudioAsset, StudioJob, StudioJobEvent, StudioProviderConfig, StudioUpload } from '@kortix/api-contract';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
@@ -102,6 +104,40 @@ function serializeEvent(row: any): StudioJobEvent {
     cursor: String(row.cursor),
     type: row.eventType,
     payload: row.payload ?? {},
+    created_at: row.createdAt,
+  };
+}
+
+function serializeUpload(row: any): StudioUpload {
+  return {
+    upload_id: row.uploadId,
+    project_id: row.projectId,
+    asset_id: row.finalizedAssetId ?? null,
+    object_key: row.objectKey,
+    declared_mime_type: row.declaredMimeType,
+    expected_size_bytes: Number(row.expectedSizeBytes),
+    expected_checksum_sha256: row.expectedChecksumSha256,
+    signed_upload_url: `https://studio.local/upload/${row.uploadId}`,
+    expires_at: row.expiresAt,
+    status: row.status,
+  };
+}
+
+function serializeAsset(row: any): StudioAsset {
+  return {
+    asset_id: row.assetId,
+    account_id: row.accountId,
+    project_id: row.projectId,
+    source_job_id: row.sourceJobId ?? null,
+    kind: row.kind,
+    mime_type: row.mimeType,
+    bucket: row.bucket,
+    object_key: row.objectKey,
+    checksum_sha256: row.checksumSha256,
+    size_bytes: Number(row.sizeBytes),
+    width: row.width ?? null,
+    height: row.height ?? null,
+    metadata: row.metadata ?? {},
     created_at: row.createdAt,
   };
 }
@@ -261,6 +297,93 @@ export function createDrizzleStudioRepository(db: DbClient): StudioRepository {
         items: page,
         next_cursor: rows.length > 100 ? String(rows[100].cursor) : null,
       };
+    },
+
+    async createUpload(input) {
+      const uploadId = crypto.randomUUID();
+      const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+      const rows = await db
+        .insert(studioAssetUploads)
+        .values({
+          uploadId,
+          accountId: input.account_id,
+          projectId: input.project_id,
+          actorUserId: input.actor_user_id,
+          objectKey: `studio/uploads/${input.project_id}/${uploadId}`,
+          declaredMimeType: input.declared_mime_type,
+          expectedSizeBytes: input.expected_size_bytes,
+          expectedChecksumSha256: input.expected_checksum_sha256,
+          expiresAt,
+          status: 'pending',
+        })
+        .returning();
+      return serializeUpload(rows[0]);
+    },
+
+    async finalizeUpload(projectId, uploadId) {
+      const uploads = await db
+        .select()
+        .from(studioAssetUploads)
+        .where(and(
+          eq(studioAssetUploads.projectId, projectId),
+          eq(studioAssetUploads.uploadId, uploadId),
+          eq(studioAssetUploads.status, 'pending'),
+        ))
+        .limit(1);
+      const upload = uploads[0];
+      if (!upload) return null;
+
+      const inserted = await db
+        .insert(studioAssets)
+        .values({
+          accountId: upload.accountId,
+          projectId: upload.projectId,
+          creatorUserId: upload.actorUserId,
+          sourceJobId: null,
+          kind: 'image',
+          mimeType: upload.declaredMimeType,
+          bucket: 'studio',
+          objectKey: upload.objectKey,
+          checksumSha256: upload.expectedChecksumSha256,
+          sizeBytes: upload.expectedSizeBytes,
+          metadata: {},
+        })
+        .returning();
+      const asset = serializeAsset(inserted[0]);
+      await db
+        .update(studioAssetUploads)
+        .set({
+          status: 'finalized',
+          finalizedAssetId: asset.asset_id,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(studioAssetUploads.uploadId, uploadId));
+      return asset;
+    },
+
+    async listAssets(projectId, limit, cursor) {
+      const conditions = [eq(studioAssets.projectId, projectId)];
+      if (cursor) conditions.push(lt(studioAssets.createdAt, cursor));
+      const rows = await db
+        .select()
+        .from(studioAssets)
+        .where(and(...conditions))
+        .orderBy(desc(studioAssets.createdAt))
+        .limit(limit + 1);
+      const page = rows.slice(0, limit).map(serializeAsset);
+      return {
+        items: page,
+        next_cursor: rows.length > limit ? rows[limit].createdAt : null,
+      };
+    },
+
+    async getAsset(projectId, assetId) {
+      const rows = await db
+        .select()
+        .from(studioAssets)
+        .where(and(eq(studioAssets.projectId, projectId), eq(studioAssets.assetId, assetId)))
+        .limit(1);
+      return rows[0] ? serializeAsset(rows[0]) : null;
     },
   };
 }

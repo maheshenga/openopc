@@ -119,6 +119,17 @@ real output. `typecheck` is not evidence.
 
 ---
 
+## 2026-07-15 Studio Phase 1 SDK Claim
+
+- Owner: Codex
+- Scope: Add `kortix.project(projectId).studio` plus `@kortix/sdk/react` Studio hooks.
+- Public surface: additive only; no new SDK subpath.
+- Required gates: typecheck, test, public-surface snapshot, smoke install.
+- Plan: `docs/specs/2026-07-15-kortix-studio-phase1-implementation-plan.md`
+- Status: active
+
+---
+
 ## NOW — active plan: v2 structure & distribution
 
 - **Plan:** `docs/superpowers/plans/2026-07-10-sdk-v2-structure-and-distribution.md`
@@ -787,3 +798,18 @@ packed, installed, imported, and constructed `@kortix/sdk` successfully.
 **Shippable to production: YES** for the SDK surface. API/web typechecks,
 focused provider tests, and UI lint also pass; live dev verification remains the
 enclosing rollout gate.
+
+---
+
+### 2026-07-15 - Studio Phase 1 claim
+
+Studio Phase 1 SDK work claimed for `docs/specs/2026-07-15-kortix-studio-phase1-implementation-plan.md`.
+No SDK implementation code changed in this entry.
+
+**Verified**
+
+```
+git status --short --branch -> ## studio-platform
+```
+
+**Shippable to production: YES** (claim metadata only).

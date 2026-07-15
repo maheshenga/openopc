@@ -11,6 +11,8 @@ export type StudioRetryClassification =
 
 export interface StudioProviderContext {
   correlationId: string;
+  /** Stable, worker-committed idempotency key. It exists before provider I/O. */
+  submissionKey: string;
 }
 
 export interface StudioCostEstimate {
@@ -60,9 +62,7 @@ export interface StudioProviderAdapter {
   ): Promise<StudioProviderResult>;
 }
 
-export type StudioValidationResult =
-  | { ok: true }
-  | { ok: false; code: string; message: string };
+export type StudioValidationResult = { ok: true } | { ok: false; code: string; message: string };
 
 export interface RetryClassificationInput {
   status?: number;
@@ -77,7 +77,10 @@ export interface RetryClassificationResult {
   retry_after_ms?: number;
 }
 
-export function parseRetryAfterMs(value: string | null | undefined, now = new Date()): number | undefined {
+export function parseRetryAfterMs(
+  value: string | null | undefined,
+  now = new Date(),
+): number | undefined {
   if (!value) {
     return undefined;
   }
@@ -97,7 +100,7 @@ export function classifyProviderRetry(input: RetryClassificationInput): RetryCla
     return { classification: 'unknown_outcome', retryable: false };
   }
   if (input.status === 429) {
-    const retryAfterMs = parseRetryAfterMs(input.retryAfter, input.now ?? new Date(0));
+    const retryAfterMs = parseRetryAfterMs(input.retryAfter, input.now ?? new Date());
     return {
       classification: 'rate_limited',
       retryable: true,
@@ -126,18 +129,19 @@ export function createFakeStudioProvider(): StudioProviderAdapter {
         ? { ok: true }
         : { ok: false, code: 'STUDIO_MODEL_UNSUPPORTED', message: 'Unsupported capability' };
     },
-    async estimate() {
+    async estimate(_ctx, input) {
+      const outputCount = input.capability === 'image.generate' ? input.image.output_count : 1;
       return {
-        max_credits: 1,
+        max_credits: outputCount,
         provider_credits: 0,
-        platform_credits: 1,
+        platform_credits: outputCount,
       };
     },
     async submit(_ctx, input) {
       return {
         provider: 'fake',
-        id: `fake-${input.capability}`,
-        submission_key: 'fake-submission-key',
+        id: `fake-${input.capability}-outputs-${input.image.output_count}`,
+        submission_key: _ctx.submissionKey,
       };
     },
     async poll() {
@@ -147,17 +151,26 @@ export function createFakeStudioProvider(): StudioProviderAdapter {
     async reconcile() {
       return 'unknown';
     },
-    async fetchResult() {
+    async fetchResult(_ctx, handle) {
+      const outputCountMatch = /^fake-image\.generate-outputs-([1-8])$/.exec(handle.id);
+      const outputCount = Number(outputCountMatch?.[1] ?? 1);
       return {
-        assets: [
-          {
-            kind: 'image',
-            mime_type: 'image/png',
-            bytes: new Uint8Array([137, 80, 78, 71]),
-            filename: 'fake-studio-image.png',
-          },
-        ],
+        assets: Array.from({ length: outputCount }, (_, index) => ({
+          kind: 'image',
+          mime_type: 'image/png',
+          bytes: fakePngBytes(),
+          filename: `fake-studio-image-${index + 1}.png`,
+        })),
       };
     },
   };
+}
+
+function fakePngBytes(): Uint8Array {
+  return new Uint8Array(
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    ),
+  );
 }

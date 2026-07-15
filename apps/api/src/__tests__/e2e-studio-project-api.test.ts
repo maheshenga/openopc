@@ -1,15 +1,19 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { canonicalStudioRequestHash } from '../../../../packages/studio-runtime/src/idempotency';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { createStudioProjectRoutes, createMemoryStudioRepository } from '../studio';
+import { canonicalStudioRequestHash } from '../../../../packages/studio-runtime/src/idempotency';
 import { PROJECT_ACTIONS } from '../iam/actions';
+import { createMemoryStudioRepository, createStudioProjectRoutes } from '../studio';
 
 const ACCOUNT_ID = '00000000-0000-4000-a000-000000000101';
 const PROJECT_ID = '00000000-0000-4000-a000-000000000201';
 const OTHER_PROJECT_ID = '00000000-0000-4000-a000-000000000202';
 const USER_ID = '00000000-0000-4000-a000-000000000001';
 const PROVIDER_CONFIG_ID = '00000000-0000-4000-a000-000000000301';
+const OTHER_PROVIDER_CONFIG_ID = '00000000-0000-4000-a000-000000000302';
+const ESTIMATE_SIGNING_SECRET = 'studio-test-estimate-signing-secret';
+const ACCOUNT_TOKEN_ID = '00000000-0000-4000-a000-000000000501';
+const SERVICE_ACCOUNT_ID = '00000000-0000-4000-a000-000000000502';
 
 const imageInput = {
   capability: 'image.generate' as const,
@@ -22,7 +26,16 @@ const imageInput = {
   },
 };
 
-function createApp() {
+type TestAuthContext = {
+  authType?: 'supabase' | 'pat' | 'apiKey' | 'service_account';
+  userId?: string;
+  iamTokenId?: string;
+  sessionId?: string;
+  agentGrant?: { agent: string } | null;
+  createJobError?: Error;
+};
+
+function createApp(auth: TestAuthContext = {}) {
   const repository = createMemoryStudioRepository({
     providers: [
       {
@@ -41,6 +54,13 @@ function createApp() {
       },
     ],
   });
+  let capturedCreateInput: Parameters<typeof repository.createJob>[0] | null = null;
+  const createJob = repository.createJob.bind(repository);
+  repository.createJob = async (...args) => {
+    capturedCreateInput = args[0];
+    if (auth.createJobError) throw auth.createJobError;
+    return createJob(...args);
+  };
   const assertedActions: string[] = [];
   const routes = createStudioProjectRoutes({
     repository,
@@ -48,14 +68,23 @@ function createApp() {
       projectId === PROJECT_ID || projectId === OTHER_PROJECT_ID
         ? {
             row: { accountId: ACCOUNT_ID, projectId },
-            userId: USER_ID,
+            userId: auth.userId ?? USER_ID,
           }
         : null,
     assertProjectCapability: async (_c, _userId, _accountId, _projectId, action) => {
       assertedActions.push(action);
     },
+    estimateSigningSecret: ESTIMATE_SIGNING_SECRET,
   });
   const app = new Hono();
+  app.use('*', async (c, next) => {
+    const context = c as unknown as { set(key: string, value: unknown): void };
+    if (auth.authType) context.set('authType', auth.authType);
+    if (auth.iamTokenId) context.set('iamTokenId', auth.iamTokenId);
+    if (auth.sessionId) context.set('sessionId', auth.sessionId);
+    if (auth.agentGrant !== undefined) context.set('agentGrant', auth.agentGrant);
+    await next();
+  });
   app.route('/v1/projects', routes);
   app.onError((err, c) => {
     if (err instanceof HTTPException) {
@@ -63,7 +92,7 @@ function createApp() {
     }
     return c.json({ error: true, message: (err as Error).message }, 500);
   });
-  return { app, assertedActions };
+  return { app, assertedActions, getCapturedCreateInput: () => capturedCreateInput };
 }
 
 async function createEstimate(app: Hono) {
@@ -91,8 +120,10 @@ describe('Studio project API', () => {
 
     const capabilities = await app.request(`/v1/projects/${PROJECT_ID}/studio/capabilities`);
     expect(capabilities.status).toBe(200);
-    const capabilityBody = await capabilities.json();
-    expect(capabilityBody.items.map((item: any) => item.capability)).toEqual(['image.generate']);
+    const capabilityBody = (await capabilities.json()) as {
+      items: Array<{ capability: string }>;
+    };
+    expect(capabilityBody.items.map((item) => item.capability)).toEqual(['image.generate']);
 
     const providers = await app.request(`/v1/projects/${PROJECT_ID}/studio/providers`);
     expect(providers.status).toBe(200);
@@ -126,7 +157,187 @@ describe('Studio project API', () => {
         input: imageInput,
       }),
     });
-    expect(estimate.estimate_token).toStartWith('studio-estimate-');
+    expect(estimate.estimate_token).toStartWith('studio-estimate-v1.');
+  });
+
+  test('rejects an estimate token reused for a more expensive request', async () => {
+    const { app } = createApp();
+    const estimate = await createEstimate(app);
+    const expensiveInput = {
+      ...imageInput,
+      image: { ...imageInput.image, quality: 'high' as const, output_count: 8 },
+    };
+
+    const response = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        capability: 'image.generate',
+        provider_config_id: PROVIDER_CONFIG_ID,
+        model: 'fake/image-v1',
+        input: expensiveInput,
+        estimate_id: estimate.estimate_id,
+        estimate_token: estimate.estimate_token,
+        idempotency_key: 'studio-under-reservation-attempt',
+        request_hash: canonicalStudioRequestHash({
+          capability: 'image.generate',
+          provider_config_id: PROVIDER_CONFIG_ID,
+          model: 'fake/image-v1',
+          input: expensiveInput,
+        }),
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'STUDIO_ESTIMATE_EXPIRED' });
+  });
+
+  test('rejects an expired estimate token', async () => {
+    const { app } = createApp();
+    const estimate = await createEstimate(app);
+    const originalNow = Date.now;
+    Date.now = () => Date.parse(estimate.expires_at) + 1;
+    try {
+      const response = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          capability: 'image.generate',
+          provider_config_id: PROVIDER_CONFIG_ID,
+          model: 'fake/image-v1',
+          input: imageInput,
+          estimate_id: estimate.estimate_id,
+          estimate_token: estimate.estimate_token,
+          idempotency_key: 'studio-expired-estimate-key',
+          request_hash: estimate.input_hash,
+        }),
+      });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'STUDIO_ESTIMATE_EXPIRED' });
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
+  test('accepts a signed estimate on a different API instance', async () => {
+    const issuer = createApp().app;
+    const estimate = await createEstimate(issuer);
+    const verifier = createApp().app;
+
+    const response = await verifier.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        capability: 'image.generate',
+        provider_config_id: PROVIDER_CONFIG_ID,
+        model: 'fake/image-v1',
+        input: imageInput,
+        estimate_id: estimate.estimate_id,
+        estimate_token: estimate.estimate_token,
+        idempotency_key: 'studio-cross-instance-estimate',
+        request_hash: estimate.input_hash,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ reserved_credits: 1, status: 'queued' });
+  });
+
+  test('persists only type-correct PAT, Agent session, and service-account identity context', async () => {
+    const cases = [
+      {
+        name: 'supabase',
+        auth: { authType: 'supabase' as const, sessionId: 'supabase-root-session' },
+        expected: {
+          actor_type: 'user',
+          acting_token_id: null,
+          agent_name: null,
+          session_id: null,
+        },
+      },
+      {
+        name: 'service-account',
+        auth: {
+          authType: 'service_account' as const,
+          userId: SERVICE_ACCOUNT_ID,
+          iamTokenId: SERVICE_ACCOUNT_ID,
+        },
+        expected: {
+          actor_type: 'system',
+          acting_token_id: null,
+          agent_name: null,
+          session_id: null,
+        },
+      },
+      {
+        name: 'agent-pat',
+        auth: {
+          authType: 'pat' as const,
+          iamTokenId: ACCOUNT_TOKEN_ID,
+          sessionId: 'project-session-1',
+          agentGrant: { agent: 'image-agent' },
+        },
+        expected: {
+          actor_type: 'agent',
+          acting_token_id: ACCOUNT_TOKEN_ID,
+          agent_name: 'image-agent',
+          session_id: 'project-session-1',
+        },
+      },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const harness = createApp(testCase.auth);
+      const estimate = await createEstimate(harness.app);
+      const response = await harness.app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          capability: 'image.generate',
+          provider_config_id: PROVIDER_CONFIG_ID,
+          model: 'fake/image-v1',
+          input: imageInput,
+          estimate_id: estimate.estimate_id,
+          estimate_token: estimate.estimate_token,
+          idempotency_key: `studio-auth-context-${testCase.name}-${index}`,
+          request_hash: estimate.input_hash,
+        }),
+      });
+
+      expect(response.status).toBe(201);
+      expect(harness.getCapturedCreateInput()).toMatchObject(testCase.expected);
+    }
+  });
+
+  test('maps insufficient reservation credits to the public 402 error contract', async () => {
+    const error = Object.assign(new Error('Insufficient credits'), {
+      studioCode: 'STUDIO_INSUFFICIENT_CREDITS',
+      httpStatus: 402,
+    });
+    const { app } = createApp({ createJobError: error });
+    const estimate = await createEstimate(app);
+
+    const response = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        capability: 'image.generate',
+        provider_config_id: PROVIDER_CONFIG_ID,
+        model: 'fake/image-v1',
+        input: imageInput,
+        estimate_id: estimate.estimate_id,
+        estimate_token: estimate.estimate_token,
+        idempotency_key: 'studio-insufficient-credits',
+        request_hash: estimate.input_hash,
+      }),
+    });
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({
+      code: 'STUDIO_INSUFFICIENT_CREDITS',
+      error: 'Insufficient credits',
+    });
   });
 
   test('creates jobs idempotently, lists events, and cancels queued jobs', async () => {
@@ -183,7 +394,8 @@ describe('Studio project API', () => {
 
     const list = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`);
     expect(list.status).toBe(200);
-    expect((await list.json()).items.map((item: any) => item.job_id)).toEqual([job.job_id]);
+    const listedJobs = (await list.json()) as { items: Array<{ job_id: string }> };
+    expect(listedJobs.items.map((item) => item.job_id)).toEqual([job.job_id]);
 
     const read = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs/${job.job_id}`);
     expect(read.status).toBe(200);
@@ -198,9 +410,12 @@ describe('Studio project API', () => {
       expect.objectContaining({ job_id: job.job_id, cursor: '1', type: 'queued' }),
     ]);
 
-    const cancelled = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs/${job.job_id}/cancel`, {
-      method: 'POST',
-    });
+    const cancelled = await app.request(
+      `/v1/projects/${PROJECT_ID}/studio/jobs/${job.job_id}/cancel`,
+      {
+        method: 'POST',
+      },
+    );
     expect(cancelled.status).toBe(200);
     expect(await cancelled.json()).toMatchObject({ job_id: job.job_id, status: 'cancelled' });
     expect(assertedActions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_RUN);
@@ -253,18 +468,24 @@ describe('Studio project API', () => {
 
     const assets = await app.request(`/v1/projects/${PROJECT_ID}/studio/assets`);
     expect(assets.status).toBe(200);
-    expect((await assets.json()).items.map((item: any) => item.asset_id)).toEqual([asset.asset_id]);
+    const listedAssets = (await assets.json()) as { items: Array<{ asset_id: string }> };
+    expect(listedAssets.items.map((item) => item.asset_id)).toEqual([asset.asset_id]);
 
     const read = await app.request(`/v1/projects/${PROJECT_ID}/studio/assets/${asset.asset_id}`);
     expect(read.status).toBe(200);
     expect((await read.json()).asset_id).toBe(asset.asset_id);
 
-    const hidden = await app.request(`/v1/projects/${OTHER_PROJECT_ID}/studio/assets/${asset.asset_id}`);
+    const hidden = await app.request(
+      `/v1/projects/${OTHER_PROJECT_ID}/studio/assets/${asset.asset_id}`,
+    );
     expect(hidden.status).toBe(404);
 
-    const download = await app.request(`/v1/projects/${PROJECT_ID}/studio/assets/${asset.asset_id}/download-url`, {
-      method: 'POST',
-    });
+    const download = await app.request(
+      `/v1/projects/${PROJECT_ID}/studio/assets/${asset.asset_id}/download-url`,
+      {
+        method: 'POST',
+      },
+    );
     expect(download.status).toBe(200);
     expect(await download.json()).toMatchObject({
       asset_id: asset.asset_id,
@@ -273,5 +494,66 @@ describe('Studio project API', () => {
 
     expect(assertedActions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_WRITE);
     expect(assertedActions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_READ);
+  });
+
+  test('does not disclose an existing job when an idempotency key crosses projects', async () => {
+    const repository = createMemoryStudioRepository();
+    const estimate = {
+      estimate_id: '00000000-0000-4000-a000-000000000401',
+      estimate_token: 'studio-estimate-token',
+      expires_at: '2026-07-15T10:15:00.000Z',
+      currency: 'credits' as const,
+      input_hash: 'same-request-hash',
+      provider_cost_credits: 1,
+      platform_cost_credits: 0,
+      max_approved_credits: 1,
+      line_items: [],
+    };
+    const provider = (projectId: string, providerConfigId: string) => ({
+      provider_config_id: providerConfigId,
+      account_id: ACCOUNT_ID,
+      project_id: projectId,
+      provider: 'fake' as const,
+      display_name: 'Fake',
+      base_url: null,
+      region: null,
+      credential_binding: { kind: 'none' as const },
+      capabilities: ['image.generate' as const],
+      enabled: true,
+      created_at: '2026-07-15T10:00:00.000Z',
+      updated_at: '2026-07-15T10:00:00.000Z',
+    });
+    const jobInput = (projectId: string, providerConfigId: string) => ({
+      account_id: ACCOUNT_ID,
+      project_id: projectId,
+      actor_user_id: USER_ID,
+      actor_type: 'user' as const,
+      acting_token_id: null,
+      agent_name: null,
+      session_id: null,
+      parent_job_id: null,
+      capability: 'image.generate' as const,
+      provider_config_id: providerConfigId,
+      model: 'fake/image-v1',
+      input: imageInput,
+      estimate_id: estimate.estimate_id,
+      estimate_token: estimate.estimate_token,
+      idempotency_key: 'shared-account-idempotency-key',
+      request_hash: 'same-request-hash',
+    });
+
+    await repository.createJob(
+      jobInput(PROJECT_ID, PROVIDER_CONFIG_ID),
+      provider(PROJECT_ID, PROVIDER_CONFIG_ID),
+      estimate,
+    );
+    const collision = await repository.createJob(
+      jobInput(OTHER_PROJECT_ID, OTHER_PROVIDER_CONFIG_ID),
+      provider(OTHER_PROJECT_ID, OTHER_PROVIDER_CONFIG_ID),
+      estimate,
+    );
+
+    expect(collision).toMatchObject({ created: false, mismatch: true });
+    expect('job' in collision).toBe(false);
   });
 });

@@ -56,7 +56,9 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
     await this.assertReady();
     const bytes = await readStream(input.body);
     if (bytes.byteLength !== input.size_bytes) {
-      throw new Error(`Studio object size mismatch: expected ${input.size_bytes}, got ${bytes.byteLength}`);
+      throw new Error(
+        `Studio object size mismatch: expected ${input.size_bytes}, got ${bytes.byteLength}`,
+      );
     }
     this.objects.set(objectId(input), {
       bytes,
@@ -72,7 +74,7 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
     }
     return {
       ...ref,
-      body: new Blob([object.bytes]).stream(),
+      body: byteStream(object.bytes),
       content_type: object.content_type,
       size_bytes: object.bytes.byteLength,
     };
@@ -87,6 +89,15 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
     await this.assertReady();
     return `memory-upload://${input.bucket}/${input.key}?ttl=${input.expires_in_seconds}`;
   }
+}
+
+function byteStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
 }
 
 function objectId(ref: StudioObjectRef): string {

@@ -1,4 +1,4 @@
-import type { StudioAsset, StudioEstimateResponse, StudioJob, StudioJobEvent, StudioUpload } from '@kortix/api-contract';
+import type { StudioAsset, StudioJob, StudioJobEvent, StudioUpload } from '@kortix/api-contract';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
@@ -15,16 +15,30 @@ function isoNow() {
   return new Date().toISOString();
 }
 
-export function createMemoryStudioRepository(input: MemoryStudioRepositoryInput = {}): StudioRepository {
-  const providers = new Map(input.providers?.map((provider) => [provider.provider_config_id, provider]) ?? []);
-  const estimates = new Map<string, StudioEstimateResponse>();
+export function createMemoryStudioRepository(
+  input: MemoryStudioRepositoryInput = {},
+): StudioRepository {
+  const providers = new Map(
+    input.providers?.map((provider) => [provider.provider_config_id, provider]) ?? [],
+  );
   const jobs = new Map<string, StudioJob>();
   const events = new Map<string, StudioJobEvent[]>();
-  const uploads = new Map<string, StudioUpload & { account_id: string; actor_user_id: string | null; metadata: Record<string, unknown> }>();
+  const uploads = new Map<
+    string,
+    StudioUpload & {
+      account_id: string;
+      actor_user_id: string | null;
+      metadata: Record<string, unknown>;
+    }
+  >();
   const assets = new Map<string, StudioAsset>();
   const now = input.now ?? isoNow;
 
-  const appendEvent = (jobId: string, type: StudioJobEvent['type'], payload: Record<string, unknown>) => {
+  const appendEvent = (
+    jobId: string,
+    type: StudioJobEvent['type'],
+    payload: Record<string, unknown>,
+  ) => {
     const list = events.get(jobId) ?? [];
     const cursor = String(list.length + 1);
     list.push({
@@ -40,7 +54,9 @@ export function createMemoryStudioRepository(input: MemoryStudioRepositoryInput 
 
   return {
     async listProviders(projectId) {
-      return [...providers.values()].filter((provider) => provider.project_id === projectId && provider.enabled);
+      return [...providers.values()].filter(
+        (provider) => provider.project_id === projectId && provider.enabled,
+      );
     },
 
     async getProvider(projectId, providerConfigId) {
@@ -48,23 +64,21 @@ export function createMemoryStudioRepository(input: MemoryStudioRepositoryInput 
       return provider?.project_id === projectId && provider.enabled ? provider : null;
     },
 
-    async saveEstimate(_input, estimate) {
-      estimates.set(estimate.estimate_id, estimate);
-    },
-
-    async getEstimate(estimateId) {
-      return estimates.get(estimateId) ?? null;
-    },
-
     async createJob(input, provider, estimate): Promise<StudioCreateJobResult> {
       const existing = [...jobs.values()].find(
-        (job) => job.account_id === input.account_id && job.idempotency_key === input.idempotency_key,
+        (job) =>
+          job.account_id === input.account_id && job.idempotency_key === input.idempotency_key,
       );
       if (existing) {
+        if (
+          existing.project_id !== input.project_id ||
+          existing.request_hash !== input.request_hash
+        ) {
+          return { created: false, mismatch: true };
+        }
         return {
           job: existing,
           created: false,
-          mismatch: existing.request_hash !== input.request_hash,
         };
       }
 
@@ -117,9 +131,15 @@ export function createMemoryStudioRepository(input: MemoryStudioRepositoryInput 
       return job?.project_id === projectId ? job : null;
     },
 
-    async cancelQueuedJob(projectId, jobId) {
+    async requestCancellation(projectId, jobId) {
       const job = jobs.get(jobId);
-      if (!job || job.project_id !== projectId || job.status !== 'queued') return null;
+      if (!job || job.project_id !== projectId || !['queued', 'running'].includes(job.status))
+        return null;
+      if (job.status === 'running') {
+        const updated = { ...job, updated_at: now() };
+        jobs.set(jobId, updated);
+        return updated;
+      }
       const updated: StudioJob = {
         ...job,
         status: 'cancelled',
@@ -141,7 +161,11 @@ export function createMemoryStudioRepository(input: MemoryStudioRepositoryInput 
 
     async createUpload(input) {
       const uploadId = crypto.randomUUID();
-      const upload: StudioUpload & { account_id: string; actor_user_id: string | null; metadata: Record<string, unknown> } = {
+      const upload: StudioUpload & {
+        account_id: string;
+        actor_user_id: string | null;
+        metadata: Record<string, unknown>;
+      } = {
         upload_id: uploadId,
         project_id: input.project_id,
         asset_id: null,
@@ -157,7 +181,12 @@ export function createMemoryStudioRepository(input: MemoryStudioRepositoryInput 
         metadata: input.metadata,
       };
       uploads.set(uploadId, upload);
-      const { account_id: _accountId, actor_user_id: _actorUserId, metadata: _metadata, ...wire } = upload;
+      const {
+        account_id: _accountId,
+        actor_user_id: _actorUserId,
+        metadata: _metadata,
+        ...wire
+      } = upload;
       return wire;
     },
 

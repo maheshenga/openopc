@@ -1,12 +1,20 @@
-import { and, desc, eq, gt, lt } from 'drizzle-orm';
+import type {
+  StudioAsset,
+  StudioJob,
+  StudioJobEvent,
+  StudioProviderConfig,
+  StudioUpload,
+} from '@kortix/api-contract';
 import {
+  type Database,
+  studioAssetUploads,
+  studioAssets,
   studioJobEvents,
   studioJobs,
-  studioAssets,
-  studioAssetUploads,
   studioProviderConfigs,
 } from '@kortix/db';
-import type { StudioAsset, StudioJob, StudioJobEvent, StudioProviderConfig, StudioUpload } from '@kortix/api-contract';
+import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { StudioRepositoryError } from '../types';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
@@ -14,11 +22,11 @@ import type {
   StudioRepository,
 } from '../types';
 
-type DbClient = {
-  select: (...args: any[]) => any;
-  insert: (...args: any[]) => any;
-  update: (...args: any[]) => any;
-};
+type ProviderRow = typeof studioProviderConfigs.$inferSelect;
+type JobRow = typeof studioJobs.$inferSelect;
+type EventRow = typeof studioJobEvents.$inferSelect;
+type UploadRow = typeof studioAssetUploads.$inferSelect;
+type AssetRow = typeof studioAssets.$inferSelect;
 
 function numberValue(value: unknown): number {
   if (value === null || value === undefined) return 0;
@@ -44,16 +52,23 @@ function providerCapabilities(raw: unknown): StudioProviderConfig['capabilities'
   return [];
 }
 
-function serializeProvider(row: any): StudioProviderConfigWire | null {
-  if (row.provider !== 'fake' && row.provider !== 'openai-compatible') return null;
-  const credential = row.credentialBinding ?? { kind: 'none' };
-  if (
-    !credential ||
-    typeof credential !== 'object' ||
-    !['secret', 'connector', 'none'].includes(String((credential as Record<string, unknown>).kind))
-  ) {
-    return null;
+function publicCredentialBinding(raw: unknown): StudioProviderConfig['credential_binding'] | null {
+  if (!raw || typeof raw !== 'object') return raw == null ? { kind: 'none' } : null;
+  const candidate = raw as Record<string, unknown>;
+  if (candidate.kind === 'none') return { kind: 'none' };
+  if (candidate.kind === 'secret' && typeof candidate.identifier === 'string') {
+    return candidate.identifier ? { kind: 'secret', identifier: candidate.identifier } : null;
   }
+  if (candidate.kind === 'connector' && typeof candidate.slug === 'string') {
+    return candidate.slug ? { kind: 'connector', slug: candidate.slug } : null;
+  }
+  return null;
+}
+
+function serializeProvider(row: ProviderRow): StudioProviderConfigWire | null {
+  if (row.provider !== 'fake' && row.provider !== 'openai-compatible') return null;
+  const credential = publicCredentialBinding(row.credentialBinding);
+  if (!credential) return null;
   return {
     provider_config_id: row.providerConfigId,
     account_id: row.accountId,
@@ -62,53 +77,53 @@ function serializeProvider(row: any): StudioProviderConfigWire | null {
     display_name: row.displayName,
     base_url: row.baseUrl ?? null,
     region: row.region ?? null,
-    credential_binding: credential as StudioProviderConfig['credential_binding'],
+    credential_binding: credential,
     capabilities: providerCapabilities(row.capabilityMap),
     enabled: row.enabled === true,
-    created_at: row.createdAt,
-    updated_at: row.updatedAt,
+    created_at: row.createdAt ?? new Date(0).toISOString(),
+    updated_at: row.updatedAt ?? new Date(0).toISOString(),
   };
 }
 
-function serializeJob(row: any): StudioJob {
+function serializeJob(row: JobRow): StudioJob {
   return {
     job_id: row.jobId,
     account_id: row.accountId,
     project_id: row.projectId,
     actor_user_id: row.actorUserId ?? null,
-    actor_type: row.actorType,
-    capability: row.capability,
+    actor_type: row.actorType as StudioJob['actor_type'],
+    capability: row.capability as StudioJob['capability'],
     provider_config_id: row.providerConfigId,
     provider: row.provider,
     model: row.model,
-    input: row.input,
-    status: row.status,
+    input: row.input as StudioJob['input'],
+    status: row.status as StudioJob['status'],
     idempotency_key: row.idempotencyKey,
     request_hash: row.requestHash,
     attempt_count: row.attemptCount,
     reserved_credits: numberValue(row.reservedCredits),
     actual_credits: nullableNumberValue(row.actualCredits),
-    error_code: row.errorCode ?? null,
+    error_code: (row.errorCode as StudioJob['error_code']) ?? null,
     error_message: row.errorMessage ?? null,
-    created_at: row.createdAt,
-    updated_at: row.updatedAt,
+    created_at: row.createdAt ?? new Date(0).toISOString(),
+    updated_at: row.updatedAt ?? new Date(0).toISOString(),
     started_at: row.startedAt ?? null,
     completed_at: row.completedAt ?? null,
   };
 }
 
-function serializeEvent(row: any): StudioJobEvent {
+function serializeEvent(row: EventRow): StudioJobEvent {
   return {
     event_id: row.eventId,
     job_id: row.jobId,
     cursor: String(row.cursor),
-    type: row.eventType,
+    type: row.eventType as StudioJobEvent['type'],
     payload: row.payload ?? {},
-    created_at: row.createdAt,
+    created_at: row.createdAt ?? new Date(0).toISOString(),
   };
 }
 
-function serializeUpload(row: any): StudioUpload {
+function serializeUpload(row: UploadRow): StudioUpload {
   return {
     upload_id: row.uploadId,
     project_id: row.projectId,
@@ -119,17 +134,17 @@ function serializeUpload(row: any): StudioUpload {
     expected_checksum_sha256: row.expectedChecksumSha256,
     signed_upload_url: `https://studio.local/upload/${row.uploadId}`,
     expires_at: row.expiresAt,
-    status: row.status,
+    status: row.status as StudioUpload['status'],
   };
 }
 
-function serializeAsset(row: any): StudioAsset {
+function serializeAsset(row: AssetRow): StudioAsset {
   return {
     asset_id: row.assetId,
     account_id: row.accountId,
     project_id: row.projectId,
     source_job_id: row.sourceJobId ?? null,
-    kind: row.kind,
+    kind: row.kind as StudioAsset['kind'],
     mime_type: row.mimeType,
     bucket: row.bucket,
     object_key: row.objectKey,
@@ -138,103 +153,123 @@ function serializeAsset(row: any): StudioAsset {
     width: row.width ?? null,
     height: row.height ?? null,
     metadata: row.metadata ?? {},
-    created_at: row.createdAt,
+    created_at: row.createdAt ?? new Date(0).toISOString(),
   };
 }
 
-export function createDrizzleStudioRepository(db: DbClient): StudioRepository {
-  const estimates = new Map<string, import('@kortix/api-contract').StudioEstimateResponse>();
-
-  async function insertEvent(jobId: string, type: StudioJobEvent['type'], payload: Record<string, unknown>) {
-    const current = await db
-      .select({ cursor: studioJobEvents.cursor })
-      .from(studioJobEvents)
-      .where(eq(studioJobEvents.jobId, jobId))
-      .orderBy(desc(studioJobEvents.cursor))
-      .limit(1);
-    const nextCursor = Number(current[0]?.cursor ?? 0) + 1;
-    await db.insert(studioJobEvents).values({
-      jobId,
-      cursor: nextCursor,
-      eventType: type,
-      payload,
-    });
+function rowsFromExecute(value: unknown): Record<string, unknown>[] {
+  if (!value || typeof (value as { [Symbol.iterator]?: unknown })[Symbol.iterator] !== 'function') {
+    return [];
   }
+  return Array.from(value as Iterable<Record<string, unknown>>);
+}
 
+export function createDrizzleStudioRepository(db: Database): StudioRepository {
   return {
     async listProviders(projectId) {
       const rows = await db
         .select()
         .from(studioProviderConfigs)
-        .where(and(eq(studioProviderConfigs.projectId, projectId), eq(studioProviderConfigs.enabled, true)));
+        .where(
+          and(
+            eq(studioProviderConfigs.projectId, projectId),
+            eq(studioProviderConfigs.enabled, true),
+          ),
+        );
       return rows
         .map(serializeProvider)
-        .filter((provider: StudioProviderConfigWire | null): provider is StudioProviderConfigWire => !!provider);
+        .filter(
+          (provider: StudioProviderConfigWire | null): provider is StudioProviderConfigWire =>
+            !!provider,
+        );
     },
 
     async getProvider(projectId, providerConfigId) {
       const rows = await db
         .select()
         .from(studioProviderConfigs)
-        .where(and(
-          eq(studioProviderConfigs.projectId, projectId),
-          eq(studioProviderConfigs.providerConfigId, providerConfigId),
-          eq(studioProviderConfigs.enabled, true),
-        ))
+        .where(
+          and(
+            eq(studioProviderConfigs.projectId, projectId),
+            eq(studioProviderConfigs.providerConfigId, providerConfigId),
+            eq(studioProviderConfigs.enabled, true),
+          ),
+        )
         .limit(1);
       return rows[0] ? serializeProvider(rows[0]) : null;
-    },
-
-    async saveEstimate(_input, estimate) {
-      estimates.set(estimate.estimate_id, estimate);
-    },
-
-    async getEstimate(estimateId) {
-      return estimates.get(estimateId) ?? null;
     },
 
     async createJob(input, provider, estimate): Promise<StudioCreateJobResult> {
       const existing = await db
         .select()
         .from(studioJobs)
-        .where(and(
-          eq(studioJobs.accountId, input.account_id),
-          eq(studioJobs.idempotencyKey, input.idempotency_key),
-        ))
+        .where(
+          and(
+            eq(studioJobs.accountId, input.account_id),
+            eq(studioJobs.idempotencyKey, input.idempotency_key),
+          ),
+        )
         .limit(1);
       if (existing[0]) {
+        if (
+          existing[0].projectId !== input.project_id ||
+          existing[0].requestHash !== input.request_hash
+        ) {
+          return { created: false, mismatch: true };
+        }
         return {
           job: serializeJob(existing[0]),
           created: false,
-          mismatch: existing[0].requestHash !== input.request_hash,
         };
       }
 
-      const inserted = await db
-        .insert(studioJobs)
-        .values({
-          accountId: input.account_id,
-          projectId: input.project_id,
-          actorUserId: input.actor_user_id,
-          actorType: input.actor_type,
-          capability: input.capability,
-          providerConfigId: input.provider_config_id,
-          provider: provider.provider,
-          model: input.model,
-          input: input.input,
-          status: 'queued',
-          idempotencyKey: input.idempotency_key,
-          requestHash: input.request_hash,
-          reservedCredits: String(estimate.max_approved_credits),
-        })
-        .returning();
-      const job = serializeJob(inserted[0]);
-      await insertEvent(job.job_id, 'queued', {
-        capability: job.capability,
-        provider_config_id: job.provider_config_id,
-        model: job.model,
-      });
-      return { job, created: true };
+      const reservationExpiresAt = new Date(
+        Math.max(Date.now() + 24 * 60 * 60_000, Date.parse(estimate.expires_at)),
+      ).toISOString();
+      const rpcRows = await db.execute(sql`
+        SELECT public.atomic_create_studio_job(
+          ${input.account_id}::uuid,
+          ${input.project_id}::uuid,
+          ${input.actor_user_id}::uuid,
+          ${input.actor_type},
+          ${input.acting_token_id}::uuid,
+          ${input.agent_name},
+          ${input.session_id},
+          ${input.parent_job_id}::uuid,
+          ${input.capability},
+          ${input.provider_config_id}::uuid,
+          ${provider.provider},
+          ${input.model},
+          ${JSON.stringify(input.input)}::jsonb,
+          ${input.idempotency_key},
+          ${input.request_hash},
+          ${String(estimate.max_approved_credits)}::numeric,
+          ${reservationExpiresAt}::timestamptz
+        ) AS result
+      `);
+      const rpc = rowsFromExecute(rpcRows)[0]?.result as Record<string, unknown> | undefined;
+      if (!rpc || rpc.success !== true) {
+        if (rpc?.code === 'idempotency_mismatch') {
+          return { created: false, mismatch: true };
+        }
+        if (rpc?.code === 'insufficient_credits') {
+          throw new StudioRepositoryError(
+            'STUDIO_INSUFFICIENT_CREDITS',
+            402,
+            'Insufficient credits',
+          );
+        }
+        throw new Error(String(rpc?.error ?? 'Studio job reservation failed'));
+      }
+      const jobId = String(rpc.job_id);
+      const rows = await db
+        .select()
+        .from(studioJobs)
+        .where(and(eq(studioJobs.projectId, input.project_id), eq(studioJobs.jobId, jobId)))
+        .limit(1);
+      if (!rows[0]) throw new Error('Studio job was created but could not be reloaded');
+      const job = serializeJob(rows[0]);
+      return { job, created: rpc.idempotent !== true };
     },
 
     async listJobs(projectId, limit, cursor) {
@@ -262,23 +297,52 @@ export function createDrizzleStudioRepository(db: DbClient): StudioRepository {
       return rows[0] ? serializeJob(rows[0]) : null;
     },
 
-    async cancelQueuedJob(projectId, jobId) {
-      const existing = await this.getJob(projectId, jobId);
-      if (!existing || existing.status !== 'queued') return null;
-      const completedAt = new Date().toISOString();
-      const rows = await db
-        .update(studioJobs)
-        .set({
-          status: 'cancelled',
-          cancellationRequestedAt: completedAt,
-          completedAt,
-          updatedAt: completedAt,
-        })
-        .where(and(eq(studioJobs.projectId, projectId), eq(studioJobs.jobId, jobId), eq(studioJobs.status, 'queued')))
-        .returning();
-      if (!rows[0]) return null;
-      await insertEvent(jobId, 'cancelled', { reason: 'user_cancelled' });
-      return serializeJob(rows[0]);
+    async requestCancellation(projectId, jobId) {
+      const now = new Date().toISOString();
+      const rows = await db.execute(sql`
+        WITH locked AS (
+          SELECT job_id, status
+          FROM kortix.studio_jobs
+          WHERE project_id = ${projectId}::uuid
+            AND job_id = ${jobId}::uuid
+            AND status IN ('queued', 'running')
+          FOR UPDATE
+        ), updated AS (
+          UPDATE kortix.studio_jobs job
+          SET cancellation_requested_at = ${now}::timestamptz,
+              status = CASE WHEN locked.status = 'queued' THEN 'cancelled'::kortix.studio_job_status ELSE job.status END,
+              completed_at = CASE WHEN locked.status = 'queued' THEN ${now}::timestamptz ELSE job.completed_at END,
+              lease_owner = CASE WHEN locked.status = 'queued' THEN NULL ELSE job.lease_owner END,
+              lease_expires_at = CASE WHEN locked.status = 'queued' THEN NULL ELSE job.lease_expires_at END,
+              updated_at = ${now}::timestamptz
+          FROM locked
+          WHERE job.job_id = locked.job_id
+          RETURNING job.job_id, job.status, locked.status AS prior_status
+        ), released AS (
+          UPDATE kortix.studio_credit_reservations reservation
+          SET status = 'released',
+              release_key = ${`studio:cancel:${jobId}`},
+              released_at = ${now}::timestamptz
+          FROM updated
+          WHERE reservation.job_id = updated.job_id
+            AND updated.prior_status = 'queued'
+            AND reservation.status = 'active'
+          RETURNING reservation.job_id
+        ), next_cursor AS (
+          SELECT COALESCE(MAX(event.cursor), 0) + 1 AS cursor
+          FROM kortix.studio_job_events event
+          JOIN updated ON updated.job_id = event.job_id
+        ), terminal_event AS (
+          INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+          SELECT updated.job_id, next_cursor.cursor, 'cancelled', ${JSON.stringify({ reason: 'user_cancelled' })}::jsonb, ${now}::timestamptz
+          FROM updated CROSS JOIN next_cursor
+          WHERE updated.prior_status = 'queued'
+          RETURNING job_id
+        )
+        SELECT job_id, status FROM updated
+      `);
+      if (!rowsFromExecute(rows)[0]) return null;
+      return this.getJob(projectId, jobId);
     },
 
     async listEvents(projectId, jobId, afterCursor) {
@@ -324,11 +388,13 @@ export function createDrizzleStudioRepository(db: DbClient): StudioRepository {
       const uploads = await db
         .select()
         .from(studioAssetUploads)
-        .where(and(
-          eq(studioAssetUploads.projectId, projectId),
-          eq(studioAssetUploads.uploadId, uploadId),
-          eq(studioAssetUploads.status, 'pending'),
-        ))
+        .where(
+          and(
+            eq(studioAssetUploads.projectId, projectId),
+            eq(studioAssetUploads.uploadId, uploadId),
+            eq(studioAssetUploads.status, 'pending'),
+          ),
+        )
         .limit(1);
       const upload = uploads[0];
       if (!upload) return null;

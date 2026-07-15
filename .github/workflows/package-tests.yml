@@ -146,6 +146,7 @@ jobs:
                --filter "@kortix/enterprise-updater" \
                --filter "@kortix/enterprise-release" \
                --filter "@kortix/sandbox-agent-server" \
+               --filter "@kortix/studio-worker" \
                --filter "kortix" \
                --if-present test
 

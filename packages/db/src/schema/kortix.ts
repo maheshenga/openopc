@@ -1948,7 +1948,7 @@ export const creditAccounts = kortixSchema.table(
     nonExpiringCredits: numeric('non_expiring_credits', { precision: 12, scale: 4 })
       .default('0')
       .notNull(),
-    dailyCreditsBalance: numeric('daily_credits_balance', { precision: 10, scale: 2 })
+    dailyCreditsBalance: numeric('daily_credits_balance', { precision: 12, scale: 4 })
       .default('0')
       .notNull(),
     trialStatus: varchar('trial_status', { length: 20 }).default('none'),
@@ -2399,6 +2399,9 @@ export const studioCreditReservations = kortixSchema.table(
   (table) => [
     index('idx_studio_credit_reservations_active_account')
       .on(table.accountId)
+      .where(sql`${table.status} = 'active'`),
+    index('idx_studio_credit_reservations_expiry')
+      .on(table.expiresAt)
       .where(sql`${table.status} = 'active'`),
     uniqueIndex('idx_studio_credit_reservations_job').on(table.jobId),
     uniqueIndex('idx_studio_credit_reservations_settlement_key')

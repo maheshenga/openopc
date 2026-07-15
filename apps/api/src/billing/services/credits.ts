@@ -2,6 +2,7 @@ import { InsufficientCreditsError } from '../../errors';
 import { db } from '../../shared/db';
 import { getSupabase } from '../../shared/supabase';
 import {
+  getActiveStudioCreditReservationTotal,
   getCreditAccount,
   getCreditBalance,
   updateCreditAccount,
@@ -57,20 +58,24 @@ export async function getBalance(accountId: string) {
 export async function getCreditSummary(accountId: string) {
   const account = await getCreditAccount(accountId);
   if (!account) {
-    return { total: 0, daily: 0, monthly: 0, extra: 0, canRun: false };
+    return { total: 0, daily: 0, monthly: 0, extra: 0, reserved: 0, available: 0, canRun: false };
   }
 
   const daily = Number(account.dailyCreditsBalance) || 0;
   const monthly = Number(account.expiringCredits) || 0;
   const extra = Number(account.nonExpiringCredits) || 0;
   const total = Number(account.balance) || 0;
+  const reserved = await getActiveStudioCreditReservationTotal(accountId);
+  const available = Math.max(0, total - reserved);
 
   return {
     total,
     daily,
     monthly,
     extra,
-    canRun: total >= MINIMUM_CREDIT_FOR_RUN,
+    reserved,
+    available,
+    canRun: available >= MINIMUM_CREDIT_FOR_RUN,
   };
 }
 

@@ -14,6 +14,7 @@ export const mockRegistry = {
 
   getCreditAccount: null as ((id: string) => Promise<any>) | null,
   getCreditBalance: null as ((id: string) => Promise<any>) | null,
+  getActiveStudioCreditReservationTotal: null as ((id: string) => Promise<number>) | null,
   updateCreditAccount: null as ((id: string, data: any) => Promise<void>) | null,
   upsertCreditAccount: null as ((id: string, data: any) => Promise<void>) | null,
   getYearlyAccountsDueForRotation: null as (() => Promise<any[]>) | null,
@@ -90,6 +91,10 @@ export function registerGlobalMocks() {
       const a = createMockCreditAccount();
       return { balance: a.balance, expiringCredits: a.expiringCredits, nonExpiringCredits: a.nonExpiringCredits, dailyCreditsBalance: a.dailyCreditsBalance, tier: a.tier };
     },
+    getActiveStudioCreditReservationTotal: async (id: string) =>
+      mockRegistry.getActiveStudioCreditReservationTotal
+        ? mockRegistry.getActiveStudioCreditReservationTotal(id)
+        : 0,
     updateCreditAccount: async (id: string, data: any) =>
       mockRegistry.updateCreditAccount ? mockRegistry.updateCreditAccount(id, data) : undefined,
     upsertCreditAccount: async (id: string, data: any) =>

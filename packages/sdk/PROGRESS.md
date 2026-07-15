@@ -813,3 +813,31 @@ git status --short --branch -> ## studio-platform
 ```
 
 **Shippable to production: YES** (claim metadata only).
+
+---
+
+### 2026-07-15 - Studio Phase 1 billing reservation fields
+
+Completed the additive SDK billing shape for Task 5: account-state credits now
+surface `reserved` and `available`, and `getDefaultAccountState()` initializes
+both to `0`. This is additive only; no SDK public name was removed or renamed.
+
+Also fixed the SDK install smoke script on Windows so its internal package
+commands resolve `pnpm.cmd` / `npm.cmd` instead of failing before pack/install.
+
+**Final SDK gates**
+
+```
+pnpm.cmd --filter @kortix/sdk typecheck
+-> exit 0
+
+pnpm.cmd --filter @kortix/sdk test
+-> 1095 pass, 0 fail, 4939 expect() calls, 80 files
+
+pnpm.cmd --filter @kortix/sdk smoke:install
+-> OK: @kortix/sdk imports and constructs from a packed tarball
+-> install smoke test passed
+```
+
+**Shippable to production: YES** for the additive SDK billing fields and Windows
+smoke-install fix. The broader Studio Phase 1 rollout remains in progress.

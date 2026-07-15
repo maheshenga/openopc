@@ -5,6 +5,34 @@ let creditSummary: any = null;
 let autoTopup: any = null;
 let isAdmin = false;
 
+mock.module('../config', () => ({
+  config: {
+    DATABASE_URL: 'postgres://test/test',
+    SUPABASE_URL: 'http://127.0.0.1:54321',
+    SUPABASE_SERVICE_ROLE_KEY: 'test-service-role',
+    API_KEY_SECRET: 'test-api-key-secret',
+    ALLOWED_SANDBOX_PROVIDERS: [],
+    TUNNEL_ENABLED: false,
+  },
+}));
+
+function makeSelectChain(result: any[]) {
+  const chain: any = {
+    from: () => chain,
+    where: () => chain,
+    limit: async () => result,
+    then: (resolve: (value: any[]) => void) => Promise.resolve(result).then(resolve),
+  };
+  return chain;
+}
+
+mock.module('../shared/db', () => ({
+  db: {
+    select: (shape?: Record<string, unknown>) =>
+      makeSelectChain(shape?.activeCount ? [{ activeCount: 0 }] : []),
+  },
+}));
+
 mock.module('../billing/repositories/credit-accounts', () => ({
   getCreditAccount: async () => null,
   getCreditBalance: async () => null,
@@ -85,6 +113,23 @@ describe('buildMinimalAccountState revenuecat', () => {
     const state = await buildMinimalAccountState('acc_test_123');
 
     expect(state.subscription.status).toBe('past_due');
+  });
+
+  test('surfaces reserved and available credits from the credit summary', async () => {
+    creditSummary = {
+      total: 25,
+      daily: 0,
+      monthly: 20,
+      extra: 5,
+      reserved: 7,
+      available: 18,
+      canRun: true,
+    };
+
+    const state = await buildMinimalAccountState('acc_test_123');
+
+    expect(state.credits.reserved).toBe(7);
+    expect(state.credits.available).toBe(18);
   });
 
   test('reports canceled revenuecat subscription correctly', async () => {

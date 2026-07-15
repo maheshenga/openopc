@@ -117,6 +117,17 @@ describe('getCreditSummary', () => {
     const result = await getCreditSummary('acc_test_123');
     expect(result.canRun).toBe(false);
   });
+
+  test('reports active Studio reservations and bases canRun on available credits', async () => {
+    (mockRegistry as any).getActiveStudioCreditReservationTotal = async () => 12.5;
+
+    const result = await getCreditSummary('acc_test_123');
+
+    expect(result.total).toBe(100);
+    expect(result.reserved).toBe(12.5);
+    expect(result.available).toBe(87.5);
+    expect(result.canRun).toBe(true);
+  });
 });
 
 describe('deductCredits', () => {

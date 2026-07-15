@@ -164,6 +164,8 @@ export interface AccountStateResponse {
     daily: number;
     monthly: number;
     extra: number;
+    reserved: number;
+    available: number;
     can_run: boolean;
     daily_refresh: {
       enabled: boolean;

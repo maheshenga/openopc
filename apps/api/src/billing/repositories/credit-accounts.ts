@@ -1,5 +1,6 @@
-import { creditAccounts } from '@kortix/db';
+import { creditAccounts, studioCreditReservations } from '@kortix/db';
 import { and, eq, isNull, lte, ne, or } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { db } from '../../shared/db';
 
 export async function getCreditAccount(accountId: string) {
@@ -51,6 +52,23 @@ export async function getCreditBalance(accountId: string) {
     .limit(1);
 
   return row ?? null;
+}
+
+export async function getActiveStudioCreditReservationTotal(accountId: string): Promise<number> {
+  const [row] = await db
+    .select({
+      total: sql<string>`COALESCE(SUM(${studioCreditReservations.amountCredits}), 0)`,
+    })
+    .from(studioCreditReservations)
+    .where(
+      and(
+        eq(studioCreditReservations.accountId, accountId),
+        eq(studioCreditReservations.status, 'active'),
+      ),
+    )
+    .limit(1);
+
+  return Number(row?.total ?? 0);
 }
 
 export async function getSubscriptionInfo(accountId: string) {

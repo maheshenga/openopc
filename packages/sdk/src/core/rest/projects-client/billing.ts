@@ -15,6 +15,8 @@ export interface AccountState {
     daily: number;
     monthly: number;
     extra: number;
+    reserved: number;
+    available: number;
     can_run: boolean;
     daily_refresh: {
       enabled: boolean;
@@ -174,6 +176,8 @@ export function getDefaultAccountState(): AccountState {
       daily: 0,
       monthly: 0,
       extra: 0,
+      reserved: 0,
+      available: 0,
       can_run: false,
       daily_refresh: null,
     },

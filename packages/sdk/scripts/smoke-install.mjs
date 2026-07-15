@@ -23,10 +23,18 @@ import { join } from 'node:path';
 
 const PKG_DIR = process.cwd();
 const CATALOG_DIR = join(PKG_DIR, '..', 'llm-catalog');
+const PNPM = process.env.PNPM_BIN || (process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
+const NPM = process.env.NPM_BIN || (process.platform === 'win32' ? 'npm.cmd' : 'npm');
 
 /** `execFileSync` takes an options object — cwd and env both live there. */
 const run = (cmd, args, cwd, env) =>
-  execFileSync(cmd, args, { cwd, env: env ?? process.env, stdio: 'pipe', encoding: 'utf8' });
+  execFileSync(cmd, args, {
+    cwd,
+    env: env ?? process.env,
+    stdio: 'pipe',
+    encoding: 'utf8',
+    shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd),
+  });
 
 const stage = (dir) =>
   run('node', ['../../scripts/stage-npm-publish.mjs'], dir, {
@@ -48,8 +56,8 @@ try {
   // dist/kortix.global.js) that publishConfig.browser/unpkg/jsdelivr point at.
   // stage() below promotes those fields and verifies they exist in dist/, so
   // they must be built before staging — plain `build` only runs tsc.
-  run('pnpm', ['run', 'build:bundles'], PKG_DIR);
-  run('pnpm', ['run', 'build'], CATALOG_DIR);
+  run(PNPM, ['run', 'build:bundles'], PKG_DIR);
+  run(PNPM, ['run', 'build'], CATALOG_DIR);
 
   console.log('→ staging the published manifests');
   copyFileSync(join(PKG_DIR, 'package.json'), backup);
@@ -60,9 +68,9 @@ try {
   stage(CATALOG_DIR);
 
   console.log('→ npm pack');
-  const tarball = run('npm', ['pack', '--silent'], PKG_DIR).trim().split('\n').pop();
+  const tarball = run(NPM, ['pack', '--silent'], PKG_DIR).trim().split('\n').pop();
   tarballPath = join(PKG_DIR, tarball);
-  const catalogTarball = run('npm', ['pack', '--silent'], CATALOG_DIR).trim().split('\n').pop();
+  const catalogTarball = run(NPM, ['pack', '--silent'], CATALOG_DIR).trim().split('\n').pop();
   catalogTarballPath = join(CATALOG_DIR, catalogTarball);
 
   console.log(`→ installing ${catalogTarball} + ${tarball} into ${workdir}`);
@@ -70,7 +78,7 @@ try {
     join(workdir, 'package.json'),
     JSON.stringify({ name: 'smoke', private: true, type: 'module' }, null, 2),
   );
-  run('npm', ['install', '--no-audit', '--no-fund', catalogTarballPath, tarballPath], workdir);
+  run(NPM, ['install', '--no-audit', '--no-fund', catalogTarballPath, tarballPath], workdir);
 
   console.log('→ importing in Node ESM');
   writeFileSync(

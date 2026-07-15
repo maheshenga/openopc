@@ -48,6 +48,13 @@ test('getAccountState hits /billing/account-state and returns the parsed body', 
   expect(result.subscription.tier_key).toBe('pro');
 });
 
+test('default account-state exposes Studio credit reservation fields', () => {
+  const state = getDefaultAccountState();
+
+  expect(state.credits.reserved).toBe(0);
+  expect(state.credits.available).toBe(0);
+});
+
 test('getAccountState forwards skipCache and accountId as query params', async () => {
   nextResponse = { status: 200, body: getDefaultAccountState() };
   await getAccountState({ skipCache: true, accountId: 'acc-1' });

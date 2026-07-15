@@ -1,6 +1,6 @@
 # Studio Production Provider and Storage Design
 
-**Status:** Direction approved; written specification pending user review
+**Status:** Approved; amended after implementation-readiness review
 
 **Date:** 2026-07-16
 
@@ -8,7 +8,7 @@
 
 **Parent architecture:** `docs/specs/2026-07-15-kortix-studio-platform-design.md`
 
-**Amends:** Task 9 in `docs/specs/2026-07-15-kortix-studio-phase1-implementation-plan.md`
+**Amends:** Parent architecture sections 4.1, 4.2, 7.1, 11, 17, and 18, plus Tasks 3, 8, 9, 14, and 15 in `docs/specs/2026-07-15-kortix-studio-phase1-implementation-plan.md`
 
 ## 1. Outcome
 
@@ -82,6 +82,7 @@ The runtime package owns only provider-neutral contracts and rules:
 - `StudioProviderCallError` and retry classifications;
 - `StudioProviderAdapter`, submission, handle, status, and result types;
 - `StudioObjectStore` and object metadata types;
+- the server-only `StudioCredentialResolver` port and opaque resolved-credential type;
 - provider and object-store conformance helpers;
 - state, retry, idempotency, and lease rules;
 - deterministic fake and in-memory test implementations.
@@ -107,10 +108,11 @@ The API owns:
 
 - project-scoped provider configuration management and IAM checks;
 - provider/model validation and signed estimates;
+- account-scoped immutable pricing-catalog management gated by `billing.write`;
 - the configured object-store instance;
 - upload presigning, upload finalization, signed downloads, and storage readiness;
 - capability responses that advertise executable capabilities only when storage is ready;
-- audited operator-recovery service methods reused by an internal command surface.
+- an audited recovery route at `POST /v1/projects/:projectId/studio/jobs/:jobId/recovery`.
 
 The API never receives or returns resolved provider credentials through public Studio contracts.
 
@@ -120,12 +122,14 @@ The worker owns:
 
 - provider config loading under the claimed job lease;
 - uncached token, Service Account, project action, and Agent grant revalidation;
-- just-in-time Secret or Connector credential resolution;
+- just-in-time Secret or Connector credential resolution through `StudioCredentialResolver`;
 - invocation-scoped adapter construction;
 - provider submission, polling, staging, asset persistence, and billing settlement;
 - startup and graceful-shutdown behavior for the independent process.
 
 Plaintext credentials exist only in the invocation object for the duration of the outbound call. They are never added to jobs, attempts, handles, events, diagnostics, metrics, or asset metadata.
+
+`StudioCredentialResolver` is declared in `@kortix/studio-runtime`. Its concrete server-only factory lives at `apps/api/src/studio/credentials.ts`, accepts a narrow encrypted-row lookup/decrypt seam, and encapsulates reuse of the existing Kortix Secret envelope and default Connector profile rules. The worker supplies a lookup backed by its existing SQL client, so importing the facade does not initialize the API Drizzle singleton or a second connection pool. The facade imports the existing Secret decryptor; the worker does not import `projects/secrets.ts` or `executor/credentials.ts` directly and does not copy encryption logic.
 
 ## 5. Provider configuration and credential flow
 
@@ -137,9 +141,13 @@ Plaintext credentials exist only in the invocation object for the duration of th
 - credential binding;
 - capability map;
 - supported model allowlist;
-- provider dialect and idempotency/reconcile declarations;
-- versioned pricing rules;
+- a registered adapter-owned dialect profile ID;
+- references from allowed models to immutable pricing-catalog entry IDs;
 - enabled state and update version.
+
+Operational provider configuration and pricing authority are separate. `project.studio.providers.manage` may change display name, base URL, credential binding, enabled state, select a code-registered dialect profile, and choose the subset of active catalog models exposed to the project. It cannot create retry/idempotency/reconciliation claims or edit rates, maximum-cost rules, or markup. Immutable account-scoped pricing entries are created only through the billing service by an actor with `billing.write`; changing a price creates a new version rather than mutating a version referenced by an estimate or job.
+
+Dialect profiles are immutable reviewed definitions shipped by `@kortix/studio-adapters`. They own request/response shape, sync/async behavior, cancellation support, and whether submit replay or submission-key reconciliation is actually proven. A profile with replay/reconciliation support must also bind that proof to an adapter-controlled provider identity or exact allowed origin; a project manager cannot attach such semantics to an arbitrary compatible endpoint. The Phase 1 `openai-images-v1-generic` profile is synchronous, has no reconciliation or upstream cancellation, sends no idempotency header, and never replays a submit after dispatch.
 
 Worker environment variables enable adapter types and storage infrastructure; they do not override a job's provider base URL, API key, or model.
 
@@ -159,11 +167,35 @@ The OpenAI-compatible production adapter accepts only `secret` or `connector` bi
 
 ## 6. Provider contract changes
 
-### 6.1 Typed errors
+### 6.1 Credential-free provider definition
+
+The API estimates without resolving a provider credential. `@kortix/studio-runtime` therefore separates the definition used for validation and pricing from the invocation adapter used for external I/O:
+
+```ts
+interface StudioProviderDefinitionConfig {
+  provider_config_id: string;
+  provider: string;
+  base_url: string | null;
+  region: string | null;
+  capability_map: Record<string, unknown>;
+  version_token: string;
+}
+
+interface StudioProviderDefinition {
+  readonly id: string;
+  capabilities(config: StudioProviderDefinitionConfig): readonly StudioCapabilityDescriptor[];
+  validate(config: StudioProviderDefinitionConfig, model: string, input: StudioJobInput): StudioValidationResult;
+  estimate(config: StudioProviderDefinitionConfig, pricing: StudioPricingSnapshot, input: StudioJobInput): StudioCostEstimate;
+}
+```
+
+`@kortix/studio-adapters` exports the reviewed OpenAI-compatible definition and an invocation-adapter factory. API and worker resolve the same definition ID; only the worker creates the credential-bound invocation adapter.
+
+### 6.2 Typed errors
 
 `StudioProviderCallError` moves into `@kortix/studio-runtime`. Adapters throw this shared type and the worker consumes the same runtime identity, so `instanceof` classification cannot fail across package boundaries.
 
-### 6.2 Synchronous and asynchronous submission
+### 6.3 Synchronous and asynchronous submission
 
 `submit` returns a discriminated result:
 
@@ -183,9 +215,9 @@ type StudioProviderSubmission =
 
 The worker does not invent a polling handle for a synchronous response. An asynchronous handle contains only allowlisted durable identifiers and never includes credentials, raw URLs with sensitive query parameters, or provider payloads.
 
-The public capability remains `async: true` because Kortix always executes it as a durable background job. Public `cancellable: true` means Kortix accepts a cancellation request; the provider dialect separately declares whether an already-dispatched upstream operation can be cancelled. When it cannot, Kortix stops further processing where safe, records unavoidable provider cost, and reports that upstream cancellation was not available.
+The public capability remains `async: true` because Kortix always executes it as a durable background job. Public `cancellable: true` means Kortix accepts a cancellation request; the adapter-owned dialect profile separately declares whether an already-dispatched upstream operation can be cancelled. When it cannot, Kortix stops further processing where safe, records unavoidable provider cost, and reports that upstream cancellation was not available.
 
-### 6.3 Streaming asset result
+### 6.4 Streaming asset result
 
 Provider results expose bounded streams rather than requiring full `Uint8Array` assets:
 
@@ -195,21 +227,22 @@ interface StudioProviderAsset {
   filename: string;
   mime_type: string;
   size_bytes: number;
-  body: ReadableStream<Uint8Array>;
+  replayable_within_attempt: boolean;
+  openBody(): Promise<ReadableStream<Uint8Array>>;
 }
 ```
 
-The Phase 1 OpenAI-compatible adapter may parse a bounded JSON/base64 response, but it must expose decoded bytes as a stream and enforce the limits in section 10. Later video and 3D adapters must not use base64 JSON for large outputs.
+`openBody()` permits a bounded storage retry in the same worker attempt when the adapter can reopen a base64 buffer or refetch an unexpired validated output URL. It is not a durable function and is never serialized. The Phase 1 OpenAI-compatible adapter may parse a bounded JSON/base64 response, but it must expose decoded bytes through `openBody()` and enforce the limits in section 10. Later video and 3D adapters must not use base64 JSON for large outputs.
 
-### 6.4 Reference assets
+### 6.5 Reference assets
 
-The provider invocation receives a project-scoped, read-only `StudioReferenceAssetResolver`. It resolves only finalized assets owned by the job project, enforces declared and detected MIME/size limits, and returns streams. Provider-specific code never queries Studio asset tables directly.
+When a selected model advertises reference-image support, the provider invocation receives a project-scoped, read-only `StudioReferenceAssetResolver`. It resolves only finalized assets owned by the job project, enforces declared and detected MIME/size limits, and returns streams. Provider-specific code never queries Studio asset tables directly. The initial `openai-images-v1` definition advertises no reference-image support and rejects non-empty reference IDs; the fake provider continues to exercise the Phase 1 reference workflow until a reviewed compatible edit dialect is added.
 
 ## 7. Submission durability and retry semantics
 
 The stable submission key is committed before any outbound request. A replay of the same logical upstream submission always uses the same key.
 
-Provider dialect metadata declares:
+Adapter-owned dialect profile metadata declares:
 
 - whether submission idempotency is supported;
 - the exact idempotency header or request field;
@@ -220,28 +253,37 @@ Provider dialect metadata declares:
 Retry behavior depends on operation and dispatch certainty:
 
 - Validation, DNS, TLS, or configuration failure proven to occur before request dispatch is terminal or safely retryable without a provider submission.
-- A submit request that may have been dispatched and then times out, disconnects, or receives an ambiguous response becomes `unknown_outcome` unless the dialect guarantees idempotent replay or reconciliation.
-- A submit 429 or 5xx is not automatically replayed. Replay is allowed only when the dialect's tested idempotency contract covers that response.
+- A submit request that may have been dispatched and then times out, disconnects, or receives an ambiguous response becomes `unknown_outcome` unless an adapter-owned profile bound to the verified provider identity guarantees idempotent replay or reconciliation.
+- A submit 429 or 5xx is not automatically replayed. Project configuration cannot opt into replay. Replay is allowed only when a reviewed, provider-bound profile's conformance tests cover that response.
+- Provider submit POST requests do not follow redirects in the generic profile. Any 3xx received after dispatch becomes `unknown_outcome`; method, body, authorization, and prompt data are never forwarded to the redirect target.
 - Poll, reconciliation, and result-fetch GET operations may retry 408, 425, 429, and 5xx with the existing bounded jitter and clamped `Retry-After` rules.
 - A new attempt and new submission key are created only after the previous attempt is proven not to have been accepted.
 
 ### 7.1 Durable synchronous-result staging
 
-For a completed submission, the worker writes validated assets and a deterministic staging manifest under the submission key before marking the submission durable. The manifest contains only object locations, hashes, sizes, MIME types, filenames, and provider usage fields accepted by the server-side pricing calculator.
+For a completed submission, the worker writes validated assets and a deterministic staging manifest under the submission key before marking the submission durable. The manifest binds account, project, job, attempt, submission-key hash, provider-config ID/version, and pricing-catalog ID/version. It otherwise contains only object locations, hashes, sizes, MIME types, filenames, and provider usage fields accepted by the server-side pricing calculator.
 
 On restart, the worker checks the staging manifest before invoking provider reconciliation. This closes the crash window after object staging. A crash after upstream success but before the first durable staging write remains an explicit unknown outcome and is never blindly resubmitted.
 
+Before provider submission, the worker requires a fresh storage readiness result. If staging fails, it retries only while the same attempt still owns a replayable asset source. A consumed non-replayable source, an expired provider URL, or a process exit before the manifest becomes durable transitions the attempt to `unknown_outcome`; the design does not claim durable storage retry for a one-shot synchronous response.
+
 Final asset object keys and staging keys include account, project, job, attempt, and submission-key hash prefixes. Database finalization and billing settlement remain idempotent. Orphan staging objects are removed only after the corresponding attempt is terminal and retention rules allow deletion.
+
+Recovery never trusts a caller-supplied key/checksum alone. The service derives the exact expected prefix from locked database rows, verifies every manifest identity field, requires every asset key to stay under that prefix, and re-heads objects to compare size, checksum, MIME metadata, and encryption before passing normalized assets to SQL.
 
 ## 8. Unknown-outcome operations
 
-Task 9 adds an audited server-side operator service with three idempotent decisions:
+Task 9 adds an audited handler at `POST /v1/projects/:projectId/studio/jobs/:jobId/recovery` with three idempotent decisions:
 
 - `confirm_succeeded`: attach a validated staging manifest or imported provider result, create assets, and settle the reservation;
 - `confirm_not_created`: mark the attempt failed and release the unused reservation;
 - `keep_unknown`: extend the reservation, retain evidence, and emit an operational alert.
 
-Every decision requires both `billing.write` at account scope and `project.studio.jobs.cancel` for the owning project. It records actor, reason, evidence reference, previous state, and resulting state, and emits an immutable Studio event. Direct manual SQL is not the supported recovery path.
+`keep_unknown` is server-timed: one decision extends at most seven days, the default extension is 24 hours, and no active reservation may be held beyond 30 days from creation. At the cap, maintenance atomically settles any verified earlier-attempt cost (or releases a zero-cost hold), marks the job unresolved-expired, and opens a `studio_billing_incidents` row for the remaining potential provider liability. The user's balance is no longer held or charged later automatically. Task 14's billing-incident operation resolves later evidence as platform liability before production enablement; repeated recovery calls cannot hold credits forever.
+
+The route uses normal authenticated API context and never accepts an actor ID from request data. Every decision requires both `billing.write` at account scope and `project.studio.jobs.cancel` for the owning project. It records actor, reason, evidence reference, previous state, and resulting state. Existing finalizers emit the existing asset/billing/terminal events; a non-terminal `keep_unknown` emits existing `progress` with an operator-review phase. No recovery-specific public event type is added. The route is omitted from the public SDK and has no Phase 1 UI. Direct manual SQL is not the supported recovery path.
+
+Idempotency and audit evidence are stored in `studio_job_recoveries`, keyed uniquely by job and caller-supplied idempotency key. The row stores decision, actor, reason, evidence reference, prior state, resulting state, and creation time; it never stores a raw provider URL or credential.
 
 ## 9. Object-store contract
 
@@ -269,14 +311,14 @@ The S3-compatible driver enforces:
 - separate internal service and public signing endpoints when deployment networking requires them;
 - redaction of `X-Amz-Credential`, `X-Amz-Signature`, security tokens, and all signed query strings.
 
-Readiness uses non-billable bucket metadata operations and proves the permissions needed by the selected API or worker role. It does not create a bucket or call a paid AI provider.
+Readiness uses a reserved `_studio-readiness/{role}/{uuid}` key. Each API or worker process performs a one-byte put, head, get-and-verify, and delete sequence with the configured encryption and checksum settings, then caches success for 60 seconds. A bucket lifecycle rule removes abandoned readiness keys after 24 hours. This produces ordinary low-volume storage requests, does not create a bucket, and never calls a paid AI provider. Presigned-browser behavior is proven by integration tests and the upload flow rather than inferred from the readiness probe.
 
 ## 10. Network and media safety
 
 ### 10.1 Provider base URL
 
 - Require HTTPS outside explicit local-test mode.
-- Reject URL userinfo, fragments, non-HTTP schemes, malformed ports, and ambiguous host encodings.
+- Reject URL userinfo, query strings, fragments, non-HTTP schemes, malformed ports, and ambiguous host encodings.
 - Resolve and validate every A and AAAA result.
 - Reject loopback, unspecified, private, carrier-grade NAT, link-local, multicast, documentation, and cloud-metadata destinations.
 - Allow a private enterprise provider only through an exact-origin administrator allowlist. Wildcards are not accepted.
@@ -286,6 +328,7 @@ Readiness uses non-billable bucket metadata operations and proves the permission
 
 - Apply the same address validation independently from the provider base URL policy.
 - Follow at most three redirects and revalidate every hop and resolved address.
+- Redirect following is available only for credential-free provider output GETs, never for the provider submit POST.
 - Never forward provider Authorization, cookies, or signed provider headers.
 - Use a 10-second connect timeout and a 120-second total download timeout.
 - Reject compressed or chunked bodies that exceed the decoded byte limit while streaming.
@@ -346,16 +389,16 @@ The provider config capability map contains an allowlisted model entry with:
 - provider model identifier;
 - supported request fields and limits;
 - quality, size, and output-count mapping;
-- pricing unit and version;
-- maximum provider cost rule;
-- platform markup rule;
-- idempotency, polling, cancellation, and output dialect metadata.
+- immutable pricing-catalog entry ID;
+- registered dialect profile ID. Idempotency, polling, cancellation, and output semantics come only from that adapter-owned profile.
+
+An immutable `studio_pricing_catalog` entry contains account, provider type, model, pricing unit, rate data, maximum provider-cost rule, platform markup rule, integer version, active state, creator, and creation time. An update inserts a new version and may deactivate the old entry for new estimates; existing estimates and jobs retain the referenced version.
 
 The signed estimate binds account, project, actor, provider config ID and version, model, pricing version, canonical input hash, maximum credits, and expiry. Job creation persists the pricing snapshot needed to calculate attempt and final cost.
 
 Job creation rejects an estimate when the provider config or pricing version changed after estimation. Before first provider I/O, the worker compares the persisted snapshot with the live provider config and rejects a stale or newly unsupported model without submitting upstream. Credential value rotation does not invalidate the estimate because it does not change provider capability or pricing; the worker always resolves the latest authorized credential value.
 
-The worker calculates credits from allowlisted provider usage fields and the persisted pricing snapshot. It never trusts an upstream `actual_credits` value directly. Costs incurred by failed, retried, cancelled, and unknown attempts are recorded when evidence exists. SQL settlement still caps the user's charge to the active reservation; any verified provider cost above the maximum is recorded as platform loss and emits a critical estimate-violation alert.
+The worker calculates credits from allowlisted provider usage fields and the persisted pricing snapshot. It never trusts an upstream `actual_credits` value directly. Each evidenced attempt cost is written idempotently before retry, failure, cancellation, or success finalization. A successful job charges the sum of verified provider costs across all attempts plus the successful-output markup; a failed or cancelled job charges only verified provider cost. Unknown attempts without evidence remain reserved until recovery. SQL finalizers aggregate the immutable attempt-cost rows, cap the user's charge to the active reservation, record final user charge and excess platform loss, and emit a critical estimate-violation alert. Attempt usage rows are the only additive upstream-cost series; the final row keeps the verified aggregate only as non-additive metadata so accounting queries cannot double count it.
 
 ## 13. Configuration and compatibility
 
@@ -398,10 +441,12 @@ Conflicting settings fail startup with secret-safe field names only. Existing `S
 
 - Configuration validation fails before database claims or provider I/O.
 - Credential failures return Studio credential/configuration errors without revealing identifiers beyond the caller's authorized provider config.
+- Provider/pricing version mismatch maps to `STUDIO_PROVIDER_CONFIG_STALE` or `STUDIO_PRICING_STALE`; recovery idempotency/state mismatch maps to `STUDIO_RECOVERY_CONFLICT`.
 - Provider HTTP bodies are allowlisted and bounded before diagnostic extraction.
 - Provider submit ambiguity maps to `STUDIO_SUBMISSION_OUTCOME_UNKNOWN`.
+- Confirmed absence maps to `STUDIO_SUBMISSION_CONFIRMED_NOT_CREATED`; a 30-day unresolved hold maps to `STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED` and later recovery requires the audited billing-incident path.
 - Storage permission, availability, timeout, and integrity failures map to `STUDIO_STORAGE_UNAVAILABLE` or `STUDIO_ASSET_INVALID` as appropriate.
-- Storage failures during result persistence use durable bounded retries and do not resubmit the provider request.
+- Storage failures during result persistence retry only through `openBody()` while the source remains replayable in the owned attempt. Otherwise they become `unknown_outcome`; they never resubmit the provider request.
 - All persisted diagnostics pass shared redaction that covers bearer/basic authorization, API keys, passwords, tokens, signed URLs, `X-Amz-*` signatures, and sensitive query parameters.
 
 ## 15. Testing and acceptance
@@ -490,13 +535,16 @@ The implementation remains concentrated in extension-owned paths:
 ```text
 packages/studio-runtime/
 packages/studio-adapters/
+packages/api-contract/src/studio/
+packages/db/src/schema/kortix.ts                 # additive Studio changes
+packages/db/migrations/                          # additive Studio migrations
 apps/api/src/studio/
 apps/studio-worker/
 ```
 
 Thin existing touchpoints are limited to workspace registration, API dependency assembly, configuration schema, CI path filters, deployment manifests, and additive database migrations. Public SDK and Studio API contracts remain additive. Provider-specific payloads, credentials, S3 client objects, and storage endpoints do not escape their adapter or server-side service boundaries.
 
-The existing Phase 1 implementation plan must replace its Task 9 file map and checklist with a plan derived from this document before implementation begins. The stale Supabase-only, API-local adapter, and mandatory webhook instructions are not executed in parallel.
+The parent architecture and existing Phase 1 implementation plan must be updated with this document before implementation begins. Task 3's initial ports are deliberately evolved in Task 9; Tasks 8, 14, and 15 consume the amended contracts and gates. The stale Supabase-only, API-local adapter, and mandatory Phase 1 webhook instructions are not executed in parallel.
 
 ## 19. Acceptance checklist
 

@@ -1,6 +1,6 @@
 # Kortix Studio Platform Design
 
-**Status:** Draft, internally reviewed, pending user review
+**Status:** Approved for phased implementation; Task 9 amended 2026-07-16
 
 **Date:** 2026-07-15
 
@@ -55,7 +55,7 @@ The implementation follows an additive extension model.
 
 ### 4.1 Allowed integration points
 
-- One project-router registration for `/v1/projects/:projectId/studio/*` and one signed raw-body callback mount at `/v1/webhooks/studio/:provider`, following the existing webhook deadline/signature pattern.
+- One project-router registration for `/v1/projects/:projectId/studio/*`. The signed raw-body callback mount at `/v1/webhooks/studio/:provider` is reserved for the first later provider that requires callbacks; Phase 1 image generation does not mount an unused webhook.
 - One project navigation entry and additive Studio route files in the existing web application.
 - Canonical SDK facade wiring at `kortix.project(projectId).studio` and React bindings through the existing `@kortix/sdk/react` export. Studio does not add a new SDK subpath.
 - Shared wire schemas in `@kortix/api-contract`, additive SDK public-surface snapshots, package export checks, documentation, and publish/install smoke tests.
@@ -73,6 +73,7 @@ The implementation should remain concentrated in:
 
 ```text
 packages/studio-runtime/
+packages/studio-adapters/
 packages/api-contract/src/studio/
 packages/db/src/schema/kortix.ts                 # additive Studio table block
 apps/api/src/studio/
@@ -232,7 +233,7 @@ Web/Mobile/Desktop or Agent tool
   -> transaction: validate + authorize + estimate/reserve + queue event
   -> Postgres job row
   -> worker claims row with a lease
-  -> provider adapter submit/poll or provider webhook
+  -> provider adapter synchronous completion or durable submit/poll
   -> normalized result
   -> object storage assets + asset rows
   -> usage settlement + audit event
@@ -278,15 +279,28 @@ Each job stores account, project, actor, capability, provider, model, versioned 
 
 ### 7.4 Provider adapter contract
 
-Provider-specific behavior is isolated behind:
+Provider-specific behavior is split between a credential-free definition used by API estimates and a credential-bound invocation adapter used by the worker:
 
 ```ts
+interface StudioProviderDefinitionConfig {
+  provider_config_id: string;
+  provider: string;
+  base_url: string | null;
+  region: string | null;
+  capability_map: Record<string, unknown>;
+  version_token: string;
+}
+
+interface StudioProviderDefinition {
+  readonly id: string;
+  capabilities(config: StudioProviderDefinitionConfig): readonly CapabilityDescriptor[];
+  validate(config: StudioProviderDefinitionConfig, model: string, input: StudioJobInput): StudioValidationResult;
+  estimate(config: StudioProviderDefinitionConfig, pricing: StudioPricingSnapshot, input: StudioJobInput): StudioCostEstimate;
+}
+
 interface StudioProviderAdapter {
   readonly id: string;
-  capabilities(): readonly CapabilityDescriptor[];
-  validate(input: StudioJobInput): StudioValidationResult;
-  estimate(ctx: StudioProviderContext, input: StudioJobInput): Promise<StudioCostEstimate>;
-  submit(ctx: StudioProviderContext, input: StudioJobInput): Promise<StudioProviderHandle>;
+  submit(ctx: StudioProviderContext, input: StudioJobInput): Promise<StudioProviderSubmission>;
   poll(ctx: StudioProviderContext, handle: StudioProviderHandle): Promise<StudioProviderStatus>;
   cancel(ctx: StudioProviderContext, handle: StudioProviderHandle): Promise<void>;
   reconcile?(ctx: StudioProviderContext, submissionKey: string): Promise<StudioProviderHandle | 'not-found' | 'unknown'>;
@@ -294,7 +308,7 @@ interface StudioProviderAdapter {
 }
 ```
 
-Adapters return canonical handles, statuses, errors, usage, and assets. Raw provider bodies may be stored only as redacted diagnostic metadata with bounded size and retention.
+Definitions validate models and calculate estimates without provider credentials. Invocation adapters return either a synchronous completed result or an asynchronous canonical handle, plus canonical statuses, errors, usage, and replayable-within-attempt asset streams. Raw provider bodies may be stored only as redacted diagnostic metadata with bounded size and retention.
 
 Planned adapters are:
 
@@ -312,6 +326,8 @@ Studio does not store raw API keys in job rows or provider configuration rows. A
 - model/capability mappings;
 - a reference to an existing Kortix Secret or Connector credential;
 - account/project scope and activation state.
+
+The worker resolves the binding through the server-only `StudioCredentialResolver` port. Its concrete implementation is exposed by the extension-owned `apps/api/src/studio/credentials.ts` facade, which reuses Kortix Secret encryption and default Connector profile rules without making the worker import API core modules directly.
 
 Provider administration and provider use are separate authorities. Creating, changing, disabling, or rebinding a provider configuration requires `project.studio.providers.manage`. Estimating or running a job through an enabled configuration requires both `project.studio.jobs.run` and `project.studio.providers.use`; it does not grant the caller raw Secret/Connector read access. The job stores the configuration and credential-binding IDs, never the credential value.
 
@@ -355,13 +371,25 @@ Records operational and financial attribution independent of LLM token fields: a
 
 ### 8.9 `studio_provider_configs`
 
-Stores account/project-scoped adapter configuration: adapter kind, display name, base URL, region, enabled model/capability mappings, credential binding ID, enabled state, creator, and timestamps. It never stores a raw credential. Project configuration takes precedence over an enabled account default.
+Stores account/project-scoped adapter configuration: adapter kind, display name, base URL, region, enabled model/capability mappings, credential binding ID, immutable pricing-catalog references, enabled state, creator, and timestamps. It never stores a raw credential. Project configuration takes precedence over an enabled account default. `project.studio.providers.manage` cannot edit rates or markup.
 
-### 8.10 `studio_webhook_deliveries`
+### 8.10 `studio_pricing_catalog`
 
-Provides callback replay protection and auditability. A unique `(provider, delivery_id)` key records the verified body hash, received time, mapped attempt, processing result, and terminal event cursor. A repeated delivery with the same hash returns the prior success; a reused delivery ID with a different hash returns `STUDIO_WEBHOOK_REPLAYED`.
+Stores immutable account-scoped pricing versions: provider, model, unit, rate data, maximum-cost rule, markup rule, version, active state, creator, and creation time. An actor with `billing.write` creates a new version or deactivates one for future estimates; estimates and jobs keep referencing the exact version they signed.
 
-### 8.11 Later tables
+### 8.11 `studio_job_recoveries`
+
+Stores immutable, idempotent unknown-outcome decisions keyed by job and caller idempotency key: decision, actor, reason, evidence reference, prior state, resulting state, and creation time. It never stores a raw provider URL or credential.
+
+### 8.12 `studio_billing_incidents`
+
+Stores an immutable account/project/job/attempt-scoped incident when an unknown-outcome reservation reaches its 30-day cap. Opening the incident atomically ends the user's active hold after settling only verified cost, records remaining potential provider liability, and requires the Task 14 billing-operations path for later evidence. Late unknown cost is never charged automatically to the user.
+
+### 8.13 `studio_webhook_deliveries`
+
+Introduced only with the first later callback-based provider. It provides callback replay protection and auditability through a unique `(provider, delivery_id)` key, verified body hash, received time, mapped attempt, processing result, and terminal event cursor.
+
+### 8.14 Later tables
 
 Module, review, batch, workflow, and revenue tables are introduced only in the subprojects that need them. Their identifiers are reserved in contracts but no empty production tables are created in subproject 1.
 
@@ -370,17 +398,22 @@ Module, review, batch, workflow, and revenue tables are introduced only in the s
 Subproject 1 exposes:
 
 ```text
+GET    /v1/accounts/:accountId/studio/pricing-catalog
+POST   /v1/accounts/:accountId/studio/pricing-catalog
+POST   /v1/accounts/:accountId/studio/pricing-catalog/:pricingCatalogId/deactivate
+POST   /v1/accounts/:accountId/studio/billing-incidents/:incidentId/resolve
 GET    /v1/projects/:projectId/studio/capabilities
 GET    /v1/projects/:projectId/studio/providers
 POST   /v1/projects/:projectId/studio/providers
 PATCH  /v1/projects/:projectId/studio/providers/:providerConfigId
 DELETE /v1/projects/:projectId/studio/providers/:providerConfigId
-POST   /v1/projects/:projectId/studio/jobs/estimate
+POST   /v1/projects/:projectId/studio/estimates
 POST   /v1/projects/:projectId/studio/jobs
 GET    /v1/projects/:projectId/studio/jobs
 GET    /v1/projects/:projectId/studio/jobs/:jobId
 POST   /v1/projects/:projectId/studio/jobs/:jobId/cancel
 POST   /v1/projects/:projectId/studio/jobs/:jobId/retry
+POST   /v1/projects/:projectId/studio/jobs/:jobId/recovery
 GET    /v1/projects/:projectId/studio/jobs/:jobId/events
 POST   /v1/projects/:projectId/studio/uploads
 POST   /v1/projects/:projectId/studio/uploads/:uploadId/finalize
@@ -388,10 +421,9 @@ DELETE /v1/projects/:projectId/studio/uploads/:uploadId
 GET    /v1/projects/:projectId/studio/assets
 GET    /v1/projects/:projectId/studio/assets/:assetId
 POST   /v1/projects/:projectId/studio/assets/:assetId/download-url
-POST   /v1/webhooks/studio/:provider
 ```
 
-Contracts use Zod from `@kortix/api-contract` and Hono OpenAPI. Every project route derives scope only from the path parameter, authorizes that exact project, and constrains every job, upload, asset, provider configuration, event, and credential query by the same project ID. There is no account-wide fallback listing in subproject 1. Cross-project identifier substitution returns 404 after authorization and never leaks existence.
+Contracts use Zod from `@kortix/api-contract` and Hono OpenAPI. Pricing-catalog writes and billing-incident resolution require `billing.write` for the exact account and never expose provider credentials. The incident route is internal/non-SDK, validates evidence server-side, and never re-debits a user after the 30-day hold transfer. Every project route derives scope only from the path parameter, authorizes that exact project, and constrains every job, upload, asset, provider configuration, event, and credential query by the same project ID. There is no account-wide job or asset fallback listing in subproject 1. Cross-project identifier substitution returns 404 after authorization and never leaks existence. The recovery route additionally requires `billing.write` and `project.studio.jobs.cancel`, is omitted from the public SDK, and has no Phase 1 UI.
 
 Errors use stable machine-readable codes and an optional retry hint. List endpoints use cursor pagination. Creation accepts an `Idempotency-Key` header and returns the same job for a repeated matching request; a different request hash with the same key returns 409.
 
@@ -407,12 +439,12 @@ The API process does not hold a long HTTP request open while a provider generate
 - Any Studio worker replica may claim new submissions and due provider polls with `FOR UPDATE SKIP LOCKED`.
 - A claim writes `locked_by` and `locked_until`; workers heartbeat leases while performing a local transfer, provider submission, or result download.
 - For an Agent job, the worker performs an uncached read of `acting_token_id` before IAM evaluation and requires `status = 'active'`, `revoked_at IS NULL`, `expires_at IS NULL OR expires_at > now()`, and the persisted project binding to match the job. Only then may it pass the current binding and grant into `authorizeV2()` and the credential-grant checks. This authentication step is mandatory because `authorizeV2()` assumes request middleware has already validated token lifecycle state and its memoized binding lookup is not a revocation check.
-- Before external submission, one transaction creates the attempt, assigns a stable unique submission key, changes the public job to `running`, and commits the lease. The adapter passes that key to providers supporting idempotent submission.
-- After provider acceptance, the worker persists the provider handle and `next_poll_at`. If it crashes between acceptance and handle persistence, the next worker calls the adapter's `reconcile` method with the stable submission key. A provider without idempotency or reconciliation support leaves the attempt in `reconciling` and the public job in `running`; it is never automatically resubmitted. After 15 minutes it raises `STUDIO_SUBMISSION_OUTCOME_UNKNOWN` for operator resolution while retaining the reservation.
-- Signed provider webhooks may advance the same state machine.
+- Before external submission, one transaction creates the attempt, assigns a stable unique submission key, changes the public job to `running`, and commits the lease. Only an adapter-owned, provider-bound reviewed profile may pass that key as an upstream idempotency mechanism; project configuration cannot declare the guarantee.
+- An asynchronous provider persists its handle and `next_poll_at`. If the worker crashes between acceptance and handle persistence, the next worker calls the adapter's `reconcile` method with the stable submission key. A provider without idempotency or reconciliation support leaves the attempt in `reconciling` and the public job in `running`; it is never automatically resubmitted. After 15 minutes it raises `STUDIO_SUBMISSION_OUTCOME_UNKNOWN` for operator resolution while retaining the reservation. At 30 days, maintenance ends the user hold atomically and transfers remaining uncertainty to an audited billing incident; it never holds the user's available balance indefinitely.
+- A synchronous completed result is written to deterministic object staging and a durable manifest before finalization. Storage retries use `openBody()` only while the same attempt retains a replayable source. A process exit, consumed source, or expired output URL before durable staging becomes an explicit unknown outcome and never causes a second provider submission.
 - Retryable failures receive at most three total attempts by default. Delays use full jitter bounded by 5 seconds, 30 seconds, and 120 seconds; a longer provider `Retry-After` is honored up to 15 minutes. Adapters may lower the attempt limit but cannot exceed three in subproject 1.
 - A Studio-owned maintenance lease uses `kortix.worker_leader_lease` with the distinct lock key `studio-maintenance`. `apps/studio-worker` obtains it through a Studio-owned, instance-based parameterized lease primitive whose constructor accepts lock key, owner ID, TTL, and renewal interval. It must not import `apps/api/src/shared/leader-election.ts`, whose module-global state and `LOCK_KEY = 'background-workers'` are intentionally API-specific. The maintenance owner requeues expired local leases, detects stuck reconciliation, compacts events, expires uploads, and reconciles leaked credit reservations; it does not poll normal provider handles.
-- Polling and webhook delivery are idempotent. A terminal job cannot be charged or completed twice.
+- Polling, reconciliation, staging recovery, and terminal writes are idempotent. A terminal job cannot be charged or completed twice.
 - Cancellation is best effort at the provider and definitive in Kortix. Late provider results after cancellation are quarantined and never become active outputs unless an operator explicitly recovers them.
 
 No in-memory queue is authoritative.
@@ -421,9 +453,9 @@ No in-memory queue is authoritative.
 
 Studio runtime code depends on a streaming `StudioObjectStore` port rather than Supabase APIs directly. The port provides readiness, signed upload creation, object stat, bounded streaming read/write, short-lived signed download, and delete operations. Transfers use `ReadableStream<Uint8Array>` (or an equivalent adapter-native stream) and must not buffer complete video, audio, or 3D outputs in API/worker memory.
 
-The managed driver uses a private `studio-assets` bucket in Supabase Storage. The driver, bucket, upload/output limits, and signed-URL lifetimes are deployment configuration; an S3-compatible driver can be added without changing jobs, assets, routes, or SDK contracts. Database rows store the selected driver namespace plus bucket/key, not provider-specific client objects.
+The first production driver uses the S3 protocol with a private Studio bucket and fixed prefix. MinIO provides deterministic conformance coverage. Alibaba Cloud OSS must pass a gated compatibility smoke before the S3-compatible driver is enabled for its endpoint; if it fails, a native OSS driver implements the same port. Database rows store the selected driver namespace plus bucket/key, not provider-specific client objects.
 
-Supabase Storage is not assumed to exist in every self-hosted Kortix deployment. On startup, the API and worker resolve the configured driver and run its readiness check. When no driver is configured, Studio remains unavailable and `/capabilities` advertises no executable `image.generate`; upload and job-creation attempts return `STUDIO_STORAGE_UNAVAILABLE` with an administrator-facing configuration hint. A transiently unhealthy configured store also returns 503 for new media work, while already durable jobs remain queued for bounded recovery instead of losing state. Self-host bootstrap may provision the managed bucket when the Storage service is present, but enabling Studio is gated on the same readiness check.
+Studio storage is not assumed to exist in every self-hosted deployment. On startup and with a 60-second success cache, the API and worker run a one-byte put/head/get/delete probe under `_studio-readiness/{role}/{uuid}`; a 24-hour lifecycle rule removes abandoned probe keys. When no driver is configured, Studio remains unavailable and `/capabilities` advertises no executable `image.generate`; upload and job-creation attempts return `STUDIO_STORAGE_UNAVAILABLE` with an administrator-facing configuration hint. A transiently unhealthy configured store also returns 503 for new media work, while already durable jobs remain queued for bounded recovery instead of losing state. Bucket creation remains an operator action.
 
 - Upload creation inserts `studio_asset_uploads` and returns a signed URL valid for 15 minutes. An unfinalized upload expires after 30 minutes.
 - The API validates ownership, declared MIME type, detected MIME type, size, checksum, and capability limits before attaching an input.
@@ -456,7 +488,7 @@ Every mutation stores the actor user ID or Agent principal. Project membership d
 
 Studio reuses the Kortix credit wallet while adding a reservation/settlement layer suitable for asynchronous media jobs.
 
-1. `estimate` returns provider cost, platform price, a maximum approved amount, and a signed estimate token expiring five minutes after issuance. The token binds project, actor, capability, provider, model, canonical input hash, maximum amount, and expiry; job creation requires it.
+1. `estimate` returns provider cost, platform price, a maximum approved amount, and a signed estimate token expiring five minutes after issuance. The token binds project, actor, capability, provider config/version, immutable pricing-catalog version, model, canonical input hash, maximum amount, and expiry; job creation requires it.
 2. Job creation calls `public.atomic_create_studio_job`, which locks the credit account, verifies the unreserved available balance, and inserts the job, active reservation, and queued event in one database transaction.
 3. Provider attempts record upstream usage and cost.
 4. Success settles the actual amount and releases unused reservation.
@@ -470,7 +502,7 @@ The account-state response gains additive `reserved` and `available` credit fiel
 
 `public.atomic_settle_studio_job` locks the reservation and credit account, applies the same daily/expiring/non-expiring bucket ordering as the current wallet, inserts exactly one final `credit_ledger` debit keyed by the unique settlement key, writes `studio_usage_events`, and marks the reservation settled. `public.atomic_release_studio_job` releases an unused reservation idempotently. The maintenance reconciler releases an expired reservation only when its job is terminal or no provider attempt can still incur cost; otherwise it extends the hold and emits an operational alert.
 
-Adapters must estimate a defensible maximum. If verified actual provider cost exceeds the approved maximum because a provider violated its pricing contract, the user is charged no more than the reservation, the platform records the excess, and a critical estimate-violation alert is emitted.
+Credential-free provider definitions estimate from immutable account pricing-catalog versions. Project provider managers may select active catalog entries but cannot edit rates or markup. If verified actual provider cost exceeds the approved maximum because a provider violated its pricing contract, the user is charged no more than the reservation, the platform records the excess, and a critical estimate-violation alert is emitted.
 
 Reservations and usage records do not overload LLM token fields. Usage attribution includes capability, provider, model, job, actor, upstream cost, markup, final cost, and billing transaction reference.
 
@@ -525,20 +557,28 @@ STUDIO_PERMISSION_DENIED
 STUDIO_INSUFFICIENT_CREDITS
 STUDIO_CREDENTIAL_MISSING
 STUDIO_CREDENTIAL_EXPIRED
+STUDIO_CREDENTIAL_UNAVAILABLE
 STUDIO_MODEL_UNSUPPORTED
 STUDIO_ESTIMATE_EXPIRED
 STUDIO_IDEMPOTENCY_MISMATCH
+STUDIO_PROVIDER_CONFIG_INVALID
+STUDIO_PROVIDER_CONFIG_STALE
+STUDIO_PRICING_STALE
 STUDIO_PROVIDER_UNAVAILABLE
 STUDIO_PROVIDER_RATE_LIMITED
 STUDIO_PROVIDER_REJECTED
 STUDIO_PROVIDER_TIMEOUT
 STUDIO_SUBMISSION_OUTCOME_UNKNOWN
+STUDIO_SUBMISSION_CONFIRMED_NOT_CREATED
+STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED
 STUDIO_ASSET_INVALID
 STUDIO_ASSET_TOO_LARGE
 STUDIO_UPLOAD_EXPIRED
 STUDIO_STORAGE_UNAVAILABLE
 STUDIO_JOB_CONFLICT
 STUDIO_JOB_NOT_CANCELLABLE
+STUDIO_RECOVERY_CONFLICT
+STUDIO_BILLING_INCIDENT_REQUIRED
 STUDIO_WEBHOOK_SIGNATURE_INVALID
 STUDIO_WEBHOOK_REPLAYED
 STUDIO_EVENT_CURSOR_EXPIRED
@@ -552,7 +592,7 @@ Errors distinguish user-fixable, retryable, provider-terminal, and platform-inte
 ## 17. Security
 
 - Reuse Supabase authentication, project/account IAM, audit events, Secret encryption, Connector scoping, and request deadlines for non-streaming, non-long-poll requests; the explicit Studio events exemption in section 9 remains authoritative.
-- Validate every provider callback signature and enforce replay protection.
+- When a later provider introduces callbacks, validate every callback signature and enforce replay protection before mounting the reserved webhook route.
 - Apply SSRF protection to custom base URLs and provider output downloads.
 - Reject private/link-local destinations unless an administrator explicitly enables a private enterprise provider.
 - Never log API keys, signed asset URLs, raw Authorization headers, or unredacted provider payloads.
@@ -562,7 +602,7 @@ Errors distinguish user-fixable, retryable, provider-terminal, and platform-inte
 
 ## 18. Observability
 
-Metrics include queue age, claim latency, provider submission latency, provider completion latency, success/failure/cancellation rate, retries, webhook delay, asset transfer latency, SSE reconnects, estimate error, upstream cost, final cost, and reservation leaks.
+Metrics include queue age, claim latency, provider submission latency, provider completion latency, success/failure/cancellation rate, retries, unknown outcomes, asset transfer latency, storage readiness, SSE reconnects, estimate error, upstream cost, final cost, and reservation leaks. Webhook delay is added with the first callback-based provider.
 
 Every request, job, attempt, event, asset, billing record, and provider callback carries a correlation ID. Structured logs include IDs and classifications but no sensitive payloads. Existing operational surfaces should add Studio queue depth and oldest queued job.
 
@@ -577,18 +617,18 @@ Every request, job, attempt, event, asset, billing record, and provider callback
 ### 19.2 Runtime
 
 - State-machine transition tests.
-- Idempotent job creation, callback, polling, cancellation, settlement, and retry tests.
+- Idempotent job creation, synchronous staging, polling, reconciliation, cancellation, settlement, and retry tests.
 - Lease expiry and concurrent `SKIP LOCKED` claim tests against Postgres.
 - Parameterized maintenance-lease tests prove `studio-maintenance` cannot collide with or mutate the existing `background-workers` lease owner.
 - Fault-injection tests at attempt commit, provider acceptance, handle persistence, output download, asset commit, reservation settlement, and terminal event emission boundaries.
 - Reconciliation tests for providers with idempotency, providers with lookup-by-submission-key, and providers that return an unknown submission outcome.
 - Adapter conformance suite run against every provider adapter.
 - `StudioObjectStore` conformance tests cover streaming, signed URLs, readiness failure, self-host feature gating, and recovery from transient storage loss.
-- SSRF, signature, replay, credential-redaction, asset validation, token lifecycle, Secret/Connector Agent-grant, and authorization tests.
+- SSRF, credential-redaction, asset validation, token lifecycle, Secret/Connector Agent-grant, pricing-authority separation, recovery-route, and authorization tests.
 
 ### 19.3 API and SDK
 
-- Authenticated black-box HTTP tests for estimate, create, list, read, cancel, retry, events, upload presign/finalize/expiry, assets, and callbacks.
+- Authenticated black-box HTTP tests for pricing catalog, provider configuration, estimate, create, list, read, cancel, retry, recovery, events, upload presign/finalize/expiry, and assets.
 - Cross-project isolation tests replace project, job, upload, asset, provider, and event identifiers independently and assert no existence leak.
 - SDK transport, facade, and React binding tests, including SSE timeout exemption, 15-second heartbeat, `Last-Event-ID` reconnect, and JSON cursor polling.
 - Exact read-back assertions for persisted jobs, events, assets, usage, and billing settlement.
@@ -638,7 +678,7 @@ Studio foundation and Image Studio are complete when:
 7. Progress survives API and worker restarts and reconnects through durable events.
 8. Completed images are validated, copied into the private Studio bucket, recorded as assets, and displayed in the output grid.
 9. The user can select, download, and reuse an output as a new input.
-10. Cancellation, retryable failure, permanent failure, missing/expired credentials, unsupported model, expired estimate/upload, invalid assets, insufficient credits, permission denial, replayed webhook, storage failure, and cursor expiry have tested recovery behavior.
+10. Cancellation, retryable failure, permanent failure, missing/expired credentials, unsupported model, expired estimate/upload, invalid assets, insufficient credits, permission denial, unknown outcome, storage failure, and cursor expiry have tested recovery behavior.
 11. Usage is attributed to account, project, actor, provider, model, and job; reservation, partial upstream cost, settlement, release, and ledger idempotency are consistent.
 12. Active Studio reservations prevent concurrent LLM, compute, or other Studio spend from consuming held balance, while accounts without reservations retain existing wallet behavior.
 13. Cross-project job, event, provider, upload, asset, and download access fails without revealing resource existence.

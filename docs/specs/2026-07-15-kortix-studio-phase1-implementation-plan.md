@@ -1,12 +1,12 @@
 # Kortix Studio Phase 1 Implementation Plan
 
-**Status:** Ready for review
+**Status:** In progress; Tasks 1-8 complete, Task 9 amended 2026-07-16
 
 **Date:** 2026-07-15
 
 **Branch:** `studio-platform`
 
-**Architecture source:** `docs/specs/2026-07-15-kortix-studio-platform-design.md`
+**Architecture sources:** `docs/specs/2026-07-15-kortix-studio-platform-design.md` and `docs/specs/2026-07-16-studio-production-provider-storage-design.md`
 
 **Goal:** Ship the first usable Studio slice: shared Studio foundations, OpenAI-compatible `image.generate`, durable jobs/assets/billing/events, SDK bindings, Image Studio, mobile monitoring, Electron compatibility, Agent tools, deployment manifests, and black-box verification.
 
@@ -18,7 +18,7 @@
 
 - Keep Kortix upgrade-friendly: prefer additive packages and thin integration points.
 - Keep API routes project-scoped under `/v1/projects/:projectId/studio/*`.
-- Keep provider callbacks under `/v1/webhooks/studio/:provider`.
+- Reserve provider callbacks under `/v1/webhooks/studio/:provider`, but do not mount the route until a later callback-based provider requires it.
 - Keep app consumers on the SDK: web, mobile, Electron, and Agent tools must not call Studio API routes through host-local raw `fetch`.
 - Add SDK surface at `kortix.project(projectId).studio` and `@kortix/sdk/react`; do not create a new SDK subpath.
 - Public job states are exactly `queued`, `running`, `succeeded`, `failed`, and `cancelled`.
@@ -29,7 +29,7 @@
 - Provider attempts commit a stable submission key before external I/O. Unknown submission outcomes reconcile or enter explicit unknown recovery; they are never blindly retried.
 - Limit retries to three attempts with bounded jitter and `Retry-After` support.
 - Reuse Kortix IAM, Secrets, Connectors, billing credits, audit patterns, projects, teams, Agent grants, SDK conventions, web shell, Expo app, and Electron wrapper.
-- Use a private streaming object-store abstraction with a Supabase managed driver and a self-host readiness gate.
+- Use a private streaming object-store abstraction with an S3-compatible production driver, MinIO conformance, a gated Alibaba Cloud OSS compatibility smoke, and API/worker readiness probes.
 - Preserve raw credential secrecy: provider keys never leave server-side resolution and are never stored in jobs, logs, clients, Agent payloads, or developer artifacts.
 
 ## File Map
@@ -46,14 +46,15 @@ Create:
 - `packages/studio-runtime/src/object-store.ts` - streaming object-store port and readiness contract.
 - `packages/studio-runtime/src/leases.ts` - parameterized Postgres lease helper for Studio maintenance.
 - `packages/studio-runtime/src/fake-provider.ts` - deterministic image provider for tests.
+- `packages/studio-adapters/**` - concrete OpenAI-compatible and S3-compatible drivers, provider definitions, safe fetch, pricing parser, and runtime configuration.
 - `apps/api/src/studio/index.ts` - project route app factory.
 - `apps/api/src/studio/contracts.ts` - request parsing and contract glue.
 - `apps/api/src/studio/repositories/*.ts` - repositories for jobs, attempts, events, assets, uploads, providers, and billing reservations.
 - `apps/api/src/studio/services/*.ts` - service methods shared by routes and Agent tools.
-- `apps/api/src/studio/providers/*.ts` - provider configuration, fake provider, and OpenAI-compatible image adapter registration.
-- `apps/api/src/studio/storage/*.ts` - Supabase-backed `StudioObjectStore` implementation.
+- `apps/api/src/studio/providers/*.ts` - provider configuration, definition registry, and immutable pricing-catalog services.
+- `apps/api/src/studio/storage/*.ts` - API upload/finalize/download services using the shared object-store driver.
+- `apps/api/src/studio/credentials.ts` - server-only Studio credential resolver facade over existing Secret and Connector rules.
 - `apps/api/src/studio/tools/*.ts` - governed Agent/MCP tool handlers.
-- `apps/api/src/webhooks/studio.ts` - raw-body provider webhook router.
 - `apps/studio-worker/package.json` - worker workspace package.
 - `apps/studio-worker/src/index.ts` - worker entrypoint.
 - `apps/studio-worker/src/worker.ts` - claim, execute, reconcile, retry, cancel, and settle loop.
@@ -75,7 +76,7 @@ Modify:
 - `packages/api-contract/src/index.ts` - export Studio contracts.
 - `packages/db/src/schema/kortix.ts` - add Studio tables and indexes.
 - `packages/db/migrations/*` - add Studio migration and bounded `atomic_use_credits` body replacement.
-- `apps/api/src/index.ts` - mount Studio project routes and webhook router.
+- `apps/api/src/index.ts` - mount Studio account pricing and project routes.
 - `apps/api/src/projects/index.ts` - mount project-scoped Studio subrouter.
 - `apps/api/src/middleware/request-deadline.ts` - exempt Studio SSE and bounded long-poll routes.
 - `apps/api/src/iam/actions.ts` - add Studio actions.
@@ -226,7 +227,7 @@ Modify:
 
 - [ ] Implement `canonicalStudioRequestHash(input)` using stable JSON ordering and contract-normalized input.
 
-- [ ] Implement `StudioProviderAdapter` exactly as the architecture defines it.
+- [ ] Implement the initial fake-provider `StudioProviderAdapter` contract. Task 9 deliberately evolves it with shared typed errors, synchronous submission results, replayable-within-attempt asset sources, and the production object-store port before external provider I/O is enabled.
 
 - [ ] Implement retry classes:
 
@@ -506,8 +507,8 @@ Modify:
   - provider config and credential binding validation
   - attempt creation
   - provider submit
-  - poll or webhook wait
-  - result fetch
+  - synchronous completion staging or asynchronous poll
+  - result fetch for durable asynchronous handles
   - object-store copy
   - asset creation
   - billing settlement
@@ -531,50 +532,17 @@ Modify:
 
 ## Task 9: Storage Driver and OpenAI-Compatible Image Adapter
 
-**Files:**
-- Create: `apps/api/src/studio/storage/supabase-object-store.ts`
-- Create: `apps/api/src/studio/providers/openai-compatible-image.ts`
-- Create: `apps/api/src/studio/providers/provider-registry.ts`
-- Create: `apps/api/src/webhooks/studio.ts`
-- Modify: `apps/api/src/index.ts`
-- Test: adapter conformance tests and webhook tests
+**Design:** `docs/specs/2026-07-16-studio-production-provider-storage-design.md`
 
-**Consumes:** Task 3 adapter/object-store ports and Task 8 worker.
+**Execution plan:** `docs/specs/2026-07-16-studio-production-provider-storage-implementation-plan.md`
 
-**Produces:** Real provider path for OpenAI-compatible image generation with private object storage.
+**Consumes:** Task 3's initial runtime ports, Task 7's project API, Task 8's worker and authorization fences, and the existing billing reservation functions.
 
-- [ ] Write object-store conformance tests for streaming upload, streaming download, signed download URL, signed upload URL, object metadata, transient failure, and self-host readiness failure.
+**Produces:** Project-scoped OpenAI-compatible image execution, shared API/worker private object storage, trusted immutable pricing, safe synchronous/asynchronous recovery, and production assembly that remains disabled until Tasks 14 and 15 pass.
 
-- [ ] Write adapter conformance tests for OpenAI-compatible image generation using mocked HTTP:
-
-  - request shape
-  - authorization header redaction
-  - base URL validation
-  - SSRF rejection
-  - timeout classification
-  - rate-limit classification with `Retry-After`
-  - unsupported model
-  - output download validation
-
-- [ ] Implement Supabase managed storage driver without buffering large media into API memory.
-
-- [ ] Implement OpenAI-compatible image adapter behind provider config.
-
-- [ ] Mount `/v1/webhooks/studio/:provider` with raw-body handling and replay protection for providers that use callbacks. Phase 1 fake/OpenAI-compatible polling may not need live callbacks, but the signed callback surface and tests must exist.
-
-- [ ] Run:
-
-  ```powershell
-  pnpm --filter kortix-api test
-  pnpm --filter @kortix/studio-runtime test
-  ```
-
-- [ ] Commit:
-
-  ```powershell
-  git add apps/api/src/studio/storage apps/api/src/studio/providers apps/api/src/webhooks/studio.ts apps/api/src/index.ts
-  git commit -m "feat: add studio storage and image adapter"
-  ```
+- [ ] Execute the dedicated Task 9 plan task-by-task with TDD and a review checkpoint after every commit.
+- [ ] Do not implement the stale Supabase-only driver or an unused Phase 1 webhook.
+- [ ] Do not enable production Studio until MinIO conformance, gated provider smoke, Alibaba Cloud OSS compatibility, deployment, and full acceptance gates pass.
 
 ## Task 10: SDK Facade, React Hooks, SSE, and Polling
 
@@ -777,7 +745,18 @@ Modify:
 - Modify: `infra/k8s/envs/staging/values.yaml`
 - Modify: `infra/k8s/envs/prod/values.yaml`
 - Modify: `infra/k8s/envs/preview/values.yaml`
-- Modify: operational metrics/health files after locating current conventions
+- Modify: `apps/api/src/lib/metrics.ts`
+- Modify: `apps/api/src/studio/metrics.ts`
+- Create: `apps/api/src/studio/billing-incidents.ts`
+- Create: `apps/api/src/studio/billing-incidents.test.ts`
+- Modify: `apps/api/src/studio/account-routes.ts`
+- Modify: `packages/api-contract/src/studio/index.ts`
+- Create: `apps/api/src/studio/observability-config.test.ts`
+- Create: `apps/studio-worker/src/observability-server.ts`
+- Create: `apps/studio-worker/src/observability-server.test.ts`
+- Create: `infra/k8s/charts/kortix-api/templates/studio-worker-service.yaml`
+- Create: `infra/k8s/charts/kortix-api/templates/studio-worker-servicemonitor.yaml`
+- Modify: `infra/k8s/observability/kortix-alerts.yaml`
 
 **Consumes:** Tasks 8 and 9.
 
@@ -785,25 +764,39 @@ Modify:
 
 - [ ] Add Studio worker command to the existing API image, but run it as a distinct process/deployment.
 
-- [ ] Add local compose worker service with `STUDIO_ENABLED`, storage env, provider env, and database access.
+- [ ] Add local compose worker and MinIO services with `STUDIO_ENABLED`, shared storage config, adapter enablement, database access, a private bucket, and readiness-probe lifecycle cleanup.
 
 - [ ] Add self-host readiness gate so storage-disabled deployments fail Studio startup clearly while the rest of Kortix can run when Studio is disabled.
 
 - [ ] Add Kubernetes Studio worker Deployment using the shared image and a distinct command.
 
-- [ ] Add metrics for queue age, claim latency, provider latency, completion latency, failures, retries, reservation leaks, SSE reconnects, storage failures, and estimate violations.
+- [ ] Connect Task 9's API and worker instrumentation to production counter/gauge/histogram sinks. The API sink registers with the existing `/metrics` registry. The independent worker exposes liveness, readiness, and `/metrics` on a dedicated internal-only port; liveness does not call providers or storage.
+
+- [ ] Add a worker Service and ServiceMonitor selecting only the Studio worker. Render and verify both API and worker scrape targets in Helm. No metric label may contain account/project/job IDs, object keys, URLs, models, credentials, signed queries, or error messages.
+
+- [ ] Add recording/alert rules for unknown outcomes, reservation age over 24 hours, critical age over seven days, 30-day billing-incident transfer, storage readiness failure, estimate violation, platform loss, queue age, and orphan staging objects. Every alert has severity, bounded `for`, and the Studio provider/storage runbook URL.
+
+- [ ] Implement the internal, non-SDK `POST /v1/accounts/:accountId/studio/billing-incidents/:incidentId/resolve` operation gated by `billing.write`. It accepts an idempotency key, reason, evidence reference, and `confirm_not_created | record_platform_liability`; the server validates evidence and calculates provider credits. It never accepts raw credits/actor IDs, never automatically re-debits the user after the 30-day hold ended, and never relies on manual SQL. Add idempotency, actor attribution, conflicting evidence, and cross-account tests.
+
+- [ ] Add `observability-config.test.ts` to parse rendered/checked YAML, assert every required series has a scrape consumer or alert/recording rule, and assert the incident operation exists before any production value can set `STUDIO_ENABLED=true`.
 
 - [ ] Run:
 
   ```powershell
   docker compose -f scripts/compose/docker-compose.yml config
   tests/infra/scripts/helm-validate.sh
+  pnpm --filter @kortix/api-contract test
+  pnpm --filter @kortix/api-contract typecheck
+  pnpm --filter kortix-api exec bun test src/studio/metrics.test.ts src/studio/billing-incidents.test.ts src/studio/observability-config.test.ts
+  pnpm --filter kortix-api typecheck
+  pnpm --filter @kortix/studio-worker test src/metrics.test.ts src/observability-server.test.ts
+  pnpm --filter @kortix/studio-worker typecheck
   ```
 
 - [ ] Commit:
 
   ```powershell
-  git add apps/api/Dockerfile scripts/compose/docker-compose.yml apps/cli/src/self-host/assets/kortix-compose.yml infra/k8s
+  git add apps/api/Dockerfile apps/api/src/lib/metrics.ts apps/api/src/studio apps/studio-worker/src packages/api-contract/src/studio scripts/compose/docker-compose.yml apps/cli/src/self-host/assets/kortix-compose.yml infra/k8s
   git commit -m "feat: deploy studio worker"
   ```
 
@@ -831,7 +824,11 @@ Modify:
   pnpm --filter @kortix/api-contract test
   pnpm --filter @kortix/db test
   pnpm --filter @kortix/studio-runtime test
+  pnpm --filter @kortix/studio-runtime typecheck
+  pnpm --filter @kortix/studio-adapters test
+  pnpm --filter @kortix/studio-adapters typecheck
   pnpm --filter @kortix/studio-worker test
+  pnpm --filter @kortix/studio-worker typecheck
   pnpm --filter kortix-api test
   pnpm --filter @kortix/sdk test
   pnpm --filter @kortix/sdk build
@@ -840,6 +837,8 @@ Modify:
   pnpm --filter ./apps/mobile test
   git diff --check
   ```
+
+- [ ] Run the required MinIO object-store conformance and API/worker integration job. A missing Docker/MinIO dependency is a failed gate, not a skipped pass.
 
 - [ ] Run black-box API flow against a real local API.
 
@@ -864,6 +863,12 @@ Modify:
   - one final billing settlement
   - output visible in Image Studio
   - asset download succeeds
+
+- [ ] Run the gated Alibaba Cloud OSS storage smoke against the intended endpoint. If S3 compatibility fails, Task 9 is not production-complete until a native OSS driver passes the same conformance suite.
+
+- [ ] Scrape a real local API and independent worker `/metrics` endpoint after driving fake success, unknown outcome, storage-readiness failure, estimate violation, and platform-loss fixtures. Assert all required Task 9 series appear, labels contain no tenant/secret/URL data, and the worker scrape remains available when the provider is unreachable.
+
+- [ ] Run the observability configuration tests and render Helm with monitoring enabled. Verify the API and worker ServiceMonitors select live endpoints and every unknown/reservation/readiness/estimate/platform-loss alert expression references an emitted series. Trigger the 24-hour and seven-day fixture rules; verify the 30-day fixture ends the user hold, opens one billing incident, and the audited incident operation resolves it without a late user debit.
 
 - [ ] Confirm Phase 1 has no executable future-media surface.
 

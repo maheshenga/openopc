@@ -1,5 +1,5 @@
 -- Studio production provider storage: additive pricing, recovery, and billing state.
--- This migration deliberately contains no public RPC definitions.
+-- It also installs service-role-only RPC overloads without changing historical migrations.
 
 CREATE TABLE IF NOT EXISTS kortix.studio_pricing_catalog (
   pricing_catalog_id uuid primary key default gen_random_uuid(),
@@ -130,6 +130,431 @@ BEGIN
       FOREIGN KEY (account_id) REFERENCES kortix.accounts(account_id) ON DELETE CASCADE;
   END IF;
 END $$;
+
+CREATE OR REPLACE FUNCTION public.atomic_create_studio_job(
+  p_account_id uuid,
+  p_project_id uuid,
+  p_actor_user_id uuid,
+  p_actor_type text,
+  p_acting_token_id uuid,
+  p_agent_name text,
+  p_session_id text,
+  p_parent_job_id uuid,
+  p_capability text,
+  p_provider_config_id uuid,
+  p_provider_config_version text,
+  p_provider text,
+  p_model text,
+  p_pricing_catalog_id uuid,
+  p_pricing_version integer,
+  p_pricing_snapshot jsonb,
+  p_input jsonb,
+  p_idempotency_key text,
+  p_request_hash text,
+  p_reserved_credits numeric,
+  p_reservation_expires_at timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_total numeric(12,4);
+  v_reserved numeric(12,4) := 0;
+  v_available numeric(12,4);
+  v_requested_reservation numeric(12,4);
+  v_expected_reservation numeric(12,4);
+  v_output_count_numeric numeric;
+  v_output_count integer;
+  v_existing record;
+  v_config record;
+  v_price record;
+  v_trusted_snapshot jsonb;
+  v_max_provider_credits numeric(12,4);
+  v_markup_credits numeric(12,4);
+  v_rate_credits numeric(12,4);
+  v_job_id uuid;
+  v_reservation_id uuid;
+BEGIN
+  IF p_reserved_credits IS NULL OR p_reserved_credits < 0 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Reserved credits must be non-negative');
+  END IF;
+
+  v_requested_reservation := p_reserved_credits::numeric(12,4);
+
+  SELECT COALESCE(balance, 0)
+  INTO v_total
+  FROM kortix.credit_accounts
+  WHERE account_id = p_account_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'No credit account found',
+      'required', v_requested_reservation,
+      'available', 0
+    );
+  END IF;
+
+  -- This account-scoped lookup deliberately precedes all provider and price checks.
+  -- It preserves replay of both legacy and production jobs after configuration changes.
+  SELECT job_id, project_id, request_hash, status
+  INTO v_existing
+  FROM kortix.studio_jobs
+  WHERE account_id = p_account_id
+    AND idempotency_key = p_idempotency_key;
+
+  IF FOUND THEN
+    IF v_existing.project_id IS DISTINCT FROM p_project_id
+      OR v_existing.request_hash IS DISTINCT FROM p_request_hash THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Idempotency key reused with different request',
+        'code', 'idempotency_mismatch'
+      );
+    END IF;
+
+    RETURN jsonb_build_object(
+      'success', true,
+      'idempotent', true,
+      'job_id', v_existing.job_id,
+      'status', v_existing.status
+    );
+  END IF;
+
+  SELECT
+    config.*,
+    md5(jsonb_build_object(
+      'provider_config_id', config.provider_config_id,
+      'account_id', config.account_id,
+      'project_id', config.project_id,
+      'provider', config.provider,
+      'base_url', config.base_url,
+      'region', config.region,
+      'credential_binding', config.credential_binding,
+      'capability_map', config.capability_map,
+      'enabled', config.enabled
+    )::text) AS canonical_version
+  INTO v_config
+  FROM kortix.studio_provider_configs config
+  WHERE config.provider_config_id = p_provider_config_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio provider configuration is stale',
+      'code', 'provider_config_stale'
+    );
+  END IF;
+
+  IF v_config.account_id IS DISTINCT FROM p_account_id
+    OR v_config.project_id IS DISTINCT FROM p_project_id
+    OR v_config.provider IS DISTINCT FROM p_provider
+    OR v_config.enabled IS NOT TRUE
+    OR v_config.canonical_version IS DISTINCT FROM p_provider_config_version THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio provider configuration is stale',
+      'code', 'provider_config_stale'
+    );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(
+      CASE
+        WHEN jsonb_typeof(v_config.capability_map #> ARRAY['capabilities', p_capability, 'models']) = 'array'
+          THEN v_config.capability_map #> ARRAY['capabilities', p_capability, 'models']
+        ELSE '[]'::jsonb
+      END
+    ) AS models(model)
+    WHERE models.model ->> 'model' = p_model
+      AND models.model ->> 'pricing_catalog_id' = p_pricing_catalog_id::text
+  ) THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio pricing binding is stale',
+      'code', 'pricing_stale'
+    );
+  END IF;
+
+  SELECT price.*
+  INTO v_price
+  FROM kortix.studio_pricing_catalog price
+  WHERE price.pricing_catalog_id = p_pricing_catalog_id
+    AND price.account_id = p_account_id
+    AND price.provider = p_provider
+    AND price.model = p_model
+    AND price.version = p_pricing_version
+    AND price.active IS TRUE
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio pricing is stale',
+      'code', 'pricing_stale'
+    );
+  END IF;
+
+  IF jsonb_typeof(v_price.rate_data -> 'rate_credits') <> 'number'
+    OR jsonb_typeof(v_price.maximum_cost_rule -> 'max_provider_credits') <> 'number'
+    OR jsonb_typeof(v_price.markup_rule -> 'markup_credits') <> 'number' THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio pricing is stale',
+      'code', 'pricing_stale'
+    );
+  END IF;
+
+  v_rate_credits := (v_price.rate_data ->> 'rate_credits')::numeric(12,4);
+  v_max_provider_credits :=
+    (v_price.maximum_cost_rule ->> 'max_provider_credits')::numeric(12,4);
+  v_markup_credits := (v_price.markup_rule ->> 'markup_credits')::numeric(12,4);
+
+  IF v_rate_credits < 0 OR v_max_provider_credits < 0 OR v_markup_credits < 0 THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio pricing is stale',
+      'code', 'pricing_stale'
+    );
+  END IF;
+
+  v_trusted_snapshot := jsonb_build_object(
+    'pricing_catalog_id', v_price.pricing_catalog_id::text,
+    'version', v_price.version,
+    'provider', v_price.provider,
+    'model', v_price.model,
+    'unit', v_price.unit,
+    'rate_credits', (v_price.rate_data ->> 'rate_credits')::numeric,
+    'max_provider_credits', (v_price.maximum_cost_rule ->> 'max_provider_credits')::numeric,
+    'markup_credits', (v_price.markup_rule ->> 'markup_credits')::numeric
+  );
+
+  IF p_pricing_snapshot IS DISTINCT FROM v_trusted_snapshot THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio pricing snapshot is stale',
+      'code', 'pricing_stale'
+    );
+  END IF;
+
+  IF jsonb_typeof(p_input #> '{image,output_count}') <> 'number' THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Invalid Studio output count');
+  END IF;
+
+  v_output_count_numeric := (p_input #>> '{image,output_count}')::numeric;
+  IF v_output_count_numeric <> trunc(v_output_count_numeric)
+    OR v_output_count_numeric < 1
+    OR v_output_count_numeric > 8 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Invalid Studio output count');
+  END IF;
+  v_output_count := v_output_count_numeric::integer;
+
+  v_expected_reservation := (
+    v_max_provider_credits + (v_markup_credits * v_output_count)
+  )::numeric(12,4);
+  IF v_requested_reservation IS DISTINCT FROM v_expected_reservation THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio pricing reservation is stale',
+      'code', 'pricing_stale'
+    );
+  END IF;
+
+  SELECT COALESCE(SUM(amount_credits), 0)
+  INTO v_reserved
+  FROM kortix.studio_credit_reservations
+  WHERE account_id = p_account_id
+    AND status = 'active';
+
+  v_available := GREATEST(0, v_total - v_reserved);
+  IF v_available < v_requested_reservation THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'code', 'insufficient_credits',
+      'error', 'Insufficient credits',
+      'required', v_requested_reservation,
+      'available', v_available,
+      'reserved', v_reserved
+    );
+  END IF;
+
+  INSERT INTO kortix.studio_jobs(
+    account_id, project_id, actor_user_id, actor_type, acting_token_id,
+    agent_name, session_id, parent_job_id, capability, provider_config_id,
+    provider_config_version, provider, model, pricing_catalog_id,
+    pricing_version, pricing_snapshot, input, idempotency_key, request_hash,
+    reserved_credits
+  )
+  VALUES (
+    p_account_id, p_project_id, p_actor_user_id,
+    COALESCE(NULLIF(p_actor_type, ''), 'user'), p_acting_token_id,
+    p_agent_name, p_session_id, p_parent_job_id, p_capability,
+    p_provider_config_id, p_provider_config_version, p_provider, p_model,
+    p_pricing_catalog_id, p_pricing_version, v_trusted_snapshot,
+    COALESCE(p_input, '{}'::jsonb), p_idempotency_key, p_request_hash,
+    v_requested_reservation
+  )
+  RETURNING job_id INTO v_job_id;
+
+  INSERT INTO kortix.studio_credit_reservations(
+    account_id, job_id, amount_credits, expires_at
+  )
+  VALUES (
+    p_account_id, v_job_id, v_requested_reservation, p_reservation_expires_at
+  )
+  RETURNING reservation_id INTO v_reservation_id;
+
+  INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload)
+  VALUES (
+    v_job_id,
+    1,
+    'queued',
+    jsonb_build_object(
+      'capability', p_capability,
+      'provider_config_id', p_provider_config_id,
+      'provider_config_version', p_provider_config_version,
+      'model', p_model,
+      'pricing_catalog_id', p_pricing_catalog_id,
+      'pricing_version', p_pricing_version
+    )
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'idempotent', false,
+    'job_id', v_job_id,
+    'reservation_id', v_reservation_id,
+    'reserved', v_requested_reservation,
+    'available_after_reservation', v_available - v_requested_reservation
+  );
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.atomic_record_studio_attempt_cost(
+  p_job_id uuid,
+  p_attempt_id uuid,
+  p_lease_owner text,
+  p_upstream_usage jsonb,
+  p_upstream_cost_credits numeric,
+  p_outcome text,
+  p_recorded_at timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_job kortix.studio_jobs%ROWTYPE;
+  v_attempt kortix.studio_job_attempts%ROWTYPE;
+  v_usage jsonb := COALESCE(p_upstream_usage, '{}'::jsonb);
+  v_cost numeric(12,4);
+BEGIN
+  IF p_upstream_cost_credits IS NULL OR p_upstream_cost_credits < 0 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Attempt cost must be non-negative');
+  END IF;
+  IF p_outcome IS NULL OR p_outcome NOT IN ('succeeded', 'failed', 'cancelled', 'unknown') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Invalid attempt cost outcome');
+  END IF;
+  IF p_recorded_at IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Attempt cost time is required');
+  END IF;
+  v_cost := p_upstream_cost_credits::numeric(12,4);
+
+  SELECT job.*
+  INTO v_job
+  FROM kortix.studio_jobs job
+  WHERE job.job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Studio job not found');
+  END IF;
+
+  IF v_job.status NOT IN ('queued', 'running')
+    OR v_job.lease_owner IS DISTINCT FROM p_lease_owner
+    OR v_job.lease_expires_at IS NULL
+    OR v_job.lease_expires_at <= clock_timestamp()
+    OR v_job.lease_expires_at <= p_recorded_at THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Studio job lease is not live');
+  END IF;
+
+  SELECT attempt.*
+  INTO v_attempt
+  FROM kortix.studio_job_attempts attempt
+  WHERE attempt.attempt_id = p_attempt_id
+    AND attempt.job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Studio attempt not found');
+  END IF;
+
+  IF v_attempt.cost_recorded_at IS NOT NULL THEN
+    IF v_attempt.upstream_usage IS NOT DISTINCT FROM v_usage
+      AND v_attempt.upstream_cost_credits::numeric(12,4) IS NOT DISTINCT FROM v_cost
+      AND v_attempt.cost_outcome IS NOT DISTINCT FROM p_outcome THEN
+      RETURN jsonb_build_object(
+        'success', true,
+        'idempotent', true,
+        'job_id', p_job_id,
+        'attempt_id', p_attempt_id,
+        'upstream_cost_credits', v_attempt.upstream_cost_credits,
+        'outcome', v_attempt.cost_outcome,
+        'cost_recorded_at', v_attempt.cost_recorded_at
+      );
+    END IF;
+
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio attempt cost was already recorded differently',
+      'code', 'attempt_cost_conflict'
+    );
+  END IF;
+
+  UPDATE kortix.studio_job_attempts
+  SET upstream_usage = v_usage,
+      upstream_cost_credits = v_cost,
+      cost_outcome = p_outcome,
+      cost_recorded_at = p_recorded_at
+  WHERE attempt_id = p_attempt_id
+    AND job_id = p_job_id;
+
+  INSERT INTO kortix.studio_usage_events(
+    account_id, project_id, job_id, attempt_id, capability, provider, model,
+    upstream_cost_credits, final_cost_credits, platform_loss_credits,
+    outcome, metadata, created_at
+  )
+  VALUES (
+    v_job.account_id, v_job.project_id, p_job_id, p_attempt_id,
+    v_job.capability, v_job.provider, v_job.model,
+    v_cost, 0, 0, p_outcome,
+    jsonb_build_object('kind', 'attempt', 'cost_recorded_at', p_recorded_at),
+    p_recorded_at
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'idempotent', false,
+    'job_id', p_job_id,
+    'attempt_id', p_attempt_id,
+    'upstream_cost_credits', v_cost,
+    'outcome', p_outcome,
+    'cost_recorded_at', p_recorded_at
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.atomic_create_studio_job(uuid, uuid, uuid, text, uuid, text, text, uuid, text, uuid, text, text, text, uuid, integer, jsonb, jsonb, text, text, numeric, timestamptz) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.atomic_create_studio_job(uuid, uuid, uuid, text, uuid, text, text, uuid, text, uuid, text, text, text, uuid, integer, jsonb, jsonb, text, text, numeric, timestamptz) TO service_role;
+
+REVOKE ALL ON FUNCTION public.atomic_record_studio_attempt_cost(uuid, uuid, text, jsonb, numeric, text, timestamptz) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.atomic_record_studio_attempt_cost(uuid, uuid, text, jsonb, numeric, text, timestamptz) TO service_role;
 
 REVOKE ALL ON TABLE kortix.studio_pricing_catalog FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON TABLE kortix.studio_pricing_catalog TO service_role;
@@ -660,3 +1085,762 @@ BEGIN
       ADD CONSTRAINT studio_job_recoveries_job_idempotency_key UNIQUE (job_id, idempotency_key);
   END IF;
 END $$;
+
+CREATE OR REPLACE FUNCTION kortix.atomic_settle_studio_job_production(
+  p_job_id uuid,
+  p_requested_credits numeric,
+  p_settlement_key text,
+  p_description text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_reservation record;
+  v_debit jsonb := NULL;
+  v_settled_credits numeric(12,4);
+BEGIN
+  IF p_requested_credits IS NULL OR p_requested_credits <= 0 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Requested credits must be positive');
+  END IF;
+
+  PERFORM 1
+  FROM kortix.studio_jobs
+  WHERE job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Studio job not found');
+  END IF;
+
+  SELECT reservation_id, account_id, amount_credits, status, settlement_key
+  INTO v_reservation
+  FROM kortix.studio_credit_reservations
+  WHERE job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'No reservation found');
+  END IF;
+
+  IF v_reservation.status = 'settled' THEN
+    IF v_reservation.settlement_key = p_settlement_key THEN
+      RETURN jsonb_build_object(
+        'success', true,
+        'idempotent', true,
+        'job_id', p_job_id,
+        'settled', LEAST(p_requested_credits, v_reservation.amount_credits)::numeric(12,4)
+      );
+    END IF;
+
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Reservation already settled with a different key'
+    );
+  END IF;
+
+  IF v_reservation.status <> 'active' THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Reservation is not active',
+      'status', v_reservation.status
+    );
+  END IF;
+
+  v_settled_credits := LEAST(
+    p_requested_credits::numeric(12,4),
+    v_reservation.amount_credits
+  )::numeric(12,4);
+
+  UPDATE kortix.studio_credit_reservations
+  SET status = 'settled',
+      settlement_key = p_settlement_key,
+      settled_at = NOW()
+  WHERE reservation_id = v_reservation.reservation_id;
+
+  UPDATE kortix.studio_jobs
+  SET actual_credits = v_settled_credits,
+      updated_at = NOW()
+  WHERE job_id = p_job_id;
+
+  IF v_settled_credits > 0 THEN
+    v_debit := public.atomic_use_credits(
+      v_reservation.account_id,
+      v_settled_credits,
+      p_description,
+      'studio'
+    );
+
+    IF COALESCE((v_debit ->> 'success')::boolean, false) IS NOT TRUE THEN
+      RAISE EXCEPTION 'Studio production settlement debit failed: %', v_debit;
+    END IF;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'idempotent', false,
+    'job_id', p_job_id,
+    'reserved', v_reservation.amount_credits,
+    'requested', p_requested_credits::numeric(12,4),
+    'settled', v_settled_credits,
+    'capped', v_settled_credits < p_requested_credits::numeric(12,4),
+    'debit', v_debit
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION kortix.atomic_settle_studio_job_production(uuid, numeric, text, text) FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.atomic_finalize_studio_job_success(
+  p_job_id uuid,
+  p_attempt_id uuid,
+  p_lease_owner text,
+  p_actual_credits numeric,
+  p_assets jsonb,
+  p_completed_at timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_job kortix.studio_jobs%ROWTYPE;
+  v_billing jsonb;
+  v_asset jsonb;
+  v_asset_id uuid;
+  v_linked_asset_id uuid;
+  v_cursor bigint;
+  v_ledger_id uuid;
+  v_verified_upstream_credits numeric(12,4) := 0;
+  v_expected_credits numeric(12,4) := 0;
+  v_markup_credits numeric(12,4) := 0;
+  v_charged_credits numeric(12,4) := 0;
+  v_platform_loss_credits numeric(12,4) := 0;
+BEGIN
+  IF p_actual_credits < 0 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Actual credits must be non-negative');
+  END IF;
+
+  IF jsonb_typeof(COALESCE(p_assets, '[]'::jsonb)) <> 'array' THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Assets must be a JSON array');
+  END IF;
+
+  IF jsonb_array_length(COALESCE(p_assets, '[]'::jsonb)) > 16 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Too many Studio output assets');
+  END IF;
+
+  SELECT job.*
+  INTO v_job
+  FROM kortix.studio_jobs job
+  WHERE job.job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Studio job not found');
+  END IF;
+
+  IF v_job.status = 'succeeded' THEN
+    RETURN jsonb_build_object('success', true, 'outcome', 'succeeded', 'idempotent', true);
+  END IF;
+
+  IF v_job.status = 'cancelled' THEN
+    RETURN jsonb_build_object('success', true, 'outcome', 'cancelled', 'idempotent', true);
+  END IF;
+
+  IF v_job.status NOT IN ('queued', 'running')
+    OR v_job.lease_owner IS DISTINCT FROM p_lease_owner THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Studio job lease is not owned');
+  END IF;
+
+  PERFORM 1
+  FROM kortix.studio_job_attempts attempt
+  WHERE attempt.attempt_id = p_attempt_id
+    AND attempt.job_id = p_job_id
+    AND attempt.status IN ('submitted', 'polling', 'reconciling')
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Studio attempt not found');
+  END IF;
+
+  SELECT COALESCE(MAX(event.cursor), 0)
+  INTO v_cursor
+  FROM kortix.studio_job_events event
+  WHERE event.job_id = p_job_id;
+
+  IF v_job.pricing_snapshot IS NULL THEN
+    v_verified_upstream_credits := 0;
+  ELSE
+    SELECT COALESCE(SUM(attempt.upstream_cost_credits), 0)::numeric(12,4)
+    INTO v_verified_upstream_credits
+    FROM kortix.studio_job_attempts attempt
+    WHERE attempt.job_id = p_job_id
+      AND attempt.cost_recorded_at IS NOT NULL;
+  END IF;
+
+  IF v_job.cancellation_requested_at IS NOT NULL THEN
+    IF v_job.pricing_snapshot IS NULL THEN
+      v_billing := public.atomic_release_studio_job(
+        p_job_id,
+        'studio:release:' || p_job_id::text || ':user_cancelled',
+        'user_cancelled'
+      );
+    ELSIF v_verified_upstream_credits = 0 THEN
+      v_billing := public.atomic_release_studio_job(
+        p_job_id,
+        'studio:release:' || p_job_id::text || ':user_cancelled',
+        'user_cancelled'
+      );
+    ELSE
+      v_billing := kortix.atomic_settle_studio_job_production(
+        p_job_id,
+        v_verified_upstream_credits,
+        'studio:settle:' || p_job_id::text,
+        'Studio job verified provider usage'
+      );
+      v_charged_credits := COALESCE(
+        (v_billing ->> 'settled')::numeric,
+        (SELECT actual_credits FROM kortix.studio_jobs WHERE job_id = p_job_id),
+        0
+      )::numeric(12,4);
+      IF NULLIF(v_billing #>> '{debit,transaction_id}', '') IS NOT NULL THEN
+        v_ledger_id := (v_billing #>> '{debit,transaction_id}')::uuid;
+      END IF;
+    END IF;
+
+    IF COALESCE((v_billing ->> 'success')::boolean, false) IS NOT TRUE THEN
+      RAISE EXCEPTION 'Studio cancellation billing failed: %', v_billing;
+    END IF;
+
+    IF v_job.pricing_snapshot IS NOT NULL THEN
+      v_platform_loss_credits := GREATEST(
+        0,
+        v_verified_upstream_credits - v_charged_credits
+      )::numeric(12,4);
+
+      INSERT INTO kortix.studio_usage_events(
+        account_id, project_id, job_id, attempt_id, capability, provider, model,
+        upstream_cost_credits, final_cost_credits, platform_loss_credits,
+        ledger_id, outcome, metadata, created_at
+      )
+      SELECT
+        v_job.account_id, v_job.project_id, p_job_id, NULL,
+        v_job.capability, v_job.provider, v_job.model,
+        0, v_charged_credits, v_platform_loss_credits,
+        v_ledger_id, 'cancelled',
+        jsonb_strip_nulls(jsonb_build_object(
+          'kind', 'final',
+          'verified_upstream_cost_credits', v_verified_upstream_credits,
+          'settlement_key', CASE WHEN v_charged_credits > 0
+            THEN 'studio:settle:' || p_job_id::text ELSE NULL END,
+          'release_key', CASE WHEN v_charged_credits = 0
+            THEN 'studio:release:' || p_job_id::text || ':user_cancelled' ELSE NULL END
+        )),
+        p_completed_at
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM kortix.studio_usage_events existing
+        WHERE existing.job_id = p_job_id
+          AND existing.metadata ->> 'kind' = 'final'
+      );
+
+      IF NOT EXISTS (
+        SELECT 1 FROM kortix.studio_job_events event
+        WHERE event.job_id = p_job_id AND event.event_type = 'billing-settled'
+      ) THEN
+        v_cursor := v_cursor + 1;
+        INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+        VALUES (
+          p_job_id,
+          v_cursor,
+          'billing-settled',
+          jsonb_build_object(
+            'actual_credits', v_charged_credits,
+            'verified_upstream_cost_credits', v_verified_upstream_credits,
+            'platform_loss_credits', v_platform_loss_credits,
+            'capped', v_charged_credits < v_verified_upstream_credits
+          ),
+          p_completed_at
+        );
+      END IF;
+    END IF;
+
+    UPDATE kortix.studio_job_attempts
+    SET status = 'cancelled', ended_at = p_completed_at
+    WHERE attempt_id = p_attempt_id
+      AND job_id = p_job_id;
+
+    UPDATE kortix.studio_jobs
+    SET status = 'cancelled',
+        actual_credits = CASE
+          WHEN v_job.pricing_snapshot IS NULL THEN actual_credits
+          ELSE v_charged_credits
+        END,
+        error_code = NULL,
+        error_message = NULL,
+        completed_at = p_completed_at,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = p_completed_at
+    WHERE job_id = p_job_id
+      AND lease_owner = p_lease_owner
+      AND status IN ('queued', 'running');
+
+    v_cursor := v_cursor + 1;
+    INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+    VALUES (p_job_id, v_cursor, 'cancelled', jsonb_build_object('reason', 'user_cancelled'), p_completed_at);
+
+    RETURN jsonb_build_object('success', true, 'outcome', 'cancelled', 'idempotent', false);
+  END IF;
+
+  IF v_job.pricing_snapshot IS NULL THEN
+    IF p_actual_credits = 0 THEN
+      v_billing := public.atomic_release_studio_job(
+        p_job_id,
+        'studio:release:' || p_job_id::text || ':zero_cost_success',
+        'zero_cost_success'
+      );
+      v_charged_credits := 0;
+    ELSE
+      v_billing := public.atomic_settle_studio_job(
+        p_job_id,
+        p_actual_credits,
+        'studio:settle:' || p_job_id::text,
+        'Studio job usage'
+      );
+      v_charged_credits := COALESCE((v_billing ->> 'settled')::numeric, p_actual_credits);
+    END IF;
+  ELSE
+    v_markup_credits := (v_job.pricing_snapshot ->> 'markup_credits')::numeric(12,4);
+    v_expected_credits := (
+      v_verified_upstream_credits
+      + v_markup_credits * jsonb_array_length(COALESCE(p_assets, '[]'::jsonb))
+    )::numeric(12,4);
+
+    IF p_actual_credits::numeric(12,4) IS DISTINCT FROM v_expected_credits THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Studio actual credits do not match verified cost',
+        'code', 'actual_credits_mismatch',
+        'expected', v_expected_credits
+      );
+    END IF;
+
+    IF v_expected_credits = 0 THEN
+      v_billing := public.atomic_release_studio_job(
+        p_job_id,
+        'studio:release:' || p_job_id::text || ':zero_cost_success',
+        'zero_cost_success'
+      );
+      v_charged_credits := 0;
+    ELSE
+      v_billing := kortix.atomic_settle_studio_job_production(
+        p_job_id,
+        v_expected_credits,
+        'studio:settle:' || p_job_id::text,
+        'Studio job usage'
+      );
+      v_charged_credits := COALESCE(
+        (v_billing ->> 'settled')::numeric,
+        (SELECT actual_credits FROM kortix.studio_jobs WHERE job_id = p_job_id),
+        0
+      )::numeric(12,4);
+    END IF;
+    v_platform_loss_credits := GREATEST(
+      0,
+      v_verified_upstream_credits - v_charged_credits
+    )::numeric(12,4);
+  END IF;
+
+  IF COALESCE((v_billing ->> 'success')::boolean, false) IS NOT TRUE THEN
+    RAISE EXCEPTION 'Studio success settlement failed: %', v_billing;
+  END IF;
+
+  IF v_charged_credits > 0 AND NULLIF(v_billing #>> '{debit,transaction_id}', '') IS NOT NULL THEN
+    v_ledger_id := (v_billing #>> '{debit,transaction_id}')::uuid;
+  END IF;
+
+  FOR v_asset IN
+    SELECT value FROM jsonb_array_elements(COALESCE(p_assets, '[]'::jsonb))
+  LOOP
+    v_asset_id := NULL;
+    INSERT INTO kortix.studio_assets AS existing_asset(
+      account_id, project_id, creator_user_id, source_job_id, kind, mime_type,
+      bucket, object_key, checksum_sha256, size_bytes, metadata, created_at, updated_at
+    )
+    VALUES (
+      v_job.account_id,
+      v_job.project_id,
+      v_job.actor_user_id,
+      p_job_id,
+      v_asset ->> 'kind',
+      v_asset ->> 'mimeType',
+      v_asset ->> 'bucket',
+      v_asset ->> 'objectKey',
+      v_asset ->> 'checksumSha256',
+      (v_asset ->> 'sizeBytes')::bigint,
+      jsonb_build_object('filename', v_asset ->> 'filename', 'attempt_id', p_attempt_id),
+      p_completed_at,
+      p_completed_at
+    )
+    ON CONFLICT (bucket, object_key) DO UPDATE
+      SET updated_at = EXCLUDED.updated_at
+      WHERE existing_asset.source_job_id = EXCLUDED.source_job_id
+    RETURNING asset_id INTO v_asset_id;
+
+    IF v_asset_id IS NULL THEN
+      RAISE EXCEPTION 'Studio asset object key belongs to another job';
+    END IF;
+
+    v_linked_asset_id := NULL;
+    INSERT INTO kortix.studio_job_assets(job_id, asset_id, role, created_at)
+    VALUES (p_job_id, v_asset_id, 'output', p_completed_at)
+    ON CONFLICT DO NOTHING
+    RETURNING asset_id INTO v_linked_asset_id;
+
+    IF v_linked_asset_id IS NOT NULL THEN
+      v_cursor := v_cursor + 1;
+      INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+      VALUES (
+        p_job_id,
+        v_cursor,
+        'asset-created',
+        jsonb_build_object('asset_id', v_asset_id),
+        p_completed_at
+      );
+    END IF;
+  END LOOP;
+
+  IF v_job.pricing_snapshot IS NULL THEN
+    INSERT INTO kortix.studio_usage_events(
+      account_id, project_id, job_id, capability, provider, model,
+      upstream_cost_credits, final_cost_credits, ledger_id, metadata, created_at
+    )
+    SELECT
+      v_job.account_id,
+      v_job.project_id,
+      p_job_id,
+      v_job.capability,
+      v_job.provider,
+      v_job.model,
+      0,
+      v_charged_credits,
+      v_ledger_id,
+      CASE
+        WHEN p_actual_credits = 0 THEN jsonb_build_object(
+          'kind', 'final',
+          'release_key', 'studio:release:' || p_job_id::text || ':zero_cost_success'
+        )
+        ELSE jsonb_build_object('kind', 'final', 'settlement_key', 'studio:settle:' || p_job_id::text)
+      END,
+      p_completed_at
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM kortix.studio_usage_events existing
+      WHERE existing.job_id = p_job_id
+        AND existing.metadata ->> 'kind' = 'final'
+    );
+  ELSE
+    INSERT INTO kortix.studio_usage_events(
+      account_id, project_id, job_id, attempt_id, capability, provider, model,
+      upstream_cost_credits, final_cost_credits, platform_loss_credits,
+      ledger_id, outcome, metadata, created_at
+    )
+    SELECT
+      v_job.account_id, v_job.project_id, p_job_id, NULL,
+      v_job.capability, v_job.provider, v_job.model,
+      0, v_charged_credits, v_platform_loss_credits,
+      v_ledger_id, 'succeeded',
+      jsonb_strip_nulls(jsonb_build_object(
+        'kind', 'final',
+        'verified_upstream_cost_credits', v_verified_upstream_credits,
+        'settlement_key', CASE WHEN v_charged_credits > 0
+          THEN 'studio:settle:' || p_job_id::text ELSE NULL END,
+        'release_key', CASE WHEN v_charged_credits = 0
+          THEN 'studio:release:' || p_job_id::text || ':zero_cost_success' ELSE NULL END
+      )),
+      p_completed_at
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM kortix.studio_usage_events existing
+      WHERE existing.job_id = p_job_id
+        AND existing.metadata ->> 'kind' = 'final'
+    );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM kortix.studio_job_events event
+    WHERE event.job_id = p_job_id AND event.event_type = 'billing-settled'
+  ) THEN
+    v_cursor := v_cursor + 1;
+    INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+    VALUES (
+      p_job_id,
+      v_cursor,
+      'billing-settled',
+      CASE
+        WHEN v_job.pricing_snapshot IS NULL THEN jsonb_build_object(
+          'actual_credits', v_charged_credits,
+          'requested_actual_credits', p_actual_credits,
+          'capped', v_charged_credits < p_actual_credits
+        )
+        ELSE jsonb_build_object(
+          'actual_credits', v_charged_credits,
+          'requested_actual_credits', v_expected_credits,
+          'verified_upstream_cost_credits', v_verified_upstream_credits,
+          'platform_loss_credits', v_platform_loss_credits,
+          'capped', v_charged_credits < v_expected_credits
+        )
+      END,
+      p_completed_at
+    );
+  END IF;
+
+  UPDATE kortix.studio_job_attempts
+  SET status = 'succeeded', ended_at = p_completed_at
+  WHERE attempt_id = p_attempt_id
+    AND job_id = p_job_id;
+
+  UPDATE kortix.studio_jobs
+  SET status = 'succeeded',
+      actual_credits = v_charged_credits,
+      error_code = NULL,
+      error_message = NULL,
+      completed_at = p_completed_at,
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      updated_at = p_completed_at
+  WHERE job_id = p_job_id
+    AND lease_owner = p_lease_owner
+    AND status IN ('queued', 'running')
+    AND cancellation_requested_at IS NULL;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Studio success finalization lost its cancellation fence';
+  END IF;
+
+  v_cursor := v_cursor + 1;
+  INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+  VALUES (p_job_id, v_cursor, 'succeeded', '{}'::jsonb, p_completed_at);
+
+  RETURN jsonb_build_object('success', true, 'outcome', 'succeeded', 'idempotent', false);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.atomic_finalize_studio_job_terminal(
+  p_job_id uuid,
+  p_attempt_id uuid,
+  p_lease_owner text,
+  p_terminal_status text,
+  p_error_code text,
+  p_error_message text,
+  p_retry_classification text,
+  p_release_reason text,
+  p_completed_at timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_job kortix.studio_jobs%ROWTYPE;
+  v_billing jsonb;
+  v_cursor bigint;
+  v_ledger_id uuid;
+  v_verified_upstream_credits numeric(12,4) := 0;
+  v_charged_credits numeric(12,4) := 0;
+  v_platform_loss_credits numeric(12,4) := 0;
+BEGIN
+  IF p_terminal_status NOT IN ('failed', 'cancelled') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Invalid Studio terminal status');
+  END IF;
+
+  SELECT job.*
+  INTO v_job
+  FROM kortix.studio_jobs job
+  WHERE job.job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Studio job not found');
+  END IF;
+
+  IF v_job.status::text = p_terminal_status THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'outcome', p_terminal_status,
+      'idempotent', true
+    );
+  END IF;
+
+  IF v_job.status NOT IN ('queued', 'running')
+    OR v_job.lease_owner IS DISTINCT FROM p_lease_owner THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Studio job lease is not owned');
+  END IF;
+
+  IF p_attempt_id IS NOT NULL THEN
+    PERFORM 1
+    FROM kortix.studio_job_attempts attempt
+    WHERE attempt.attempt_id = p_attempt_id
+      AND attempt.job_id = p_job_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object('success', false, 'error', 'Studio attempt not found');
+    END IF;
+  END IF;
+
+  SELECT COALESCE(MAX(event.cursor), 0)
+  INTO v_cursor
+  FROM kortix.studio_job_events event
+  WHERE event.job_id = p_job_id;
+
+  IF v_job.pricing_snapshot IS NULL THEN
+    v_billing := public.atomic_release_studio_job(
+      p_job_id,
+      'studio:release:' || p_job_id::text || ':' || p_release_reason,
+      p_release_reason
+    );
+  ELSE
+    SELECT COALESCE(SUM(attempt.upstream_cost_credits), 0)::numeric(12,4)
+    INTO v_verified_upstream_credits
+    FROM kortix.studio_job_attempts attempt
+    WHERE attempt.job_id = p_job_id
+      AND attempt.cost_recorded_at IS NOT NULL;
+
+    IF v_verified_upstream_credits = 0 THEN
+      v_billing := public.atomic_release_studio_job(
+        p_job_id,
+        'studio:release:' || p_job_id::text || ':' || p_release_reason,
+        p_release_reason
+      );
+    ELSE
+      v_billing := kortix.atomic_settle_studio_job_production(
+        p_job_id,
+        v_verified_upstream_credits,
+        'studio:settle:' || p_job_id::text,
+        'Studio job verified provider usage'
+      );
+      v_charged_credits := COALESCE(
+        (v_billing ->> 'settled')::numeric,
+        (SELECT actual_credits FROM kortix.studio_jobs WHERE job_id = p_job_id),
+        0
+      )::numeric(12,4);
+      IF NULLIF(v_billing #>> '{debit,transaction_id}', '') IS NOT NULL THEN
+        v_ledger_id := (v_billing #>> '{debit,transaction_id}')::uuid;
+      END IF;
+    END IF;
+
+    v_platform_loss_credits := GREATEST(
+      0,
+      v_verified_upstream_credits - v_charged_credits
+    )::numeric(12,4);
+  END IF;
+
+  IF COALESCE((v_billing ->> 'success')::boolean, false) IS NOT TRUE THEN
+    RAISE EXCEPTION 'Studio terminal reservation billing failed: %', v_billing;
+  END IF;
+
+  IF v_job.pricing_snapshot IS NOT NULL THEN
+    INSERT INTO kortix.studio_usage_events(
+      account_id, project_id, job_id, attempt_id, capability, provider, model,
+      upstream_cost_credits, final_cost_credits, platform_loss_credits,
+      ledger_id, outcome, metadata, created_at
+    )
+    SELECT
+      v_job.account_id, v_job.project_id, p_job_id, NULL,
+      v_job.capability, v_job.provider, v_job.model,
+      0, v_charged_credits, v_platform_loss_credits,
+      v_ledger_id, p_terminal_status,
+      jsonb_strip_nulls(jsonb_build_object(
+        'kind', 'final',
+        'verified_upstream_cost_credits', v_verified_upstream_credits,
+        'settlement_key', CASE WHEN v_charged_credits > 0
+          THEN 'studio:settle:' || p_job_id::text ELSE NULL END,
+        'release_key', CASE WHEN v_charged_credits = 0
+          THEN 'studio:release:' || p_job_id::text || ':' || p_release_reason ELSE NULL END
+      )),
+      p_completed_at
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM kortix.studio_usage_events existing
+      WHERE existing.job_id = p_job_id
+        AND existing.metadata ->> 'kind' = 'final'
+    );
+
+    IF NOT EXISTS (
+      SELECT 1 FROM kortix.studio_job_events event
+      WHERE event.job_id = p_job_id AND event.event_type = 'billing-settled'
+    ) THEN
+      v_cursor := v_cursor + 1;
+      INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+      VALUES (
+        p_job_id,
+        v_cursor,
+        'billing-settled',
+        jsonb_build_object(
+          'actual_credits', v_charged_credits,
+          'verified_upstream_cost_credits', v_verified_upstream_credits,
+          'platform_loss_credits', v_platform_loss_credits,
+          'capped', v_charged_credits < v_verified_upstream_credits
+        ),
+        p_completed_at
+      );
+    END IF;
+  END IF;
+
+  IF p_attempt_id IS NOT NULL THEN
+    UPDATE kortix.studio_job_attempts
+    SET status = p_terminal_status::kortix.studio_attempt_status,
+        retry_classification = COALESCE(p_retry_classification, retry_classification),
+        ended_at = p_completed_at
+    WHERE attempt_id = p_attempt_id
+      AND job_id = p_job_id;
+  END IF;
+
+  UPDATE kortix.studio_jobs
+  SET status = p_terminal_status::kortix.studio_job_status,
+      actual_credits = CASE
+        WHEN v_job.pricing_snapshot IS NULL THEN actual_credits
+        ELSE v_charged_credits
+      END,
+      error_code = p_error_code,
+      error_message = p_error_message,
+      completed_at = p_completed_at,
+      lease_owner = NULL,
+      lease_expires_at = NULL,
+      updated_at = p_completed_at
+  WHERE job_id = p_job_id
+    AND lease_owner = p_lease_owner
+    AND status IN ('queued', 'running');
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Studio terminal finalization lost its lease fence';
+  END IF;
+
+  v_cursor := v_cursor + 1;
+  INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+  VALUES (
+    p_job_id,
+    v_cursor,
+    p_terminal_status,
+    jsonb_strip_nulls(jsonb_build_object('code', p_error_code, 'reason', p_release_reason)),
+    p_completed_at
+  );
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'outcome', p_terminal_status,
+    'idempotent', false
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.atomic_finalize_studio_job_success(uuid, uuid, text, numeric, jsonb, timestamptz) FROM PUBLIC, authenticated;
+REVOKE ALL ON FUNCTION public.atomic_finalize_studio_job_terminal(uuid, uuid, text, text, text, text, text, text, timestamptz) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.atomic_finalize_studio_job_success(uuid, uuid, text, numeric, jsonb, timestamptz) TO service_role;
+GRANT EXECUTE ON FUNCTION public.atomic_finalize_studio_job_terminal(uuid, uuid, text, text, text, text, text, text, timestamptz) TO service_role;

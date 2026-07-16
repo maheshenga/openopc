@@ -66,8 +66,6 @@ describe('Studio production provider storage migration', () => {
       for (const table of forbiddenTables) expect(historical).not.toContain(table);
       for (const column of forbiddenHistoricalColumns) expect(historical).not.toContain(column);
     }
-
-    expect(migration).not.toContain('create or replace function public.atomic_');
   });
 
   test('declares the pricing catalog before jobs with exact types, constraints, and lookup index', () => {
@@ -424,5 +422,71 @@ describe('Studio production provider storage migration', () => {
       'grant select, insert, update on table kortix.studio_billing_incidents to service_role',
       'revoke insert, update, delete, truncate, references, trigger on table kortix.studio_jobs, kortix.studio_job_attempts, kortix.studio_credit_reservations, kortix.studio_usage_events from public, anon, authenticated',
     ]);
+  });
+
+  test('installs both atomic job-create overloads with exact service-role privileges', () => {
+    expectAll(migration, [
+      'create or replace function public.atomic_create_studio_job(',
+      'p_provider_config_version text',
+      'p_pricing_catalog_id uuid',
+      'p_pricing_version integer',
+      'p_pricing_snapshot jsonb',
+      "'provider_config_id', config.provider_config_id",
+      "'capability_map', config.capability_map",
+      "models.model ->> 'pricing_catalog_id' = p_pricing_catalog_id::text",
+      "'code', 'provider_config_stale'",
+      "'code', 'pricing_stale'",
+      'p_reserved_credits::numeric(12,4)',
+    ]);
+    expect(migration).toContain(
+      compact(
+        'revoke all on function public.atomic_create_studio_job(uuid, uuid, uuid, text, uuid, text, text, uuid, text, uuid, text, text, text, uuid, integer, jsonb, jsonb, text, text, numeric, timestamptz) from public, authenticated',
+      ),
+    );
+    expect(migration).toContain(
+      compact(
+        'grant execute on function public.atomic_create_studio_job(uuid, uuid, uuid, text, uuid, text, text, uuid, text, uuid, text, text, text, uuid, integer, jsonb, jsonb, text, text, numeric, timestamptz) to service_role',
+      ),
+    );
+    expect(migration).not.toContain('drop function public.atomic_create_studio_job');
+  });
+
+  test('records one immutable attempt cost and rejects a conflicting second observation', () => {
+    expectAll(migration, [
+      'create or replace function public.atomic_record_studio_attempt_cost(',
+      'p_upstream_usage jsonb',
+      'p_upstream_cost_credits numeric',
+      'p_outcome text',
+      'for update',
+      'cost_recorded_at',
+      'insert into kortix.studio_usage_events',
+      "'code', 'attempt_cost_conflict'",
+      'revoke all on function public.atomic_record_studio_attempt_cost(uuid, uuid, text, jsonb, numeric, text, timestamptz) from public, authenticated',
+      'grant execute on function public.atomic_record_studio_attempt_cost(uuid, uuid, text, jsonb, numeric, text, timestamptz) to service_role',
+    ]);
+  });
+
+  test('keeps legacy finalization and adds cost-aware production finalization without double counting', () => {
+    expectAll(migration, [
+      'create or replace function public.atomic_finalize_studio_job_success(',
+      'create or replace function public.atomic_finalize_studio_job_terminal(',
+      'if v_job.pricing_snapshot is null then',
+      "metadata ->> 'kind' = 'final'",
+      'sum(attempt.upstream_cost_credits)',
+      'verified_upstream_cost_credits',
+      'platform_loss_credits',
+      'upstream_cost_credits, final_cost_credits',
+      "'code', 'actual_credits_mismatch'",
+    ]);
+    expect(migration).toContain(
+      compact(
+        'revoke all on function public.atomic_finalize_studio_job_success(uuid, uuid, text, numeric, jsonb, timestamptz) from public, authenticated',
+      ),
+    );
+    expect(migration).toContain(
+      compact(
+        'revoke all on function public.atomic_finalize_studio_job_terminal(uuid, uuid, text, text, text, text, text, text, timestamptz) from public, authenticated',
+      ),
+    );
   });
 });

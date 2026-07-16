@@ -490,4 +490,122 @@ describe('Studio production provider storage migration', () => {
       ),
     );
   });
+
+  test('installs audited recovery with exact privileges, lock order, replay, and all decisions', () => {
+    const recovery = section(
+      migration,
+      'create or replace function public.atomic_recover_studio_job(',
+      'create or replace function public.atomic_expire_studio_unknown_hold(',
+    );
+    expectAll(recovery, [
+      'p_project_id uuid',
+      'p_job_id uuid',
+      'p_attempt_id uuid',
+      'p_actor_user_id uuid',
+      'p_actor_type text',
+      'p_acting_token_id uuid',
+      'p_decision text',
+      'p_idempotency_key text',
+      'p_request_hash text',
+      'p_reason text',
+      'p_evidence jsonb',
+      'p_result_assets jsonb',
+      'p_actual_credits numeric',
+      'p_keep_unknown_until timestamptz',
+      'p_recovered_at timestamptz',
+      "set search_path to ''",
+      'pg_catalog.pg_advisory_xact_lock',
+      'from kortix.studio_job_recoveries recovery',
+      "'code', 'recovery_conflict'",
+      "p_decision = 'confirm_succeeded'",
+      'staging_manifest_key',
+      'staging_manifest_checksum',
+      "p_evidence -> 'upstream_usage'",
+      "p_evidence ->> 'upstream_cost_credits'",
+      'public.atomic_record_studio_attempt_cost(',
+      'public.atomic_finalize_studio_job_success(',
+      "p_decision = 'confirm_not_created'",
+      'studio_submission_confirmed_not_created',
+      'public.atomic_finalize_studio_job_terminal(',
+      "p_decision = 'keep_unknown'",
+      "p_recovered_at + interval '7 days'",
+      "v_reservation.created_at + interval '30 days'",
+      'greatest(v_reservation.expires_at, p_keep_unknown_until)',
+      "'phase', 'operator-review'",
+      'insert into kortix.studio_job_recoveries',
+    ]);
+
+    const jobLock = recovery.indexOf('from kortix.studio_jobs job');
+    const advisoryLock = recovery.indexOf('pg_catalog.pg_advisory_xact_lock');
+    const replayLock = recovery.indexOf('from kortix.studio_job_recoveries recovery');
+    const attemptLock = recovery.indexOf('from kortix.studio_job_attempts attempt');
+    const reservationLock = recovery.indexOf('from kortix.studio_credit_reservations reservation');
+    expect(jobLock).toBeGreaterThanOrEqual(0);
+    expect(advisoryLock).toBeGreaterThan(jobLock);
+    expect(replayLock).toBeGreaterThan(advisoryLock);
+    expect(attemptLock).toBeGreaterThan(replayLock);
+    expect(reservationLock).toBeGreaterThan(attemptLock);
+
+    expect(migration).toContain(
+      compact(
+        'revoke all on function public.atomic_recover_studio_job(uuid, uuid, uuid, uuid, text, uuid, text, text, text, text, jsonb, jsonb, numeric, timestamptz, timestamptz) from public, authenticated',
+      ),
+    );
+    expect(migration).toContain(
+      compact(
+        'grant execute on function public.atomic_recover_studio_job(uuid, uuid, uuid, uuid, text, uuid, text, text, text, text, jsonb, jsonb, numeric, timestamptz, timestamptz) to service_role',
+      ),
+    );
+  });
+
+  test('installs capped unknown-hold expiry without adding recovery event types', () => {
+    const expiryStart = migration.indexOf(
+      compact('create or replace function public.atomic_expire_studio_unknown_hold('),
+    );
+    expect(expiryStart).toBeGreaterThanOrEqual(0);
+    const expiry = migration.slice(expiryStart);
+    expectAll(expiry, [
+      'p_job_id uuid',
+      'p_attempt_id uuid',
+      'p_expired_at timestamptz',
+      "set search_path to ''",
+      'from kortix.studio_jobs job',
+      'from kortix.studio_billing_incidents incident',
+      'from kortix.studio_job_attempts attempt',
+      'from kortix.studio_credit_reservations reservation',
+      'p_expired_at > clock_timestamp()',
+      "v_reservation.created_at + interval '30 days' > p_expired_at",
+      'public.atomic_finalize_studio_job_terminal(',
+      'studio_submission_outcome_unresolved_expired',
+      "v_job.pricing_snapshot ->> 'max_provider_credits'",
+      'insert into kortix.studio_billing_incidents',
+    ]);
+    expect(expiry.indexOf('from kortix.studio_jobs job')).toBeLessThan(
+      expiry.indexOf('from kortix.studio_billing_incidents incident'),
+    );
+    expect(expiry.indexOf('from kortix.studio_billing_incidents incident')).toBeLessThan(
+      expiry.indexOf('from kortix.studio_job_attempts attempt'),
+    );
+    expect(expiry.indexOf('from kortix.studio_job_attempts attempt')).toBeLessThan(
+      expiry.indexOf('from kortix.studio_credit_reservations reservation'),
+    );
+    expect(migration).toContain(
+      compact(
+        'revoke all on function public.atomic_expire_studio_unknown_hold(uuid, uuid, timestamptz) from public, authenticated',
+      ),
+    );
+    expect(migration).toContain(
+      compact(
+        'grant execute on function public.atomic_expire_studio_unknown_hold(uuid, uuid, timestamptz) to service_role',
+      ),
+    );
+    for (const eventType of [
+      "'recovery-succeeded'",
+      "'recovery-not-created'",
+      "'recovery-keep-unknown'",
+      "'unknown-hold-expired'",
+    ]) {
+      expect(migration).not.toContain(eventType);
+    }
+  });
 });

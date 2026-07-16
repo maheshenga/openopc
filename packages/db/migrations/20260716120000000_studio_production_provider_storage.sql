@@ -1902,3 +1902,738 @@ REVOKE ALL ON FUNCTION public.atomic_finalize_studio_job_success(uuid, uuid, tex
 REVOKE ALL ON FUNCTION public.atomic_finalize_studio_job_terminal(uuid, uuid, text, text, text, text, text, text, timestamptz) FROM PUBLIC, authenticated;
 GRANT EXECUTE ON FUNCTION public.atomic_finalize_studio_job_success(uuid, uuid, text, numeric, jsonb, timestamptz) TO service_role;
 GRANT EXECUTE ON FUNCTION public.atomic_finalize_studio_job_terminal(uuid, uuid, text, text, text, text, text, text, timestamptz) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.atomic_recover_studio_job(
+  p_project_id uuid,
+  p_job_id uuid,
+  p_attempt_id uuid,
+  p_actor_user_id uuid,
+  p_actor_type text,
+  p_acting_token_id uuid,
+  p_decision text,
+  p_idempotency_key text,
+  p_request_hash text,
+  p_reason text,
+  p_evidence jsonb,
+  p_result_assets jsonb,
+  p_actual_credits numeric,
+  p_keep_unknown_until timestamptz,
+  p_recovered_at timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_job kortix.studio_jobs%ROWTYPE;
+  v_attempt kortix.studio_job_attempts%ROWTYPE;
+  v_reservation kortix.studio_credit_reservations%ROWTYPE;
+  v_existing_recovery kortix.studio_job_recoveries%ROWTYPE;
+  v_recovery_id uuid := gen_random_uuid();
+  v_recovery_lease_owner text;
+  v_recovery_lease_expires_at timestamptz;
+  v_prior_job_status text;
+  v_prior_attempt_status text;
+  v_resulting_job_status text;
+  v_resulting_attempt_status text;
+  v_resulting_reservation_status text;
+  v_resulting_hold_expires_at timestamptz := NULL;
+  v_upstream_usage jsonb;
+  v_upstream_cost_credits numeric(12,4);
+  v_cost_result jsonb;
+  v_finalize_result jsonb;
+  v_result jsonb;
+  v_cursor bigint;
+  v_hold_cap timestamptz;
+  v_current_hold timestamptz;
+BEGIN
+  IF p_job_id IS NULL OR p_attempt_id IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio recovery job and attempt are required',
+      'code', 'recovery_arguments_invalid'
+    );
+  END IF;
+  IF NULLIF(pg_catalog.btrim(p_idempotency_key), '') IS NULL
+    OR NULLIF(pg_catalog.btrim(p_request_hash), '') IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio recovery idempotency key and request hash are required',
+      'code', 'recovery_arguments_invalid'
+    );
+  END IF;
+
+  SELECT job.*
+  INTO v_job
+  FROM kortix.studio_jobs job
+  WHERE job.job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio job not found',
+      'code', 'recovery_job_not_found'
+    );
+  END IF;
+
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(
+      p_job_id::text || pg_catalog.chr(31) || p_idempotency_key,
+      0
+    )
+  );
+
+  SELECT recovery.*
+  INTO v_existing_recovery
+  FROM kortix.studio_job_recoveries recovery
+  WHERE recovery.job_id = p_job_id
+    AND recovery.idempotency_key = p_idempotency_key
+  FOR UPDATE;
+
+  IF FOUND THEN
+    IF v_existing_recovery.request_hash = p_request_hash THEN
+      RETURN v_existing_recovery.result;
+    END IF;
+
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio recovery idempotency key was already used',
+      'code', 'recovery_conflict'
+    );
+  END IF;
+
+  SELECT attempt.*
+  INTO v_attempt
+  FROM kortix.studio_job_attempts attempt
+  WHERE attempt.attempt_id = p_attempt_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_attempt.job_id IS DISTINCT FROM p_job_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio recovery attempt not found',
+      'code', 'recovery_attempt_not_found'
+    );
+  END IF;
+
+  SELECT reservation.*
+  INTO v_reservation
+  FROM kortix.studio_credit_reservations reservation
+  WHERE reservation.job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio recovery reservation not found',
+      'code', 'recovery_reservation_not_found'
+    );
+  END IF;
+
+  IF v_job.project_id IS DISTINCT FROM p_project_id
+    OR v_job.pricing_snapshot IS NULL
+    OR v_job.status <> 'running'
+    OR v_attempt.status <> 'reconciling'
+    OR v_reservation.account_id IS DISTINCT FROM v_job.account_id
+    OR v_reservation.status <> 'active' THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio recovery state is not eligible',
+      'code', 'recovery_state_invalid'
+    );
+  END IF;
+
+  IF (v_job.lease_owner IS NULL) IS DISTINCT FROM (v_job.lease_expires_at IS NULL)
+    OR (
+      v_job.lease_owner IS NOT NULL
+      AND v_job.lease_expires_at > clock_timestamp()
+    ) THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio job still has a worker lease',
+      'code', 'recovery_lease_live'
+    );
+  END IF;
+
+  IF p_actor_user_id IS NULL
+    OR NULLIF(pg_catalog.btrim(p_actor_type), '') IS NULL
+    OR NULLIF(pg_catalog.btrim(p_reason), '') IS NULL
+    OR p_recovered_at IS NULL
+    OR jsonb_typeof(p_evidence) IS DISTINCT FROM 'object'
+    OR p_decision IS NULL
+    OR p_decision NOT IN ('confirm_succeeded', 'confirm_not_created', 'keep_unknown') THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio recovery decision arguments are invalid',
+      'code', 'recovery_arguments_invalid'
+    );
+  END IF;
+
+  v_prior_job_status := v_job.status::text;
+  v_prior_attempt_status := v_attempt.status::text;
+  v_recovery_lease_owner := 'studio-recovery:' || v_recovery_id::text;
+  v_recovery_lease_expires_at :=
+    GREATEST(clock_timestamp(), p_recovered_at) + interval '5 minutes';
+
+  IF p_decision = 'confirm_succeeded' THEN
+    IF v_attempt.staging_manifest_key IS NULL
+      OR v_attempt.staging_manifest_checksum IS NULL
+      OR p_evidence ->> 'staging_manifest_key'
+        IS DISTINCT FROM v_attempt.staging_manifest_key
+      OR p_evidence ->> 'staging_manifest_checksum'
+        IS DISTINCT FROM v_attempt.staging_manifest_checksum THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Studio recovery manifest identity does not match the attempt',
+        'code', 'recovery_manifest_mismatch'
+      );
+    END IF;
+    IF jsonb_typeof(p_result_assets) IS DISTINCT FROM 'array' THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Confirmed Studio success requires result assets',
+        'code', 'recovery_assets_required'
+      );
+    END IF;
+    IF jsonb_array_length(p_result_assets) = 0 THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Confirmed Studio success requires result assets',
+        'code', 'recovery_assets_required'
+      );
+    END IF;
+    IF p_keep_unknown_until IS NOT NULL OR v_job.cancellation_requested_at IS NOT NULL THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Confirmed Studio success cannot extend or cancel the hold',
+        'code', 'recovery_success_invalid'
+      );
+    END IF;
+    IF jsonb_typeof(p_evidence -> 'upstream_usage') IS DISTINCT FROM 'object'
+      OR jsonb_typeof(p_evidence -> 'upstream_cost_credits') IS DISTINCT FROM 'number'
+      OR p_actual_credits IS NULL
+      OR p_actual_credits::text IN ('NaN', 'Infinity', '-Infinity')
+      OR p_actual_credits < 0 THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Confirmed Studio success cost evidence is invalid',
+        'code', 'recovery_cost_invalid'
+      );
+    END IF;
+
+    v_upstream_usage := p_evidence -> 'upstream_usage';
+    v_upstream_cost_credits := (p_evidence ->> 'upstream_cost_credits')::numeric(12,4);
+    IF v_upstream_cost_credits < 0
+      OR EXISTS (
+        SELECT 1
+        FROM jsonb_each(v_upstream_usage) usage_field(key, value)
+        WHERE jsonb_typeof(usage_field.value) = 'number'
+          AND (usage_field.value #>> '{}')::numeric < 0
+      ) THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Confirmed Studio success cost evidence is invalid',
+        'code', 'recovery_cost_invalid'
+      );
+    END IF;
+
+    IF v_attempt.cost_recorded_at IS NOT NULL
+      AND (
+        v_attempt.upstream_usage IS DISTINCT FROM v_upstream_usage
+        OR v_attempt.upstream_cost_credits IS DISTINCT FROM v_upstream_cost_credits
+      ) THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Studio attempt cost was already recorded differently',
+        'code', 'attempt_cost_conflict'
+      );
+    END IF;
+
+    UPDATE kortix.studio_jobs
+    SET lease_owner = v_recovery_lease_owner,
+        lease_expires_at = v_recovery_lease_expires_at,
+        updated_at = clock_timestamp()
+    WHERE job_id = p_job_id;
+
+    IF v_attempt.cost_recorded_at IS NULL THEN
+      v_cost_result := public.atomic_record_studio_attempt_cost(
+        p_job_id,
+        p_attempt_id,
+        v_recovery_lease_owner,
+        v_upstream_usage,
+        v_upstream_cost_credits,
+        'succeeded',
+        p_recovered_at
+      );
+      IF COALESCE((v_cost_result ->> 'success')::boolean, false) IS NOT TRUE THEN
+        RAISE EXCEPTION 'Studio recovery cost recording failed (%): %',
+          COALESCE(v_cost_result ->> 'code', 'unknown'),
+          COALESCE(v_cost_result ->> 'error', 'unknown');
+      END IF;
+    END IF;
+
+    v_finalize_result := public.atomic_finalize_studio_job_success(
+      p_job_id,
+      p_attempt_id,
+      v_recovery_lease_owner,
+      p_actual_credits,
+      p_result_assets,
+      p_recovered_at
+    );
+    IF COALESCE((v_finalize_result ->> 'success')::boolean, false) IS NOT TRUE THEN
+      RAISE EXCEPTION 'Studio recovery success finalization failed (%): %',
+        COALESCE(v_finalize_result ->> 'code', 'unknown'),
+        COALESCE(v_finalize_result ->> 'error', 'unknown');
+    END IF;
+  ELSIF p_decision = 'confirm_not_created' THEN
+    IF p_result_assets IS NOT NULL AND p_result_assets <> 'null'::jsonb THEN
+      IF jsonb_typeof(p_result_assets) IS DISTINCT FROM 'array' THEN
+        RETURN jsonb_build_object(
+          'success', false,
+          'error', 'Confirmed not-created arguments are invalid',
+          'code', 'recovery_not_created_invalid'
+        );
+      END IF;
+      IF jsonb_array_length(p_result_assets) <> 0 THEN
+        RETURN jsonb_build_object(
+          'success', false,
+          'error', 'Confirmed not-created arguments are invalid',
+          'code', 'recovery_not_created_invalid'
+        );
+      END IF;
+    END IF;
+    IF p_actual_credits IS NOT NULL
+      OR p_keep_unknown_until IS NOT NULL
+      OR (
+        p_evidence ? 'upstream_usage'
+        AND p_evidence -> 'upstream_usage' <> 'null'::jsonb
+      )
+      OR (
+        p_evidence ? 'upstream_cost_credits'
+        AND p_evidence -> 'upstream_cost_credits' <> 'null'::jsonb
+      ) THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Confirmed not-created arguments are invalid',
+        'code', 'recovery_not_created_invalid'
+      );
+    END IF;
+    IF v_attempt.cost_recorded_at IS NOT NULL
+      AND COALESCE(v_attempt.upstream_cost_credits, 0) > 0 THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Current Studio attempt has verified provider cost',
+        'code', 'current_attempt_cost_positive'
+      );
+    END IF;
+
+    UPDATE kortix.studio_jobs
+    SET lease_owner = v_recovery_lease_owner,
+        lease_expires_at = v_recovery_lease_expires_at,
+        updated_at = clock_timestamp()
+    WHERE job_id = p_job_id;
+
+    v_finalize_result := public.atomic_finalize_studio_job_terminal(
+      p_job_id,
+      p_attempt_id,
+      v_recovery_lease_owner,
+      'failed',
+      'STUDIO_SUBMISSION_CONFIRMED_NOT_CREATED',
+      'Provider evidence confirms that the submission was not created',
+      'unknown_outcome',
+      'submission_confirmed_not_created',
+      p_recovered_at
+    );
+    IF COALESCE((v_finalize_result ->> 'success')::boolean, false) IS NOT TRUE THEN
+      RAISE EXCEPTION 'Studio not-created finalization failed (%): %',
+        COALESCE(v_finalize_result ->> 'code', 'unknown'),
+        COALESCE(v_finalize_result ->> 'error', 'unknown');
+    END IF;
+  ELSIF p_decision = 'keep_unknown' THEN
+    IF p_result_assets IS NOT NULL AND p_result_assets <> 'null'::jsonb THEN
+      IF jsonb_typeof(p_result_assets) IS DISTINCT FROM 'array' THEN
+        RETURN jsonb_build_object(
+          'success', false,
+          'error', 'Keep-unknown arguments are invalid',
+          'code', 'keep_unknown_invalid'
+        );
+      END IF;
+      IF jsonb_array_length(p_result_assets) <> 0 THEN
+        RETURN jsonb_build_object(
+          'success', false,
+          'error', 'Keep-unknown arguments are invalid',
+          'code', 'keep_unknown_invalid'
+        );
+      END IF;
+    END IF;
+    IF p_actual_credits IS NOT NULL
+      OR p_keep_unknown_until IS NULL
+      OR (
+        p_evidence ? 'upstream_usage'
+        AND p_evidence -> 'upstream_usage' <> 'null'::jsonb
+      )
+      OR (
+        p_evidence ? 'upstream_cost_credits'
+        AND p_evidence -> 'upstream_cost_credits' <> 'null'::jsonb
+      ) THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Keep-unknown arguments are invalid',
+        'code', 'keep_unknown_invalid'
+      );
+    END IF;
+
+    v_hold_cap := v_reservation.created_at + interval '30 days';
+    v_current_hold := GREATEST(
+      v_reservation.expires_at,
+      COALESCE(v_job.available_at, v_reservation.expires_at)
+    );
+    IF v_current_hold >= v_hold_cap THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Studio unknown-outcome hold reached its cumulative cap',
+        'code', 'hold_cap_reached'
+      );
+    END IF;
+    IF p_keep_unknown_until <= clock_timestamp()
+      OR p_keep_unknown_until <= p_recovered_at THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Studio unknown-outcome hold must remain in the future',
+        'code', 'hold_not_future'
+      );
+    END IF;
+    IF p_keep_unknown_until <= v_current_hold THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Studio unknown-outcome hold was not extended',
+        'code', 'hold_not_extended'
+      );
+    END IF;
+    IF p_keep_unknown_until > p_recovered_at + interval '7 days' THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Studio unknown-outcome hold extension exceeds seven days',
+        'code', 'hold_extension_too_long'
+      );
+    END IF;
+    IF p_keep_unknown_until > v_reservation.created_at + interval '30 days' THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Studio unknown-outcome hold exceeds its cumulative cap',
+        'code', 'hold_cumulative_cap_exceeded'
+      );
+    END IF;
+
+    UPDATE kortix.studio_credit_reservations
+    SET expires_at = GREATEST(v_reservation.expires_at, p_keep_unknown_until)
+    WHERE reservation_id = v_reservation.reservation_id;
+
+    UPDATE kortix.studio_jobs
+    SET available_at = GREATEST(
+          COALESCE(v_job.available_at, p_keep_unknown_until),
+          p_keep_unknown_until
+        ),
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = p_recovered_at
+    WHERE job_id = p_job_id
+      AND status = 'running';
+
+    SELECT COALESCE(MAX(event.cursor), 0) + 1
+    INTO v_cursor
+    FROM kortix.studio_job_events event
+    WHERE event.job_id = p_job_id;
+
+    INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+    VALUES (
+      p_job_id,
+      v_cursor,
+      'progress',
+      jsonb_build_object(
+        'phase', 'operator-review',
+        'recovery_id', v_recovery_id,
+        'decision', 'keep_unknown'
+      ),
+      p_recovered_at
+    );
+  END IF;
+
+  SELECT job.status::text
+  INTO v_resulting_job_status
+  FROM kortix.studio_jobs job
+  WHERE job.job_id = p_job_id;
+
+  SELECT attempt.status::text
+  INTO v_resulting_attempt_status
+  FROM kortix.studio_job_attempts attempt
+  WHERE attempt.attempt_id = p_attempt_id;
+
+  SELECT reservation.status, reservation.expires_at
+  INTO v_resulting_reservation_status, v_resulting_hold_expires_at
+  FROM kortix.studio_credit_reservations reservation
+  WHERE reservation.job_id = p_job_id;
+
+  IF p_decision <> 'keep_unknown' THEN
+    v_resulting_hold_expires_at := NULL;
+  END IF;
+
+  v_result := jsonb_build_object(
+    'recovery_id', v_recovery_id,
+    'job_id', p_job_id,
+    'attempt_id', p_attempt_id,
+    'decision', p_decision,
+    'job_status', v_resulting_job_status,
+    'attempt_status', v_resulting_attempt_status,
+    'reservation_status', v_resulting_reservation_status,
+    'hold_expires_at', v_resulting_hold_expires_at
+  );
+
+  INSERT INTO kortix.studio_job_recoveries(
+    recovery_id, account_id, project_id, job_id, attempt_id,
+    idempotency_key, request_hash, decision, reason,
+    actor_user_id, actor_type, acting_token_id, evidence,
+    prior_job_status, prior_attempt_status,
+    resulting_job_status, resulting_attempt_status,
+    result, created_at
+  )
+  VALUES (
+    v_recovery_id, v_job.account_id, v_job.project_id, p_job_id, p_attempt_id,
+    p_idempotency_key, p_request_hash, p_decision, p_reason,
+    p_actor_user_id, p_actor_type, p_acting_token_id, p_evidence,
+    v_prior_job_status, v_prior_attempt_status,
+    v_resulting_job_status, v_resulting_attempt_status,
+    v_result, p_recovered_at
+  );
+
+  RETURN v_result;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.atomic_recover_studio_job(uuid, uuid, uuid, uuid, text, uuid, text, text, text, text, jsonb, jsonb, numeric, timestamptz, timestamptz) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.atomic_recover_studio_job(uuid, uuid, uuid, uuid, text, uuid, text, text, text, text, jsonb, jsonb, numeric, timestamptz, timestamptz) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.atomic_expire_studio_unknown_hold(
+  p_job_id uuid,
+  p_attempt_id uuid,
+  p_expired_at timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_job kortix.studio_jobs%ROWTYPE;
+  v_attempt kortix.studio_job_attempts%ROWTYPE;
+  v_reservation kortix.studio_credit_reservations%ROWTYPE;
+  v_existing_incident kortix.studio_billing_incidents%ROWTYPE;
+  v_inserted_incident kortix.studio_billing_incidents%ROWTYPE;
+  v_recovery_lease_owner text;
+  v_recovery_lease_expires_at timestamptz;
+  v_verified_cost_credits numeric(12,4) := 0;
+  v_max_provider_credits numeric(12,4);
+  v_potential_liability_credits numeric(12,4);
+  v_finalize_result jsonb;
+BEGIN
+  IF p_expired_at IS NULL THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio hold expiry time is required',
+      'code', 'expiry_time_required'
+    );
+  END IF;
+  IF p_expired_at > clock_timestamp() THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio hold expiry cannot be in the future',
+      'code', 'expiry_in_future'
+    );
+  END IF;
+
+  SELECT job.*
+  INTO v_job
+  FROM kortix.studio_jobs job
+  WHERE job.job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio job not found',
+      'code', 'expiry_job_not_found'
+    );
+  END IF;
+
+  SELECT incident.*
+  INTO v_existing_incident
+  FROM kortix.studio_billing_incidents incident
+  WHERE incident.job_id = p_job_id
+    AND incident.attempt_id = p_attempt_id
+    AND incident.kind = 'unknown_outcome_hold_expired'
+  FOR UPDATE;
+
+  IF FOUND THEN
+    RETURN jsonb_build_object(
+      'incident_id', v_existing_incident.incident_id,
+      'job_id', v_existing_incident.job_id,
+      'attempt_id', v_existing_incident.attempt_id,
+      'kind', v_existing_incident.kind,
+      'status', v_existing_incident.status,
+      'verified_cost_credits', v_existing_incident.verified_cost_credits,
+      'potential_liability_credits', v_existing_incident.potential_liability_credits
+    );
+  END IF;
+
+  SELECT attempt.*
+  INTO v_attempt
+  FROM kortix.studio_job_attempts attempt
+  WHERE attempt.attempt_id = p_attempt_id
+  FOR UPDATE;
+
+  IF NOT FOUND OR v_attempt.job_id IS DISTINCT FROM p_job_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio expiry attempt not found',
+      'code', 'expiry_attempt_not_found'
+    );
+  END IF;
+
+  SELECT reservation.*
+  INTO v_reservation
+  FROM kortix.studio_credit_reservations reservation
+  WHERE reservation.job_id = p_job_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio expiry reservation not found',
+      'code', 'expiry_reservation_not_found'
+    );
+  END IF;
+
+  IF v_job.pricing_snapshot IS NULL
+    OR v_job.status <> 'running'
+    OR v_attempt.status <> 'reconciling'
+    OR v_reservation.account_id IS DISTINCT FROM v_job.account_id
+    OR v_reservation.status <> 'active' THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio hold is not eligible for expiry',
+      'code', 'expiry_state_invalid'
+    );
+  END IF;
+  IF (v_job.lease_owner IS NULL) IS DISTINCT FROM (v_job.lease_expires_at IS NULL)
+    OR (
+      v_job.lease_owner IS NOT NULL
+      AND v_job.lease_expires_at > clock_timestamp()
+    ) THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio job still has a worker lease',
+      'code', 'expiry_lease_live'
+    );
+  END IF;
+  IF v_reservation.created_at + interval '30 days' > p_expired_at THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio unknown-outcome hold has not reached thirty days',
+      'code', 'hold_not_expired'
+    );
+  END IF;
+  IF jsonb_typeof(v_job.pricing_snapshot -> 'max_provider_credits')
+      IS DISTINCT FROM 'number' THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio pricing snapshot is invalid',
+      'code', 'expiry_pricing_invalid'
+    );
+  END IF;
+
+  v_max_provider_credits :=
+    (v_job.pricing_snapshot ->> 'max_provider_credits')::numeric(12,4);
+  IF v_max_provider_credits < 0 THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'Studio pricing snapshot is invalid',
+      'code', 'expiry_pricing_invalid'
+    );
+  END IF;
+
+  SELECT COALESCE(SUM(attempt.upstream_cost_credits), 0)::numeric(12,4)
+  INTO v_verified_cost_credits
+  FROM kortix.studio_job_attempts attempt
+  WHERE attempt.job_id = p_job_id
+    AND attempt.cost_recorded_at IS NOT NULL;
+
+  v_potential_liability_credits := GREATEST(
+    0,
+    (v_job.pricing_snapshot ->> 'max_provider_credits')::numeric(12,4)
+      - v_verified_cost_credits
+  )::numeric(12,4);
+  v_recovery_lease_owner := 'studio-expiry:' || gen_random_uuid()::text;
+  v_recovery_lease_expires_at :=
+    GREATEST(clock_timestamp(), p_expired_at) + interval '5 minutes';
+
+  UPDATE kortix.studio_jobs
+  SET lease_owner = v_recovery_lease_owner,
+      lease_expires_at = v_recovery_lease_expires_at,
+      updated_at = clock_timestamp()
+  WHERE job_id = p_job_id;
+
+  v_finalize_result := public.atomic_finalize_studio_job_terminal(
+    p_job_id,
+    p_attempt_id,
+    v_recovery_lease_owner,
+    'failed',
+    'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED',
+    'Provider submission outcome remained unresolved after the maximum hold',
+    'unknown_outcome',
+    'submission_outcome_unresolved_expired',
+    p_expired_at
+  );
+  IF COALESCE((v_finalize_result ->> 'success')::boolean, false) IS NOT TRUE THEN
+    RAISE EXCEPTION 'Studio unknown-hold expiry finalization failed (%): %',
+      COALESCE(v_finalize_result ->> 'code', 'unknown'),
+      COALESCE(v_finalize_result ->> 'error', 'unknown');
+  END IF;
+
+  INSERT INTO kortix.studio_billing_incidents(
+    account_id, project_id, job_id, attempt_id, kind, status,
+    verified_cost_credits, potential_liability_credits,
+    metadata, opened_at
+  )
+  VALUES (
+    v_job.account_id,
+    v_job.project_id,
+    p_job_id,
+    p_attempt_id,
+    'unknown_outcome_hold_expired',
+    'open',
+    v_verified_cost_credits,
+    v_potential_liability_credits,
+    jsonb_build_object(
+      'expired_at', p_expired_at,
+      'error_code', 'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED'
+    ),
+    clock_timestamp()
+  )
+  RETURNING * INTO v_inserted_incident;
+
+  RETURN jsonb_build_object(
+    'incident_id', v_inserted_incident.incident_id,
+    'job_id', v_inserted_incident.job_id,
+    'attempt_id', v_inserted_incident.attempt_id,
+    'kind', v_inserted_incident.kind,
+    'status', v_inserted_incident.status,
+    'verified_cost_credits', v_inserted_incident.verified_cost_credits,
+    'potential_liability_credits', v_inserted_incident.potential_liability_credits
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.atomic_expire_studio_unknown_hold(uuid, uuid, timestamptz) FROM PUBLIC, authenticated;
+GRANT EXECUTE ON FUNCTION public.atomic_expire_studio_unknown_hold(uuid, uuid, timestamptz) TO service_role;

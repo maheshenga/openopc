@@ -451,6 +451,36 @@ function recordProductionAttemptCost(input: {
   `);
 }
 
+function prepareRecoveryAttempt(input: {
+  jobId: string;
+  attemptId: string;
+  leaseOwner: string;
+  manifestKey: string;
+  manifestChecksum: string;
+}): void {
+  prepareProductionAttempt({
+    jobId: input.jobId,
+    attemptId: input.attemptId,
+    leaseOwner: input.leaseOwner,
+    status: 'reconciling',
+  });
+  dockerPsql(`
+    UPDATE kortix.studio_job_attempts
+    SET submission_kind = 'async',
+        staging_manifest_key = '${input.manifestKey}',
+        staging_manifest_checksum = '${input.manifestChecksum}'
+    WHERE attempt_id = '${input.attemptId}';
+  `);
+}
+
+function clearStudioLease(jobId: string): void {
+  dockerPsql(`
+    UPDATE kortix.studio_jobs
+    SET lease_owner = NULL, lease_expires_at = NULL
+    WHERE job_id = '${jobId}';
+  `);
+}
+
 function finalizeProductionSuccess(input: {
   jobId: string;
   attemptId: string;
@@ -503,6 +533,93 @@ function finalizeProductionTerminal(input: {
       clock_timestamp()
     );
   `);
+}
+
+interface RecoveryCallInput {
+  projectId: string;
+  jobId: string;
+  attemptId: string;
+  decision: 'confirm_succeeded' | 'confirm_not_created' | 'keep_unknown';
+  idempotencyKey: string;
+  requestHash: string;
+  evidence?: Record<string, unknown>;
+  resultAssets?: Array<Record<string, unknown>> | null;
+  actualCredits?: number | null;
+  keepUnknownUntilSql?: string;
+  recoveredAtSql?: string;
+  reason?: string;
+}
+
+function recoveryAssets(objectKey: string): Array<Record<string, unknown>> {
+  return [
+    {
+      kind: 'image',
+      mimeType: 'image/png',
+      bucket: 'studio-integration',
+      objectKey,
+      checksumSha256: 'recovery-integration-checksum',
+      sizeBytes: 4,
+      filename: 'recovered-result.png',
+    },
+  ];
+}
+
+function recoveryCallSql(input: RecoveryCallInput): string {
+  const evidence = JSON.stringify(input.evidence ?? {}).replaceAll("'", "''");
+  const assets =
+    input.resultAssets == null
+      ? 'NULL::jsonb'
+      : `'${JSON.stringify(input.resultAssets).replaceAll("'", "''")}'::jsonb`;
+  const actualCredits = input.actualCredits == null ? 'NULL::numeric' : input.actualCredits;
+  const reason = (input.reason ?? 'Operator confirmed the provider outcome.').replaceAll("'", "''");
+
+  return `
+    SET ROLE service_role;
+    SELECT public.atomic_recover_studio_job(
+      '${input.projectId}'::uuid,
+      '${input.jobId}'::uuid,
+      '${input.attemptId}'::uuid,
+      '60000000-0000-4000-a000-000000000001'::uuid,
+      'user',
+      NULL::uuid,
+      '${input.decision}',
+      '${input.idempotencyKey}',
+      '${input.requestHash}',
+      '${reason}',
+      '${evidence}'::jsonb,
+      ${assets},
+      ${actualCredits},
+      ${input.keepUnknownUntilSql ?? 'NULL::timestamptz'},
+      ${input.recoveredAtSql ?? 'clock_timestamp()'}
+    );
+  `;
+}
+
+function recoverProductionJob(input: RecoveryCallInput): Record<string, unknown> {
+  return dockerPsqlJson(recoveryCallSql(input));
+}
+
+function expireUnknownHoldSql(input: {
+  jobId: string;
+  attemptId: string;
+  expiredAtSql?: string;
+}): string {
+  return `
+    SET ROLE service_role;
+    SELECT public.atomic_expire_studio_unknown_hold(
+      '${input.jobId}'::uuid,
+      '${input.attemptId}'::uuid,
+      ${input.expiredAtSql ?? 'clock_timestamp()'}
+    );
+  `;
+}
+
+function expireUnknownHold(input: {
+  jobId: string;
+  attemptId: string;
+  expiredAtSql?: string;
+}): Record<string, unknown> {
+  return dockerPsqlJson(expireUnknownHoldSql(input));
 }
 
 describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', () => {
@@ -623,6 +740,42 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
             'public.atomic_record_studio_attempt_cost(uuid,uuid,text,jsonb,numeric,text,timestamp with time zone)',
             'EXECUTE'
           ),
+          'recover_exists', to_regprocedure(
+            'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamp with time zone,timestamp with time zone)'
+          ) IS NOT NULL,
+          'service_role_can_recover', has_function_privilege(
+            'service_role',
+            'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamp with time zone,timestamp with time zone)',
+            'EXECUTE'
+          ),
+          'authenticated_can_recover', has_function_privilege(
+            'authenticated',
+            'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamp with time zone,timestamp with time zone)',
+            'EXECUTE'
+          ),
+          'anon_can_recover', has_function_privilege(
+            'anon',
+            'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamp with time zone,timestamp with time zone)',
+            'EXECUTE'
+          ),
+          'expire_hold_exists', to_regprocedure(
+            'public.atomic_expire_studio_unknown_hold(uuid,uuid,timestamp with time zone)'
+          ) IS NOT NULL,
+          'service_role_can_expire_hold', has_function_privilege(
+            'service_role',
+            'public.atomic_expire_studio_unknown_hold(uuid,uuid,timestamp with time zone)',
+            'EXECUTE'
+          ),
+          'authenticated_can_expire_hold', has_function_privilege(
+            'authenticated',
+            'public.atomic_expire_studio_unknown_hold(uuid,uuid,timestamp with time zone)',
+            'EXECUTE'
+          ),
+          'anon_can_expire_hold', has_function_privilege(
+            'anon',
+            'public.atomic_expire_studio_unknown_hold(uuid,uuid,timestamp with time zone)',
+            'EXECUTE'
+          ),
           'service_role_can_call_internal_settlement', has_function_privilege(
             'service_role',
             'kortix.atomic_settle_studio_job_production(uuid,numeric,text,text)',
@@ -667,6 +820,14 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       record_cost_exists: true,
       service_role_can_record_cost: true,
       authenticated_can_record_cost: false,
+      recover_exists: true,
+      service_role_can_recover: true,
+      authenticated_can_recover: false,
+      anon_can_recover: false,
+      expire_hold_exists: true,
+      service_role_can_expire_hold: true,
+      authenticated_can_expire_hold: false,
+      anon_can_expire_hold: false,
       service_role_can_call_internal_settlement: false,
       authenticated_can_call_internal_settlement: false,
       anon_can_call_internal_settlement: false,
@@ -718,6 +879,26 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     expect(
       dockerPsql(
         'SET ROLE authenticated; UPDATE kortix.studio_provider_configs SET enabled = enabled WHERE false;',
+        true,
+      ).exitCode,
+    ).not.toBe(0);
+    expect(
+      dockerPsql(
+        `SET ROLE authenticated;
+         SELECT public.atomic_recover_studio_job(
+           NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid, NULL::text,
+           NULL::uuid, NULL::text, NULL::text, NULL::text, NULL::text,
+           NULL::jsonb, NULL::jsonb, NULL::numeric, NULL::timestamptz, NULL::timestamptz
+         );`,
+        true,
+      ).exitCode,
+    ).not.toBe(0);
+    expect(
+      dockerPsql(
+        `SET ROLE anon;
+         SELECT public.atomic_expire_studio_unknown_hold(
+           NULL::uuid, NULL::uuid, NULL::timestamptz
+         );`,
         true,
       ).exitCode,
     ).not.toBe(0);
@@ -1554,6 +1735,700 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
         objectPrefix: 'studio/production-cancel-must-not-exist',
       }),
     ).toMatchObject({ success: true, outcome: 'cancelled', idempotent: true });
+  }, 30_000);
+
+  test('recovers a confirmed success and replays the stored result byte-for-byte', () => {
+    const scope = seedProductionScope({ suffix: '10' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000010';
+    const leaseOwner = 'studio-worker:recovery-success';
+    const manifestKey = `staging/${jobId}/manifest.json`;
+    const manifestChecksum = 'a'.repeat(64);
+    const evidence = {
+      staging_manifest_key: manifestKey,
+      staging_manifest_checksum: manifestChecksum,
+      provider_request_id: 'provider-recovery-success',
+      upstream_usage: { output_count: 1 },
+      upstream_cost_credits: 2,
+    };
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner,
+      manifestKey,
+      manifestChecksum,
+    });
+    clearStudioLease(jobId);
+
+    const call = {
+      projectId: scope.projectId,
+      jobId,
+      attemptId,
+      decision: 'confirm_succeeded' as const,
+      idempotencyKey: 'recovery-success-key-00000010',
+      requestHash: 'recovery-success-hash-10',
+      evidence,
+      resultAssets: recoveryAssets(`studio/recovery/${jobId}/result.png`),
+      actualCredits: 3,
+    };
+    const first = recoverProductionJob(call);
+    expect(first).toMatchObject({
+      job_id: jobId,
+      attempt_id: attemptId,
+      decision: 'confirm_succeeded',
+      job_status: 'succeeded',
+      attempt_status: 'succeeded',
+      reservation_status: 'settled',
+      hold_expires_at: null,
+    });
+    expect(first.recovery_id).toEqual(expect.any(String));
+
+    const replay = recoverProductionJob(call);
+    expect(JSON.stringify(replay)).toBe(JSON.stringify(first));
+    expect(
+      recoverProductionJob({ ...call, requestHash: 'different-recovery-success-hash' }),
+    ).toMatchObject({ success: false, code: 'recovery_conflict' });
+
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job', (
+            SELECT jsonb_build_object('status', status, 'actual', actual_credits)
+            FROM kortix.studio_jobs WHERE job_id = '${jobId}'
+          ),
+          'attempt', (
+            SELECT jsonb_build_object(
+              'status', status,
+              'cost', upstream_cost_credits,
+              'outcome', cost_outcome
+            ) FROM kortix.studio_job_attempts WHERE attempt_id = '${attemptId}'
+          ),
+          'reservation', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}'
+          ),
+          'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${jobId}'
+          ),
+          'attempt_usage', (
+            SELECT count(*) FROM kortix.studio_usage_events
+            WHERE job_id = '${jobId}' AND attempt_id = '${attemptId}'
+          ),
+          'final_usage', (
+            SELECT count(*) FROM kortix.studio_usage_events
+            WHERE job_id = '${jobId}' AND attempt_id IS NULL
+          ),
+          'assets', (
+            SELECT count(*) FROM kortix.studio_assets WHERE source_job_id = '${jobId}'
+          ),
+          'stored_result', (
+            SELECT result FROM kortix.studio_job_recoveries WHERE job_id = '${jobId}'
+          )
+        );
+      `),
+    ).toEqual({
+      job: { status: 'succeeded', actual: 3 },
+      attempt: { status: 'succeeded', cost: 2, outcome: 'succeeded' },
+      reservation: 'settled',
+      recoveries: 1,
+      attempt_usage: 1,
+      final_usage: 1,
+      assets: 1,
+      stored_result: first,
+    });
+  }, 30_000);
+
+  test('reuses an identical immutable unknown cost observation during success recovery', () => {
+    const scope = seedProductionScope({ suffix: '16' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000016';
+    const leaseOwner = 'studio-worker:recovery-unknown-cost';
+    const manifestKey = `staging/${jobId}/manifest.json`;
+    const manifestChecksum = 'b'.repeat(64);
+    const usage = { output_count: 1, provider_request_id: 'unknown-cost' };
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner,
+      manifestKey,
+      manifestChecksum,
+    });
+    recordProductionAttemptCost({
+      jobId,
+      attemptId,
+      leaseOwner,
+      usage,
+      cost: 2,
+      outcome: 'unknown',
+    });
+    const before = dockerPsqlJson(`
+      SELECT jsonb_build_object(
+        'recorded_at', cost_recorded_at,
+        'usage_count', (
+          SELECT count(*) FROM kortix.studio_usage_events
+          WHERE job_id = '${jobId}' AND attempt_id = '${attemptId}'
+        )
+      ) FROM kortix.studio_job_attempts WHERE attempt_id = '${attemptId}';
+    `);
+    clearStudioLease(jobId);
+
+    const base = {
+      projectId: scope.projectId,
+      jobId,
+      attemptId,
+      decision: 'confirm_succeeded' as const,
+      evidence: {
+        staging_manifest_key: manifestKey,
+        staging_manifest_checksum: manifestChecksum,
+        upstream_usage: usage,
+        upstream_cost_credits: 2,
+      },
+      resultAssets: recoveryAssets(`studio/recovery/${jobId}/unknown.png`),
+      actualCredits: 3,
+    };
+    expect(
+      recoverProductionJob({
+        ...base,
+        idempotencyKey: 'recovery-unknown-mismatch-key-16',
+        requestHash: 'recovery-unknown-mismatch-hash-16',
+        evidence: { ...base.evidence, upstream_cost_credits: 3 },
+        actualCredits: 4,
+      }),
+    ).toMatchObject({ success: false, code: 'attempt_cost_conflict' });
+
+    expect(
+      recoverProductionJob({
+        ...base,
+        idempotencyKey: 'recovery-unknown-success-key-16',
+        requestHash: 'recovery-unknown-success-hash-16',
+      }),
+    ).toMatchObject({ decision: 'confirm_succeeded', job_status: 'succeeded' });
+
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'outcome', cost_outcome,
+          'recorded_at', cost_recorded_at,
+          'usage_count', (
+            SELECT count(*) FROM kortix.studio_usage_events
+            WHERE job_id = '${jobId}' AND attempt_id = '${attemptId}'
+          ),
+          'recovery_count', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${jobId}'
+          )
+        ) FROM kortix.studio_job_attempts WHERE attempt_id = '${attemptId}';
+      `),
+    ).toEqual({
+      outcome: 'unknown',
+      recorded_at: before.recorded_at,
+      usage_count: 1,
+      recovery_count: 1,
+    });
+  }, 30_000);
+
+  test('confirms not-created with earlier cost, zero-cost release, and current-cost rejection', () => {
+    const scope = seedProductionScope({ suffix: '11' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const earlierAttemptId = '74000000-0000-4000-a000-000000001101';
+    const currentAttemptId = '74000000-0000-4000-a000-000000001102';
+    const earlierLease = 'studio-worker:not-created-earlier';
+    prepareProductionAttempt({ jobId, attemptId: earlierAttemptId, leaseOwner: earlierLease });
+    recordProductionAttemptCost({
+      jobId,
+      attemptId: earlierAttemptId,
+      leaseOwner: earlierLease,
+      usage: { request_id: 'earlier-failed-attempt' },
+      cost: 1.25,
+      outcome: 'failed',
+    });
+    dockerPsql(`
+      UPDATE kortix.studio_job_attempts
+      SET status = 'failed', ended_at = clock_timestamp()
+      WHERE attempt_id = '${earlierAttemptId}';
+    `);
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId: currentAttemptId,
+      leaseOwner: 'studio-worker:not-created-current',
+      manifestKey: `staging/${jobId}/manifest.json`,
+      manifestChecksum: 'c'.repeat(64),
+    });
+    clearStudioLease(jobId);
+
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId,
+        attemptId: currentAttemptId,
+        decision: 'confirm_not_created',
+        idempotencyKey: 'recovery-not-created-cost-key-11',
+        requestHash: 'recovery-not-created-cost-hash-11',
+        evidence: { provider_request_id: 'confirmed-absent' },
+      }),
+    ).toMatchObject({
+      decision: 'confirm_not_created',
+      job_status: 'failed',
+      attempt_status: 'failed',
+      reservation_status: 'settled',
+    });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job', (
+            SELECT jsonb_build_object(
+              'status', status, 'actual', actual_credits, 'error_code', error_code
+            ) FROM kortix.studio_jobs WHERE job_id = '${jobId}'
+          ),
+          'attempt', (
+            SELECT jsonb_build_object(
+              'status', status, 'retry', retry_classification
+            ) FROM kortix.studio_job_attempts WHERE attempt_id = '${currentAttemptId}'
+          ),
+          'reservation', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}'
+          )
+        );
+      `),
+    ).toEqual({
+      job: {
+        status: 'failed',
+        actual: 1.25,
+        error_code: 'STUDIO_SUBMISSION_CONFIRMED_NOT_CREATED',
+      },
+      attempt: { status: 'failed', retry: 'unknown_outcome' },
+      reservation: 'settled',
+    });
+
+    const zeroCreated = createProductionJob(scope, {
+      idempotencyKey: 'production-create:not-created-zero-11',
+      requestHash: 'production-hash:not-created-zero-11',
+    });
+    const zeroJobId = String(zeroCreated.job_id);
+    const zeroAttemptId = '74000000-0000-4000-a000-000000001103';
+    prepareRecoveryAttempt({
+      jobId: zeroJobId,
+      attemptId: zeroAttemptId,
+      leaseOwner: 'studio-worker:not-created-zero',
+      manifestKey: `staging/${zeroJobId}/manifest.json`,
+      manifestChecksum: 'd'.repeat(64),
+    });
+    clearStudioLease(zeroJobId);
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId: zeroJobId,
+        attemptId: zeroAttemptId,
+        decision: 'confirm_not_created',
+        idempotencyKey: 'recovery-not-created-zero-key-11',
+        requestHash: 'recovery-not-created-zero-hash-11',
+      }),
+    ).toMatchObject({ reservation_status: 'released', job_status: 'failed' });
+
+    const rejectedCreated = createProductionJob(scope, {
+      idempotencyKey: 'production-create:not-created-current-cost-11',
+      requestHash: 'production-hash:not-created-current-cost-11',
+    });
+    const rejectedJobId = String(rejectedCreated.job_id);
+    const rejectedAttemptId = '74000000-0000-4000-a000-000000001104';
+    const rejectedLease = 'studio-worker:not-created-current-cost';
+    prepareRecoveryAttempt({
+      jobId: rejectedJobId,
+      attemptId: rejectedAttemptId,
+      leaseOwner: rejectedLease,
+      manifestKey: `staging/${rejectedJobId}/manifest.json`,
+      manifestChecksum: 'e'.repeat(64),
+    });
+    recordProductionAttemptCost({
+      jobId: rejectedJobId,
+      attemptId: rejectedAttemptId,
+      leaseOwner: rejectedLease,
+      usage: { request_id: 'positive-current-attempt' },
+      cost: 0.5,
+      outcome: 'unknown',
+    });
+    clearStudioLease(rejectedJobId);
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId: rejectedJobId,
+        attemptId: rejectedAttemptId,
+        decision: 'confirm_not_created',
+        idempotencyKey: 'recovery-not-created-rejected-key-11',
+        requestHash: 'recovery-not-created-rejected-hash-11',
+      }),
+    ).toMatchObject({ success: false, code: 'current_attempt_cost_positive' });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job_status', (SELECT status FROM kortix.studio_jobs WHERE job_id = '${rejectedJobId}'),
+          'reservation_status', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${rejectedJobId}'
+          ),
+          'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${rejectedJobId}'
+          )
+        );
+      `),
+    ).toEqual({ job_status: 'running', reservation_status: 'active', recoveries: 0 });
+  }, 30_000);
+
+  test('keeps an unknown hold monotonically and enforces seven-day and thirty-day caps', () => {
+    const scope = seedProductionScope({ suffix: '12' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000012';
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner: 'studio-worker:keep-unknown',
+      manifestKey: `staging/${jobId}/manifest.json`,
+      manifestChecksum: 'f'.repeat(64),
+    });
+    clearStudioLease(jobId);
+    dockerPsql(`
+      UPDATE kortix.studio_credit_reservations
+      SET created_at = clock_timestamp() - interval '1 day',
+          expires_at = clock_timestamp() + interval '1 hour'
+      WHERE job_id = '${jobId}';
+    `);
+
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId,
+        attemptId,
+        decision: 'keep_unknown',
+        idempotencyKey: 'recovery-keep-unknown-key-12a',
+        requestHash: 'recovery-keep-unknown-hash-12a',
+        keepUnknownUntilSql: "clock_timestamp() + interval '24 hours'",
+      }),
+    ).toMatchObject({
+      decision: 'keep_unknown',
+      job_status: 'running',
+      attempt_status: 'reconciling',
+      reservation_status: 'active',
+    });
+    const firstHold = dockerPsqlJson(`
+      SELECT jsonb_build_object(
+        'expires_at', expires_at,
+        'available_at', (SELECT available_at FROM kortix.studio_jobs WHERE job_id = '${jobId}')
+      ) FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}';
+    `);
+
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId,
+        attemptId,
+        decision: 'keep_unknown',
+        idempotencyKey: 'recovery-keep-unknown-key-12b',
+        requestHash: 'recovery-keep-unknown-hash-12b',
+        keepUnknownUntilSql: "clock_timestamp() + interval '12 hours'",
+      }),
+    ).toMatchObject({ success: false, code: 'hold_not_extended' });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'expires_at', expires_at,
+          'available_at', (SELECT available_at FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'progress_events', (
+            SELECT count(*) FROM kortix.studio_job_events
+            WHERE job_id = '${jobId}' AND event_type = 'progress'
+              AND payload ->> 'phase' = 'operator-review'
+          ),
+          'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${jobId}'
+          ),
+          'usage_events', (
+            SELECT count(*) FROM kortix.studio_usage_events WHERE job_id = '${jobId}'
+          )
+        ) FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}';
+      `),
+    ).toEqual({ ...firstHold, progress_events: 1, recoveries: 1, usage_events: 0 });
+
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId,
+        attemptId,
+        decision: 'keep_unknown',
+        idempotencyKey: 'recovery-keep-unknown-key-12c',
+        requestHash: 'recovery-keep-unknown-hash-12c',
+        keepUnknownUntilSql: "clock_timestamp() + interval '8 days'",
+      }),
+    ).toMatchObject({ success: false, code: 'hold_extension_too_long' });
+
+    dockerPsql(`
+      UPDATE kortix.studio_credit_reservations
+      SET created_at = clock_timestamp() - interval '29 days'
+      WHERE job_id = '${jobId}';
+    `);
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId,
+        attemptId,
+        decision: 'keep_unknown',
+        idempotencyKey: 'recovery-keep-unknown-key-12d',
+        requestHash: 'recovery-keep-unknown-hash-12d',
+        keepUnknownUntilSql: "clock_timestamp() + interval '2 days'",
+      }),
+    ).toMatchObject({ success: false, code: 'hold_cumulative_cap_exceeded' });
+
+    dockerPsql(`
+      UPDATE kortix.studio_credit_reservations
+      SET created_at = clock_timestamp() - interval '30 days',
+          expires_at = clock_timestamp()
+      WHERE job_id = '${jobId}';
+    `);
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId,
+        attemptId,
+        decision: 'keep_unknown',
+        idempotencyKey: 'recovery-keep-unknown-key-12e',
+        requestHash: 'recovery-keep-unknown-hash-12e',
+        keepUnknownUntilSql: "clock_timestamp() + interval '1 hour'",
+      }),
+    ).toMatchObject({ success: false, code: 'hold_cap_reached' });
+  }, 30_000);
+
+  test('expires unknown holds with verified-cost settlement, zero-cost release, and one incident', () => {
+    const scope = seedProductionScope({ suffix: '13' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000013';
+    const leaseOwner = 'studio-worker:expire-positive';
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner,
+      manifestKey: `staging/${jobId}/manifest.json`,
+      manifestChecksum: '1'.repeat(64),
+    });
+    recordProductionAttemptCost({
+      jobId,
+      attemptId,
+      leaseOwner,
+      usage: { request_id: 'expiry-positive' },
+      cost: 2,
+      outcome: 'unknown',
+    });
+    clearStudioLease(jobId);
+
+    expect(expireUnknownHold({ jobId, attemptId })).toMatchObject({
+      success: false,
+      code: 'hold_not_expired',
+    });
+    dockerPsql(`
+      UPDATE kortix.studio_credit_reservations
+      SET created_at = clock_timestamp() - interval '31 days',
+          expires_at = clock_timestamp() - interval '1 day'
+      WHERE job_id = '${jobId}';
+    `);
+    expect(
+      expireUnknownHold({
+        jobId,
+        attemptId,
+        expiredAtSql: "clock_timestamp() + interval '1 hour'",
+      }),
+    ).toMatchObject({ success: false, code: 'expiry_in_future' });
+
+    const expired = expireUnknownHold({ jobId, attemptId });
+    expect(expired).toMatchObject({
+      job_id: jobId,
+      attempt_id: attemptId,
+      kind: 'unknown_outcome_hold_expired',
+      status: 'open',
+      verified_cost_credits: 2,
+      potential_liability_credits: 6,
+    });
+    expect(expired.incident_id).toEqual(expect.any(String));
+    expect(expireUnknownHold({ jobId, attemptId })).toEqual(expired);
+
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job', (
+            SELECT jsonb_build_object('status', status, 'actual', actual_credits, 'code', error_code)
+            FROM kortix.studio_jobs WHERE job_id = '${jobId}'
+          ),
+          'attempt_status', (
+            SELECT status FROM kortix.studio_job_attempts WHERE attempt_id = '${attemptId}'
+          ),
+          'reservation_status', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}'
+          ),
+          'incident', (
+            SELECT jsonb_build_object(
+              'count', count(*),
+              'resolved_at', max(resolved_at),
+              'resolved_by', max(resolved_by_user_id::text),
+              'resolution_count', count(*) FILTER (WHERE resolution IS NOT NULL)
+            ) FROM kortix.studio_billing_incidents WHERE job_id = '${jobId}'
+          ),
+          'final_usage', (
+            SELECT jsonb_build_object('cost', final_cost_credits, 'loss', platform_loss_credits)
+            FROM kortix.studio_usage_events WHERE job_id = '${jobId}' AND attempt_id IS NULL
+          )
+        );
+      `),
+    ).toEqual({
+      job: {
+        status: 'failed',
+        actual: 2,
+        code: 'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED',
+      },
+      attempt_status: 'failed',
+      reservation_status: 'settled',
+      incident: { count: 1, resolved_at: null, resolved_by: null, resolution_count: 0 },
+      final_usage: { cost: 2, loss: 0 },
+    });
+
+    const zeroScope = seedProductionScope({ suffix: '14' });
+    const zeroCreated = createProductionJob(zeroScope);
+    const zeroJobId = String(zeroCreated.job_id);
+    const zeroAttemptId = '74000000-0000-4000-a000-000000000014';
+    prepareRecoveryAttempt({
+      jobId: zeroJobId,
+      attemptId: zeroAttemptId,
+      leaseOwner: 'studio-worker:expire-zero',
+      manifestKey: `staging/${zeroJobId}/manifest.json`,
+      manifestChecksum: '2'.repeat(64),
+    });
+    clearStudioLease(zeroJobId);
+    dockerPsql(`
+      UPDATE kortix.studio_credit_reservations
+      SET created_at = clock_timestamp() - interval '31 days',
+          expires_at = clock_timestamp() - interval '1 day'
+      WHERE job_id = '${zeroJobId}';
+    `);
+    expect(expireUnknownHold({ jobId: zeroJobId, attemptId: zeroAttemptId })).toMatchObject({
+      status: 'open',
+      verified_cost_credits: 0,
+      potential_liability_credits: 8,
+    });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'reservation_status', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${zeroJobId}'
+          ),
+          'ledger_count', (
+            SELECT count(*) FROM kortix.credit_ledger WHERE account_id = '${zeroScope.accountId}'
+          ),
+          'incident_count', (
+            SELECT count(*) FROM kortix.studio_billing_incidents WHERE job_id = '${zeroJobId}'
+          )
+        );
+      `),
+    ).toEqual({ reservation_status: 'released', ledger_count: 0, incident_count: 1 });
+  }, 30_000);
+
+  test('rolls back recovery cost, billing, assets, events, and audit on finalizer event failure', () => {
+    const scope = seedProductionScope({ suffix: '15' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000015';
+    const manifestKey = `staging/${jobId}/manifest.json`;
+    const manifestChecksum = '3'.repeat(64);
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner: 'studio-worker:recovery-rollback',
+      manifestKey,
+      manifestChecksum,
+    });
+    clearStudioLease(jobId);
+    dockerPsql(`
+      CREATE OR REPLACE FUNCTION kortix.test_fail_recovery_event()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      SET search_path TO ''
+      AS $function$
+      BEGIN
+        RAISE EXCEPTION 'injected recovery event failure';
+      END;
+      $function$;
+      CREATE TRIGGER trg_test_fail_recovery_event
+      BEFORE INSERT ON kortix.studio_job_events
+      FOR EACH ROW
+      WHEN (NEW.job_id = '${jobId}'::uuid)
+      EXECUTE FUNCTION kortix.test_fail_recovery_event();
+    `);
+    try {
+      const failed = dockerPsql(
+        recoveryCallSql({
+          projectId: scope.projectId,
+          jobId,
+          attemptId,
+          decision: 'confirm_succeeded',
+          idempotencyKey: 'recovery-rollback-key-15',
+          requestHash: 'recovery-rollback-hash-15',
+          evidence: {
+            staging_manifest_key: manifestKey,
+            staging_manifest_checksum: manifestChecksum,
+            upstream_usage: { output_count: 1 },
+            upstream_cost_credits: 2,
+          },
+          resultAssets: recoveryAssets(`studio/recovery/${jobId}/must-rollback.png`),
+          actualCredits: 3,
+        }),
+        true,
+      );
+      expect(failed.exitCode).not.toBe(0);
+      expect(failed.output).toContain('injected recovery event failure');
+    } finally {
+      dockerPsql(`
+        DROP TRIGGER IF EXISTS trg_test_fail_recovery_event ON kortix.studio_job_events;
+        DROP FUNCTION IF EXISTS kortix.test_fail_recovery_event();
+      `);
+    }
+
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job', (
+            SELECT jsonb_build_object('status', status, 'lease_owner', lease_owner)
+            FROM kortix.studio_jobs WHERE job_id = '${jobId}'
+          ),
+          'attempt', (
+            SELECT jsonb_build_object('status', status, 'recorded_at', cost_recorded_at)
+            FROM kortix.studio_job_attempts WHERE attempt_id = '${attemptId}'
+          ),
+          'reservation', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}'
+          ),
+          'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${jobId}'
+          ),
+          'usage_events', (
+            SELECT count(*) FROM kortix.studio_usage_events WHERE job_id = '${jobId}'
+          ),
+          'assets', (
+            SELECT count(*) FROM kortix.studio_assets WHERE source_job_id = '${jobId}'
+          ),
+          'events', (
+            SELECT count(*) FROM kortix.studio_job_events WHERE job_id = '${jobId}'
+          ),
+          'ledger', (
+            SELECT count(*) FROM kortix.credit_ledger WHERE account_id = '${scope.accountId}'
+          )
+        );
+      `),
+    ).toEqual({
+      job: { status: 'running', lease_owner: null },
+      attempt: { status: 'reconciling', recorded_at: null },
+      reservation: 'active',
+      recoveries: 0,
+      usage_events: 0,
+      assets: 0,
+      events: 1,
+      ledger: 0,
+    });
   }, 30_000);
 
   test('atomically creates the queued job, reservation, and first durable event', () => {

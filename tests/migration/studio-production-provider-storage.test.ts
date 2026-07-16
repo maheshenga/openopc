@@ -27,6 +27,14 @@ function expectAll(source: string, fragments: string[]): void {
   }
 }
 
+function section(source: string, startMarker: string, endMarker: string): string {
+  const start = source.indexOf(compact(startMarker));
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf(compact(endMarker), start + 1);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
 describe('Studio production provider storage migration', () => {
   const rawMigration = readIfPresent(migrationPath);
   const migration = compact(rawMigration);
@@ -211,6 +219,10 @@ describe('Studio production provider storage migration', () => {
       "index('idx_studio_billing_incidents_attempt').on(table.attemptid)",
       "check( 'studio_billing_incidents_kind_check'",
       "check( 'studio_billing_incidents_status_check'",
+      "check( 'studio_billing_incidents_verified_cost_check'",
+      "check( 'studio_billing_incidents_potential_liability_check'",
+      "check( 'studio_billing_incidents_resolution_audit_check'",
+      "check( 'studio_billing_incidents_resolved_at_check'",
       "unique('studio_billing_incidents_job_attempt_kind_key').on( table.jobid, table.attemptid, table.kind",
     ]);
 
@@ -227,19 +239,53 @@ describe('Studio production provider storage migration', () => {
       'opened_at timestamptz not null default now()',
       'resolved_at timestamptz null',
       'resolved_by_user_id uuid null',
-      'resolution jsonb null',
       'add column if not exists resolution jsonb',
+      'verified_cost_credits >= 0',
+      'potential_liability_credits >= 0',
+      "status = 'open' and resolved_at is null and resolved_by_user_id is null and resolution is null",
+      "status = 'resolved' and resolved_at is not null and resolved_by_user_id is not null and resolution is not null",
+      'resolved_at is null or resolved_at >= opened_at',
       'unique (job_id, attempt_id, kind)',
     ]);
 
-    for (const table of ['studio_job_recoveries', 'studio_billing_incidents']) {
+    const recoveryCreate = section(
+      migration,
+      'create table if not exists kortix.studio_job_recoveries',
+      'create table if not exists kortix.studio_billing_incidents',
+    );
+    const incidentCreate = section(
+      migration,
+      'create table if not exists kortix.studio_billing_incidents',
+      'create index if not exists idx_studio_job_recoveries_account',
+    );
+    expect(incidentCreate).not.toContain('resolution jsonb null');
+    expect(migration).toContain(
+      compact(
+        'alter table kortix.studio_billing_incidents add column if not exists resolution jsonb',
+      ),
+    );
+    for (const [table, tableSection] of [
+      ['studio_job_recoveries', recoveryCreate],
+      ['studio_billing_incidents', incidentCreate],
+    ] as const) {
       for (const parent of ['accounts', 'projects', 'studio_jobs', 'studio_job_attempts']) {
-        expect(migration).toContain(compact(`references kortix.${parent}(`));
+        expect(tableSection).toContain(compact(`references kortix.${parent}(`));
       }
-      expect(migration).toContain(compact('on delete cascade'));
-      expect(migration).toContain(compact(`create index if not exists idx_${table}_account`));
-      expect(migration).toContain(compact(`create index if not exists idx_${table}_project`));
-      expect(migration).toContain(compact(`create index if not exists idx_${table}_attempt`));
+      expect(tableSection).toContain(compact('on delete cascade'));
+      const indexStart = migration.indexOf(
+        compact(`create index if not exists idx_${table}_account`),
+      );
+      const indexEndMarker =
+        table === 'studio_job_recoveries'
+          ? 'create index if not exists idx_studio_billing_incidents_account'
+          : 'alter table kortix.studio_billing_incidents';
+      const indexEnd = migration.indexOf(compact(indexEndMarker), indexStart + 1);
+      expect(indexStart).toBeGreaterThanOrEqual(0);
+      expect(indexEnd).toBeGreaterThan(indexStart);
+      const indexes = migration.slice(indexStart, indexEnd);
+      expect(indexes).toContain(compact(`create index if not exists idx_${table}_account`));
+      expect(indexes).toContain(compact(`create index if not exists idx_${table}_project`));
+      expect(indexes).toContain(compact(`create index if not exists idx_${table}_attempt`));
     }
   });
 
@@ -296,13 +342,54 @@ describe('Studio production provider storage migration', () => {
       'studio_billing_incidents_attempt_fk',
       'studio_billing_incidents_kind_check',
       'studio_billing_incidents_status_check',
+      'studio_billing_incidents_verified_cost_check',
+      'studio_billing_incidents_potential_liability_check',
+      'studio_billing_incidents_resolution_audit_check',
+      'studio_billing_incidents_resolved_at_check',
       'studio_billing_incidents_job_attempt_kind_key',
       'studio_usage_events_attempt_fk',
       'studio_usage_events_outcome_shape_check',
     ];
+    const constraintRelations: Record<string, string> = {
+      studio_pricing_catalog_account_fk: 'studio_pricing_catalog',
+      studio_pricing_catalog_unit_check: 'studio_pricing_catalog',
+      studio_pricing_catalog_version_check: 'studio_pricing_catalog',
+      studio_pricing_catalog_scope_version_key: 'studio_pricing_catalog',
+      studio_jobs_pricing_catalog_fk: 'studio_jobs',
+      studio_jobs_pricing_snapshot_shape_check: 'studio_jobs',
+      studio_jobs_pricing_version_check: 'studio_jobs',
+      studio_job_attempts_submission_kind_check: 'studio_job_attempts',
+      studio_job_attempts_staging_manifest_check: 'studio_job_attempts',
+      studio_job_attempts_cost_outcome_check: 'studio_job_attempts',
+      studio_job_attempts_cost_recorded_check: 'studio_job_attempts',
+      studio_job_attempts_upstream_cost_check: 'studio_job_attempts',
+      studio_job_recoveries_account_fk: 'studio_job_recoveries',
+      studio_job_recoveries_project_fk: 'studio_job_recoveries',
+      studio_job_recoveries_job_fk: 'studio_job_recoveries',
+      studio_job_recoveries_attempt_fk: 'studio_job_recoveries',
+      studio_job_recoveries_decision_check: 'studio_job_recoveries',
+      studio_job_recoveries_job_idempotency_key: 'studio_job_recoveries',
+      studio_billing_incidents_account_fk: 'studio_billing_incidents',
+      studio_billing_incidents_project_fk: 'studio_billing_incidents',
+      studio_billing_incidents_job_fk: 'studio_billing_incidents',
+      studio_billing_incidents_attempt_fk: 'studio_billing_incidents',
+      studio_billing_incidents_kind_check: 'studio_billing_incidents',
+      studio_billing_incidents_status_check: 'studio_billing_incidents',
+      studio_billing_incidents_verified_cost_check: 'studio_billing_incidents',
+      studio_billing_incidents_potential_liability_check: 'studio_billing_incidents',
+      studio_billing_incidents_resolution_audit_check: 'studio_billing_incidents',
+      studio_billing_incidents_resolved_at_check: 'studio_billing_incidents',
+      studio_billing_incidents_job_attempt_kind_key: 'studio_billing_incidents',
+      studio_usage_events_attempt_fk: 'studio_usage_events',
+      studio_usage_events_outcome_shape_check: 'studio_usage_events',
+    };
     for (const name of constraintNames) {
+      const guardNeedle = compact(`from pg_catalog.pg_constraint where conname = '${name}'`);
+      expect(migration.split(guardNeedle).length - 1).toBe(1);
       expect(migration).toContain(
-        compact(`from pg_catalog.pg_constraint where conname = '${name}'`),
+        compact(
+          `from pg_catalog.pg_constraint where conname = '${name}' and conrelid = 'kortix.${constraintRelations[name]}'::regclass`,
+        ),
       );
       expect(migration).toContain(compact(`add constraint ${name}`));
     }
@@ -318,7 +405,13 @@ describe('Studio production provider storage migration', () => {
       'create trigger trg_studio_job_recoveries_immutable',
       "from pg_catalog.pg_trigger where tgname = 'trg_studio_pricing_catalog_immutable'",
       "from pg_catalog.pg_trigger where tgname = 'trg_studio_job_recoveries_immutable'",
+      'not exists (select 1 from kortix.accounts where account_id = old.account_id)',
+      'not exists (select 1 from kortix.projects where project_id = old.project_id)',
+      'not exists (select 1 from kortix.studio_jobs where job_id = old.job_id)',
+      'not exists (select 1 from kortix.studio_job_attempts where attempt_id = old.attempt_id)',
     ]);
+    // A live PostgreSQL test should also invoke a nested delete with every parent present and
+    // assert that the immutable trigger still rejects it; this sandbox has no PostgreSQL runtime.
   });
 
   test('applies least-privilege table grants and removes direct client writes', () => {

@@ -2441,6 +2441,31 @@ export const studioBillingIncidents = kortixSchema.table(
       'studio_billing_incidents_status_check',
       sql`${table.status} IN ('open', 'resolved')`,
     ),
+    check(
+      'studio_billing_incidents_verified_cost_check',
+      sql`${table.verifiedCostCredits} >= 0`,
+    ),
+    check(
+      'studio_billing_incidents_potential_liability_check',
+      sql`${table.potentialLiabilityCredits} >= 0`,
+    ),
+    check(
+      'studio_billing_incidents_resolution_audit_check',
+      sql`(
+        (${table.status} = 'open'
+          AND ${table.resolvedAt} IS NULL
+          AND ${table.resolvedByUserId} IS NULL
+          AND ${table.resolution} IS NULL)
+        OR (${table.status} = 'resolved'
+          AND ${table.resolvedAt} IS NOT NULL
+          AND ${table.resolvedByUserId} IS NOT NULL
+          AND ${table.resolution} IS NOT NULL)
+      )`,
+    ),
+    check(
+      'studio_billing_incidents_resolved_at_check',
+      sql`${table.resolvedAt} IS NULL OR ${table.resolvedAt} >= ${table.openedAt}`,
+    ),
     unique('studio_billing_incidents_job_attempt_kind_key').on(
       table.jobId,
       table.attemptId,

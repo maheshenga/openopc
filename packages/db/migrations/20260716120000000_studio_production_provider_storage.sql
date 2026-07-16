@@ -68,7 +68,6 @@ CREATE TABLE IF NOT EXISTS kortix.studio_billing_incidents (
   opened_at timestamptz not null default now(),
   resolved_at timestamptz null,
   resolved_by_user_id uuid null,
-  resolution jsonb null,
   CONSTRAINT studio_billing_incidents_account_fk
     FOREIGN KEY (account_id) REFERENCES kortix.accounts(account_id) ON DELETE CASCADE,
   CONSTRAINT studio_billing_incidents_project_fk
@@ -124,6 +123,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_pricing_catalog_account_fk'
+      AND conrelid = 'kortix.studio_pricing_catalog'::regclass
   ) THEN
     ALTER TABLE kortix.studio_pricing_catalog
       ADD CONSTRAINT studio_pricing_catalog_account_fk
@@ -150,6 +150,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_billing_incidents_account_fk'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
   ) THEN
     ALTER TABLE kortix.studio_billing_incidents
       ADD CONSTRAINT studio_billing_incidents_account_fk
@@ -162,6 +163,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_billing_incidents_project_fk'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
   ) THEN
     ALTER TABLE kortix.studio_billing_incidents
       ADD CONSTRAINT studio_billing_incidents_project_fk
@@ -174,6 +176,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_billing_incidents_job_fk'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
   ) THEN
     ALTER TABLE kortix.studio_billing_incidents
       ADD CONSTRAINT studio_billing_incidents_job_fk
@@ -186,6 +189,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_billing_incidents_attempt_fk'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
   ) THEN
     ALTER TABLE kortix.studio_billing_incidents
       ADD CONSTRAINT studio_billing_incidents_attempt_fk
@@ -198,6 +202,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_billing_incidents_kind_check'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
   ) THEN
     ALTER TABLE kortix.studio_billing_incidents
       ADD CONSTRAINT studio_billing_incidents_kind_check
@@ -210,6 +215,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_billing_incidents_status_check'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
   ) THEN
     ALTER TABLE kortix.studio_billing_incidents
       ADD CONSTRAINT studio_billing_incidents_status_check
@@ -221,7 +227,68 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
+    WHERE conname = 'studio_billing_incidents_verified_cost_check'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
+  ) THEN
+    ALTER TABLE kortix.studio_billing_incidents
+      ADD CONSTRAINT studio_billing_incidents_verified_cost_check
+      CHECK (verified_cost_credits >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_constraint
+    WHERE conname = 'studio_billing_incidents_potential_liability_check'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
+  ) THEN
+    ALTER TABLE kortix.studio_billing_incidents
+      ADD CONSTRAINT studio_billing_incidents_potential_liability_check
+      CHECK (potential_liability_credits >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_constraint
+    WHERE conname = 'studio_billing_incidents_resolution_audit_check'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
+  ) THEN
+    ALTER TABLE kortix.studio_billing_incidents
+      ADD CONSTRAINT studio_billing_incidents_resolution_audit_check CHECK (
+        (status = 'open'
+          AND resolved_at IS NULL
+          AND resolved_by_user_id IS NULL
+          AND resolution IS NULL)
+        OR (status = 'resolved'
+          AND resolved_at IS NOT NULL
+          AND resolved_by_user_id IS NOT NULL
+          AND resolution IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_constraint
+    WHERE conname = 'studio_billing_incidents_resolved_at_check'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
+  ) THEN
+    ALTER TABLE kortix.studio_billing_incidents
+      ADD CONSTRAINT studio_billing_incidents_resolved_at_check
+      CHECK (resolved_at IS NULL OR resolved_at >= opened_at);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_billing_incidents_job_attempt_kind_key'
+      AND conrelid = 'kortix.studio_billing_incidents'::regclass
   ) THEN
     ALTER TABLE kortix.studio_billing_incidents
       ADD CONSTRAINT studio_billing_incidents_job_attempt_kind_key
@@ -234,6 +301,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_usage_events_attempt_fk'
+      AND conrelid = 'kortix.studio_usage_events'::regclass
   ) THEN
     ALTER TABLE kortix.studio_usage_events
       ADD CONSTRAINT studio_usage_events_attempt_fk
@@ -246,6 +314,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_usage_events_outcome_shape_check'
+      AND conrelid = 'kortix.studio_usage_events'::regclass
   ) THEN
     ALTER TABLE kortix.studio_usage_events
       ADD CONSTRAINT studio_usage_events_outcome_shape_check CHECK (
@@ -278,7 +347,9 @@ SET search_path TO ''
 AS $function$
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    IF pg_catalog.pg_trigger_depth() > 1 THEN
+    -- A nested delete is a parent-account cascade only when that account row is gone.
+    IF pg_catalog.pg_trigger_depth() > 1
+      AND NOT EXISTS (SELECT 1 FROM kortix.accounts WHERE account_id = OLD.account_id) THEN
       RETURN OLD;
     END IF;
     RAISE EXCEPTION 'Studio pricing catalog rows are append-only';
@@ -315,7 +386,15 @@ LANGUAGE plpgsql
 SET search_path TO ''
 AS $function$
 BEGIN
-  IF TG_OP = 'DELETE' and pg_catalog.pg_trigger_depth() > 1 THEN
+  -- Nested deletes with every declared parent still present are direct deletes and fail.
+  IF TG_OP = 'DELETE'
+    AND pg_catalog.pg_trigger_depth() > 1
+    AND (
+      NOT EXISTS (SELECT 1 FROM kortix.accounts WHERE account_id = OLD.account_id)
+      OR NOT EXISTS (SELECT 1 FROM kortix.projects WHERE project_id = OLD.project_id)
+      OR NOT EXISTS (SELECT 1 FROM kortix.studio_jobs WHERE job_id = OLD.job_id)
+      OR NOT EXISTS (SELECT 1 FROM kortix.studio_job_attempts WHERE attempt_id = OLD.attempt_id)
+    ) THEN
     RETURN OLD;
   END IF;
 
@@ -356,6 +435,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_pricing_catalog_unit_check'
+      AND conrelid = 'kortix.studio_pricing_catalog'::regclass
   ) THEN
     ALTER TABLE kortix.studio_pricing_catalog
       ADD CONSTRAINT studio_pricing_catalog_unit_check CHECK (unit = 'image');
@@ -367,6 +447,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_pricing_catalog_version_check'
+      AND conrelid = 'kortix.studio_pricing_catalog'::regclass
   ) THEN
     ALTER TABLE kortix.studio_pricing_catalog
       ADD CONSTRAINT studio_pricing_catalog_version_check CHECK (version > 0);
@@ -378,6 +459,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_pricing_catalog_scope_version_key'
+      AND conrelid = 'kortix.studio_pricing_catalog'::regclass
   ) THEN
     ALTER TABLE kortix.studio_pricing_catalog
       ADD CONSTRAINT studio_pricing_catalog_scope_version_key
@@ -390,6 +472,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_jobs_pricing_catalog_fk'
+      AND conrelid = 'kortix.studio_jobs'::regclass
   ) THEN
     ALTER TABLE kortix.studio_jobs
       ADD CONSTRAINT studio_jobs_pricing_catalog_fk
@@ -404,6 +487,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_jobs_pricing_snapshot_shape_check'
+      AND conrelid = 'kortix.studio_jobs'::regclass
   ) THEN
     ALTER TABLE kortix.studio_jobs
       ADD CONSTRAINT studio_jobs_pricing_snapshot_shape_check CHECK (
@@ -420,6 +504,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_jobs_pricing_version_check'
+      AND conrelid = 'kortix.studio_jobs'::regclass
   ) THEN
     ALTER TABLE kortix.studio_jobs
       ADD CONSTRAINT studio_jobs_pricing_version_check
@@ -435,6 +520,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_attempts_submission_kind_check'
+      AND conrelid = 'kortix.studio_job_attempts'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_attempts
       ADD CONSTRAINT studio_job_attempts_submission_kind_check
@@ -447,6 +533,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_attempts_staging_manifest_check'
+      AND conrelid = 'kortix.studio_job_attempts'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_attempts
       ADD CONSTRAINT studio_job_attempts_staging_manifest_check CHECK (
@@ -461,6 +548,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_attempts_cost_outcome_check'
+      AND conrelid = 'kortix.studio_job_attempts'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_attempts
       ADD CONSTRAINT studio_job_attempts_cost_outcome_check
@@ -473,6 +561,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_attempts_cost_recorded_check'
+      AND conrelid = 'kortix.studio_job_attempts'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_attempts
       ADD CONSTRAINT studio_job_attempts_cost_recorded_check CHECK (
@@ -487,6 +576,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_attempts_upstream_cost_check'
+      AND conrelid = 'kortix.studio_job_attempts'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_attempts
       ADD CONSTRAINT studio_job_attempts_upstream_cost_check
@@ -499,6 +589,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_recoveries_account_fk'
+      AND conrelid = 'kortix.studio_job_recoveries'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_recoveries
       ADD CONSTRAINT studio_job_recoveries_account_fk
@@ -511,6 +602,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_recoveries_project_fk'
+      AND conrelid = 'kortix.studio_job_recoveries'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_recoveries
       ADD CONSTRAINT studio_job_recoveries_project_fk
@@ -523,6 +615,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_recoveries_job_fk'
+      AND conrelid = 'kortix.studio_job_recoveries'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_recoveries
       ADD CONSTRAINT studio_job_recoveries_job_fk
@@ -535,6 +628,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_recoveries_attempt_fk'
+      AND conrelid = 'kortix.studio_job_recoveries'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_recoveries
       ADD CONSTRAINT studio_job_recoveries_attempt_fk
@@ -547,6 +641,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_recoveries_decision_check'
+      AND conrelid = 'kortix.studio_job_recoveries'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_recoveries
       ADD CONSTRAINT studio_job_recoveries_decision_check
@@ -559,6 +654,7 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_constraint
     WHERE conname = 'studio_job_recoveries_job_idempotency_key'
+      AND conrelid = 'kortix.studio_job_recoveries'::regclass
   ) THEN
     ALTER TABLE kortix.studio_job_recoveries
       ADD CONSTRAINT studio_job_recoveries_job_idempotency_key UNIQUE (job_id, idempotency_key);

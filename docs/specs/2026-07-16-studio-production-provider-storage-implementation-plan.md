@@ -720,7 +720,7 @@ git commit -m "feat: add openai compatible studio image adapter"
 
 - Produces immutable pricing rows, signed pricing/provider snapshots, staging-manifest columns, recovery audit rows, capped-hold billing incidents, and an expand-first job-creation overload.
 
-- [ ] **Step 1: Write RED API-contract tests**
+- [x] **Step 1: Write RED API-contract tests**
 
 Add strict schemas for:
 
@@ -761,7 +761,7 @@ STUDIO_SUBMISSION_CONFIRMED_NOT_CREATED
 STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED
 ```
 
-- [ ] **Step 2: Write RED migration tests**
+- [x] **Step 2: Write RED migration tests**
 
 Assert:
 
@@ -792,7 +792,7 @@ Run and capture RED:
 pnpm exec bun test tests/migration/studio-production-provider-storage.test.ts
 ```
 
-- [ ] **Step 3: Implement additive Drizzle schema**
+- [x] **Step 3: Implement additive Drizzle schema**
 
 Add `studioPricingCatalog` with these exact columns and constraints:
 
@@ -885,7 +885,7 @@ Add expand-first checks so the four job snapshot columns are either all null or 
 
 Attempt usage rows are the only additive source for upstream cost: they have non-null `attempt_id` and observation `outcome`, with `final_cost_credits = 0` and `platform_loss_credits = 0`. A production final usage row has null `attempt_id`, a terminal `outcome`, `upstream_cost_credits = 0`, the user charge in `final_cost_credits`, platform loss in its dedicated column, and the non-additive aggregate under `metadata.verified_upstream_cost_credits`. Constraints enforce those shapes whenever `outcome` is non-null while allowing pre-migration legacy rows with null `outcome`. Existing fake jobs and attempts remain valid with null production fields. Do not alter the original 20260715 migrations.
 
-- [ ] **Step 4: Implement the expand-first SQL migration**
+- [x] **Step 4: Implement the expand-first SQL migration**
 
 Create tables/indexes/columns with `IF NOT EXISTS`. Preserve this original overload and its existing `service_role` grant unchanged for mixed-version fake-only rollback:
 
@@ -1090,11 +1090,11 @@ GRANT EXECUTE ON FUNCTION public.atomic_expire_studio_unknown_hold(
 
 Do not emit a new public event type: the terminal finalizer emits existing `failed` and `billing-settled` events with the incident/error code in payload. The incident row is the immutable operations record.
 
-- [ ] **Step 5: Bind provider/pricing version into estimate tokens**
+- [x] **Step 5: Bind provider/pricing version into estimate tokens**
 
 Extend internal token claims with `provider_config_version`, `pricing_catalog_id`, and `pricing_version`. Verification rejects mismatches before job creation. Public estimate response remains additive and does not expose rate internals beyond line items and totals.
 
-- [ ] **Step 6: Run the Task 5 gate and commit**
+- [x] **Step 6: Run the Task 5 gate and commit**
 
 ```powershell
 pnpm --filter @kortix/api-contract test

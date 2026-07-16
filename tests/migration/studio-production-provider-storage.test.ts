@@ -6,6 +6,10 @@ const migrationPath = join(
   import.meta.dir,
   '../../packages/db/migrations/20260716120000000_studio_production_provider_storage.sql',
 );
+const recoveryHardeningMigrationPath = join(
+  import.meta.dir,
+  '../../packages/db/migrations/20260717020000000_studio_recovery_hardening.sql',
+);
 const schemaPath = join(import.meta.dir, '../../packages/db/src/schema/kortix.ts');
 const historicalMigrationPaths = [
   '20260715160000000_studio_phase1.sql',
@@ -206,8 +210,8 @@ describe('Studio production provider storage migration', () => {
       "incidentid: uuid('incident_id').defaultrandom().primarykey()",
       "kind: text('kind').notnull()",
       "status: text('status').default('open').notnull()",
-      "verifiedcostcredits: numeric('verified_cost_credits', { precision: 12, scale: 4 }).notnull()",
-      "potentialliabilitycredits: numeric('potential_liability_credits', { precision: 12, scale: 4 }).notnull()",
+      "verifiedcostcredits: numeric('verified_cost_credits', { precision: 20, scale: 4 }).notnull()",
+      "potentialliabilitycredits: numeric('potential_liability_credits', { precision: 20, scale: 4 }).notnull()",
       "metadata: jsonb('metadata').default({}).notnull()",
       "openedat: timestamp('opened_at', { withtimezone: true, mode: 'string' }).defaultnow().notnull()",
       "resolvedat: timestamp('resolved_at', { withtimezone: true, mode: 'string' })",
@@ -292,7 +296,7 @@ describe('Studio production provider storage migration', () => {
     expectAll(schema, [
       "attemptid: uuid('attempt_id').references(() => studiojobattempts.attemptid, { ondelete: 'cascade'",
       "outcome: text('outcome')",
-      "platformlosscredits: numeric('platform_loss_credits', { precision: 12, scale: 4 }).default('0').notnull()",
+      "platformlosscredits: numeric('platform_loss_credits', { precision: 20, scale: 4 }).default('0').notnull()",
       "uniqueindex('idx_studio_usage_events_attempt').on(table.attemptid).where(sql`${table.attemptid} is not null`)",
       "check('studio_usage_events_outcome_shape_check'",
     ]);
@@ -609,5 +613,88 @@ describe('Studio production provider storage migration', () => {
     ]) {
       expect(migration).not.toContain(eventType);
     }
+  });
+
+  test('ships recovery boundary fixes in a later forward migration', () => {
+    expect(existsSync(recoveryHardeningMigrationPath)).toBe(true);
+    const hardening = compact(readIfPresent(recoveryHardeningMigrationPath));
+    const reservationsSchema = section(
+      schema,
+      "export const studioCreditReservations = kortixSchema.table( 'studio_credit_reservations'",
+      'export const studioUsageEvents = kortixSchema.table(',
+    );
+    expectAll(hardening, [
+      "set local lock_timeout = '5s'",
+      'lock table kortix.studio_billing_incidents in access exclusive mode',
+      'lock table kortix.studio_credit_reservations in access exclusive mode',
+      'lock table kortix.studio_usage_events in access exclusive mode',
+      'update kortix.studio_credit_reservations reservation',
+      "clock_timestamp() - interval '30 days'",
+      'alter column platform_loss_credits type numeric(20,4)',
+      'alter column verified_cost_credits type numeric(20,4)',
+      'alter column potential_liability_credits type numeric(20,4)',
+      'alter column created_at set not null',
+      'studio_credit_reservations_created_at_finite_check',
+      'trg_studio_credit_reservation_created_at_immutable',
+      'before insert or update of created_at',
+      "pg_catalog.pg_has_role(current_user, 'pg_database_owner', 'member')",
+      'create or replace function kortix.atomic_settle_studio_job_production(',
+      'create or replace function public.atomic_finalize_studio_job_success(',
+      'create or replace function public.atomic_finalize_studio_job_terminal(',
+      'create or replace function public.atomic_recover_studio_job(',
+      'create or replace function public.atomic_expire_studio_unknown_hold(',
+      "p_recovered_at::text in ('infinity', '-infinity')",
+      "'code', 'recovery_job_not_found'",
+      "'code', 'recovery_reservation_time_invalid'",
+      'v_reservation.created_at > clock_timestamp()',
+      'v_upstream_cost_input numeric',
+      'v_max_provider_credits_input numeric',
+      'v_verified_upstream_credits numeric(20,4)',
+      'jsonb_path_exists',
+    ]);
+    const reservationLock = hardening.indexOf(
+      'lock table kortix.studio_credit_reservations in access exclusive mode',
+    );
+    const incidentLock = hardening.indexOf(
+      'lock table kortix.studio_billing_incidents in access exclusive mode',
+    );
+    const usageLock = hardening.indexOf(
+      'lock table kortix.studio_usage_events in access exclusive mode',
+    );
+    const reservationBackfill = hardening.indexOf(
+      'update kortix.studio_credit_reservations reservation',
+    );
+    expect(reservationLock).toBeGreaterThanOrEqual(0);
+    expect(incidentLock).toBeLessThan(reservationLock);
+    expect(reservationLock).toBeLessThan(usageLock);
+    expect(reservationLock).toBeLessThan(reservationBackfill);
+    const projectFence = hardening.indexOf('v_job.project_id is distinct from p_project_id');
+    const replayLookup = hardening.indexOf('from kortix.studio_job_recoveries recovery');
+    expect(projectFence).toBeGreaterThanOrEqual(0);
+    expect(projectFence).toBeLessThan(replayLookup);
+    const expiryReplayLookup = hardening.indexOf('from kortix.studio_billing_incidents incident');
+    const expiryTimeValidation = hardening.indexOf('if p_expired_at is null');
+    expect(expiryReplayLookup).toBeGreaterThanOrEqual(0);
+    expect(expiryReplayLookup).toBeLessThan(expiryTimeValidation);
+    const productionSettlement = section(
+      hardening,
+      'create or replace function kortix.atomic_settle_studio_job_production(',
+      'create or replace function public.atomic_finalize_studio_job_success(',
+    );
+    expect(productionSettlement).not.toContain('p_requested_credits::numeric(12,4)');
+    const productionFinalizers = section(
+      hardening,
+      'create or replace function public.atomic_finalize_studio_job_success(',
+      'create or replace function public.atomic_recover_studio_job(',
+    );
+    expect(productionFinalizers).not.toContain(
+      'sum(attempt.upstream_cost_credits), 0)::numeric(12,4)',
+    );
+    expect(reservationsSchema).toContain(
+      compact(
+        "createdat: timestamp('created_at', { withtimezone: true, mode: 'string' }) .defaultnow() .notnull()",
+      ),
+    );
+    expect(reservationsSchema).toContain('studio_credit_reservations_created_at_finite_check');
   });
 });

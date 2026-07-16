@@ -1,10 +1,22 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { runner } from 'node-pg-migrate';
+import pg from 'pg';
 
 const dockerAvailable =
   Bun.spawnSync(['docker', 'version'], { stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
 
 const container = `kortix-studio-worker-migration-${crypto.randomUUID().slice(0, 8)}`;
+const migrationsDirectory = resolve(import.meta.dir, '..', 'migrations');
+const recoveryHardeningMigration = '20260717020000000_studio_recovery_hardening.sql';
+let mappedPostgresPort = '';
+const silentMigrationLogger = {
+  debug: (_message: string) => undefined,
+  info: (_message: string) => undefined,
+  warn: (_message: string) => undefined,
+  error: (_message: string) => undefined,
+};
 
 const SUCCESS_ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const CANCEL_ACCOUNT_ID = '10000000-0000-4000-a000-000000000002';
@@ -37,7 +49,7 @@ interface ProductionScope {
   snapshot: Record<string, unknown>;
 }
 
-function dockerPsql(sql: string, allowFailure = false) {
+function dockerPsql(sql: string, allowFailure = false, database = 'testdb') {
   const result = Bun.spawnSync(
     [
       'docker',
@@ -49,7 +61,7 @@ function dockerPsql(sql: string, allowFailure = false) {
       '-U',
       'postgres',
       '-d',
-      'testdb',
+      database,
       '-v',
       'ON_ERROR_STOP=1',
       '-t',
@@ -62,8 +74,8 @@ function dockerPsql(sql: string, allowFailure = false) {
   return { exitCode: result.exitCode, output };
 }
 
-function dockerPsqlJson(sql: string): Record<string, unknown> {
-  const output = dockerPsql(sql).output;
+function dockerPsqlJson(sql: string, database = 'testdb'): Record<string, unknown> {
+  const output = dockerPsql(sql, false, database).output;
   const jsonLine = output
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -72,9 +84,52 @@ function dockerPsqlJson(sql: string): Record<string, unknown> {
   return JSON.parse(jsonLine) as Record<string, unknown>;
 }
 
-async function applyMigration(name: string): Promise<void> {
+async function applyMigration(name: string, database = 'testdb'): Promise<void> {
   const migration = await Bun.file(resolve(import.meta.dir, '..', 'migrations', name)).text();
-  dockerPsql(`BEGIN;\n${migration}\nCOMMIT;`);
+  dockerPsql(`BEGIN;\n${migration}\nCOMMIT;`, false, database);
+}
+
+function postgresUrl(database: string): string {
+  if (!mappedPostgresPort) throw new Error('PostgreSQL host port is not mapped');
+  return `postgres://postgres:test@127.0.0.1:${mappedPostgresPort}/${database}`;
+}
+
+async function applyOnlyRecordedForwardMigration(database: string): Promise<string[]> {
+  const migrationNames = readdirSync(migrationsDirectory).filter((name) =>
+    /^\d{17}.*\.sql$/.test(name),
+  );
+  const historicalMigrationCount = migrationNames.filter(
+    (name) => name < recoveryHardeningMigration,
+  ).length;
+  const laterMigrationPattern = migrationNames
+    .filter((name) => name > recoveryHardeningMigration)
+    .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  const base = {
+    databaseUrl: postgresUrl(database),
+    dir: migrationsDirectory,
+    migrationsTable: 'pgmigrations',
+    migrationsSchema: 'kortix_migrations',
+    createMigrationsSchema: true,
+    checkOrder: true,
+    singleTransaction: true,
+    verbose: false,
+    logger: silentMigrationLogger,
+    ...(laterMigrationPattern ? { ignorePattern: `(?:${laterMigrationPattern})$` } : {}),
+  } as const;
+
+  await runner({
+    ...base,
+    direction: 'up',
+    count: historicalMigrationCount,
+    fake: true,
+  });
+  const applied = await runner({
+    ...base,
+    direction: 'up',
+    count: Number.POSITIVE_INFINITY,
+  });
+  return applied.map((migration) => migration.name);
 }
 
 const PRE_STUDIO_SCHEMA = `
@@ -133,6 +188,11 @@ const PRE_STUDIO_SCHEMA = `
     metadata jsonb DEFAULT '{}'::jsonb
   );
 `;
+
+const PRE_STUDIO_SCHEMA_WITH_EXISTING_ROLES = PRE_STUDIO_SCHEMA.replace(
+  /\s*CREATE ROLE (?:anon|authenticated|service_role) NOLOGIN;/g,
+  '',
+);
 
 const CORE_FIXTURES = `
   INSERT INTO kortix.accounts(account_id) VALUES
@@ -635,6 +695,8 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       'POSTGRES_PASSWORD=test',
       '-e',
       'POSTGRES_DB=testdb',
+      '-p',
+      '127.0.0.1::5432',
       'postgres:16-alpine',
     ]);
     if (started.exitCode !== 0) throw new Error(started.stderr.toString());
@@ -661,11 +723,25 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     }
     if (!ready) throw new Error('Disposable PostgreSQL did not become ready');
 
+    const mappedPort = Bun.spawnSync(['docker', 'port', container, '5432/tcp'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    if (mappedPort.exitCode !== 0) throw new Error(mappedPort.stderr.toString());
+    const mappedPortValue = mappedPort.stdout
+      .toString()
+      .trim()
+      .match(/:(\d+)$/)?.[1];
+    if (!mappedPortValue)
+      throw new Error(`Could not resolve mapped PostgreSQL port: ${mappedPort.stdout}`);
+    mappedPostgresPort = mappedPortValue;
+
     dockerPsql(PRE_STUDIO_SCHEMA);
     await applyMigration('20260715160000000_studio_phase1.sql');
     await applyMigration('20260715170000000_studio_credit_reservations.sql');
     await applyMigration('20260715180000000_studio_worker_hardening.sql');
     await applyMigration('20260716120000000_studio_production_provider_storage.sql');
+    await applyMigration('20260717020000000_studio_recovery_hardening.sql');
     dockerPsql(CORE_FIXTURES);
   }, 150_000);
 
@@ -851,6 +927,268 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       authenticated_can_finalize_terminal: false,
     });
   }, 30_000);
+
+  test('applies the recorded B2 and B3 forward-upgrade paths with dirty reservation anchors', async () => {
+    for (const variant of ['b2', 'b3'] as const) {
+      const database = `studio_upgrade_${variant}`;
+      dockerPsql(`CREATE DATABASE ${database};`);
+      dockerPsql(PRE_STUDIO_SCHEMA_WITH_EXISTING_ROLES, false, database);
+      await applyMigration('20260715160000000_studio_phase1.sql', database);
+      await applyMigration('20260715170000000_studio_credit_reservations.sql', database);
+      await applyMigration('20260715180000000_studio_worker_hardening.sql', database);
+      await applyMigration('20260716120000000_studio_production_provider_storage.sql', database);
+      dockerPsql(CORE_FIXTURES, false, database);
+
+      const jobIds = [1, 2, 3, 4].map(
+        (index) => `81000000-0000-4000-a000-0000000000${variant === 'b2' ? '1' : '2'}${index}`,
+      );
+      dockerPsql(
+        `
+          INSERT INTO kortix.studio_jobs(
+            job_id, account_id, project_id, actor_user_id, actor_type, capability,
+            provider_config_id, provider, model, input, status, idempotency_key,
+            request_hash, attempt_count, reserved_credits, available_at, created_at
+          ) VALUES
+            (
+              '${jobIds[0]}', '${SUCCESS_ACCOUNT_ID}', '${SUCCESS_PROJECT_ID}',
+              '60000000-0000-4000-a000-000000000001', 'user', 'image.generate',
+              '${SUCCESS_PROVIDER_ID}', 'fake', 'fake-image-v1', '{}'::jsonb, 'running',
+              'upgrade-${variant}-1', 'upgrade-hash-${variant}-1', 0, 1,
+              clock_timestamp(), clock_timestamp() - interval '10 days'
+            ),
+            (
+              '${jobIds[1]}', '${SUCCESS_ACCOUNT_ID}', '${SUCCESS_PROJECT_ID}',
+              '60000000-0000-4000-a000-000000000001', 'user', 'image.generate',
+              '${SUCCESS_PROVIDER_ID}', 'fake', 'fake-image-v1', '{}'::jsonb, 'running',
+              'upgrade-${variant}-2', 'upgrade-hash-${variant}-2', 0, 1,
+              clock_timestamp(), clock_timestamp() - interval '20 days'
+            ),
+            (
+              '${jobIds[2]}', '${SUCCESS_ACCOUNT_ID}', '${SUCCESS_PROJECT_ID}',
+              '60000000-0000-4000-a000-000000000001', 'user', 'image.generate',
+              '${SUCCESS_PROVIDER_ID}', 'fake', 'fake-image-v1', '{}'::jsonb, 'running',
+              'upgrade-${variant}-3', 'upgrade-hash-${variant}-3', 0, 1,
+              clock_timestamp(), clock_timestamp() - interval '5 days'
+            ),
+            (
+              '${jobIds[3]}', '${SUCCESS_ACCOUNT_ID}', '${SUCCESS_PROJECT_ID}',
+              '60000000-0000-4000-a000-000000000001', 'user', 'image.generate',
+              '${SUCCESS_PROVIDER_ID}', 'fake', 'fake-image-v1', '{}'::jsonb, 'running',
+              'upgrade-${variant}-4', 'upgrade-hash-${variant}-4', 0, 1,
+              clock_timestamp(), 'infinity'::timestamptz
+            );
+
+          INSERT INTO kortix.studio_credit_reservations(
+            account_id, job_id, amount_credits, status, expires_at, created_at
+          ) VALUES
+            ('${SUCCESS_ACCOUNT_ID}', '${jobIds[0]}', 1, 'active', clock_timestamp() + interval '1 hour', NULL),
+            ('${SUCCESS_ACCOUNT_ID}', '${jobIds[1]}', 1, 'active', clock_timestamp() + interval '1 hour', 'infinity'::timestamptz),
+            ('${SUCCESS_ACCOUNT_ID}', '${jobIds[2]}', 1, 'active', clock_timestamp() + interval '1 hour', clock_timestamp() + interval '1 year'),
+            ('${SUCCESS_ACCOUNT_ID}', '${jobIds[3]}', 1, 'active', clock_timestamp() + interval '1 hour', '-infinity'::timestamptz);
+        `,
+        false,
+        database,
+      );
+
+      if (variant === 'b2') {
+        dockerPsql(
+          `
+            DROP FUNCTION public.atomic_recover_studio_job(
+              uuid, uuid, uuid, uuid, text, uuid, text, text, text, text,
+              jsonb, jsonb, numeric, timestamptz, timestamptz
+            );
+            DROP FUNCTION public.atomic_expire_studio_unknown_hold(uuid, uuid, timestamptz);
+          `,
+          false,
+          database,
+        );
+      }
+
+      const applied = await applyOnlyRecordedForwardMigration(database);
+      expect(applied).toHaveLength(1);
+      expect(applied[0]).toContain('20260717020000000_studio_recovery_hardening');
+      expect(
+        dockerPsqlJson(
+          `
+            SELECT jsonb_build_object(
+              'all_valid', NOT EXISTS (
+                SELECT 1
+                FROM kortix.studio_credit_reservations
+                WHERE created_at IS NULL
+                  OR created_at::text IN ('infinity', '-infinity')
+                  OR created_at > clock_timestamp()
+              ),
+              'trusted_backfills', (
+                SELECT count(*)
+                FROM kortix.studio_credit_reservations reservation
+                JOIN kortix.studio_jobs job USING (job_id)
+                WHERE reservation.job_id IN ('${jobIds[0]}', '${jobIds[1]}', '${jobIds[2]}')
+                  AND reservation.created_at = job.created_at
+              ),
+              'fallback_reached_cap', (
+                SELECT created_at <= clock_timestamp() - interval '29 days 23 hours'
+                FROM kortix.studio_credit_reservations
+                WHERE job_id = '${jobIds[3]}'
+              ),
+              'created_at_not_null', (
+                SELECT is_nullable = 'NO'
+                FROM information_schema.columns
+                WHERE table_schema = 'kortix'
+                  AND table_name = 'studio_credit_reservations'
+                  AND column_name = 'created_at'
+              ),
+              'recovery_exists', to_regprocedure(
+                'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamptz,timestamptz)'
+              ) IS NOT NULL,
+              'expiry_exists', to_regprocedure(
+                'public.atomic_expire_studio_unknown_hold(uuid,uuid,timestamptz)'
+              ) IS NOT NULL,
+              'service_can_recover', has_function_privilege(
+                'service_role',
+                'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamptz,timestamptz)',
+                'EXECUTE'
+              ),
+              'authenticated_can_recover', has_function_privilege(
+                'authenticated',
+                'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamptz,timestamptz)',
+                'EXECUTE'
+              ),
+              'forward_recorded', EXISTS (
+                SELECT 1
+                FROM kortix_migrations.pgmigrations
+                WHERE name LIKE '20260717020000000_studio_recovery_hardening%'
+              )
+            );
+          `,
+          database,
+        ),
+      ).toEqual({
+        all_valid: true,
+        trusted_backfills: 3,
+        fallback_reached_cap: true,
+        created_at_not_null: true,
+        recovery_exists: true,
+        expiry_exists: true,
+        service_can_recover: true,
+        authenticated_can_recover: false,
+        forward_recorded: true,
+      });
+
+      const immutable = dockerPsql(
+        `
+          SET ROLE service_role;
+          UPDATE kortix.studio_credit_reservations
+          SET created_at = clock_timestamp()
+          WHERE job_id = '${jobIds[0]}';
+        `,
+        true,
+        database,
+      );
+      expect(immutable.exitCode).not.toBe(0);
+      expect(immutable.output).toContain('Studio reservation creation time is immutable');
+    }
+  }, 150_000);
+
+  test('times out before backfill when live traffic blocks the reservation table lock', async () => {
+    const database = 'studio_upgrade_lock';
+    const jobId = '81000000-0000-4000-a000-000000000031';
+    dockerPsql(`CREATE DATABASE ${database};`);
+    dockerPsql(PRE_STUDIO_SCHEMA_WITH_EXISTING_ROLES, false, database);
+    await applyMigration('20260715160000000_studio_phase1.sql', database);
+    await applyMigration('20260715170000000_studio_credit_reservations.sql', database);
+    await applyMigration('20260715180000000_studio_worker_hardening.sql', database);
+    await applyMigration('20260716120000000_studio_production_provider_storage.sql', database);
+    dockerPsql(CORE_FIXTURES, false, database);
+    dockerPsql(
+      `
+        INSERT INTO kortix.studio_jobs(
+          job_id, account_id, project_id, actor_user_id, actor_type, capability,
+          provider_config_id, provider, model, input, status, idempotency_key,
+          request_hash, attempt_count, reserved_credits, available_at, created_at
+        ) VALUES (
+          '${jobId}', '${SUCCESS_ACCOUNT_ID}', '${SUCCESS_PROJECT_ID}',
+          '60000000-0000-4000-a000-000000000001', 'user', 'image.generate',
+          '${SUCCESS_PROVIDER_ID}', 'fake', 'fake-image-v1', '{}'::jsonb, 'running',
+          'upgrade-lock', 'upgrade-lock-hash', 0, 1,
+          clock_timestamp(), clock_timestamp() - interval '1 day'
+        );
+        INSERT INTO kortix.studio_credit_reservations(
+          account_id, job_id, amount_credits, status, expires_at, created_at
+        ) VALUES (
+          '${SUCCESS_ACCOUNT_ID}', '${jobId}', 1, 'active',
+          clock_timestamp() + interval '1 hour', 'infinity'::timestamptz
+        );
+      `,
+      false,
+      database,
+    );
+
+    const migrationSql = await Bun.file(
+      resolve(migrationsDirectory, recoveryHardeningMigration),
+    ).text();
+    const holder = new pg.Client({ connectionString: postgresUrl(database) });
+    const migrator = new pg.Client({ connectionString: postgresUrl(database) });
+    await holder.connect();
+    await migrator.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query(
+        'SELECT 1 FROM kortix.studio_credit_reservations WHERE job_id = $1 FOR UPDATE',
+        [jobId],
+      );
+
+      const blockedMigration = migrator.query(`BEGIN;\n${migrationSql}\nCOMMIT;`);
+      await Bun.sleep(250);
+      expect(
+        dockerPsqlJson(
+          `
+            SELECT jsonb_build_object(
+              'created_at', created_at::text,
+              'constraint_exists', EXISTS (
+                SELECT 1 FROM pg_catalog.pg_constraint
+                WHERE conname = 'studio_credit_reservations_created_at_finite_check'
+                  AND conrelid = 'kortix.studio_credit_reservations'::regclass
+              )
+            )
+            FROM kortix.studio_credit_reservations
+            WHERE job_id = '${jobId}';
+          `,
+          database,
+        ),
+      ).toEqual({ created_at: 'infinity', constraint_exists: false });
+
+      let lockError: unknown;
+      try {
+        await blockedMigration;
+      } catch (error) {
+        lockError = error;
+      }
+      expect(lockError).toBeInstanceOf(Error);
+      expect((lockError as { code?: string }).code).toBe('55P03');
+      await migrator.query('ROLLBACK');
+      await holder.query('ROLLBACK');
+
+      await migrator.query(`BEGIN;\n${migrationSql}\nCOMMIT;`);
+      expect(
+        dockerPsqlJson(
+          `
+            SELECT jsonb_build_object(
+              'created_at_is_finite', created_at::text NOT IN ('infinity', '-infinity'),
+              'created_at_is_not_future', created_at <= clock_timestamp()
+            )
+            FROM kortix.studio_credit_reservations
+            WHERE job_id = '${jobId}';
+          `,
+          database,
+        ),
+      ).toEqual({ created_at_is_finite: true, created_at_is_not_future: true });
+    } finally {
+      await holder.query('ROLLBACK').catch(() => undefined);
+      await migrator.query('ROLLBACK').catch(() => undefined);
+      await holder.end();
+      await migrator.end();
+    }
+  }, 90_000);
 
   test('removes direct client access from every PostgREST-exposed Studio table', () => {
     const state = dockerPsqlJson(`
@@ -1802,6 +2140,10 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
 
     const replay = recoverProductionJob(call);
     expect(JSON.stringify(replay)).toBe(JSON.stringify(first));
+    expect(recoverProductionJob({ ...call, projectId: SUCCESS_PROJECT_ID })).toMatchObject({
+      success: false,
+      code: 'recovery_job_not_found',
+    });
     expect(
       recoverProductionJob({ ...call, requestHash: 'different-recovery-success-hash' }),
     ).toMatchObject({ success: false, code: 'recovery_conflict' });
@@ -1998,6 +2340,183 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       reservation_status: 'active',
       recoveries: 0,
     });
+  }, 30_000);
+
+  test('rejects nested negative recovery usage before recording immutable cost', () => {
+    const scope = seedProductionScope({ suffix: '20' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000020';
+    const manifestKey = `staging/${jobId}/manifest.json`;
+    const manifestChecksum = '5'.repeat(64);
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner: 'studio-worker:recovery-nested-negative',
+      manifestKey,
+      manifestChecksum,
+    });
+    clearStudioLease(jobId);
+
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId,
+        attemptId,
+        decision: 'confirm_succeeded',
+        idempotencyKey: 'recovery-nested-negative-key-20',
+        requestHash: 'recovery-nested-negative-hash-20',
+        evidence: {
+          staging_manifest_key: manifestKey,
+          staging_manifest_checksum: manifestChecksum,
+          upstream_usage: { output: { billable_count: -1 } },
+          upstream_cost_credits: 0,
+        },
+        resultAssets: recoveryAssets(`studio/recovery/${jobId}/nested-negative.png`),
+        actualCredits: 1,
+      }),
+    ).toMatchObject({ success: false, code: 'recovery_cost_invalid' });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job_status', (SELECT status FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'attempt_recorded_at', (
+            SELECT cost_recorded_at FROM kortix.studio_job_attempts WHERE attempt_id = '${attemptId}'
+          ),
+          'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${jobId}'
+          )
+        );
+      `),
+    ).toEqual({ job_status: 'running', attempt_recorded_at: null, recoveries: 0 });
+  }, 30_000);
+
+  test('rejects non-finite and out-of-window recovery timestamps without mutation', () => {
+    const scope = seedProductionScope({ suffix: '18' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000018';
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner: 'studio-worker:recovery-time-fence',
+      manifestKey: `staging/${jobId}/manifest.json`,
+      manifestChecksum: '6'.repeat(64),
+    });
+    clearStudioLease(jobId);
+    const base = {
+      projectId: scope.projectId,
+      jobId,
+      attemptId,
+      decision: 'confirm_not_created' as const,
+      evidence: {},
+    };
+
+    for (const [suffix, recoveredAtSql] of [
+      ['infinity', "'infinity'::timestamptz"],
+      ['negative-infinity', "'-infinity'::timestamptz"],
+      ['future', "clock_timestamp() + interval '1 day'"],
+      ['stale', "clock_timestamp() - interval '1 day'"],
+    ] as const) {
+      expect(
+        recoverProductionJob({
+          ...base,
+          idempotencyKey: `recovery-invalid-time-key-18-${suffix}`,
+          requestHash: `recovery-invalid-time-hash-18-${suffix}`,
+          recoveredAtSql,
+        }),
+      ).toMatchObject({ success: false, code: 'recovery_time_invalid' });
+    }
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job_status', (SELECT status FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'attempt_status', (
+            SELECT status FROM kortix.studio_job_attempts WHERE attempt_id = '${attemptId}'
+          ),
+          'reservation_status', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}'
+          ),
+          'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${jobId}'
+          )
+        );
+      `),
+    ).toEqual({
+      job_status: 'running',
+      attempt_status: 'reconciling',
+      reservation_status: 'active',
+      recoveries: 0,
+    });
+  }, 30_000);
+
+  test('rejects an invalid reservation creation time at recovery and expiry', () => {
+    const scope = seedProductionScope({ suffix: '21' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000021';
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner: 'studio-worker:recovery-reservation-time',
+      manifestKey: `staging/${jobId}/manifest.json`,
+      manifestChecksum: '7'.repeat(64),
+    });
+    clearStudioLease(jobId);
+    dockerPsql(`
+      ALTER TABLE kortix.studio_credit_reservations
+        DROP CONSTRAINT IF EXISTS studio_credit_reservations_created_at_finite_check;
+      ALTER TABLE kortix.studio_credit_reservations ALTER COLUMN created_at DROP NOT NULL;
+    `);
+    try {
+      for (const [suffix, createdAtSql] of [
+        ['missing', 'NULL::timestamptz'],
+        ['infinity', "'infinity'::timestamptz"],
+        ['negative-infinity', "'-infinity'::timestamptz"],
+        ['future', "clock_timestamp() + interval '1 year'"],
+      ] as const) {
+        dockerPsql(`
+          UPDATE kortix.studio_credit_reservations
+          SET created_at = ${createdAtSql}
+          WHERE job_id = '${jobId}';
+        `);
+        expect(
+          recoverProductionJob({
+            projectId: scope.projectId,
+            jobId,
+            attemptId,
+            decision: 'keep_unknown',
+            idempotencyKey: `recovery-invalid-reservation-time-key-21-${suffix}`,
+            requestHash: `recovery-invalid-reservation-time-hash-21-${suffix}`,
+            keepUnknownUntilSql: "clock_timestamp() + interval '24 hours'",
+          }),
+        ).toMatchObject({ success: false, code: 'recovery_reservation_time_invalid' });
+      }
+      expect(expireUnknownHold({ jobId, attemptId })).toMatchObject({
+        success: false,
+        code: 'expiry_reservation_time_invalid',
+      });
+    } finally {
+      dockerPsql(`
+        UPDATE kortix.studio_credit_reservations
+        SET created_at = clock_timestamp()
+        WHERE job_id = '${jobId}';
+        ALTER TABLE kortix.studio_credit_reservations ALTER COLUMN created_at SET NOT NULL;
+        ALTER TABLE kortix.studio_credit_reservations
+          ADD CONSTRAINT studio_credit_reservations_created_at_finite_check
+          CHECK (created_at NOT IN ('infinity'::timestamptz, '-infinity'::timestamptz));
+      `);
+    }
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job_status', (SELECT status FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${jobId}'
+          )
+        );
+      `),
+    ).toEqual({ job_status: 'running', recoveries: 0 });
   }, 30_000);
 
   test('confirms not-created with earlier cost, zero-cost release, and current-cost rejection', () => {
@@ -2269,6 +2788,214 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     ).toMatchObject({ success: false, code: 'hold_cap_reached' });
   }, 30_000);
 
+  test('rejects a sub-scale negative provider maximum before unknown-hold expiry', () => {
+    const scope = seedProductionScope({ suffix: '19' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000019';
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner: 'studio-worker:expiry-negative-maximum',
+      manifestKey: `staging/${jobId}/manifest.json`,
+      manifestChecksum: '8'.repeat(64),
+    });
+    clearStudioLease(jobId);
+    dockerPsql(`
+      UPDATE kortix.studio_jobs
+      SET pricing_snapshot = jsonb_set(
+        pricing_snapshot,
+        '{max_provider_credits}',
+        '-0.00001'::jsonb
+      )
+      WHERE job_id = '${jobId}';
+      UPDATE kortix.studio_credit_reservations
+      SET created_at = clock_timestamp() - interval '31 days',
+          expires_at = clock_timestamp() - interval '1 day'
+      WHERE job_id = '${jobId}';
+    `);
+
+    expect(expireUnknownHold({ jobId, attemptId })).toMatchObject({
+      success: false,
+      code: 'expiry_pricing_invalid',
+    });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job_status', (SELECT status FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'reservation_status', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}'
+          ),
+          'incidents', (
+            SELECT count(*) FROM kortix.studio_billing_incidents WHERE job_id = '${jobId}'
+          )
+        );
+      `),
+    ).toEqual({ job_status: 'running', reservation_status: 'active', incidents: 0 });
+  }, 30_000);
+
+  test('settles a large multi-attempt recovery aggregate without numeric overflow', () => {
+    const scope = seedProductionScope({ suffix: '22' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const earlierAttemptId = '74000000-0000-4000-a000-000000002201';
+    const currentAttemptId = '74000000-0000-4000-a000-000000002202';
+    const earlierLease = 'studio-worker:large-recovery-earlier';
+    const currentLease = 'studio-worker:large-recovery-current';
+    const manifestKey = `staging/${jobId}/manifest.json`;
+    const manifestChecksum = '9'.repeat(64);
+
+    prepareProductionAttempt({ jobId, attemptId: earlierAttemptId, leaseOwner: earlierLease });
+    recordProductionAttemptCost({
+      jobId,
+      attemptId: earlierAttemptId,
+      leaseOwner: earlierLease,
+      usage: { request_id: 'large-recovery-earlier' },
+      cost: 60_000_000,
+      outcome: 'failed',
+    });
+    dockerPsql(`
+      UPDATE kortix.studio_job_attempts
+      SET status = 'failed', ended_at = clock_timestamp()
+      WHERE attempt_id = '${earlierAttemptId}';
+    `);
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId: currentAttemptId,
+      leaseOwner: currentLease,
+      manifestKey,
+      manifestChecksum,
+    });
+    recordProductionAttemptCost({
+      jobId,
+      attemptId: currentAttemptId,
+      leaseOwner: currentLease,
+      usage: { request_id: 'large-recovery-current' },
+      cost: 60_000_000,
+      outcome: 'unknown',
+    });
+    clearStudioLease(jobId);
+
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId,
+        attemptId: currentAttemptId,
+        decision: 'confirm_succeeded',
+        idempotencyKey: 'recovery-large-aggregate-key-22',
+        requestHash: 'recovery-large-aggregate-hash-22',
+        evidence: {
+          staging_manifest_key: manifestKey,
+          staging_manifest_checksum: manifestChecksum,
+          upstream_usage: { request_id: 'large-recovery-current' },
+          upstream_cost_credits: 60_000_000,
+        },
+        resultAssets: recoveryAssets(`studio/recovery/${jobId}/large.png`),
+        actualCredits: 120_000_001,
+      }),
+    ).toMatchObject({ job_status: 'succeeded', reservation_status: 'settled' });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'actual', (SELECT actual_credits FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'verified', (
+            SELECT metadata -> 'verified_upstream_cost_credits'
+            FROM kortix.studio_usage_events
+            WHERE job_id = '${jobId}' AND attempt_id IS NULL
+          ),
+          'loss', (
+            SELECT platform_loss_credits FROM kortix.studio_usage_events
+            WHERE job_id = '${jobId}' AND attempt_id IS NULL
+          ),
+          'ledger_amount', (
+            SELECT amount FROM kortix.credit_ledger WHERE account_id = '${scope.accountId}'
+          )
+        );
+      `),
+    ).toEqual({
+      actual: 9,
+      verified: 120_000_000,
+      loss: 119_999_991,
+      ledger_amount: -9,
+    });
+  }, 30_000);
+
+  test('expires a large multi-attempt aggregate without leaving the hold active', () => {
+    const scope = seedProductionScope({ suffix: '23' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const earlierAttemptId = '74000000-0000-4000-a000-000000002301';
+    const currentAttemptId = '74000000-0000-4000-a000-000000002302';
+    const earlierLease = 'studio-worker:large-expiry-earlier';
+    const currentLease = 'studio-worker:large-expiry-current';
+
+    prepareProductionAttempt({ jobId, attemptId: earlierAttemptId, leaseOwner: earlierLease });
+    recordProductionAttemptCost({
+      jobId,
+      attemptId: earlierAttemptId,
+      leaseOwner: earlierLease,
+      usage: { request_id: 'large-expiry-earlier' },
+      cost: 60_000_000,
+      outcome: 'failed',
+    });
+    dockerPsql(`
+      UPDATE kortix.studio_job_attempts
+      SET status = 'failed', ended_at = clock_timestamp()
+      WHERE attempt_id = '${earlierAttemptId}';
+    `);
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId: currentAttemptId,
+      leaseOwner: currentLease,
+      manifestKey: `staging/${jobId}/manifest.json`,
+      manifestChecksum: 'a'.repeat(64),
+    });
+    recordProductionAttemptCost({
+      jobId,
+      attemptId: currentAttemptId,
+      leaseOwner: currentLease,
+      usage: { request_id: 'large-expiry-current' },
+      cost: 60_000_000,
+      outcome: 'unknown',
+    });
+    clearStudioLease(jobId);
+    dockerPsql(`
+      UPDATE kortix.studio_credit_reservations
+      SET created_at = clock_timestamp() - interval '31 days',
+          expires_at = clock_timestamp() - interval '1 day'
+      WHERE job_id = '${jobId}';
+    `);
+
+    expect(expireUnknownHold({ jobId, attemptId: currentAttemptId })).toMatchObject({
+      verified_cost_credits: 120_000_000,
+      potential_liability_credits: 0,
+    });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job_status', (SELECT status FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'actual', (SELECT actual_credits FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'reservation_status', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}'
+          ),
+          'loss', (
+            SELECT platform_loss_credits FROM kortix.studio_usage_events
+            WHERE job_id = '${jobId}' AND attempt_id IS NULL
+          ),
+          'incidents', (
+            SELECT count(*) FROM kortix.studio_billing_incidents WHERE job_id = '${jobId}'
+          )
+        );
+      `),
+    ).toEqual({
+      job_status: 'failed',
+      actual: 9,
+      reservation_status: 'settled',
+      loss: 119_999_991,
+      incidents: 1,
+    });
+  }, 30_000);
+
   test('expires unknown holds with verified-cost settlement, zero-cost release, and one incident', () => {
     const scope = seedProductionScope({ suffix: '13' });
     const created = createProductionJob(scope);
@@ -2320,7 +3047,13 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       potential_liability_credits: 6,
     });
     expect(expired.incident_id).toEqual(expect.any(String));
-    expect(expireUnknownHold({ jobId, attemptId })).toEqual(expired);
+    expect(
+      expireUnknownHold({
+        jobId,
+        attemptId,
+        expiredAtSql: "clock_timestamp() + interval '1 hour'",
+      }),
+    ).toEqual(expired);
 
     expect(
       dockerPsqlJson(`

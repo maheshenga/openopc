@@ -2423,8 +2423,8 @@ export const studioBillingIncidents = kortixSchema.table(
     }),
     kind: text('kind').notNull(),
     status: text('status').default('open').notNull(),
-    verifiedCostCredits: numeric('verified_cost_credits', { precision: 12, scale: 4 }).notNull(),
-    potentialLiabilityCredits: numeric('potential_liability_credits', { precision: 12, scale: 4 }).notNull(),
+    verifiedCostCredits: numeric('verified_cost_credits', { precision: 20, scale: 4 }).notNull(),
+    potentialLiabilityCredits: numeric('potential_liability_credits', { precision: 20, scale: 4 }).notNull(),
     metadata: jsonb('metadata').default({}).notNull().$type<Record<string, unknown>>(),
     openedAt: timestamp('opened_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
     resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
@@ -2587,7 +2587,9 @@ export const studioCreditReservations = kortixSchema.table(
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
     settledAt: timestamp('settled_at', { withTimezone: true, mode: 'string' }),
     releasedAt: timestamp('released_at', { withTimezone: true, mode: 'string' }),
-    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
   },
   (table) => [
     index('idx_studio_credit_reservations_active_account')
@@ -2603,6 +2605,10 @@ export const studioCreditReservations = kortixSchema.table(
     uniqueIndex('idx_studio_credit_reservations_release_key')
       .on(table.releaseKey)
       .where(sql`${table.releaseKey} IS NOT NULL`),
+    check(
+      'studio_credit_reservations_created_at_finite_check',
+      sql`${table.createdAt} NOT IN ('infinity'::timestamptz, '-infinity'::timestamptz)`,
+    ),
   ],
 );
 
@@ -2626,7 +2632,7 @@ export const studioUsageEvents = kortixSchema.table(
     upstreamCostCredits: numeric('upstream_cost_credits', { precision: 12, scale: 4 }).default('0').notNull(),
     finalCostCredits: numeric('final_cost_credits', { precision: 12, scale: 4 }).default('0').notNull(),
     outcome: text('outcome'),
-    platformLossCredits: numeric('platform_loss_credits', { precision: 12, scale: 4 }).default('0').notNull(),
+    platformLossCredits: numeric('platform_loss_credits', { precision: 20, scale: 4 }).default('0').notNull(),
     ledgerId: uuid('ledger_id').references(() => creditLedger.id, { onDelete: 'set null' }),
     metadata: jsonb('metadata').default({}).notNull().$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),

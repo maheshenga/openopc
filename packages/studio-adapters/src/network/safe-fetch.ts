@@ -28,11 +28,22 @@ export type StudioSafeFetchErrorCode =
   | 'STUDIO_REDIRECT_LIMIT'
   | 'STUDIO_RESPONSE_TOO_LARGE';
 
+export type StudioSafeFetchDispatchState = 'not-dispatched' | 'may-have-dispatched';
+
 export class StudioSafeFetchError extends Error {
-  constructor(readonly code: StudioSafeFetchErrorCode) {
+  constructor(
+    readonly code: StudioSafeFetchErrorCode,
+    readonly dispatchState: StudioSafeFetchDispatchState = 'not-dispatched',
+    readonly responseStatus?: number,
+  ) {
     super(code);
     this.name = 'StudioSafeFetchError';
   }
+}
+
+interface StudioSafeFetchProgress {
+  dispatched: boolean;
+  responseStatus?: number;
 }
 
 export async function safeStudioFetch(input: SafeStudioFetchInput): Promise<Response> {
@@ -55,7 +66,12 @@ export async function safeStudioFetch(input: SafeStudioFetchInput): Promise<Resp
     throw new StudioNetworkPolicyError();
   }
 
-  const timeout = createTimeoutSignal(input.init?.signal, input.options.totalTimeoutMs);
+  const progress: StudioSafeFetchProgress = { dispatched: false };
+  const timeout = createTimeoutSignal(
+    input.init?.signal,
+    input.options.totalTimeoutMs,
+    () => progress,
+  );
   try {
     return await Promise.race([
       executeFetch(input, {
@@ -64,6 +80,7 @@ export async function safeStudioFetch(input: SafeStudioFetchInput): Promise<Resp
         initialMethod,
         initialHeaders,
         initialBody,
+        progress,
       }),
       timeout.expired,
     ]);
@@ -80,6 +97,7 @@ async function executeFetch(
     initialMethod: string;
     initialHeaders: Headers;
     initialBody: RequestInit['body'] | null;
+    progress: StudioSafeFetchProgress;
   },
 ): Promise<Response> {
   let currentUrl = new URL(input.url);
@@ -89,10 +107,12 @@ async function executeFetch(
   let redirects = 0;
 
   while (true) {
+    state.progress.responseStatus = undefined;
     const addresses = await validateRequestOrigin(currentUrl, input);
     const agent = createPinnedAgent(currentUrl, addresses, input.options.connectTimeoutMs);
     let response: Response;
     try {
+      state.progress.dispatched = true;
       response = await undiciFetch(currentUrl, {
         ...input.init,
         method,
@@ -103,10 +123,11 @@ async function executeFetch(
         signal: state.signal,
         ...(body === null ? {} : { duplex: 'half' as const }),
       });
+      state.progress.responseStatus = response.status;
     } catch {
       await destroyAgent(agent);
-      if (state.didTimeout()) throw new StudioSafeFetchError('STUDIO_NETWORK_TIMEOUT');
-      throw new StudioSafeFetchError('STUDIO_NETWORK_REQUEST_FAILED');
+      if (state.didTimeout()) throw progressError('STUDIO_NETWORK_TIMEOUT', state.progress);
+      throw progressError('STUDIO_NETWORK_REQUEST_FAILED', state.progress);
     }
 
     const location = response.headers.get('location');
@@ -118,7 +139,7 @@ async function executeFetch(
       await response.body?.cancel();
       await closeAgent(agent);
       if (redirects >= input.options.maxRedirects) {
-        throw new StudioSafeFetchError('STUDIO_REDIRECT_LIMIT');
+        throw progressError('STUDIO_REDIRECT_LIMIT', state.progress);
       }
       try {
         currentUrl = new URL(location, currentUrl);
@@ -138,9 +159,11 @@ async function executeFetch(
       return buffered;
     } catch (error) {
       await destroyAgent(agent);
-      if (error instanceof StudioSafeFetchError) throw error;
-      if (state.didTimeout()) throw new StudioSafeFetchError('STUDIO_NETWORK_TIMEOUT');
-      throw new StudioSafeFetchError('STUDIO_NETWORK_REQUEST_FAILED');
+      if (error instanceof StudioSafeFetchError) {
+        throw progressError(error.code, state.progress);
+      }
+      if (state.didTimeout()) throw progressError('STUDIO_NETWORK_TIMEOUT', state.progress);
+      throw progressError('STUDIO_NETWORK_REQUEST_FAILED', state.progress);
     }
   }
 }
@@ -244,6 +267,7 @@ async function bufferResponse(response: Response, maxBytes: number): Promise<Res
 function createTimeoutSignal(
   callerSignal: AbortSignal | null | undefined,
   timeoutMs: number,
+  progress: () => StudioSafeFetchProgress,
 ): {
   signal: AbortSignal;
   expired: Promise<never>;
@@ -259,7 +283,7 @@ function createTimeoutSignal(
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-    rejectTimeout(new StudioSafeFetchError('STUDIO_NETWORK_TIMEOUT'));
+    rejectTimeout(progressError('STUDIO_NETWORK_TIMEOUT', progress()));
   }, timeoutMs);
   const abortFromCaller = () => controller.abort();
   if (callerSignal?.aborted) controller.abort();
@@ -273,6 +297,17 @@ function createTimeoutSignal(
       callerSignal?.removeEventListener('abort', abortFromCaller);
     },
   };
+}
+
+function progressError(
+  code: StudioSafeFetchErrorCode,
+  progress: StudioSafeFetchProgress,
+): StudioSafeFetchError {
+  return new StudioSafeFetchError(
+    code,
+    progress.dispatched ? 'may-have-dispatched' : 'not-dispatched',
+    progress.responseStatus,
+  );
 }
 
 function hasCredentialHeaders(headers: Headers): boolean {

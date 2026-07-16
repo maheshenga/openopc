@@ -218,7 +218,11 @@ describe('safeStudioFetch', () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({ code: 'STUDIO_REDIRECT_LIMIT' });
+    ).rejects.toMatchObject({
+      code: 'STUDIO_REDIRECT_LIMIT',
+      dispatchState: 'may-have-dispatched',
+      responseStatus: 302,
+    });
 
     const oversized = serve(() => new Response(new Uint8Array(32)));
     await expect(
@@ -233,7 +237,11 @@ describe('safeStudioFetch', () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({ code: 'STUDIO_RESPONSE_TOO_LARGE' });
+    ).rejects.toMatchObject({
+      code: 'STUDIO_RESPONSE_TOO_LARGE',
+      dispatchState: 'may-have-dispatched',
+      responseStatus: 200,
+    });
 
     const slow = serve(async () => {
       await Bun.sleep(100);
@@ -251,7 +259,11 @@ describe('safeStudioFetch', () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({ code: 'STUDIO_NETWORK_TIMEOUT' });
+    ).rejects.toMatchObject({
+      code: 'STUDIO_NETWORK_TIMEOUT',
+      dispatchState: 'may-have-dispatched',
+      responseStatus: undefined,
+    });
   });
 
   test('applies the total timeout while DNS resolution is still pending', async () => {
@@ -272,7 +284,11 @@ describe('safeStudioFetch', () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({ code: 'STUDIO_NETWORK_TIMEOUT' });
+    ).rejects.toMatchObject({
+      code: 'STUDIO_NETWORK_TIMEOUT',
+      dispatchState: 'not-dispatched',
+      responseStatus: undefined,
+    });
     expect(performance.now() - startedAt).toBeLessThan(150);
   });
 

@@ -605,6 +605,10 @@ git commit -m "feat: add studio s3 object store"
 - Create: `packages/studio-adapters/src/providers/openai-compatible/request.ts`
 - Create: `packages/studio-adapters/src/providers/openai-compatible/response.ts`
 - Create: `packages/studio-adapters/src/providers/openai-compatible/*.test.ts`
+- Modify: `packages/api-contract/src/studio/index.ts`
+- Modify: `packages/api-contract/src/studio/index.test.ts`
+- Modify: `packages/studio-adapters/src/network/safe-fetch.ts`
+- Modify: `packages/studio-adapters/src/network/safe-fetch.test.ts`
 - Modify: `packages/studio-adapters/src/index.ts`
 
 **Interfaces:**
@@ -612,7 +616,7 @@ git commit -m "feat: add studio s3 object store"
 - Produces `openAiCompatibleImageDefinition` and `createOpenAiCompatibleImageAdapter(runtime)`.
 - Implements the reviewed synchronous `openai-images-v1-generic` profile. Runtime contracts still support durable asynchronous adapters, exercised by the fake provider.
 
-- [ ] **Step 1: Write RED definition tests**
+- [x] **Step 1: Write RED definition tests**
 
 Cover model allowlist, pricing-catalog reference, prompt, aspect ratio, quality, output count, unsupported reference assets, negative prompt/seed only when allowed, and rejection of unknown `advanced` fields.
 
@@ -640,7 +644,7 @@ export interface StudioProviderCapabilityMap {
 
 `openai-images-v1-generic` is an immutable adapter-owned profile: synchronous response, no submit replay after dispatch, no reconciliation, no upstream cancellation, and no idempotency header. Reject capability-map fields that try to override any of those guarantees. A future replay-capable profile requires a code change, provider-identity/origin binding, and its own conformance tests; project configuration alone can never enable replay.
 
-- [ ] **Step 2: Implement credential-free validation and estimation**
+- [x] **Step 2: Implement credential-free validation and estimation**
 
 The definition returns `STUDIO_MODEL_UNSUPPORTED` for an absent model and `STUDIO_VALIDATION_ERROR` for unsupported inputs. Estimate is calculated only from the immutable `StudioPricingSnapshot`:
 
@@ -659,15 +663,15 @@ return {
 
 Reject a pricing snapshot whose provider/model does not equal the definition config.
 
-- [ ] **Step 3: Write RED request tests**
+- [x] **Step 3: Write RED request tests**
 
 Assert POST to `{baseUrl}/images/generations`, exact Authorization, JSON content type, no idempotency header for the generic profile, and an allowlisted body containing `model`, `prompt`, `n`, `size`, `quality`, and `response_format: 'b64_json'`. Verify `advanced` is never spread wholesale.
 
-- [ ] **Step 4: Write RED response and ambiguity tests**
+- [x] **Step 4: Write RED response and ambiguity tests**
 
 Cover base64 outputs, safe URL outputs, output-count mismatch, malformed/oversized JSON, invalid base64, MIME mismatch, a 32 MiB single-image ceiling, a 128 MiB total-output ceiling, 400/401/403 terminal errors, submit 3xx/429/5xx becoming `unknown_outcome`, timeout after dispatch, rejection of user-supplied replay/idempotency declarations, and redacted diagnostics. The redirect test proves the target server receives no second request. No generic-profile test expects a second submit.
 
-- [ ] **Step 5: Implement the invocation adapter**
+- [x] **Step 5: Implement the invocation adapter**
 
 The factory accepts an invocation-only runtime:
 
@@ -684,14 +688,16 @@ For base64 results, retain only bounded decoded bytes and return `openBody()` th
 
 The synchronous `openai-images-v1-generic` adapter reports no upstream cancellation support. Its `cancel()` is a typed no-op; Kortix cancellation remains definitive locally and records unavoidable provider cost when dispatch already occurred.
 
-- [ ] **Step 6: Run the Task 4 gate and commit**
+Implementation keeps the reviewed runtime shape while allowing assembly to inject a policy-bound `safeStudioFetch` wrapper; the adapter supplies conservative public-origin defaults. URL outputs require an adapter-recognized signed expiry, are downloaded once for bounded validation and fingerprinting, and are refetched without provider credentials on every `openBody()` before expiry. The first URL byte buffer is not retained. Capability descriptors keep the legacy primary credential field and add authoritative `accepted_credential_types`, allowing Secret or Connector while still rejecting `none`. Safe-fetch errors carry only an allowlisted dispatch state and numeric HTTP status so 400/401/403 remain terminal even when their body is oversized or interrupted, while ambiguous dispatched outcomes remain non-replayable.
+
+- [x] **Step 6: Run the Task 4 gate and commit**
 
 ```powershell
 pnpm --filter @kortix/studio-adapters test src/providers/openai-compatible
 pnpm --filter @kortix/studio-adapters test
 pnpm --filter @kortix/studio-adapters typecheck
 git diff --check
-git add packages/studio-adapters/src/providers packages/studio-adapters/src/index.ts
+git add docs/specs/2026-07-16-studio-production-provider-storage-implementation-plan.md packages/api-contract/src/studio/index.ts packages/api-contract/src/studio/index.test.ts packages/studio-adapters/src/network/safe-fetch.ts packages/studio-adapters/src/network/safe-fetch.test.ts packages/studio-adapters/src/providers packages/studio-adapters/src/index.ts
 git commit -m "feat: add openai compatible studio image adapter"
 ```
 

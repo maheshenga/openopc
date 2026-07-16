@@ -1,18 +1,25 @@
 import { z } from 'zod';
 
-export const STUDIO_JOB_STATES = [
-  'queued',
-  'running',
-  'succeeded',
-  'failed',
-  'cancelled',
-] as const;
+export const STUDIO_JOB_STATES = ['queued', 'running', 'succeeded', 'failed', 'cancelled'] as const;
 export const StudioJobStateSchema = z.enum(STUDIO_JOB_STATES);
 export type StudioJobState = z.infer<typeof StudioJobStateSchema>;
 
 export const STUDIO_CAPABILITIES = ['image.generate'] as const;
 export const StudioCapabilitySchema = z.enum(STUDIO_CAPABILITIES);
 export type StudioCapability = z.infer<typeof StudioCapabilitySchema>;
+
+export const StudioCredentialTypeSchema = z.enum(['secret', 'connector', 'none']);
+export type StudioCredentialType = z.infer<typeof StudioCredentialTypeSchema>;
+
+const StudioAcceptedCredentialTypesSchema = z
+  .array(StudioCredentialTypeSchema)
+  .min(1)
+  .max(2)
+  .refine(
+    (types) =>
+      new Set(types).size === types.length && !(types.includes('none') && types.length > 1),
+  )
+  .readonly();
 
 export const StudioCapabilityDescriptorSchema = z.object({
   capability: StudioCapabilitySchema,
@@ -24,7 +31,8 @@ export const StudioCapabilityDescriptorSchema = z.object({
   limits: z.record(z.string(), z.unknown()),
   async: z.boolean(),
   cancellable: z.boolean(),
-  required_credential_type: z.enum(['secret', 'connector', 'none']),
+  required_credential_type: StudioCredentialTypeSchema,
+  accepted_credential_types: StudioAcceptedCredentialTypesSchema,
 });
 export type StudioCapabilityDescriptor = z.infer<typeof StudioCapabilityDescriptorSchema>;
 
@@ -273,5 +281,6 @@ export const studioPhase1Capabilities = [
     async: true,
     cancellable: true,
     required_credential_type: 'secret',
+    accepted_credential_types: ['secret', 'connector'],
   },
 ] as const satisfies readonly StudioCapabilityDescriptor[];

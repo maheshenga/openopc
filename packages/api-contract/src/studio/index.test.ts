@@ -1,6 +1,17 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  studioAssetFixture,
+  studioCreateJobRequestFixture,
+  studioEstimateRequestFixture,
+  studioEstimateResponseFixture,
+  studioJobEventFixture,
+  studioJobFixture,
+  studioProviderConfigFixture,
+  studioUploadFixture,
+} from './fixtures';
+import {
   STUDIO_JOB_STATES,
+  StudioAssetListResponseSchema,
   StudioAssetSchema,
   StudioCapabilityDescriptorSchema,
   StudioCreateJobRequestSchema,
@@ -14,46 +25,50 @@ import {
   StudioProviderConfigSchema,
   StudioProviderListResponseSchema,
   StudioUploadSchema,
-  StudioAssetListResponseSchema,
   studioPhase1Capabilities,
 } from './index';
-import {
-  studioAssetFixture,
-  studioCreateJobRequestFixture,
-  studioEstimateRequestFixture,
-  studioEstimateResponseFixture,
-  studioJobEventFixture,
-  studioJobFixture,
-  studioProviderConfigFixture,
-  studioUploadFixture,
-} from './fixtures';
 
 describe('studio phase 1 contracts', () => {
   test('advertises only executable image generation and the five public job states', () => {
-    expect(STUDIO_JOB_STATES).toEqual([
-      'queued',
-      'running',
-      'succeeded',
-      'failed',
-      'cancelled',
-    ]);
+    expect(STUDIO_JOB_STATES).toEqual(['queued', 'running', 'succeeded', 'failed', 'cancelled']);
 
     expect(studioPhase1Capabilities).toHaveLength(1);
     expect(studioPhase1Capabilities[0]?.capability).toBe('image.generate');
+    expect(studioPhase1Capabilities[0]?.accepted_credential_types).toEqual(['secret', 'connector']);
     expect(() =>
       StudioCapabilityDescriptorSchema.strict().parse(studioPhase1Capabilities[0]),
     ).not.toThrow();
+    expect(
+      StudioCapabilityDescriptorSchema.strict().safeParse({
+        ...studioPhase1Capabilities[0],
+        accepted_credential_types: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      StudioCapabilityDescriptorSchema.strict().safeParse({
+        ...studioPhase1Capabilities[0],
+        accepted_credential_types: ['none', 'secret'],
+      }).success,
+    ).toBe(false);
   });
 
   test('parses the phase 1 estimate, job, event, asset, upload, provider, and error contracts', () => {
-    expect(() => StudioEstimateRequestSchema.strict().parse(studioEstimateRequestFixture())).not.toThrow();
-    expect(() => StudioEstimateResponseSchema.strict().parse(studioEstimateResponseFixture())).not.toThrow();
-    expect(() => StudioCreateJobRequestSchema.strict().parse(studioCreateJobRequestFixture())).not.toThrow();
+    expect(() =>
+      StudioEstimateRequestSchema.strict().parse(studioEstimateRequestFixture()),
+    ).not.toThrow();
+    expect(() =>
+      StudioEstimateResponseSchema.strict().parse(studioEstimateResponseFixture()),
+    ).not.toThrow();
+    expect(() =>
+      StudioCreateJobRequestSchema.strict().parse(studioCreateJobRequestFixture()),
+    ).not.toThrow();
     expect(() => StudioJobSchema.strict().parse(studioJobFixture())).not.toThrow();
     expect(() => StudioJobEventSchema.strict().parse(studioJobEventFixture())).not.toThrow();
     expect(() => StudioAssetSchema.strict().parse(studioAssetFixture())).not.toThrow();
     expect(() => StudioUploadSchema.strict().parse(studioUploadFixture())).not.toThrow();
-    expect(() => StudioProviderConfigSchema.strict().parse(studioProviderConfigFixture())).not.toThrow();
+    expect(() =>
+      StudioProviderConfigSchema.strict().parse(studioProviderConfigFixture()),
+    ).not.toThrow();
     expect(StudioErrorCodeSchema.safeParse('STUDIO_IDEMPOTENCY_MISMATCH').success).toBe(true);
     expect(StudioErrorCodeSchema.safeParse('STUDIO_VIDEO_NOT_IN_PHASE_1').success).toBe(false);
   });
@@ -84,7 +99,9 @@ describe('studio phase 1 contracts', () => {
     ).toBe(false);
     expect(
       StudioProviderConfigSchema.safeParse(
-        studioProviderConfigFixture({ capabilities: ['image.generate', 'voice.dialogue'] as never }),
+        studioProviderConfigFixture({
+          capabilities: ['image.generate', 'voice.dialogue'] as never,
+        }),
       ).success,
     ).toBe(false);
   });
@@ -93,9 +110,9 @@ describe('studio phase 1 contracts', () => {
     expect(
       StudioCredentialBindingSchema.safeParse({ kind: 'secret', identifier: '   ' }).success,
     ).toBe(false);
-    expect(
-      StudioCredentialBindingSchema.safeParse({ kind: 'connector', slug: '\t' }).success,
-    ).toBe(false);
+    expect(StudioCredentialBindingSchema.safeParse({ kind: 'connector', slug: '\t' }).success).toBe(
+      false,
+    );
     expect(StudioCredentialBindingSchema.safeParse({ kind: 'none' }).success).toBe(true);
   });
 });

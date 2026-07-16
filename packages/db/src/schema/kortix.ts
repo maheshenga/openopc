@@ -2201,6 +2201,36 @@ export const studioProviderConfigs = kortixSchema.table(
   ],
 );
 
+export const studioPricingCatalog = kortixSchema.table(
+  'studio_pricing_catalog',
+  {
+    pricingCatalogId: uuid('pricing_catalog_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    unit: text('unit').notNull(),
+    rateData: jsonb('rate_data').notNull().$type<Record<string, unknown>>(),
+    maximumCostRule: jsonb('maximum_cost_rule').notNull().$type<Record<string, unknown>>(),
+    markupRule: jsonb('markup_rule').notNull().$type<Record<string, unknown>>(),
+    version: integer('version').notNull(),
+    active: boolean('active').default(true).notNull(),
+    createdByUserId: uuid('created_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+  },
+  (table) => [
+    check('studio_pricing_catalog_unit_check', sql`${table.unit} = 'image'`),
+    check('studio_pricing_catalog_version_check', sql`${table.version} > 0`),
+    unique('studio_pricing_catalog_scope_version_key').on(
+      table.accountId,
+      table.provider,
+      table.model,
+      table.version,
+    ),
+  ],
+);
+
 export const studioJobs = kortixSchema.table(
   'studio_jobs',
   {
@@ -2225,6 +2255,13 @@ export const studioJobs = kortixSchema.table(
     providerConfigId: uuid('provider_config_id')
       .notNull()
       .references(() => studioProviderConfigs.providerConfigId, { onDelete: 'restrict' }),
+    providerConfigVersion: text('provider_config_version'),
+    pricingCatalogId: uuid('pricing_catalog_id').references(
+      () => studioPricingCatalog.pricingCatalogId,
+      { onDelete: 'no action' },
+    ),
+    pricingVersion: integer('pricing_version'),
+    pricingSnapshot: jsonb('pricing_snapshot').$type<Record<string, unknown>>(),
     provider: text('provider').notNull(),
     model: text('model').notNull(),
     input: jsonb('input').default({}).notNull().$type<Record<string, unknown>>(),
@@ -2257,7 +2294,24 @@ export const studioJobs = kortixSchema.table(
       .where(sql`${table.status} in ('queued', 'running')`),
     index('idx_studio_jobs_provider_handle').on(table.provider, table.providerHandle),
     index('idx_studio_jobs_parent_job').on(table.parentJobId),
+    index('idx_studio_jobs_pricing_catalog').on(table.pricingCatalogId),
     uniqueIndex('idx_studio_jobs_idempotency').on(table.accountId, table.idempotencyKey),
+    check('studio_jobs_pricing_snapshot_shape_check',
+      sql`(
+        ${table.providerConfigVersion} IS NULL
+        AND ${table.pricingCatalogId} IS NULL
+        AND ${table.pricingVersion} IS NULL
+        AND ${table.pricingSnapshot} IS NULL
+      ) OR (
+        ${table.providerConfigVersion} IS NOT NULL
+        AND ${table.pricingCatalogId} IS NOT NULL
+        AND ${table.pricingVersion} IS NOT NULL
+        AND ${table.pricingSnapshot} IS NOT NULL
+      )`,
+    ),
+    check('studio_jobs_pricing_version_check',
+      sql`${table.pricingVersion} IS NULL OR ${table.pricingVersion} > 0`,
+    ),
   ],
 );
 
@@ -2269,17 +2323,129 @@ export const studioJobAttempts = kortixSchema.table(
     submissionKey: text('submission_key').notNull(),
     providerRequestId: text('provider_request_id'),
     adapterVersion: text('adapter_version').notNull(),
+    providerConfigVersion: text('provider_config_version'),
+    submissionKind: text('submission_kind'),
+    stagingManifestKey: text('staging_manifest_key'),
+    stagingManifestChecksum: text('staging_manifest_checksum'),
     status: studioAttemptStatusEnum('status').default('created').notNull(),
     retryClassification: text('retry_classification'),
     diagnostic: jsonb('diagnostic').default({}).notNull().$type<Record<string, unknown>>(),
     upstreamUsage: jsonb('upstream_usage').default({}).notNull().$type<Record<string, unknown>>(),
     upstreamCostCredits: numeric('upstream_cost_credits', { precision: 12, scale: 4 }),
+    costOutcome: text('cost_outcome'),
+    costRecordedAt: timestamp('cost_recorded_at', { withTimezone: true, mode: 'string' }),
     startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }).defaultNow(),
     endedAt: timestamp('ended_at', { withTimezone: true, mode: 'string' }),
   },
   (table) => [
     uniqueIndex('idx_studio_job_attempts_submission_key').on(table.submissionKey),
     index('idx_studio_job_attempts_job').on(table.jobId),
+    check('studio_job_attempts_submission_kind_check',
+      sql`${table.submissionKind} IS NULL OR ${table.submissionKind} IN ('async', 'completed')`,
+    ),
+    check('studio_job_attempts_staging_manifest_check',
+      sql`(${table.stagingManifestKey} IS NULL AND ${table.stagingManifestChecksum} IS NULL)
+        OR (${table.stagingManifestKey} IS NOT NULL AND ${table.stagingManifestChecksum} IS NOT NULL)`,
+    ),
+    check('studio_job_attempts_cost_outcome_check',
+      sql`${table.costOutcome} IS NULL
+        OR ${table.costOutcome} IN ('succeeded', 'failed', 'cancelled', 'unknown')`,
+    ),
+    check('studio_job_attempts_cost_recorded_check',
+      sql`(${table.costOutcome} IS NULL AND ${table.costRecordedAt} IS NULL)
+        OR (${table.costOutcome} IS NOT NULL AND ${table.costRecordedAt} IS NOT NULL)`,
+    ),
+    check('studio_job_attempts_upstream_cost_check',
+      sql`${table.upstreamCostCredits} IS NULL OR ${table.upstreamCostCredits} >= 0`,
+    ),
+  ],
+);
+
+export const studioJobRecoveries = kortixSchema.table(
+  'studio_job_recoveries',
+  {
+    recoveryId: uuid('recovery_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    jobId: uuid('job_id').notNull().references(() => studioJobs.jobId, { onDelete: 'cascade' }),
+    attemptId: uuid('attempt_id').notNull().references(() => studioJobAttempts.attemptId, {
+      onDelete: 'cascade',
+    }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    decision: text('decision').notNull(),
+    reason: text('reason').notNull(),
+    actorUserId: uuid('actor_user_id').notNull(),
+    actorType: text('actor_type').notNull(),
+    actingTokenId: uuid('acting_token_id'),
+    evidence: jsonb('evidence').notNull().$type<Record<string, unknown>>(),
+    priorJobStatus: text('prior_job_status').notNull(),
+    priorAttemptStatus: text('prior_attempt_status').notNull(),
+    resultingJobStatus: text('resulting_job_status').notNull(),
+    resultingAttemptStatus: text('resulting_attempt_status').notNull(),
+    result: jsonb('result').notNull().$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('idx_studio_job_recoveries_account').on(table.accountId),
+    index('idx_studio_job_recoveries_project').on(table.projectId),
+    index('idx_studio_job_recoveries_attempt').on(table.attemptId),
+    check(
+      'studio_job_recoveries_decision_check',
+      sql`${table.decision} IN ('confirm_succeeded', 'confirm_not_created', 'keep_unknown')`,
+    ),
+    unique('studio_job_recoveries_job_idempotency_key').on(
+      table.jobId,
+      table.idempotencyKey,
+    ),
+  ],
+);
+
+export const studioBillingIncidents = kortixSchema.table(
+  'studio_billing_incidents',
+  {
+    incidentId: uuid('incident_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    jobId: uuid('job_id').notNull().references(() => studioJobs.jobId, { onDelete: 'cascade' }),
+    attemptId: uuid('attempt_id').notNull().references(() => studioJobAttempts.attemptId, {
+      onDelete: 'cascade',
+    }),
+    kind: text('kind').notNull(),
+    status: text('status').default('open').notNull(),
+    verifiedCostCredits: numeric('verified_cost_credits', { precision: 12, scale: 4 }).notNull(),
+    potentialLiabilityCredits: numeric('potential_liability_credits', { precision: 12, scale: 4 }).notNull(),
+    metadata: jsonb('metadata').default({}).notNull().$type<Record<string, unknown>>(),
+    openedAt: timestamp('opened_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+    resolvedByUserId: uuid('resolved_by_user_id'),
+    resolution: jsonb('resolution').$type<Record<string, unknown>>(),
+  },
+  (table) => [
+    index('idx_studio_billing_incidents_account').on(table.accountId),
+    index('idx_studio_billing_incidents_project').on(table.projectId),
+    index('idx_studio_billing_incidents_attempt').on(table.attemptId),
+    check(
+      'studio_billing_incidents_kind_check',
+      sql`${table.kind} = 'unknown_outcome_hold_expired'`,
+    ),
+    check(
+      'studio_billing_incidents_status_check',
+      sql`${table.status} IN ('open', 'resolved')`,
+    ),
+    unique('studio_billing_incidents_job_attempt_kind_key').on(
+      table.jobId,
+      table.attemptId,
+      table.kind,
+    ),
   ],
 );
 
@@ -2424,11 +2590,16 @@ export const studioUsageEvents = kortixSchema.table(
       onDelete: 'cascade',
     }),
     jobId: uuid('job_id').notNull().references(() => studioJobs.jobId, { onDelete: 'cascade' }),
+    attemptId: uuid('attempt_id').references(() => studioJobAttempts.attemptId, {
+      onDelete: 'cascade',
+    }),
     capability: text('capability').notNull(),
     provider: text('provider').notNull(),
     model: text('model').notNull(),
     upstreamCostCredits: numeric('upstream_cost_credits', { precision: 12, scale: 4 }).default('0').notNull(),
     finalCostCredits: numeric('final_cost_credits', { precision: 12, scale: 4 }).default('0').notNull(),
+    outcome: text('outcome'),
+    platformLossCredits: numeric('platform_loss_credits', { precision: 12, scale: 4 }).default('0').notNull(),
     ledgerId: uuid('ledger_id').references(() => creditLedger.id, { onDelete: 'set null' }),
     metadata: jsonb('metadata').default({}).notNull().$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
@@ -2436,6 +2607,25 @@ export const studioUsageEvents = kortixSchema.table(
   (table) => [
     index('idx_studio_usage_events_account_created').on(table.accountId, table.createdAt),
     index('idx_studio_usage_events_job').on(table.jobId),
+    uniqueIndex('idx_studio_usage_events_attempt').on(table.attemptId).where(sql`${table.attemptId} IS NOT NULL`),
+    check('studio_usage_events_outcome_shape_check',
+      sql`${table.outcome} IS NULL OR (
+        (
+          ${table.attemptId} IS NOT NULL
+          AND ${table.outcome} IN ('succeeded', 'failed', 'cancelled', 'unknown')
+          AND ${table.upstreamCostCredits} >= 0
+          AND ${table.finalCostCredits} = 0
+          AND ${table.platformLossCredits} = 0
+        ) OR (
+          ${table.attemptId} IS NULL
+          AND ${table.outcome} IN ('succeeded', 'failed', 'cancelled')
+          AND ${table.upstreamCostCredits} = 0
+          AND ${table.finalCostCredits} >= 0
+          AND ${table.platformLossCredits} >= 0
+          AND ${table.metadata} ? 'verified_upstream_cost_credits'
+        )
+      )`,
+    ),
   ],
 );
 

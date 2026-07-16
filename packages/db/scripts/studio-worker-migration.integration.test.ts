@@ -743,6 +743,13 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
           'recover_exists', to_regprocedure(
             'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamp with time zone,timestamp with time zone)'
           ) IS NOT NULL,
+          'recover_security_definer', (
+            SELECT procedure.prosecdef
+            FROM pg_catalog.pg_proc procedure
+            WHERE procedure.oid = to_regprocedure(
+              'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamp with time zone,timestamp with time zone)'
+            )
+          ),
           'service_role_can_recover', has_function_privilege(
             'service_role',
             'public.atomic_recover_studio_job(uuid,uuid,uuid,uuid,text,uuid,text,text,text,text,jsonb,jsonb,numeric,timestamp with time zone,timestamp with time zone)',
@@ -761,6 +768,13 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
           'expire_hold_exists', to_regprocedure(
             'public.atomic_expire_studio_unknown_hold(uuid,uuid,timestamp with time zone)'
           ) IS NOT NULL,
+          'expire_hold_security_definer', (
+            SELECT procedure.prosecdef
+            FROM pg_catalog.pg_proc procedure
+            WHERE procedure.oid = to_regprocedure(
+              'public.atomic_expire_studio_unknown_hold(uuid,uuid,timestamp with time zone)'
+            )
+          ),
           'service_role_can_expire_hold', has_function_privilege(
             'service_role',
             'public.atomic_expire_studio_unknown_hold(uuid,uuid,timestamp with time zone)',
@@ -821,10 +835,12 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       service_role_can_record_cost: true,
       authenticated_can_record_cost: false,
       recover_exists: true,
+      recover_security_definer: true,
       service_role_can_recover: true,
       authenticated_can_recover: false,
       anon_can_recover: false,
       expire_hold_exists: true,
+      expire_hold_security_definer: true,
       service_role_can_expire_hold: true,
       authenticated_can_expire_hold: false,
       anon_can_expire_hold: false,

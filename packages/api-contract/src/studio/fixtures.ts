@@ -1,11 +1,17 @@
 import type {
   StudioAsset,
   StudioCreateJobRequest,
+  StudioCreatePricingCatalogRequest,
+  StudioCreateProviderConfigRequest,
   StudioEstimateRequest,
   StudioEstimateResponse,
   StudioJob,
   StudioJobEvent,
+  StudioPricingCatalogEntry,
   StudioProviderConfig,
+  StudioRecoveryRequest,
+  StudioRecoveryResponse,
+  StudioUpdateProviderConfigRequest,
   StudioUpload,
 } from './index';
 
@@ -19,6 +25,101 @@ export const STUDIO_FIXTURE_ESTIMATE_ID = '44444444-5555-4666-8777-888888888888'
 export const STUDIO_FIXTURE_ASSET_ID = '55555555-6666-4777-8888-999999999999';
 export const STUDIO_FIXTURE_UPLOAD_ID = '66666666-7777-4888-8999-aaaaaaaaaaaa';
 export const STUDIO_FIXTURE_EVENT_ID = '77777777-8888-4999-8aaa-bbbbbbbbbbbb';
+export const STUDIO_FIXTURE_PRICING_CATALOG_ID = '88888888-9999-4aaa-8bbb-cccccccccccc';
+export const STUDIO_FIXTURE_ATTEMPT_ID = '99999999-aaaa-4bbb-8ccc-dddddddddddd';
+export const STUDIO_FIXTURE_RECOVERY_ID = 'aaaaaaaa-1111-4bbb-8ccc-dddddddddddd';
+
+export function studioPricingCatalogEntryFixture(
+  overrides: Partial<StudioPricingCatalogEntry> = {},
+): StudioPricingCatalogEntry {
+  return {
+    pricing_catalog_id: STUDIO_FIXTURE_PRICING_CATALOG_ID,
+    account_id: STUDIO_FIXTURE_ACCOUNT_ID,
+    provider: 'openai-compatible',
+    model: 'openai-compatible/default-image',
+    unit: 'image',
+    rate_data: { rate_credits: 2 },
+    maximum_cost_rule: { max_provider_credits: 8 },
+    markup_rule: { markup_credits: 1 },
+    version: 1,
+    active: true,
+    created_by_user_id: STUDIO_FIXTURE_USER_ID,
+    created_at: STUDIO_FIXTURE_NOW,
+    ...overrides,
+  };
+}
+
+export function studioCreatePricingCatalogRequestFixture(
+  overrides: Partial<StudioCreatePricingCatalogRequest> = {},
+): StudioCreatePricingCatalogRequest {
+  return {
+    provider: 'openai-compatible',
+    model: 'openai-compatible/default-image',
+    unit: 'image',
+    rate_data: { rate_credits: 2 },
+    maximum_cost_rule: { max_provider_credits: 8 },
+    markup_rule: { markup_credits: 1 },
+    ...overrides,
+  };
+}
+
+export function studioCreateProviderConfigRequestFixture(
+  overrides: Partial<StudioCreateProviderConfigRequest> = {},
+): StudioCreateProviderConfigRequest {
+  return {
+    provider: 'openai-compatible',
+    display_name: 'OpenAI-compatible image provider',
+    base_url: 'https://api.openai-compatible.test/v1',
+    region: null,
+    credential_binding: { kind: 'secret', identifier: 'openai-compatible-primary' },
+    capability_map: {
+      'image.generate': { model: 'openai-compatible/default-image' },
+    },
+    enabled: true,
+    ...overrides,
+  };
+}
+
+export function studioUpdateProviderConfigRequestFixture(
+  overrides: Partial<StudioUpdateProviderConfigRequest> = {},
+): StudioUpdateProviderConfigRequest {
+  return {
+    display_name: 'Updated OpenAI-compatible image provider',
+    ...overrides,
+  };
+}
+
+export function studioRecoveryRequestFixture(
+  overrides: Partial<StudioRecoveryRequest> = {},
+): StudioRecoveryRequest {
+  return {
+    decision: 'confirm_succeeded',
+    idempotency_key: 'studio-recovery-idempotency-key',
+    reason: 'Provider evidence confirms the output was created.',
+    evidence: {
+      staging_manifest_key: 'staging/jobs/output-manifest.json',
+      staging_manifest_checksum: 'c'.repeat(64),
+      provider_request_id: 'provider-request-123',
+    },
+    ...overrides,
+  };
+}
+
+export function studioRecoveryResponseFixture(
+  overrides: Partial<StudioRecoveryResponse> = {},
+): StudioRecoveryResponse {
+  return {
+    recovery_id: STUDIO_FIXTURE_RECOVERY_ID,
+    job_id: STUDIO_FIXTURE_JOB_ID,
+    attempt_id: STUDIO_FIXTURE_ATTEMPT_ID,
+    decision: 'confirm_succeeded',
+    job_status: 'succeeded',
+    attempt_status: 'succeeded',
+    reservation_status: 'settled',
+    hold_expires_at: null,
+    ...overrides,
+  };
+}
 
 export function studioImageInputFixture() {
   return {
@@ -110,9 +211,7 @@ export function studioJobFixture(overrides: Partial<StudioJob> = {}): StudioJob 
   };
 }
 
-export function studioJobEventFixture(
-  overrides: Partial<StudioJobEvent> = {},
-): StudioJobEvent {
+export function studioJobEventFixture(overrides: Partial<StudioJobEvent> = {}): StudioJobEvent {
   return {
     event_id: STUDIO_FIXTURE_EVENT_ID,
     job_id: STUDIO_FIXTURE_JOB_ID,

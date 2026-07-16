@@ -2,11 +2,17 @@ import { describe, expect, test } from 'bun:test';
 import {
   studioAssetFixture,
   studioCreateJobRequestFixture,
+  studioCreatePricingCatalogRequestFixture,
+  studioCreateProviderConfigRequestFixture,
   studioEstimateRequestFixture,
   studioEstimateResponseFixture,
   studioJobEventFixture,
   studioJobFixture,
+  studioPricingCatalogEntryFixture,
   studioProviderConfigFixture,
+  studioRecoveryRequestFixture,
+  studioRecoveryResponseFixture,
+  studioUpdateProviderConfigRequestFixture,
   studioUploadFixture,
 } from './fixtures';
 import {
@@ -15,6 +21,8 @@ import {
   StudioAssetSchema,
   StudioCapabilityDescriptorSchema,
   StudioCreateJobRequestSchema,
+  StudioCreatePricingCatalogRequestSchema,
+  StudioCreateProviderConfigRequestSchema,
   StudioCredentialBindingSchema,
   StudioErrorCodeSchema,
   StudioEstimateRequestSchema,
@@ -22,11 +30,27 @@ import {
   StudioJobEventSchema,
   StudioJobListResponseSchema,
   StudioJobSchema,
+  StudioPricingCatalogEntrySchema,
   StudioProviderConfigSchema,
   StudioProviderListResponseSchema,
+  StudioRecoveryRequestSchema,
+  StudioRecoveryResponseSchema,
+  StudioUpdateProviderConfigRequestSchema,
   StudioUploadSchema,
   studioPhase1Capabilities,
 } from './index';
+import type { StudioErrorCode } from './index';
+
+const newStudioErrorCodes = [
+  'STUDIO_PROVIDER_CONFIG_INVALID',
+  'STUDIO_CREDENTIAL_UNAVAILABLE',
+  'STUDIO_PROVIDER_CONFIG_STALE',
+  'STUDIO_PRICING_STALE',
+  'STUDIO_RECOVERY_CONFLICT',
+  'STUDIO_BILLING_INCIDENT_REQUIRED',
+  'STUDIO_SUBMISSION_CONFIRMED_NOT_CREATED',
+  'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED',
+] as const satisfies readonly StudioErrorCode[];
 
 describe('studio phase 1 contracts', () => {
   test('advertises only executable image generation and the five public job states', () => {
@@ -114,5 +138,98 @@ describe('studio phase 1 contracts', () => {
       false,
     );
     expect(StudioCredentialBindingSchema.safeParse({ kind: 'none' }).success).toBe(true);
+  });
+
+  test('parses strict pricing catalog entry and create contracts', () => {
+    expect(
+      StudioPricingCatalogEntrySchema.safeParse(studioPricingCatalogEntryFixture()).success,
+    ).toBe(true);
+    expect(
+      StudioCreatePricingCatalogRequestSchema.safeParse(studioCreatePricingCatalogRequestFixture())
+        .success,
+    ).toBe(true);
+    expect(
+      StudioCreatePricingCatalogRequestSchema.safeParse({
+        ...studioCreatePricingCatalogRequestFixture(),
+        account_id: '99999999-8888-4777-8666-555555555555',
+      }).success,
+    ).toBe(false);
+    expect(
+      StudioPricingCatalogEntrySchema.safeParse({
+        ...studioPricingCatalogEntryFixture(),
+        provider_usage: { output_count: 2 },
+      }).success,
+    ).toBe(false);
+  });
+
+  test('parses strict provider create and non-empty PATCH contracts', () => {
+    expect(
+      StudioCreateProviderConfigRequestSchema.safeParse(studioCreateProviderConfigRequestFixture())
+        .success,
+    ).toBe(true);
+    expect(
+      StudioUpdateProviderConfigRequestSchema.safeParse(studioUpdateProviderConfigRequestFixture())
+        .success,
+    ).toBe(true);
+    expect(StudioUpdateProviderConfigRequestSchema.safeParse({}).success).toBe(false);
+    expect(
+      StudioCreateProviderConfigRequestSchema.safeParse({
+        ...studioCreateProviderConfigRequestFixture(),
+        credential: 'must-not-cross-the-wire',
+      }).success,
+    ).toBe(false);
+    expect(StudioUpdateProviderConfigRequestSchema.safeParse({ provider: 'fake' }).success).toBe(
+      false,
+    );
+    expect(
+      StudioUpdateProviderConfigRequestSchema.safeParse({
+        rate_data: { rate_credits: 1 },
+      }).success,
+    ).toBe(false);
+  });
+
+  test('parses exact recovery contracts and rejects client-supplied server state', () => {
+    expect(StudioRecoveryRequestSchema.safeParse(studioRecoveryRequestFixture()).success).toBe(
+      true,
+    );
+    expect(StudioRecoveryResponseSchema.safeParse(studioRecoveryResponseFixture()).success).toBe(
+      true,
+    );
+    expect(
+      StudioRecoveryRequestSchema.safeParse({
+        ...studioRecoveryRequestFixture(),
+        result_assets: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      StudioRecoveryRequestSchema.safeParse({
+        ...studioRecoveryRequestFixture(),
+        evidence: {
+          ...studioRecoveryRequestFixture().evidence,
+          signed_s3_url: 'https://storage.kortix.test/signed-result',
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      StudioRecoveryRequestSchema.safeParse({
+        ...studioRecoveryRequestFixture(),
+        evidence: {
+          ...studioRecoveryRequestFixture().evidence,
+          staging_manifest_checksum: 'ABC123',
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      StudioRecoveryResponseSchema.safeParse({
+        ...studioRecoveryResponseFixture(),
+        replayed: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  test('accepts every production provider, pricing, recovery, and billing error code', () => {
+    for (const code of newStudioErrorCodes) {
+      expect(StudioErrorCodeSchema.safeParse(code).success).toBe(true);
+    }
   });
 });

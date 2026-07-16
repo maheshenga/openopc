@@ -108,25 +108,81 @@ export const StudioCreateJobRequestSchema = z
   .strict();
 export type StudioCreateJobRequest = z.infer<typeof StudioCreateJobRequestSchema>;
 
+const StudioPricingRateDataSchema = z
+  .object({
+    rate_credits: z.number().finite().nonnegative(),
+  })
+  .strict();
+
+const StudioPricingMaximumCostRuleSchema = z
+  .object({
+    max_provider_credits: z.number().finite().nonnegative(),
+  })
+  .strict();
+
+const StudioPricingMarkupRuleSchema = z
+  .object({
+    markup_credits: z.number().finite().nonnegative(),
+  })
+  .strict();
+
+export const StudioPricingCatalogEntrySchema = z
+  .object({
+    pricing_catalog_id: z.string().uuid(),
+    account_id: z.string().uuid(),
+    provider: z.string().trim().min(1).max(100),
+    model: z.string().trim().min(1).max(255),
+    unit: z.literal('image'),
+    rate_data: StudioPricingRateDataSchema,
+    maximum_cost_rule: StudioPricingMaximumCostRuleSchema,
+    markup_rule: StudioPricingMarkupRuleSchema,
+    version: z.number().int().positive(),
+    active: z.boolean(),
+    created_by_user_id: z.string().uuid().nullable(),
+    created_at: z.string().min(1),
+  })
+  .strict();
+export type StudioPricingCatalogEntry = z.infer<typeof StudioPricingCatalogEntrySchema>;
+
+export const StudioCreatePricingCatalogRequestSchema = StudioPricingCatalogEntrySchema.pick({
+  provider: true,
+  model: true,
+  unit: true,
+  rate_data: true,
+  maximum_cost_rule: true,
+  markup_rule: true,
+}).strict();
+export type StudioCreatePricingCatalogRequest = z.infer<
+  typeof StudioCreatePricingCatalogRequestSchema
+>;
+
 export const StudioErrorCodeSchema = z.enum([
   'STUDIO_VALIDATION_ERROR',
   'STUDIO_PERMISSION_DENIED',
   'STUDIO_INSUFFICIENT_CREDITS',
   'STUDIO_CREDENTIAL_MISSING',
   'STUDIO_CREDENTIAL_EXPIRED',
+  'STUDIO_CREDENTIAL_UNAVAILABLE',
   'STUDIO_MODEL_UNSUPPORTED',
   'STUDIO_ESTIMATE_EXPIRED',
   'STUDIO_IDEMPOTENCY_MISMATCH',
   'STUDIO_PROVIDER_UNAVAILABLE',
+  'STUDIO_PROVIDER_CONFIG_INVALID',
+  'STUDIO_PROVIDER_CONFIG_STALE',
   'STUDIO_PROVIDER_RATE_LIMITED',
   'STUDIO_PROVIDER_REJECTED',
   'STUDIO_PROVIDER_TIMEOUT',
   'STUDIO_SUBMISSION_OUTCOME_UNKNOWN',
+  'STUDIO_SUBMISSION_CONFIRMED_NOT_CREATED',
+  'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED',
+  'STUDIO_PRICING_STALE',
   'STUDIO_ASSET_INVALID',
   'STUDIO_ASSET_TOO_LARGE',
   'STUDIO_UPLOAD_EXPIRED',
   'STUDIO_STORAGE_UNAVAILABLE',
   'STUDIO_JOB_CONFLICT',
+  'STUDIO_RECOVERY_CONFLICT',
+  'STUDIO_BILLING_INCIDENT_REQUIRED',
   'STUDIO_JOB_NOT_CANCELLABLE',
   'STUDIO_WEBHOOK_SIGNATURE_INVALID',
   'STUDIO_WEBHOOK_REPLAYED',
@@ -229,11 +285,14 @@ export const StudioCredentialBindingSchema = z.discriminatedUnion('kind', [
 ]);
 export type StudioCredentialBinding = z.infer<typeof StudioCredentialBindingSchema>;
 
+export const StudioProviderSchema = z.enum(['fake', 'openai-compatible']);
+export type StudioProvider = z.infer<typeof StudioProviderSchema>;
+
 export const StudioProviderConfigSchema = z
   .object({
     provider_config_id: z.string().uuid(),
     project_id: z.string().uuid(),
-    provider: z.enum(['fake', 'openai-compatible']),
+    provider: StudioProviderSchema,
     display_name: z.string().min(1),
     base_url: z.string().url().nullable(),
     region: z.string().nullable(),
@@ -245,6 +304,92 @@ export const StudioProviderConfigSchema = z
   })
   .strict();
 export type StudioProviderConfig = z.infer<typeof StudioProviderConfigSchema>;
+
+const StudioProviderDisplayNameSchema = z.string().trim().min(1).max(200);
+const StudioProviderBaseUrlSchema = z.string().url().max(2048).nullable();
+const StudioProviderRegionSchema = z.string().trim().min(1).max(100).nullable();
+const StudioProviderCapabilityMapSchema = z.record(z.string(), z.unknown());
+
+export const StudioCreateProviderConfigRequestSchema = z
+  .object({
+    provider: StudioProviderSchema,
+    display_name: StudioProviderDisplayNameSchema,
+    base_url: StudioProviderBaseUrlSchema,
+    region: StudioProviderRegionSchema,
+    credential_binding: StudioCredentialBindingSchema,
+    capability_map: StudioProviderCapabilityMapSchema,
+    enabled: z.boolean().optional(),
+  })
+  .strict();
+export type StudioCreateProviderConfigRequest = z.infer<
+  typeof StudioCreateProviderConfigRequestSchema
+>;
+
+export const StudioUpdateProviderConfigRequestSchema = z
+  .object({
+    display_name: StudioProviderDisplayNameSchema.optional(),
+    base_url: StudioProviderBaseUrlSchema.optional(),
+    region: StudioProviderRegionSchema.optional(),
+    credential_binding: StudioCredentialBindingSchema.optional(),
+    capability_map: StudioProviderCapabilityMapSchema.optional(),
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .refine((request) => Object.keys(request).length > 0, {
+    message: 'At least one provider config field is required',
+  });
+export type StudioUpdateProviderConfigRequest = z.infer<
+  typeof StudioUpdateProviderConfigRequestSchema
+>;
+
+export const StudioRecoveryDecisionSchema = z.enum([
+  'confirm_succeeded',
+  'confirm_not_created',
+  'keep_unknown',
+]);
+export type StudioRecoveryDecision = z.infer<typeof StudioRecoveryDecisionSchema>;
+
+export const StudioRecoveryRequestSchema = z
+  .object({
+    decision: z.enum(['confirm_succeeded', 'confirm_not_created', 'keep_unknown']),
+    idempotency_key: z.string().min(16).max(255),
+    reason: z.string().trim().min(8).max(2000),
+    evidence: z
+      .object({
+        staging_manifest_key: z.string().min(1).max(1024).optional(),
+        staging_manifest_checksum: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        provider_request_id: z.string().min(1).max(255).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+export type StudioRecoveryRequest = z.infer<typeof StudioRecoveryRequestSchema>;
+
+export const StudioRecoveryResponseSchema = z
+  .object({
+    recovery_id: z.string().uuid(),
+    job_id: z.string().uuid(),
+    attempt_id: z.string().uuid(),
+    decision: StudioRecoveryDecisionSchema,
+    job_status: StudioJobStateSchema,
+    attempt_status: z.enum([
+      'created',
+      'submitting',
+      'submitted',
+      'polling',
+      'reconciling',
+      'succeeded',
+      'failed',
+      'cancelled',
+    ]),
+    reservation_status: z.enum(['active', 'settled', 'released']),
+    hold_expires_at: z.string().min(1).nullable(),
+  })
+  .strict();
+export type StudioRecoveryResponse = z.infer<typeof StudioRecoveryResponseSchema>;
 
 export const StudioPaginatedResponseSchema = <T extends z.ZodTypeAny>(item: T) =>
   z

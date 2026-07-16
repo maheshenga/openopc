@@ -2356,7 +2356,9 @@ export const studioJobAttempts = kortixSchema.table(
         OR (${table.costOutcome} IS NOT NULL AND ${table.costRecordedAt} IS NOT NULL)`,
     ),
     check('studio_job_attempts_upstream_cost_check',
-      sql`${table.upstreamCostCredits} IS NULL OR ${table.upstreamCostCredits} >= 0`,
+      sql`${table.upstreamCostCredits} IS NULL
+        OR (${table.upstreamCostCredits} >= 0
+          AND ${table.upstreamCostCredits}::text NOT IN ('NaN', 'Infinity', '-Infinity'))`,
     ),
   ],
 );

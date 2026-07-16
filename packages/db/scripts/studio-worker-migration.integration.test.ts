@@ -83,6 +83,10 @@ const PRE_STUDIO_SCHEMA = `
   CREATE ROLE service_role NOLOGIN;
 
   CREATE SCHEMA kortix;
+  GRANT USAGE ON SCHEMA kortix TO anon, authenticated, service_role;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA kortix GRANT ALL ON TABLES TO service_role;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA kortix GRANT SELECT, INSERT, UPDATE ON TABLES TO authenticated;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA kortix GRANT SELECT ON TABLES TO anon;
 
   CREATE TABLE kortix.accounts (
     account_id uuid PRIMARY KEY
@@ -248,6 +252,7 @@ function seedProductionScope(input: {
   maxProviderCredits?: number;
   markupCredits?: number;
   balance?: number;
+  omitRateCredits?: boolean;
 }): ProductionScope {
   const accountId = `70000000-0000-4000-a000-0000000000${input.suffix}`;
   const projectId = `71000000-0000-4000-a000-0000000000${input.suffix}`;
@@ -256,6 +261,9 @@ function seedProductionScope(input: {
   const maxProviderCredits = input.maxProviderCredits ?? 8;
   const markupCredits = input.markupCredits ?? 1;
   const balance = input.balance ?? 100;
+  const rateDataSql = input.omitRateCredits
+    ? "'{}'::jsonb"
+    : "jsonb_build_object('rate_credits', 2)";
 
   dockerPsql(`
     INSERT INTO kortix.accounts(account_id) VALUES ('${accountId}');
@@ -269,7 +277,7 @@ function seedProductionScope(input: {
       maximum_cost_rule, markup_rule, version, active
     ) VALUES (
       '${pricingId}', '${accountId}', '${PRODUCTION_PROVIDER}', '${PRODUCTION_MODEL}',
-      'image', jsonb_build_object('rate_credits', 2),
+      'image', ${rateDataSql},
       jsonb_build_object('max_provider_credits', ${maxProviderCredits}),
       jsonb_build_object('markup_credits', ${markupCredits}), 1, true
     );
@@ -425,6 +433,7 @@ function recordProductionAttemptCost(input: {
   leaseOwner: string;
   usage: Record<string, unknown>;
   cost: number;
+  costSql?: string;
   outcome: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
   recordedAtSql?: string;
 }): Record<string, unknown> {
@@ -435,7 +444,7 @@ function recordProductionAttemptCost(input: {
       '${input.attemptId}'::uuid,
       '${input.leaseOwner}',
       '${JSON.stringify(input.usage)}'::jsonb,
-      ${input.cost},
+      ${input.costSql ?? input.cost},
       '${input.outcome}',
       ${input.recordedAtSql ?? 'clock_timestamp()'}
     );
@@ -449,12 +458,13 @@ function finalizeProductionSuccess(input: {
   actualCredits: number;
   assetCount: number;
   objectPrefix: string;
+  duplicateObjectKey?: boolean;
 }): Record<string, unknown> {
   const assets = Array.from({ length: input.assetCount }, (_, index) => ({
     kind: 'image',
     mimeType: 'image/png',
     bucket: 'studio-integration',
-    objectKey: `${input.objectPrefix}/${index + 1}.png`,
+    objectKey: `${input.objectPrefix}/${input.duplicateObjectKey ? 1 : index + 1}.png`,
     checksumSha256: `integration-checksum-${index + 1}`,
     sizeBytes: 4,
     filename: `result-${index + 1}.png`,
@@ -585,6 +595,21 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
           'production_create_exists', to_regprocedure(
             'public.atomic_create_studio_job(uuid,uuid,uuid,text,uuid,text,text,uuid,text,uuid,text,text,text,uuid,integer,jsonb,jsonb,text,text,numeric,timestamp with time zone)'
           ) IS NOT NULL,
+          'service_role_can_create_production', has_function_privilege(
+            'service_role',
+            'public.atomic_create_studio_job(uuid,uuid,uuid,text,uuid,text,text,uuid,text,uuid,text,text,text,uuid,integer,jsonb,jsonb,text,text,numeric,timestamp with time zone)',
+            'EXECUTE'
+          ),
+          'authenticated_can_create_production', has_function_privilege(
+            'authenticated',
+            'public.atomic_create_studio_job(uuid,uuid,uuid,text,uuid,text,text,uuid,text,uuid,text,text,text,uuid,integer,jsonb,jsonb,text,text,numeric,timestamp with time zone)',
+            'EXECUTE'
+          ),
+          'anon_can_create_production', has_function_privilege(
+            'anon',
+            'public.atomic_create_studio_job(uuid,uuid,uuid,text,uuid,text,text,uuid,text,uuid,text,text,text,uuid,integer,jsonb,jsonb,text,text,numeric,timestamp with time zone)',
+            'EXECUTE'
+          ),
           'record_cost_exists', to_regprocedure(
             'public.atomic_record_studio_attempt_cost(uuid,uuid,text,jsonb,numeric,text,timestamp with time zone)'
           ) IS NOT NULL,
@@ -596,6 +621,21 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
           'authenticated_can_record_cost', has_function_privilege(
             'authenticated',
             'public.atomic_record_studio_attempt_cost(uuid,uuid,text,jsonb,numeric,text,timestamp with time zone)',
+            'EXECUTE'
+          ),
+          'service_role_can_call_internal_settlement', has_function_privilege(
+            'service_role',
+            'kortix.atomic_settle_studio_job_production(uuid,numeric,text,text)',
+            'EXECUTE'
+          ),
+          'authenticated_can_call_internal_settlement', has_function_privilege(
+            'authenticated',
+            'kortix.atomic_settle_studio_job_production(uuid,numeric,text,text)',
+            'EXECUTE'
+          ),
+          'anon_can_call_internal_settlement', has_function_privilege(
+            'anon',
+            'kortix.atomic_settle_studio_job_production(uuid,numeric,text,text)',
             'EXECUTE'
           ),
           'service_role_can_finalize_terminal', has_function_privilege(
@@ -621,12 +661,66 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       terminal_finalizer_exists: true,
       legacy_create_exists: true,
       production_create_exists: true,
+      service_role_can_create_production: true,
+      authenticated_can_create_production: false,
+      anon_can_create_production: false,
       record_cost_exists: true,
       service_role_can_record_cost: true,
       authenticated_can_record_cost: false,
+      service_role_can_call_internal_settlement: false,
+      authenticated_can_call_internal_settlement: false,
+      anon_can_call_internal_settlement: false,
       service_role_can_finalize_terminal: true,
       authenticated_can_finalize_terminal: false,
     });
+  }, 30_000);
+
+  test('removes direct client access from every PostgREST-exposed Studio table', () => {
+    const state = dockerPsqlJson(`
+      WITH studio_tables(table_name) AS (
+        SELECT unnest(ARRAY[
+          'studio_provider_configs', 'studio_jobs', 'studio_job_attempts',
+          'studio_job_events', 'studio_assets', 'studio_job_assets',
+          'studio_asset_uploads', 'studio_credit_reservations',
+          'studio_usage_events', 'studio_pricing_catalog',
+          'studio_job_recoveries', 'studio_billing_incidents'
+        ])
+      )
+      SELECT jsonb_build_object(
+        'table_count', count(*),
+        'anon_direct_count', count(*) FILTER (
+          WHERE has_table_privilege('anon', 'kortix.' || table_name, 'SELECT')
+             OR has_table_privilege('anon', 'kortix.' || table_name, 'INSERT')
+             OR has_table_privilege('anon', 'kortix.' || table_name, 'UPDATE')
+             OR has_table_privilege('anon', 'kortix.' || table_name, 'DELETE')
+        ),
+        'authenticated_direct_count', count(*) FILTER (
+          WHERE has_table_privilege('authenticated', 'kortix.' || table_name, 'SELECT')
+             OR has_table_privilege('authenticated', 'kortix.' || table_name, 'INSERT')
+             OR has_table_privilege('authenticated', 'kortix.' || table_name, 'UPDATE')
+             OR has_table_privilege('authenticated', 'kortix.' || table_name, 'DELETE')
+        ),
+        'service_role_select_count', count(*) FILTER (
+          WHERE has_table_privilege('service_role', 'kortix.' || table_name, 'SELECT')
+        )
+      )
+      FROM studio_tables;
+    `);
+    expect(state).toEqual({
+      table_count: 12,
+      anon_direct_count: 0,
+      authenticated_direct_count: 0,
+      service_role_select_count: 12,
+    });
+    expect(
+      dockerPsql('SET ROLE anon; SELECT job_id FROM kortix.studio_jobs LIMIT 1;', true).exitCode,
+    ).not.toBe(0);
+    expect(
+      dockerPsql(
+        'SET ROLE authenticated; UPDATE kortix.studio_provider_configs SET enabled = enabled WHERE false;',
+        true,
+      ).exitCode,
+    ).not.toBe(0);
   }, 30_000);
 
   test('creates production jobs only from the locked provider and exact pricing snapshot', () => {
@@ -713,6 +807,7 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     expect(
       createProductionJob(scope, {
         outputCount: 2,
+        reservedCredits: -1,
         idempotencyKey: 'production-create:validated',
         requestHash: 'production-create:validated-hash',
       }),
@@ -761,6 +856,24 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       event_types: ['queued'],
       legacy_snapshot_is_null: true,
     });
+
+    dockerPsql(`DELETE FROM kortix.credit_accounts WHERE account_id = '${scope.accountId}';`);
+    expect(
+      createProductionJob(scope, {
+        outputCount: 2,
+        idempotencyKey: 'production-create:validated',
+        requestHash: 'production-create:validated-hash',
+      }),
+    ).toMatchObject({ success: true, idempotent: true, job_id: productionJobId });
+  }, 30_000);
+
+  test('rejects a pricing catalog row with a missing numeric rate field', () => {
+    const scope = seedProductionScope({ suffix: '08', omitRateCredits: true });
+    expect(
+      createProductionJob(scope, {
+        snapshot: { ...scope.snapshot, rate_credits: null },
+      }),
+    ).toMatchObject({ success: false, code: 'pricing_stale' });
   }, 30_000);
 
   test('records one canonical attempt cost and rejects conflict, forged lease, and terminal jobs', () => {
@@ -770,7 +883,33 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     const attemptId = '74000000-0000-4000-a000-000000000002';
     const secondAttemptId = '74000000-0000-4000-a000-000000000102';
     const futureAttemptId = '74000000-0000-4000-a000-000000000202';
+    const nanAttemptId = '74000000-0000-4000-a000-000000000302';
     const leaseOwner = 'studio-worker:production-cost';
+    prepareProductionAttempt({ jobId, attemptId: nanAttemptId, leaseOwner });
+    expect(
+      recordProductionAttemptCost({
+        jobId,
+        attemptId: nanAttemptId,
+        leaseOwner,
+        usage: { request_id: 'non-finite-cost' },
+        cost: 0,
+        costSql: "'NaN'::numeric",
+        outcome: 'failed',
+      }),
+    ).toMatchObject({ success: false });
+    const directNan = dockerPsql(
+      `
+        UPDATE kortix.studio_job_attempts
+        SET upstream_usage = '{"request_id":"direct-non-finite"}'::jsonb,
+            upstream_cost_credits = 'NaN'::numeric,
+            cost_outcome = 'failed',
+            cost_recorded_at = clock_timestamp()
+        WHERE attempt_id = '${nanAttemptId}';
+      `,
+      true,
+    );
+    expect(directNan.exitCode).not.toBe(0);
+
     prepareProductionAttempt({ jobId, attemptId, leaseOwner });
 
     expect(
@@ -1035,6 +1174,71 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     ).toEqual({ usage_count: 3, ledger_count: 1, asset_count: 2 });
   }, 30_000);
 
+  test('rejects duplicate production output objects before charging markup', () => {
+    const scope = seedProductionScope({ suffix: '09' });
+    const created = createProductionJob(scope, { outputCount: 2 });
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000009';
+    const leaseOwner = 'studio-worker:production-duplicate-assets';
+    prepareProductionAttempt({ jobId, attemptId, leaseOwner });
+    recordProductionAttemptCost({
+      jobId,
+      attemptId,
+      leaseOwner,
+      usage: { request_id: 'duplicate-output-object' },
+      cost: 1,
+      outcome: 'succeeded',
+    });
+
+    expect(
+      finalizeProductionSuccess({
+        jobId,
+        attemptId,
+        leaseOwner,
+        actualCredits: 3,
+        assetCount: 2,
+        objectPrefix: 'studio/production-duplicate-assets',
+        duplicateObjectKey: true,
+      }),
+    ).toMatchObject({ success: false });
+    expect(
+      finalizeProductionSuccess({
+        jobId,
+        attemptId,
+        leaseOwner,
+        actualCredits: 4,
+        assetCount: 3,
+        objectPrefix: 'studio/production-over-request-assets',
+      }),
+    ).toMatchObject({ success: false });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job_status', (SELECT status FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'reservation', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}'
+          ),
+          'ledger_count', (
+            SELECT count(*) FROM kortix.credit_ledger WHERE account_id = '${scope.accountId}'
+          ),
+          'asset_count', (
+            SELECT count(*) FROM kortix.studio_assets WHERE source_job_id = '${jobId}'
+          ),
+          'final_usage_count', (
+            SELECT count(*) FROM kortix.studio_usage_events
+            WHERE job_id = '${jobId}' AND attempt_id IS NULL
+          )
+        );
+      `),
+    ).toEqual({
+      job_status: 'running',
+      reservation: 'active',
+      ledger_count: 0,
+      asset_count: 0,
+      final_usage_count: 0,
+    });
+  }, 30_000);
+
   test('caps production success at the reservation and records only provider excess as loss', () => {
     const scope = seedProductionScope({ suffix: '04' });
     const created = createProductionJob(scope);
@@ -1079,7 +1283,9 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
             SELECT jsonb_build_object(
               'cost', final_cost_credits,
               'loss', platform_loss_credits,
-              'verified', metadata -> 'verified_upstream_cost_credits'
+              'verified', metadata -> 'verified_upstream_cost_credits',
+              'settlement_key', metadata ->> 'settlement_key',
+              'has_release_key', metadata ? 'release_key'
             ) FROM kortix.studio_usage_events
             WHERE job_id = '${jobId}' AND attempt_id IS NULL
           )
@@ -1090,7 +1296,13 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       reservation_status: 'settled',
       ledger_amount: -9,
       upstream_sum: 10,
-      final: { cost: 9, loss: 1, verified: 10 },
+      final: {
+        cost: 9,
+        loss: 1,
+        verified: 10,
+        settlement_key: `studio:settle:${jobId}`,
+        has_release_key: false,
+      },
     });
   }, 30_000);
 
@@ -1245,7 +1457,9 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
             SELECT jsonb_build_object(
               'cost', final_cost_credits,
               'loss', platform_loss_credits,
-              'verified', metadata -> 'verified_upstream_cost_credits'
+              'verified', metadata -> 'verified_upstream_cost_credits',
+              'settlement_key', metadata ->> 'settlement_key',
+              'has_release_key', metadata ? 'release_key'
             ) FROM kortix.studio_usage_events
             WHERE job_id = '${jobId}' AND attempt_id IS NULL
           )
@@ -1255,7 +1469,13 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       job_actual: 0,
       reservation: { status: 'settled', settlement_key: `studio:settle:${jobId}` },
       ledger_count: 0,
-      final: { cost: 0, loss: 1.25, verified: 1.25 },
+      final: {
+        cost: 0,
+        loss: 1.25,
+        verified: 1.25,
+        settlement_key: `studio:settle:${jobId}`,
+        has_release_key: false,
+      },
     });
   }, 30_000);
 

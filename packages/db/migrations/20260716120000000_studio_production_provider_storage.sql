@@ -177,6 +177,32 @@ DECLARE
   v_job_id uuid;
   v_reservation_id uuid;
 BEGIN
+  -- Replay precedes every validation and mutable dependency lookup. The second
+  -- lookup below closes the concurrent-create race after the account lock.
+  SELECT job_id, project_id, request_hash, status
+  INTO v_existing
+  FROM kortix.studio_jobs
+  WHERE account_id = p_account_id
+    AND idempotency_key = p_idempotency_key;
+
+  IF FOUND THEN
+    IF v_existing.project_id IS DISTINCT FROM p_project_id
+      OR v_existing.request_hash IS DISTINCT FROM p_request_hash THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Idempotency key reused with different request',
+        'code', 'idempotency_mismatch'
+      );
+    END IF;
+
+    RETURN jsonb_build_object(
+      'success', true,
+      'idempotent', true,
+      'job_id', v_existing.job_id,
+      'status', v_existing.status
+    );
+  END IF;
+
   IF p_reserved_credits IS NULL OR p_reserved_credits < 0 THEN
     RETURN jsonb_build_object('success', false, 'error', 'Reserved credits must be non-negative');
   END IF;
@@ -198,8 +224,6 @@ BEGIN
     );
   END IF;
 
-  -- This account-scoped lookup deliberately precedes all provider and price checks.
-  -- It preserves replay of both legacy and production jobs after configuration changes.
   SELECT job_id, project_id, request_hash, status
   INTO v_existing
   FROM kortix.studio_jobs
@@ -300,9 +324,9 @@ BEGIN
     );
   END IF;
 
-  IF jsonb_typeof(v_price.rate_data -> 'rate_credits') <> 'number'
-    OR jsonb_typeof(v_price.maximum_cost_rule -> 'max_provider_credits') <> 'number'
-    OR jsonb_typeof(v_price.markup_rule -> 'markup_credits') <> 'number' THEN
+  IF jsonb_typeof(v_price.rate_data -> 'rate_credits') IS DISTINCT FROM 'number'
+    OR jsonb_typeof(v_price.maximum_cost_rule -> 'max_provider_credits') IS DISTINCT FROM 'number'
+    OR jsonb_typeof(v_price.markup_rule -> 'markup_credits') IS DISTINCT FROM 'number' THEN
     RETURN jsonb_build_object(
       'success', false,
       'error', 'Studio pricing is stale',
@@ -342,7 +366,7 @@ BEGIN
     );
   END IF;
 
-  IF jsonb_typeof(p_input #> '{image,output_count}') <> 'number' THEN
+  IF jsonb_typeof(p_input #> '{image,output_count}') IS DISTINCT FROM 'number' THEN
     RETURN jsonb_build_object('success', false, 'error', 'Invalid Studio output count');
   END IF;
 
@@ -455,7 +479,9 @@ DECLARE
   v_usage jsonb := COALESCE(p_upstream_usage, '{}'::jsonb);
   v_cost numeric(12,4);
 BEGIN
-  IF p_upstream_cost_credits IS NULL OR p_upstream_cost_credits < 0 THEN
+  IF p_upstream_cost_credits IS NULL
+    OR p_upstream_cost_credits::text IN ('NaN', 'Infinity', '-Infinity')
+    OR p_upstream_cost_credits < 0 THEN
     RETURN jsonb_build_object('success', false, 'error', 'Attempt cost must be non-negative');
   END IF;
   IF p_outcome IS NULL OR p_outcome NOT IN ('succeeded', 'failed', 'cancelled', 'unknown') THEN
@@ -565,9 +591,12 @@ GRANT SELECT, INSERT ON TABLE kortix.studio_job_recoveries TO service_role;
 REVOKE ALL ON TABLE kortix.studio_billing_incidents FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE ON TABLE kortix.studio_billing_incidents TO service_role;
 
-REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
-  ON TABLE kortix.studio_jobs, kortix.studio_job_attempts,
-    kortix.studio_credit_reservations, kortix.studio_usage_events
+REVOKE ALL
+  ON TABLE kortix.studio_provider_configs, kortix.studio_jobs,
+    kortix.studio_job_attempts, kortix.studio_job_events,
+    kortix.studio_assets, kortix.studio_job_assets,
+    kortix.studio_asset_uploads, kortix.studio_credit_reservations,
+    kortix.studio_usage_events
   FROM PUBLIC, anon, authenticated;
 
 DO $$
@@ -1005,7 +1034,13 @@ BEGIN
   ) THEN
     ALTER TABLE kortix.studio_job_attempts
       ADD CONSTRAINT studio_job_attempts_upstream_cost_check
-      CHECK (upstream_cost_credits is null or upstream_cost_credits >= 0);
+      CHECK (
+        upstream_cost_credits is null
+        or (
+          upstream_cost_credits >= 0
+          and upstream_cost_credits::text not in ('NaN', 'Infinity', '-Infinity')
+        )
+      );
   END IF;
 END $$;
 
@@ -1266,6 +1301,29 @@ BEGIN
     RETURN jsonb_build_object('success', false, 'error', 'Studio attempt not found');
   END IF;
 
+  IF v_job.pricing_snapshot IS NOT NULL THEN
+    IF jsonb_typeof(v_job.input #> '{image,output_count}') IS DISTINCT FROM 'number'
+      OR jsonb_array_length(COALESCE(p_assets, '[]'::jsonb))
+        > (v_job.input #>> '{image,output_count}')::integer THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Studio successful output count exceeds the request'
+      );
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(p_assets, '[]'::jsonb)) asset(value)
+      GROUP BY asset.value ->> 'bucket', asset.value ->> 'objectKey'
+      HAVING COUNT(*) > 1
+    ) THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'Duplicate Studio output asset identity'
+      );
+    END IF;
+  END IF;
+
   SELECT COALESCE(MAX(event.cursor), 0)
   INTO v_cursor
   FROM kortix.studio_job_events event
@@ -1334,9 +1392,9 @@ BEGIN
         jsonb_strip_nulls(jsonb_build_object(
           'kind', 'final',
           'verified_upstream_cost_credits', v_verified_upstream_credits,
-          'settlement_key', CASE WHEN v_charged_credits > 0
+          'settlement_key', CASE WHEN v_verified_upstream_credits > 0
             THEN 'studio:settle:' || p_job_id::text ELSE NULL END,
-          'release_key', CASE WHEN v_charged_credits = 0
+          'release_key', CASE WHEN v_verified_upstream_credits = 0
             THEN 'studio:release:' || p_job_id::text || ':user_cancelled' ELSE NULL END
         )),
         p_completed_at
@@ -1557,9 +1615,9 @@ BEGIN
       jsonb_strip_nulls(jsonb_build_object(
         'kind', 'final',
         'verified_upstream_cost_credits', v_verified_upstream_credits,
-        'settlement_key', CASE WHEN v_charged_credits > 0
+        'settlement_key', CASE WHEN v_expected_credits > 0
           THEN 'studio:settle:' || p_job_id::text ELSE NULL END,
-        'release_key', CASE WHEN v_charged_credits = 0
+        'release_key', CASE WHEN v_expected_credits = 0
           THEN 'studio:release:' || p_job_id::text || ':zero_cost_success' ELSE NULL END
       )),
       p_completed_at
@@ -1759,9 +1817,9 @@ BEGIN
       jsonb_strip_nulls(jsonb_build_object(
         'kind', 'final',
         'verified_upstream_cost_credits', v_verified_upstream_credits,
-        'settlement_key', CASE WHEN v_charged_credits > 0
+        'settlement_key', CASE WHEN v_verified_upstream_credits > 0
           THEN 'studio:settle:' || p_job_id::text ELSE NULL END,
-        'release_key', CASE WHEN v_charged_credits = 0
+        'release_key', CASE WHEN v_verified_upstream_credits = 0
           THEN 'studio:release:' || p_job_id::text || ':' || p_release_reason ELSE NULL END
       )),
       p_completed_at

@@ -160,7 +160,8 @@ describe('Studio production provider storage migration', () => {
       "cost_outcome is null or cost_outcome in ('succeeded', 'failed', 'cancelled', 'unknown')",
       'cost_outcome is null and cost_recorded_at is null',
       'cost_outcome is not null and cost_recorded_at is not null',
-      'upstream_cost_credits is null or upstream_cost_credits >= 0',
+      'upstream_cost_credits is null',
+      "upstream_cost_credits::text not in ('nan', 'infinity', '-infinity')",
     ]);
   });
 
@@ -420,7 +421,7 @@ describe('Studio production provider storage migration', () => {
       'grant select, insert on table kortix.studio_job_recoveries to service_role',
       'revoke all on table kortix.studio_billing_incidents from public, anon, authenticated',
       'grant select, insert, update on table kortix.studio_billing_incidents to service_role',
-      'revoke insert, update, delete, truncate, references, trigger on table kortix.studio_jobs, kortix.studio_job_attempts, kortix.studio_credit_reservations, kortix.studio_usage_events from public, anon, authenticated',
+      'revoke all on table kortix.studio_provider_configs, kortix.studio_jobs, kortix.studio_job_attempts, kortix.studio_job_events, kortix.studio_assets, kortix.studio_job_assets, kortix.studio_asset_uploads, kortix.studio_credit_reservations, kortix.studio_usage_events from public, anon, authenticated',
     ]);
   });
 

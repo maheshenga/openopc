@@ -1927,6 +1927,63 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     });
   }, 30_000);
 
+  test('rejects a negative recovery cost before fixed-scale normalization', () => {
+    const scope = seedProductionScope({ suffix: '17' });
+    const created = createProductionJob(scope);
+    const jobId = String(created.job_id);
+    const attemptId = '74000000-0000-4000-a000-000000000017';
+    const manifestKey = `staging/${jobId}/manifest.json`;
+    const manifestChecksum = '4'.repeat(64);
+    prepareRecoveryAttempt({
+      jobId,
+      attemptId,
+      leaseOwner: 'studio-worker:recovery-negative-cost',
+      manifestKey,
+      manifestChecksum,
+    });
+    clearStudioLease(jobId);
+
+    expect(
+      recoverProductionJob({
+        projectId: scope.projectId,
+        jobId,
+        attemptId,
+        decision: 'confirm_succeeded',
+        idempotencyKey: 'recovery-negative-cost-key-17',
+        requestHash: 'recovery-negative-cost-hash-17',
+        evidence: {
+          staging_manifest_key: manifestKey,
+          staging_manifest_checksum: manifestChecksum,
+          upstream_usage: { output_count: 1 },
+          upstream_cost_credits: -0.00001,
+        },
+        resultAssets: recoveryAssets(`studio/recovery/${jobId}/negative-cost.png`),
+        actualCredits: 1,
+      }),
+    ).toMatchObject({ success: false, code: 'recovery_cost_invalid' });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'job_status', (SELECT status FROM kortix.studio_jobs WHERE job_id = '${jobId}'),
+          'attempt_recorded_at', (
+            SELECT cost_recorded_at FROM kortix.studio_job_attempts WHERE attempt_id = '${attemptId}'
+          ),
+          'reservation_status', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${jobId}'
+          ),
+          'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${jobId}'
+          )
+        );
+      `),
+    ).toEqual({
+      job_status: 'running',
+      attempt_recorded_at: null,
+      reservation_status: 'active',
+      recoveries: 0,
+    });
+  }, 30_000);
+
   test('confirms not-created with earlier cost, zero-cost release, and current-cost rejection', () => {
     const scope = seedProductionScope({ suffix: '11' });
     const created = createProductionJob(scope);

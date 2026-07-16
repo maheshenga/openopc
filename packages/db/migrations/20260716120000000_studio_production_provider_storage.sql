@@ -1940,6 +1940,7 @@ DECLARE
   v_resulting_reservation_status text;
   v_resulting_hold_expires_at timestamptz := NULL;
   v_upstream_usage jsonb;
+  v_upstream_cost_input numeric;
   v_upstream_cost_credits numeric(12,4);
   v_cost_result jsonb;
   v_finalize_result jsonb;
@@ -2124,8 +2125,9 @@ BEGIN
     END IF;
 
     v_upstream_usage := p_evidence -> 'upstream_usage';
-    v_upstream_cost_credits := (p_evidence ->> 'upstream_cost_credits')::numeric(12,4);
-    IF v_upstream_cost_credits < 0
+    v_upstream_cost_input := (p_evidence ->> 'upstream_cost_credits')::numeric;
+    IF v_upstream_cost_input < 0
+      OR v_upstream_cost_input > 99999999.9999
       OR EXISTS (
         SELECT 1
         FROM jsonb_each(v_upstream_usage) usage_field(key, value)
@@ -2138,6 +2140,7 @@ BEGIN
         'code', 'recovery_cost_invalid'
       );
     END IF;
+    v_upstream_cost_credits := v_upstream_cost_input::numeric(12,4);
 
     IF v_attempt.cost_recorded_at IS NOT NULL
       AND (

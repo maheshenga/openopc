@@ -83,11 +83,12 @@ The runtime package owns only provider-neutral contracts and rules:
 - `StudioProviderAdapter`, submission, handle, status, and result types;
 - `StudioObjectStore` and object metadata types;
 - the server-only `StudioCredentialResolver` port and opaque resolved-credential type;
+- a side-effect-free server-only Secret-envelope subpath whose master secret is always supplied explicitly;
 - provider and object-store conformance helpers;
 - state, retry, idempotency, and lease rules;
 - deterministic fake and in-memory test implementations.
 
-It does not import AWS, OpenAI, API application modules, process environment, or database clients.
+It does not import AWS, OpenAI, API application modules, process environment, or database clients. The Secret-envelope subpath may use `node:crypto`, but it cannot load configuration or open connections at module scope.
 
 ### 4.2 `@kortix/studio-adapters`
 
@@ -129,7 +130,7 @@ The worker owns:
 
 Plaintext credentials exist only in the invocation object for the duration of the outbound call. They are never added to jobs, attempts, handles, events, diagnostics, metrics, or asset metadata.
 
-`StudioCredentialResolver` is declared in `@kortix/studio-runtime`. Its concrete server-only factory lives at `apps/api/src/studio/credentials.ts`, accepts a narrow encrypted-row lookup/decrypt seam, and encapsulates reuse of the existing Kortix Secret envelope and default Connector profile rules. The worker supplies a lookup backed by its existing SQL client, so importing the facade does not initialize the API Drizzle singleton or a second connection pool. The facade imports the existing Secret decryptor; the worker does not import `projects/secrets.ts` or `executor/credentials.ts` directly and does not copy encryption logic.
+`StudioCredentialResolver` is declared in `@kortix/studio-runtime`. Its concrete server-only factory lives at `apps/api/src/studio/credentials.ts`, accepts narrow encrypted-row lookup and decrypt dependencies, and remains free of API database/config imports. The worker supplies a lookup backed by its existing SQL client, so importing the facade does not initialize the API Drizzle singleton or a second connection pool. A side-effect-free `@kortix/studio-runtime/secret-envelope` subpath contains the byte-compatible Kortix Secret cryptography and receives the master secret explicitly; `apps/api/src/projects/secrets.ts` keeps thin compatibility wrappers while worker runtime injects the same decrypt implementation. Neither consumer copies the cryptography or imports the other application's assembly module.
 
 ## 5. Provider configuration and credential flow
 

@@ -30,6 +30,7 @@
     "@kortix/registry": "workspace:*",
     "@kortix/shared": "workspace:*",
     "@kortix/starter": "workspace:*",
+    "@kortix/studio-runtime": "workspace:*",
     "@logtail/node": "^0.5.8",
     "@scalar/hono-api-reference": "^0.10.20",
     "@sentry/bun": "^10.47.0",

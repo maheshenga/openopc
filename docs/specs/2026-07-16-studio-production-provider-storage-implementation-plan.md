@@ -37,6 +37,7 @@
 - `packages/api-contract/src/studio/index.ts` — credential, pricing, provider-management, recovery, and error wire schemas.
 - `packages/studio-runtime/src/provider.ts` — provider definition/invocation contracts and shared provider error.
 - `packages/studio-runtime/src/credentials.ts` — server-only credential resolver port.
+- `packages/studio-runtime/src/secret-envelope.ts` — side-effect-free server-only project Secret envelope cryptography shared by API and worker.
 - `packages/studio-runtime/src/object-store.ts` — bound-bucket object-store port and in-memory conformance driver.
 - `packages/studio-runtime/src/conformance.ts` — reusable object-store/provider contract suites.
 
@@ -1113,6 +1114,8 @@ git commit -m "feat: add studio pricing and recovery schema"
 
 **Files:**
 
+- Modify: `apps/api/package.json`
+- Modify: `pnpm-lock.yaml`
 - Create: `apps/api/src/studio/credentials.ts`
 - Create: `apps/api/src/studio/credentials.test.ts`
 - Create: `apps/api/src/studio/pricing.ts`
@@ -1137,11 +1140,11 @@ git commit -m "feat: add studio pricing and recovery schema"
 
 - Produces `createStudioCredentialResolver`, `StudioPricingService`, `StudioProviderConfigService`, `StudioStorageService`, `StudioRecoveryService`, account pricing routes, and production project route dependencies.
 
-- [ ] **Step 1: Write RED credential-facade tests**
+- [x] **Step 1: Write RED credential-facade tests**
 
-Inject a narrow encrypted-row lookup and decrypt function. Prove shared active Secret resolution by identifier, active default Connector profile resolution by slug, account/project isolation, empty/disabled rejection, decryption failure, and version token generation. The facade implements `StudioCredentialResolver` and is the only Studio file that imports the existing Secret envelope implementation.
+Inject a narrow encrypted-row lookup and decrypt function. At this seam, prove exact account/project/binding argument forwarding, no cross-kind fallback, missing-row handling, owning-project checks, malformed/empty row rejection, decryption failure redaction, version-token passthrough, and rotation visibility without caching. The facade implements `StudioCredentialResolver`, remains pure dependency injection, and must not import the API database/config singleton or the existing Secret route module. Task 7, not this facade unit, proves shared-active Secret rules, active-default Connector rules, account/project SQL isolation, and metadata-derived version-token generation.
 
-- [ ] **Step 2: Implement the credential facade**
+- [x] **Step 2: Implement the credential facade**
 
 Export these exact test seam and factory shapes:
 
@@ -1171,7 +1174,7 @@ export function createStudioCredentialResolver(input: {
 }): StudioCredentialResolver
 ```
 
-The factory imports `decryptProjectSecret` from `apps/api/src/projects/secrets.ts`; it does not import the API `db` singleton or copy envelope cryptography. Task 7 supplies the production lookup through the worker's existing SQL client. Those queries reproduce current shared active Secret and active default shared Connector-profile rules, fence both account and project, and derive `version_token` from row identity/update metadata rather than plaintext. Never return binding identifiers in thrown messages.
+The factory receives decryption as an injected dependency and does not import `apps/api/src/projects/secrets.ts`, because that route module initializes API database/config state at module load. Task 7 extracts the existing Secret envelope cryptography into a side-effect-free shared server module used by both the API route and worker assembly; it must not copy or fork the cryptography. Task 7 also supplies the production lookup through the worker's existing SQL client. Those queries reproduce current shared active Secret and active default shared Connector-profile rules, fence both account and project, and derive `version_token` from row identity/update metadata rather than plaintext. Never return binding identifiers in thrown messages.
 
 - [ ] **Step 3: Write RED pricing and provider-management tests**
 
@@ -1228,7 +1231,7 @@ pnpm --filter kortix-api exec bun test src/studio src/__tests__/e2e-studio-proje
 pnpm --filter kortix-api typecheck
 pnpm --filter @kortix/studio-adapters test
 git diff --check
-git add apps/api/src/studio apps/api/src/index.ts apps/api/src/__tests__/e2e-studio-project-api.test.ts apps/api/src/__tests__/e2e-studio-production-api.test.ts
+git add apps/api/package.json apps/api/src/studio apps/api/src/index.ts apps/api/src/__tests__/e2e-studio-project-api.test.ts apps/api/src/__tests__/e2e-studio-production-api.test.ts pnpm-lock.yaml docs/specs/2026-07-16-studio-production-provider-storage-implementation-plan.md
 git commit -m "feat: connect studio production api services"
 ```
 
@@ -1238,6 +1241,11 @@ git commit -m "feat: connect studio production api services"
 
 **Files:**
 
+- Create: `packages/studio-runtime/src/secret-envelope.ts`
+- Create: `packages/studio-runtime/src/secret-envelope.test.ts`
+- Modify: `packages/studio-runtime/package.json`
+- Modify: `apps/api/src/projects/secrets.ts`
+- Create: `apps/api/src/projects/secrets-envelope.test.ts`
 - Create: `apps/studio-worker/src/provider-registry.ts`
 - Create: `apps/studio-worker/src/provider-registry.test.ts`
 - Create: `apps/studio-worker/src/credential-lookup.ts`
@@ -1247,6 +1255,8 @@ git commit -m "feat: connect studio production api services"
 - Modify: `apps/studio-worker/src/postgres.test.ts`
 - Modify: `apps/studio-worker/src/postgres.integration.test.ts`
 - Modify: `apps/studio-worker/src/authorization.ts`
+- Modify: `apps/studio-worker/src/runtime.ts`
+- Modify: `apps/studio-worker/src/runtime.test.ts`
 - Modify: `apps/studio-worker/src/worker.ts`
 - Modify: `apps/studio-worker/src/worker.test.ts`
 
@@ -1254,11 +1264,19 @@ git commit -m "feat: connect studio production api services"
 
 - Produces async `StudioProviderRegistry.resolve(job, config, credential)` and provider config rows containing base URL, region, model map, definition ID, pricing refs, and version.
 
-- [ ] **Step 1: Write RED repository tests for the complete provider snapshot**
+- [ ] **Step 1: Write RED tests for a side-effect-free Secret envelope module**
+
+Create a server-only `@kortix/studio-runtime/secret-envelope` subpath that receives the master secret explicitly and imports neither API config nor database state. Tests use fixed legacy `v1` fixtures plus fresh round trips to prove byte-compatible decryption/encryption, project-bound HKDF isolation, malformed envelope rejection, and wrong-key failure. Add assembly tests proving the API wrapper and worker resolver inject the same shared implementation; `apps/api/src/projects/secrets.ts` must no longer contain envelope constants or cipher/HKDF implementation.
+
+- [ ] **Step 2: Extract and wire the shared Secret envelope implementation**
+
+Move the existing AES-256-GCM/HKDF envelope implementation without changing its version, salt/info, IV/tag encoding, or stored ciphertext contract. Keep the existing API `encryptProjectSecret(projectId, value)` and `decryptProjectSecret(projectId, valueEnc)` signatures as thin wrappers that supply `config.API_KEY_SECRET`. Worker runtime supplies its validated secret directly and injects only the project-bound decrypt function into `createStudioCredentialResolver`; neither shared module nor credential lookup may create a database pool or load API config.
+
+- [ ] **Step 3: Write RED repository tests for the complete provider snapshot**
 
 Require `loadProviderConfigForSubmission` to return `baseUrl`, `region`, strict capability/model map, definition ID, and version token. Prove the query is fenced by job, account, project, provider, and lease owner. Prove a config/model/pricing version change prevents attempt creation.
 
-- [ ] **Step 2: Implement provider snapshot loading**
+- [ ] **Step 4: Implement provider snapshot loading**
 
 Extend `StudioWorkerProviderConfig` with:
 
@@ -1274,11 +1292,11 @@ The provider registry parses `capabilityMap` with the definition-specific schema
 
 In `credential-lookup.ts`, implement `StudioCredentialLookup` with the worker's existing Postgres client. Query shared active Secrets by stable identifier and active default shared Connector credentials by project slug, always joining through account/project ownership. Return only encrypted value, owning project, and a metadata-derived version token. Tests prove this module opens no second pool and never imports the API shared DB singleton.
 
-- [ ] **Step 3: Write RED registry tests**
+- [ ] **Step 5: Write RED registry tests**
 
 Cover fake resolution, disabled adapter type, wrong provider/config, unsafe base URL, missing credential, `kind: none` on production, model mismatch, unregistered or user-overridden dialect semantics, and successful invocation-scoped OpenAI adapter construction. Assert the registry object returned to the worker contains no serializable credential getter or diagnostic representation.
 
-- [ ] **Step 4: Implement async provider resolution**
+- [ ] **Step 6: Implement async provider resolution**
 
 Use:
 
@@ -1295,18 +1313,20 @@ export interface StudioProviderRegistry {
 
 Fake requires `kind: none`; OpenAI-compatible requires a resolved Secret/Connector and an enabled adapter type.
 
-- [ ] **Step 5: Enforce authorization before plaintext resolution**
+- [ ] **Step 7: Enforce authorization before plaintext resolution**
 
 Split authorization into binding validation and IAM/token/grant revalidation. The worker order is: load config → validate binding shape/existence → revalidate token/IAM/grants → resolve plaintext → prepare attempt → provider I/O. Tests assert the resolver is never called after any denied authorization and the provider is never called after resolver failure.
 
-- [ ] **Step 6: Run the Task 7 gate and commit**
+- [ ] **Step 8: Run the Task 7 gate and commit**
 
 ```powershell
 pnpm --filter @kortix/studio-worker test src/provider-registry.test.ts src/postgres.test.ts src/authorization.test.ts src/worker.test.ts
 pnpm --filter @kortix/studio-worker typecheck
-pnpm --filter kortix-api exec bun test src/studio/credentials.test.ts
+pnpm --filter @kortix/studio-runtime test src/secret-envelope.test.ts
+pnpm --filter @kortix/studio-runtime typecheck
+pnpm --filter kortix-api exec bun test src/projects/secrets-envelope.test.ts src/studio/credentials.test.ts
 git diff --check
-git add apps/studio-worker apps/api/src/studio/credentials.ts apps/api/src/studio/credentials.test.ts
+git add packages/studio-runtime apps/studio-worker apps/api/src/projects/secrets.ts apps/api/src/projects/secrets-envelope.test.ts apps/api/src/studio/credentials.ts apps/api/src/studio/credentials.test.ts
 git commit -m "feat: resolve studio provider credentials in worker"
 ```
 

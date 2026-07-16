@@ -117,6 +117,9 @@ importers:
       '@kortix/starter':
         specifier: workspace:*
         version: link:../../packages/starter
+      '@kortix/studio-runtime':
+        specifier: workspace:*
+        version: link:../../packages/studio-runtime
       '@logtail/node':
         specifier: ^0.5.8
         version: 0.5.8

@@ -1228,7 +1228,7 @@ Mount `POST /v1/projects/:projectId/studio/jobs/:jobId/recovery`. Prove normal a
 
 For `confirm_succeeded`, derive the expected manifest prefix from locked account/project/job/attempt/submission rows. Independently attack the caller manifest key, manifest account ID, project ID, job ID, attempt ID, submission hash, provider-config version, pricing version, and an internal asset key. Each substitution must fail without cross-project existence disclosure or billing mutation. Re-head every referenced object and reject size/checksum/MIME/SSE mismatch before calling `atomic_recover_studio_job`.
 
-- [ ] **Step 9: Run the Task 6 gate and commit**
+- [x] **Step 9: Run the Task 6 gate and commit**
 
 ```powershell
 pnpm --filter kortix-api exec bun test src/studio src/__tests__/e2e-studio-project-api.test.ts src/__tests__/e2e-studio-production-api.test.ts

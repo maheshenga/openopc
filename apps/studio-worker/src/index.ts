@@ -1,6 +1,5 @@
 import os from 'node:os';
 import {
-  InMemoryStudioObjectStore,
   createFakeStudioProvider,
   decryptProjectSecretEnvelope,
   studioMaintenanceLeaseName,
@@ -20,6 +19,7 @@ import {
   createPostgresStudioTokenLoader,
 } from './postgres';
 import { createStudioProviderRegistry } from './provider-registry';
+import { buildStudioWorkerRuntime } from './runtime';
 import { StudioWorker, createObjectStoreAssetWriter } from './worker';
 
 const EnabledEnvironmentSchema = z
@@ -119,6 +119,8 @@ async function main(): Promise<void> {
     console.info('[studio-worker] STUDIO_ENABLED is not true; worker remains disabled');
     return;
   }
+  const runtime = buildStudioWorkerRuntime();
+  if (!runtime.enabled) return;
   if (!env.fakeProviderEnabled && !env.openAiCompatibleEnabled) {
     throw new Error(
       'Studio worker has no provider driver. Set STUDIO_FAKE_PROVIDER_ENABLED=true or STUDIO_OPENAI_COMPATIBLE_ENABLED=true.',
@@ -172,10 +174,8 @@ async function main(): Promise<void> {
     fakeProviderEnabled: env.fakeProviderEnabled,
     openAiCompatibleEnabled: env.openAiCompatibleEnabled,
   });
-  const objectStore = new InMemoryStudioObjectStore({
-    namespace: 'studio-fake-ephemeral',
-    ready: true,
-  });
+  await runtime.assertReadyBeforeClaim();
+  const objectStore = runtime.store;
   const worker = new StudioWorker({
     config: {
       workerId: env.workerId,
@@ -234,6 +234,7 @@ async function main(): Promise<void> {
     process.off('SIGTERM', stop);
     await maintenance.release().catch(() => {});
     await raw.end({ timeout: 5 });
+    await runtime.close();
   }
 }
 

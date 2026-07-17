@@ -1357,7 +1357,7 @@ git commit -m "feat: resolve studio provider credentials in worker"
 
 - Produces `StudioResultStager.stage`, `loadManifest`, deterministic staging keys, and completed/async worker branches.
 
-- [ ] **Step 1: Write RED result-stager tests**
+- [x] **Step 1: Write RED result-stager tests**
 
 Prove deterministic keys include account/project/job/attempt/submission hash; each asset is streamed, hashed, validated, and written once; the manifest is written last; same input is idempotent; a partial failure leaves no manifest; replayable sources reopen at most three times in the same owned attempt; non-replayable failure becomes unknown.
 
@@ -1387,11 +1387,11 @@ interface StudioStagingManifest {
 }
 ```
 
-- [ ] **Step 2: Implement the stager**
+- [x] **Step 2: Implement the stager**
 
 Write assets to `accounts/{accountId}/projects/{projectId}/jobs/{jobId}/attempts/{attemptId}/submissions/{submissionKeyHash}/...`; write `manifest.json` only after all objects pass validation. Never place provider URLs, credentials, or raw response bodies in the manifest. Verify an existing manifest checksum and every identity field before treating it as recovery evidence. Require every asset key to remain under the database-derived exact submission prefix.
 
-- [ ] **Step 3: Write the crash-window RED matrix**
+- [x] **Step 3: Write the crash-window RED matrix**
 
 Inject faults:
 
@@ -1407,13 +1407,13 @@ after finalize/before acknowledgement
 
 For recoverable rows assert provider submit count 1, logical assets 1 set, settlement 1. For pre-manifest ambiguity assert `STUDIO_SUBMISSION_OUTCOME_UNKNOWN` and no automatic submit. Add billing cases for a first attempt with verified cost followed by retry success, dispatch followed by cancellation with verified cost, unknown followed by `confirm_not_created`, and cost above reservation. Assert one immutable cost row per attempt, aggregate upstream cost, capped user charge, and exact platform loss.
 
-- [ ] **Step 4: Implement worker completed/async branching**
+- [x] **Step 4: Implement worker completed/async branching**
 
 On `{ kind: 'async' }`, keep Task 8 handle/poll behavior. On `{ kind: 'completed' }`, verify submission key, stage, persist manifest reference/checksum, record allowlisted usage and server-calculated attempt cost, aggregate the pricing-derived final charge, then finalize and settle. When a failed/cancelled/retry response contains trusted usage, persist its attempt cost before changing attempt state. When claiming a `submitting/reconciling` attempt, check a durable manifest before provider reconciliation.
 
 Submit 429/5xx/timeout classification is operation-aware. Poll/result GET retries never create a new submission. A new submission key is minted only after the prior attempt is proven not accepted.
 
-- [ ] **Step 5: Add orphan staging maintenance**
+- [x] **Step 5: Add orphan staging maintenance**
 
 Replace the current `failStuckUnknownOutcomes` behavior before any production runtime is enabled: an aged `reconciling` attempt remains `reconciling`, retains its active reservation and evidence, releases only an expired worker lease, and emits a deduplicated existing `progress` event with `{ phase: 'operator-review' }` plus the unknown/reservation-age metric. It must not become `failed` after 15 minutes. This change is a prerequisite for the Task 6 recovery route to be operationally usable; the route remains production-disabled until this task and runtime assembly are complete.
 
@@ -1423,7 +1423,7 @@ Add a fourth job left untouched through `reservation.created_at + 30 days`. Main
 
 Maintenance deletes objects only when no manifest is attached, the attempt is terminal, the retention threshold passed, and conditional ETag/checksum matches. Unknown attempts retain evidence and reservation. Tests prove active/unknown objects are never deleted.
 
-- [ ] **Step 6: Run the Task 8 gate and commit**
+- [x] **Step 6: Run the Task 8 gate and commit**
 
 ```powershell
 pnpm --filter @kortix/studio-worker test

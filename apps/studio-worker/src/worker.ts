@@ -29,6 +29,7 @@ import {
   type StudioWorkerRepository,
   type StudioWorkerTickResult,
 } from './contracts';
+import type { StudioTelemetry } from './metrics';
 import type { StudioResultStager, StudioStagedResult } from './result-stager';
 
 const RETRY_JITTER_BOUNDS_MS = [5_000, 30_000, 120_000] as const;
@@ -61,6 +62,7 @@ export type StudioWorkerDependencies = {
   authorization: StudioSubmissionAuthorization;
   assets: StudioAssetWriter;
   stager?: StudioResultStager;
+  telemetry?: StudioTelemetry;
   signal?: AbortSignal;
   now?: () => Date;
   random?: () => number;

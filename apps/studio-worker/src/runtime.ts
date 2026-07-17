@@ -30,6 +30,12 @@ import {
   type StudioMaintenanceRepository,
 } from './maintenance';
 import {
+  type StudioTelemetry,
+  type StudioTelemetryProfile,
+  instrumentStudioObjectStore,
+  instrumentStudioProviderAdapter,
+} from './metrics';
+import {
   PostgresStudioMaintenanceRepository,
   PostgresStudioWorkerRepository,
   type StudioSqlClient,
@@ -120,6 +126,7 @@ export type StudioWorkerRuntime =
       allowInsecureLocalEndpoints: boolean;
       store: StudioObjectStore;
       worker: StudioWorker;
+      telemetry?: StudioTelemetry;
       maintenance: Pick<StudioMaintenanceCoordinator, 'runOnce' | 'release'>;
       assertReadyBeforeClaim(): Promise<void>;
       close(): Promise<void>;
@@ -187,6 +194,7 @@ export async function buildStudioWorkerRuntime(
   env: Record<string, string | undefined> = process.env,
   options: {
     signal?: AbortSignal;
+    telemetry?: StudioTelemetry;
     factories?: Partial<StudioWorkerRuntimeFactories>;
   } = {},
 ): Promise<StudioWorkerRuntime> {
@@ -204,7 +212,11 @@ export async function buildStudioWorkerRuntime(
   let database: StudioWorkerDatabase | null = null;
   let maintenance: Pick<StudioMaintenanceCoordinator, 'runOnce' | 'release'> | null = null;
   try {
-    store = factories.createObjectStore(adapter, 'worker');
+    const rawStore = factories.createObjectStore(adapter, 'worker');
+    store = rawStore;
+    const operationalStore = options.telemetry
+      ? instrumentStudioObjectStore(rawStore, 'worker', options.telemetry)
+      : rawStore;
     database = await factories.createDatabase(workerEnvironment.databaseUrl);
     const repository = factories.createWorkerRepository(database.client);
     const maintenanceRepository = factories.createMaintenanceRepository(database.client);
@@ -219,11 +231,37 @@ export async function buildStudioWorkerRuntime(
       privateProviderOrigins: adapter.privateProviderOrigins,
       allowInsecureLocalEndpoints: adapter.allowInsecureLocalEndpoints,
     });
-    const fakeProvider = factories.createFakeProvider();
-    const referenceAssets = factories.createReferenceAssetResolver(database.client, store);
+    const rawFakeProvider = factories.createFakeProvider();
+    const fakeProvider = options.telemetry
+      ? instrumentStudioProviderAdapter(rawFakeProvider, 'fake', options.telemetry)
+      : rawFakeProvider;
+    const operationalProviderRegistry = options.telemetry
+      ? {
+          resolve: async (input: Parameters<StudioProviderRegistry['resolve']>[0]) => {
+            const resolved = await providerRegistry.resolve(input);
+            if (!resolved) return null;
+            const profile = telemetryProfileForProvider(
+              input.config.provider,
+              input.config.capabilityMap,
+              input.job.model,
+            );
+            return profile
+              ? instrumentStudioProviderAdapter(
+                  resolved,
+                  profile,
+                  options.telemetry as StudioTelemetry,
+                )
+              : resolved;
+          },
+        }
+      : providerRegistry;
+    const referenceAssets = factories.createReferenceAssetResolver(
+      database.client,
+      operationalStore,
+    );
     maintenance = factories.createMaintenance({
       repository: maintenanceRepository,
-      objectStore: store,
+      objectStore: operationalStore,
       ownerId: workerEnvironment.workerId,
       lockKey: studioMaintenanceLeaseName(),
       ttlMs: Math.max(60_000, workerEnvironment.maintenanceMs * 3),
@@ -238,13 +276,14 @@ export async function buildStudioWorkerRuntime(
       repository,
       providers: {
         get: (job) => (job.provider === 'fake' ? fakeProvider : null),
-        resolve: providerRegistry.resolve,
+        resolve: operationalProviderRegistry.resolve,
       },
       credentialResolver,
       referenceAssets,
       authorization,
-      assets: createObjectStoreAssetWriter(store),
-      stager: new StudioResultStager(store),
+      assets: createObjectStoreAssetWriter(operationalStore),
+      stager: new StudioResultStager(operationalStore),
+      ...(options.telemetry ? { telemetry: options.telemetry } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     });
     const close = createIdempotentWorkerClose(
@@ -265,10 +304,11 @@ export async function buildStudioWorkerRuntime(
       storageMode: adapter.storage.mode,
       privateProviderOrigins: adapter.privateProviderOrigins,
       allowInsecureLocalEndpoints: adapter.allowInsecureLocalEndpoints,
-      store,
+      store: operationalStore,
       worker,
+      ...(options.telemetry ? { telemetry: options.telemetry } : {}),
       maintenance,
-      assertReadyBeforeClaim: () => store?.assertReady() ?? Promise.reject(new Error('closed')),
+      assertReadyBeforeClaim: () => operationalStore.assertReady(),
       close,
     };
   } catch (startupError) {
@@ -487,6 +527,31 @@ const defaultStudioWorkerRuntimeFactories: StudioWorkerRuntimeFactories = {
   createWorker: (input) => new StudioWorker(input),
   createMaintenance: (input) => createProductionStudioMaintenanceCoordinator(input),
 };
+
+function telemetryProfileForProvider(
+  provider: string,
+  capabilityMap: unknown,
+  model: string,
+): StudioTelemetryProfile | null {
+  if (provider === 'fake') return 'fake';
+  if (provider !== 'openai-compatible') return null;
+  if (!isRecord(capabilityMap)) return null;
+  const capabilities = capabilityMap.capabilities;
+  if (!isRecord(capabilities)) return null;
+  const imageCapability = capabilities['image.generate'];
+  if (!isRecord(imageCapability) || !Array.isArray(imageCapability.models)) return null;
+  const selected = imageCapability.models.find(
+    (candidate) => isRecord(candidate) && candidate.model === model,
+  );
+  if (isRecord(selected) && selected.dialect_profile_id === 'openai-images-v1-generic') {
+    return 'openai-images-v1-generic';
+  }
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 function createIdempotentWorkerClose(
   input: {

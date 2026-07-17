@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { InMemoryStudioObjectStore } from '@kortix/studio-runtime';
+import { InMemoryStudioObjectStore, createFakeStudioProvider } from '@kortix/studio-runtime';
 import { createMemoryStudioWorkerRepository } from './memory-repository';
+import { createInMemoryStudioTelemetrySink, createStudioTelemetry } from './metrics';
 import {
   assembleProductionStudioWorkerProcess,
   buildStudioWorkerAdapterRuntime,
@@ -34,8 +35,19 @@ describe('Studio worker runtime assembly', () => {
       },
     );
 
+    const telemetry = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('disabled runtime must not inspect telemetry');
+        },
+      },
+    );
     await expect(
-      buildStudioWorkerRuntime({ STUDIO_ENABLED: 'false' }, { factories: factories as never }),
+      buildStudioWorkerRuntime(
+        { STUDIO_ENABLED: 'false' },
+        { factories: factories as never, telemetry: telemetry as never },
+      ),
     ).resolves.toEqual({ enabled: false });
     expect(factoryReads).toBe(0);
   });
@@ -263,6 +275,8 @@ describe('Studio worker runtime assembly', () => {
     let databaseCreates = 0;
     let databaseCloses = 0;
     let workerInput: Record<string, unknown> | null = null;
+    const sink = createInMemoryStudioTelemetrySink();
+    const telemetry = createStudioTelemetry(sink);
     const build = buildStudioWorkerRuntime as unknown as (
       env: Record<string, string>,
       options: Record<string, unknown>,
@@ -281,6 +295,7 @@ describe('Studio worker runtime assembly', () => {
       },
       {
         signal: new AbortController().signal,
+        telemetry,
         factories: {
           createObjectStore: () => store,
           createDatabase: async () => {
@@ -309,11 +324,12 @@ describe('Studio worker runtime assembly', () => {
             createdWithClients.push(input);
             return { resolve: async () => null };
           },
-          createProviderRegistry: () => ({ resolve: async () => null }),
-          createFakeProvider: () => ({ id: 'fake' }),
+          createProviderRegistry: () => ({ resolve: async () => createFakeStudioProvider() }),
+          createFakeProvider: () => createFakeStudioProvider(),
           createReferenceAssetResolver(input: unknown, objectStore: unknown) {
             createdWithClients.push(input);
-            expect(objectStore).toBe(store);
+            expect(objectStore).not.toBe(store);
+            expect((objectStore as { namespace: string }).namespace).toBe(store.namespace);
             return referenceAssets;
           },
           createWorker(input: Record<string, unknown>) {
@@ -336,9 +352,58 @@ describe('Studio worker runtime assembly', () => {
     expect(workerInput).toMatchObject({
       repository,
       referenceAssets,
+      telemetry,
       signal: expect.any(AbortSignal),
       stager: expect.anything(),
       assets: expect.anything(),
+    });
+    const enabledRuntime = runtime as {
+      enabled: true;
+      assertReadyBeforeClaim: () => Promise<void>;
+    };
+    if (!workerInput) throw new Error('expected worker dependencies');
+    await enabledRuntime.assertReadyBeforeClaim();
+    const providers = (workerInput as { providers: {
+      resolve(input: Record<string, unknown>): Promise<{
+        submit(context: { submissionKey: string }, input: Record<string, unknown>): Promise<unknown>;
+      }>;
+    } }).providers;
+    const adapter = await providers.resolve({
+      job: { provider: 'fake' },
+      config: { provider: 'fake' },
+      credential: null,
+      referenceAssets,
+    });
+    await adapter.submit(
+      { submissionKey: 'telemetry-test' },
+      {
+        capability: 'image.generate',
+        image: {
+          prompt: 'test',
+          reference_asset_ids: [],
+          aspect_ratio: '1:1',
+          quality: 'standard',
+          output_count: 1,
+        },
+      },
+    );
+    expect(sink.emissions).toContainEqual({
+      kind: 'gauge',
+      name: 'studio_storage_readiness',
+      value: 1,
+      labels: { role: 'worker' },
+    });
+    expect(sink.emissions).toContainEqual({
+      kind: 'counter',
+      name: 'studio_provider_requests_total',
+      value: 1,
+      labels: { operation: 'submit', outcome: 'succeeded', profile: 'fake' },
+    });
+    expect(sink.emissions).toContainEqual({
+      kind: 'histogram',
+      name: 'studio_provider_request_duration_seconds',
+      value: expect.any(Number),
+      labels: { operation: 'submit', profile: 'fake' },
     });
     await (runtime.close as () => Promise<void>)();
     await (runtime.close as () => Promise<void>)();

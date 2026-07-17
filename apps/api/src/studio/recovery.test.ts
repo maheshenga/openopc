@@ -8,13 +8,14 @@ import {
 import { Hono } from 'hono';
 import { canonicalStudioRequestHash } from '../../../../packages/studio-runtime/src/idempotency';
 import { createStudioProjectRoutes } from './index';
+import { createInMemoryStudioTelemetrySink, createStudioTelemetry } from './metrics';
 import {
-  StudioRecoveryServiceError,
-  StudioRecoveryService,
   type StudioRecoveryLockedContext,
   type StudioRecoveryPreparedInput,
   type StudioRecoveryRepository,
   type StudioRecoveryRepositoryInput,
+  StudioRecoveryService,
+  StudioRecoveryServiceError,
 } from './recovery';
 import { createMemoryStudioRepository } from './repositories/memory';
 
@@ -377,6 +378,88 @@ describe('Studio recovery service', () => {
         actual_credits: null,
         keep_unknown_until: null,
       },
+    ]);
+  });
+
+  test('emits applied, replayed, and rejected recovery outcomes without changing errors', async () => {
+    const sink = createInMemoryStudioTelemetrySink();
+    const telemetry = createStudioTelemetry(sink);
+    const response = StudioRecoveryResponseSchema.parse({
+      recovery_id: RECOVERY_ID,
+      job_id: JOB_ID,
+      attempt_id: ATTEMPT_ID,
+      decision: 'confirm_not_created',
+      job_status: 'failed',
+      attempt_status: 'failed',
+      reservation_status: 'released',
+      hold_expires_at: null,
+    });
+    const request = validRouteRecoveryRequest();
+    const service = new StudioRecoveryService({
+      repository: new RecordingRecoveryRepository(response),
+      store: new InMemoryStudioObjectStore({ namespace: 'recovery-test', ready: true }),
+      now: () => NOW,
+      telemetry,
+    });
+    await service.recover({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      jobId: JOB_ID,
+      actorUserId: USER_ID,
+      actorType: 'user',
+      actingTokenId: null,
+      request,
+    });
+
+    const replayService = new StudioRecoveryService({
+      repository: {
+        recoverLocked: async () => response,
+      },
+      store: new InMemoryStudioObjectStore({ namespace: 'recovery-test', ready: true }),
+      now: () => NOW,
+      telemetry,
+    });
+    await replayService.recover({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      jobId: JOB_ID,
+      actorUserId: USER_ID,
+      actorType: 'user',
+      actingTokenId: null,
+      request: { ...request, idempotency_key: 'operator-recovery-key-0002' },
+    });
+
+    const rejection = new Error('recovery failed');
+    const rejectedService = new StudioRecoveryService({
+      repository: {
+        recoverLocked: async () => {
+          throw rejection;
+        },
+      },
+      store: new InMemoryStudioObjectStore({ namespace: 'recovery-test', ready: true }),
+      now: () => NOW,
+      telemetry,
+    });
+    await expect(
+      rejectedService.recover({
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        jobId: JOB_ID,
+        actorUserId: USER_ID,
+        actorType: 'user',
+        actingTokenId: null,
+        request: { ...request, idempotency_key: 'operator-recovery-key-0003' },
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(
+      sink.emissions
+        .filter((emission) => emission.name === 'studio_recovery_decisions_total')
+        .map((emission) => emission.labels),
+    ).toEqual([
+      { decision: 'confirm_not_created', outcome: 'applied' },
+      { decision: 'confirm_not_created', outcome: 'replayed' },
+      { decision: 'confirm_not_created', outcome: 'rejected' },
     ]);
   });
 

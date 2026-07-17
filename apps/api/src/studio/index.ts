@@ -37,6 +37,7 @@ import { createMemoryStudioRepository } from './repositories/memory';
 import { type StudioStorageService, StudioStorageServiceError } from './storage';
 import { isStudioRepositoryError } from './types';
 import type { StudioLoadedProject, StudioRepository } from './types';
+import type { StudioTelemetry } from './metrics';
 
 export { createMemoryStudioRepository } from './repositories/memory';
 export type { StudioRepository } from './types';
@@ -90,6 +91,7 @@ export type StudioProjectRouteDeps = {
   recoveryService?: StudioRecoveryExecutor;
   credentialBindingExists?: StudioCredentialBindingExists;
   estimateSigningSecret?: string;
+  telemetry?: StudioTelemetry;
 };
 
 const DEFAULT_JOB_LIMIT = 50;
@@ -264,6 +266,7 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
     recoveryService: inputDeps.recoveryService,
     credentialBindingExists: inputDeps.credentialBindingExists,
     estimateSigningSecret: inputDeps.estimateSigningSecret,
+    telemetry: inputDeps.telemetry,
   };
   const app = new Hono<AppEnv>();
 

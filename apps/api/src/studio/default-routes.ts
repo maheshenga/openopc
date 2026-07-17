@@ -17,6 +17,7 @@ import {
   type StudioProjectRouteDeps,
   createStudioProjectRoutes,
 } from './index';
+import { type StudioTelemetry, instrumentStudioObjectStore } from './metrics';
 import { StudioProviderConfigService, createStudioProviderOriginValidator } from './providers';
 import { type StudioRecoveryRepository, StudioRecoveryService } from './recovery';
 import {
@@ -34,6 +35,7 @@ export type StudioApiRuntime =
       openAiCompatibleEnabled: boolean;
       storageMode: 'memory' | 's3';
       store: StudioObjectStore;
+      telemetry?: StudioTelemetry;
       assertReadyBeforeReservation(): Promise<void>;
       close(): Promise<void>;
       privateProviderOrigins: readonly string[];
@@ -41,6 +43,7 @@ export type StudioApiRuntime =
     };
 
 export type StudioApiRuntimeOptions = {
+  telemetry?: StudioTelemetry;
   createObjectStore?: (
     adapter: Extract<StudioAdapterEnvironment, { enabled: true }>,
     role: 'api',
@@ -55,15 +58,19 @@ export function buildStudioApiRuntime(
 ): StudioApiRuntime {
   const adapter = parseStudioAdapterEnvironment(env, { test: env.NODE_ENV === 'test' });
   if (!adapter.enabled) return { enabled: false };
-  const store = (options.createObjectStore ?? createStudioObjectStore)(adapter, 'api');
+  const rawStore = (options.createObjectStore ?? createStudioObjectStore)(adapter, 'api');
+  const store = options.telemetry
+    ? instrumentStudioObjectStore(rawStore, 'api', options.telemetry)
+    : rawStore;
   return {
     enabled: true,
     fakeProviderEnabled: adapter.fakeProviderEnabled,
     openAiCompatibleEnabled: adapter.openAiCompatibleEnabled,
     storageMode: adapter.storage.mode,
     store,
+    ...(options.telemetry ? { telemetry: options.telemetry } : {}),
     assertReadyBeforeReservation: () => store.assertReady(),
-    close: createIdempotentClose(() => closeStudioObjectStore(store)),
+    close: createIdempotentClose(() => closeStudioObjectStore(rawStore)),
     privateProviderOrigins: adapter.privateProviderOrigins,
     allowInsecureLocalEndpoints: adapter.allowInsecureLocalEndpoints,
   };
@@ -88,6 +95,7 @@ type StudioProviderEnablement = {
 
 export type DefaultStudioProjectRoutesInput = {
   env?: Record<string, string | undefined>;
+  telemetry?: StudioTelemetry;
   runtime?: StudioApiRuntime;
   database?: Database;
   repository?: StudioRepository;
@@ -106,7 +114,14 @@ export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRout
     input.runtime ??
     (Object.keys(input).length === 0
       ? getDefaultStudioApiRuntime()
-      : buildStudioApiRuntime(input.env));
+      : buildStudioApiRuntime(input.env, { telemetry: input.telemetry }));
+  const telemetry = runtime.enabled ? (runtime.telemetry ?? input.telemetry) : input.telemetry;
+  const store =
+    runtime.enabled && telemetry && !runtime.telemetry
+      ? instrumentStudioObjectStore(runtime.store, 'api', telemetry)
+      : runtime.enabled
+        ? runtime.store
+        : null;
   const database = input.database ?? db;
   const defaultRepository = input.repository
     ? input.repository
@@ -137,12 +152,19 @@ export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRout
           validateOrigin: providerOriginValidator,
         })
       : undefined,
-    storageService: runtime.enabled
-      ? new StudioStorageService({ repository: defaultRepository, store: runtime.store })
+    storageService: store
+      ? new StudioStorageService({
+          repository: defaultRepository,
+          store,
+        })
       : undefined,
     recoveryService:
-      runtime.enabled && recoveryRepository
-        ? new StudioRecoveryService({ repository: recoveryRepository, store: runtime.store })
+      store && recoveryRepository
+        ? new StudioRecoveryService({
+            repository: recoveryRepository,
+            store,
+            ...(telemetry ? { telemetry } : {}),
+          })
         : undefined,
     credentialBindingExists: runtime.enabled
       ? (input.credentialBindingExists ?? createStudioCredentialBindingExists(database))
@@ -162,6 +184,7 @@ export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRout
         );
       }),
     estimateSigningSecret: config.API_KEY_SECRET,
+    ...(telemetry ? { telemetry } : {}),
   });
 }
 

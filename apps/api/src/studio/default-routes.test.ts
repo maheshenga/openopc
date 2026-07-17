@@ -3,6 +3,7 @@ import type { StudioRecoveryResponse } from '@kortix/api-contract';
 import { InMemoryStudioObjectStore, type StudioObjectStore } from '@kortix/studio-runtime';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { Hono } from 'hono';
+import { createInMemoryStudioTelemetrySink, createStudioTelemetry } from './metrics';
 
 mock.module('../config', () => ({
   SANDBOX_VERSION: 'test',
@@ -98,12 +99,22 @@ function enabledEnv(input: { fake: boolean; openai: boolean }) {
   };
 }
 
-function buildRuntimeWithObjectStore(env: Record<string, string>, store: StudioObjectStore) {
+function buildRuntimeWithObjectStore(
+  env: Record<string, string>,
+  store: StudioObjectStore,
+  telemetry?: ReturnType<typeof createStudioTelemetry>,
+) {
   const build = buildStudioApiRuntime as unknown as (
     input: Record<string, string>,
-    options: { createObjectStore: () => StudioObjectStore },
+    options: {
+      createObjectStore: () => StudioObjectStore;
+      telemetry?: ReturnType<typeof createStudioTelemetry>;
+    },
   ) => ReturnType<typeof buildStudioApiRuntime>;
-  return build(env, { createObjectStore: () => store });
+  return build(env, {
+    createObjectStore: () => store,
+    ...(telemetry ? { telemetry } : {}),
+  });
 }
 
 async function createOpenAiRepository(
@@ -181,12 +192,20 @@ async function estimate(app: Hono, providerConfigId: string) {
 
 describe('Studio API runtime assembly', () => {
   test('keeps Studio disabled without adapter configuration', () => {
+    const telemetry = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('disabled runtime must not inspect telemetry');
+        },
+      },
+    );
     expect(
       buildStudioApiRuntime({
         STUDIO_ENABLED: 'false',
         STUDIO_OBJECT_STORE_MODE: 'broken',
         STUDIO_S3_SECRET_ACCESS_KEY: 'must-not-be-validated',
-      }),
+      }, { telemetry: telemetry as never }),
     ).toEqual({ enabled: false });
   });
 
@@ -205,6 +224,27 @@ describe('Studio API runtime assembly', () => {
       ),
     ).toEqual({ enabled: false });
     expect(factoryCalls).toBe(0);
+  });
+
+  test('retains injected telemetry and records API storage readiness', async () => {
+    const sink = createInMemoryStudioTelemetrySink();
+    const telemetry = createStudioTelemetry(sink);
+    const store = new InMemoryStudioObjectStore({ namespace: 'api-telemetry', ready: false });
+    const runtime = buildRuntimeWithObjectStore(
+      enabledEnv({ fake: true, openai: false }),
+      store,
+      telemetry,
+    );
+
+    expect(runtime).toMatchObject({ enabled: true, telemetry });
+    if (!runtime.enabled) throw new Error('expected enabled Studio API runtime');
+    await expect(runtime.assertReadyBeforeReservation()).rejects.toThrow();
+    expect(sink.emissions).toContainEqual({
+      kind: 'gauge',
+      name: 'studio_storage_readiness',
+      value: 0,
+      labels: { role: 'api' },
+    });
   });
 
   test('uses the same ephemeral storage policy as the worker runtime', () => {

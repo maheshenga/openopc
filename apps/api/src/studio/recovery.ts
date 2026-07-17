@@ -17,6 +17,7 @@ import {
   StudioStorageUnavailableError,
 } from '@kortix/studio-runtime';
 import { canonicalStudioRequestHash } from '../../../../packages/studio-runtime/src/idempotency';
+import type { StudioTelemetry } from './metrics';
 
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 
@@ -95,6 +96,7 @@ export class StudioRecoveryService {
       repository: StudioRecoveryRepository;
       store: StudioObjectStore;
       now?: () => Date;
+      telemetry?: StudioTelemetry;
     },
   ) {}
 
@@ -109,53 +111,73 @@ export class StudioRecoveryService {
   }): Promise<StudioRecoveryResponse> {
     const recoveredAt = (this.input.now ?? (() => new Date()))();
     const request = input.request;
-    return this.input.repository.recoverLocked(
-      {
-        account_id: input.accountId,
-        project_id: input.projectId,
-        job_id: input.jobId,
-        actor_user_id: input.actorUserId,
-        actor_type: input.actorType,
-        acting_token_id: input.actingTokenId,
-        decision: request.decision,
-        idempotency_key: request.idempotency_key,
-        request_hash: canonicalStudioRequestHash({
+    let prepared = false;
+    try {
+      const result = await this.input.repository.recoverLocked(
+        {
+          account_id: input.accountId,
+          project_id: input.projectId,
+          job_id: input.jobId,
+          actor_user_id: input.actorUserId,
+          actor_type: input.actorType,
+          acting_token_id: input.actingTokenId,
           decision: request.decision,
+          idempotency_key: request.idempotency_key,
+          request_hash: canonicalStudioRequestHash({
+            decision: request.decision,
+            reason: request.reason,
+            evidence: request.evidence,
+          }),
           reason: request.reason,
-          evidence: request.evidence,
-        }),
-        reason: request.reason,
-        recovered_at: recoveredAt.toISOString(),
-      },
-      async (context) => {
-        if (
-          request.evidence.provider_request_id !== undefined &&
-          request.evidence.provider_request_id !== context.provider_request_id
-        ) {
-          throw invalidEvidence();
-        }
-        if (request.decision === 'confirm_succeeded') {
-          return this.prepareConfirmedSuccess(
-            context,
-            request as StudioRecoveryRequest & { decision: 'confirm_succeeded' },
-          );
-        }
-        if (request.decision === 'keep_unknown') {
+          recovered_at: recoveredAt.toISOString(),
+        },
+        async (context) => {
+          prepared = true;
+          if (
+            request.evidence.provider_request_id !== undefined &&
+            request.evidence.provider_request_id !== context.provider_request_id
+          ) {
+            throw invalidEvidence();
+          }
+          if (request.decision === 'confirm_succeeded') {
+            return this.prepareConfirmedSuccess(
+              context,
+              request as StudioRecoveryRequest & { decision: 'confirm_succeeded' },
+            );
+          }
+          if (request.decision === 'keep_unknown') {
+            return {
+              evidence: request.evidence,
+              result_assets: null,
+              actual_credits: null,
+              keep_unknown_until: keepUnknownUntil(context, recoveredAt),
+            };
+          }
           return {
             evidence: request.evidence,
             result_assets: null,
             actual_credits: null,
-            keep_unknown_until: keepUnknownUntil(context, recoveredAt),
+            keep_unknown_until: null,
           };
-        }
-        return {
-          evidence: request.evidence,
-          result_assets: null,
-          actual_credits: null,
-          keep_unknown_until: null,
-        };
-      },
-    );
+        },
+      );
+      this.emitRecoveryDecision(request.decision, prepared ? 'applied' : 'replayed');
+      return result;
+    } catch (error) {
+      this.emitRecoveryDecision(request.decision, 'rejected');
+      throw error;
+    }
+  }
+
+  private emitRecoveryDecision(
+    decision: StudioRecoveryRequest['decision'],
+    outcome: 'applied' | 'replayed' | 'rejected',
+  ): void {
+    try {
+      this.input.telemetry?.recoveryDecision({ decision, outcome });
+    } catch {
+      // Telemetry must never change recovery semantics.
+    }
   }
 
   private async prepareConfirmedSuccess(

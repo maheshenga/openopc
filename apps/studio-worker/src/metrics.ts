@@ -1,4 +1,8 @@
-import { type StudioProviderAdapter, StudioProviderCallError } from '@kortix/studio-runtime';
+import {
+  type StudioObjectStore,
+  type StudioProviderAdapter,
+  StudioProviderCallError,
+} from '@kortix/studio-runtime';
 
 export const STUDIO_TELEMETRY_PROFILES = ['fake', 'openai-images-v1-generic'] as const;
 
@@ -321,12 +325,101 @@ export function createStudioTelemetry(sinks: StudioTelemetrySinks): StudioTeleme
   };
 }
 
+/**
+ * Decorates storage calls at the runtime boundary while keeping keys, URLs, and
+ * provider diagnostics out of telemetry labels or errors.
+ */
+export function instrumentStudioObjectStore(
+  store: StudioObjectStore,
+  role: 'api' | 'worker',
+  telemetry: StudioTelemetry,
+  nowMilliseconds: () => number = performance.now.bind(performance),
+): StudioObjectStore {
+  const emit = (callback: () => void): void => {
+    try {
+      callback();
+    } catch {
+      // Telemetry must never change storage or worker behavior.
+    }
+  };
+  const observe = async <T>(
+    operation: StudioStorageOperation,
+    call: () => Promise<T>,
+  ): Promise<T> => {
+    const startedAt = nowMilliseconds();
+    try {
+      const result = await call();
+      emit(() => telemetry.storageOperation({ operation, outcome: 'succeeded' }));
+      return result;
+    } catch (error) {
+      emit(() => telemetry.storageOperation({ operation, outcome: 'failed' }));
+      throw error;
+    } finally {
+      emit(() =>
+        telemetry.storageOperationDuration({
+          operation,
+          seconds: Math.max(0, nowMilliseconds() - startedAt) / 1_000,
+        }),
+      );
+    }
+  };
+
+  return new Proxy(store, {
+    get(target, property, receiver) {
+      if (property === 'assertReady') {
+        return async () => {
+          try {
+            await target.assertReady();
+            emit(() => telemetry.storageReadiness({ role, ready: true }));
+          } catch (error) {
+            emit(() => telemetry.storageReadiness({ role, ready: false }));
+            throw error;
+          }
+        };
+      }
+      if (property === 'putObject') {
+        return (input: Parameters<StudioObjectStore['putObject']>[0]) =>
+          observe('put', () => target.putObject(input));
+      }
+      if (property === 'headObject') {
+        return (input: Parameters<StudioObjectStore['headObject']>[0]) =>
+          observe('head', () => target.headObject(input));
+      }
+      if (property === 'getObject') {
+        return (input: Parameters<StudioObjectStore['getObject']>[0]) =>
+          observe('get', () => target.getObject(input));
+      }
+      if (property === 'deleteObject') {
+        return (input: Parameters<StudioObjectStore['deleteObject']>[0]) =>
+          observe('delete', () => target.deleteObject(input));
+      }
+      if (property === 'createSignedUploadUrl') {
+        return (input: Parameters<StudioObjectStore['createSignedUploadUrl']>[0]) =>
+          observe('presign_upload', () => target.createSignedUploadUrl(input));
+      }
+      if (property === 'createSignedDownloadUrl') {
+        return (input: Parameters<StudioObjectStore['createSignedDownloadUrl']>[0]) =>
+          observe('presign_download', () => target.createSignedDownloadUrl(input));
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
 export function instrumentStudioProviderAdapter(
   adapter: StudioProviderAdapter,
   profile: StudioTelemetryProfile,
   telemetry: StudioTelemetry,
   nowMilliseconds: () => number = performance.now.bind(performance),
 ): StudioProviderAdapter {
+  const emit = (callback: () => void): void => {
+    try {
+      callback();
+    } catch {
+      // Telemetry must never change provider or worker behavior.
+    }
+  };
   const observe = async <T>(
     operation: StudioProviderOperation,
     phase: StudioUnknownOutcomePhase,
@@ -337,23 +430,25 @@ export function instrumentStudioProviderAdapter(
     try {
       const result = await call();
       const outcome = returnedUnknown(result) ? 'unknown' : 'succeeded';
-      telemetry.providerRequest({ operation, outcome, profile });
-      if (outcome === 'unknown') telemetry.unknownOutcome({ phase, profile });
+      emit(() => telemetry.providerRequest({ operation, outcome, profile }));
+      if (outcome === 'unknown') emit(() => telemetry.unknownOutcome({ phase, profile }));
       return result;
     } catch (error) {
       const outcome =
         error instanceof StudioProviderCallError && error.classification === 'unknown_outcome'
           ? 'unknown'
           : 'failed';
-      telemetry.providerRequest({ operation, outcome, profile });
-      if (outcome === 'unknown') telemetry.unknownOutcome({ phase, profile });
+      emit(() => telemetry.providerRequest({ operation, outcome, profile }));
+      if (outcome === 'unknown') emit(() => telemetry.unknownOutcome({ phase, profile }));
       throw error;
     } finally {
-      telemetry.providerRequestDuration({
-        operation,
-        profile,
-        seconds: Math.max(0, nowMilliseconds() - startedAt) / 1_000,
-      });
+      emit(() =>
+        telemetry.providerRequestDuration({
+          operation,
+          profile,
+          seconds: Math.max(0, nowMilliseconds() - startedAt) / 1_000,
+        }),
+      );
     }
   };
   const submit = adapter.submit.bind(adapter);

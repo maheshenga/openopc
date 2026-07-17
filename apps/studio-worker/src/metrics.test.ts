@@ -1,8 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { StudioProviderCallError } from '@kortix/studio-runtime';
+import {
+  InMemoryStudioObjectStore,
+  type StudioObjectStore,
+  StudioProviderCallError,
+} from '@kortix/studio-runtime';
 import {
   type StudioMetricEmission,
   createStudioTelemetry,
+  instrumentStudioObjectStore,
   instrumentStudioProviderAdapter,
 } from './metrics';
 
@@ -512,4 +517,126 @@ describe('Studio worker telemetry', () => {
     await expect(adapter.fetchResult(context, handle)).resolves.toEqual({ assets: [], usage: {} });
     await expect(adapter.reconcile?.(context, 'submission-a')).resolves.toBe('not-found');
   });
+
+  test('instruments object-store operations without leaking object identity or URLs', async () => {
+    const { telemetry, emissions } = recordingTelemetry();
+    const raw = new InMemoryStudioObjectStore({
+      namespace: 'metrics-test',
+      ready: true,
+    }) as InMemoryStudioObjectStore & { destroy(): Promise<void> };
+    let destroyCalls = 0;
+    raw.destroy = async () => {
+      destroyCalls += 1;
+    };
+    let now = 0;
+    const store = instrumentStudioObjectStore(raw, 'worker', telemetry, () => {
+      now += 100;
+      return now;
+    });
+    const bytes = new Uint8Array([1, 2, 3]);
+    const checksum = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+
+    await store.assertReady();
+    await store.putObject({
+      key: 'accounts/a/projects/p/source.bin',
+      body: new Blob([bytes]).stream(),
+      content_type: 'application/octet-stream',
+      size_bytes: bytes.byteLength,
+      checksum_sha256: checksum,
+      metadata: {},
+    });
+    await store.headObject({ key: 'accounts/a/projects/p/source.bin' });
+    await store.getObject({ key: 'accounts/a/projects/p/source.bin' });
+    await store.createSignedUploadUrl({
+      key: 'accounts/a/projects/p/upload.bin',
+      content_type: 'application/octet-stream',
+      size_bytes: bytes.byteLength,
+      checksum_sha256: checksum,
+      expires_in_seconds: 60,
+    });
+    await store.createSignedDownloadUrl({
+      key: 'accounts/a/projects/p/source.bin',
+      filename: 'source.bin',
+      expires_in_seconds: 60,
+    });
+    await store.deleteObject({ key: 'accounts/a/projects/p/source.bin' });
+    await expect(store.headObject({ key: 'accounts/a/projects/p/source.bin' })).rejects.toThrow();
+    await (store as unknown as StudioObjectStoreWithDestroy).destroy();
+
+    expect(destroyCalls).toBe(1);
+    expect(emissions.filter((emission) => emission.name === 'studio_storage_readiness')).toEqual([
+      {
+        kind: 'gauge',
+        name: 'studio_storage_readiness',
+        value: 1,
+        labels: { role: 'worker' },
+      },
+    ]);
+    expect(
+      emissions
+        .filter((emission) => emission.name === 'studio_storage_operations_total')
+        .map((emission) => emission.labels),
+    ).toEqual([
+      { operation: 'put', outcome: 'succeeded' },
+      { operation: 'head', outcome: 'succeeded' },
+      { operation: 'get', outcome: 'succeeded' },
+      { operation: 'presign_upload', outcome: 'succeeded' },
+      { operation: 'presign_download', outcome: 'succeeded' },
+      { operation: 'delete', outcome: 'succeeded' },
+      { operation: 'head', outcome: 'failed' },
+    ]);
+    expect(
+      emissions.filter((emission) => emission.name === 'studio_storage_operation_duration_seconds'),
+    ).toHaveLength(7);
+    expect(JSON.stringify(emissions)).not.toContain('source.bin');
+    expect(JSON.stringify(emissions)).not.toContain('memory://');
+  });
+
+  test('isolates provider execution from telemetry sink failures', async () => {
+    const telemetry = createStudioTelemetry({
+      counter: () => {
+        throw new Error('sink failure');
+      },
+      gauge: () => {
+        throw new Error('sink failure');
+      },
+      histogram: () => {
+        throw new Error('sink failure');
+      },
+    });
+    const adapter = instrumentStudioProviderAdapter(
+      {
+        id: 'fake',
+        submit: async () => ({
+          kind: 'async' as const,
+          handle: { provider: 'fake', id: 'handle-a', submission_key: 'submission-a' },
+        }),
+        poll: async () => ({ status: 'succeeded' as const }),
+        cancel: async () => {},
+        fetchResult: async () => ({ assets: [] }),
+      },
+      'fake',
+      telemetry,
+    );
+
+    await expect(
+      adapter.submit(
+        { correlationId: 'job-a', submissionKey: 'submission-a' },
+        {
+          capability: 'image.generate',
+          image: {
+            prompt: 'test',
+            reference_asset_ids: [],
+            aspect_ratio: '1:1',
+            quality: 'standard',
+            output_count: 1,
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ kind: 'async' });
+  });
 });
+
+type StudioObjectStoreWithDestroy = {
+  destroy(): Promise<void>;
+};

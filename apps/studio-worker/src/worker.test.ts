@@ -788,56 +788,77 @@ describe('StudioWorker', () => {
     expect(repository.getJob(job.jobId)?.actualCredits).toBe(2.25);
   });
 
-  test('a terminal durable manifest failure stops before provider reconciliation', async () => {
-    const repository = createMemoryStudioWorkerRepository();
-    const job = repository.seedJob({
-      status: 'running',
-      attemptCount: 1,
-      pricingSnapshot: {
-        pricing_catalog_id: '77777777-7777-4777-8777-777777777777',
-        version: 1,
-        provider: 'fake',
-        model: 'fake-image-v1',
-        unit: 'image',
-        rate_credits: 1,
-        max_provider_credits: 2,
-        markup_credits: 0.25,
-      },
-    });
-    const attempt = repository.seedAttempt(job.jobId, { status: 'reconciling' });
-    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
-    const manifestKey = studioStagingManifestKey({
-      accountId: job.accountId,
-      projectId: job.projectId,
-      jobId: job.jobId,
-      attemptId: attempt.attemptId,
-      submissionKeyHash: studioSubmissionKeyHash(attempt.submissionKey),
-    });
-    const invalid = new TextEncoder().encode('{}');
-    await store.putObject({
-      key: manifestKey,
-      body: new Blob([invalid]).stream(),
-      content_type: 'application/json',
-      size_bytes: invalid.byteLength,
-      checksum_sha256: new Bun.CryptoHasher('sha256').update(invalid).digest('hex'),
-      metadata: { kind: 'studio-staging-manifest' },
-    });
-    let reconciliations = 0;
-    const adapter = provider({
-      reconcile: async () => {
-        reconciliations += 1;
-        return 'unknown';
-      },
-    });
-    const { worker } = makeWorker({
-      workerId: 'worker-a',
-      repository,
-      adapter,
-      stager: new StudioResultStager(store),
-    });
+  test('quarantines a corrupt durable manifest for ambiguous attempts without provider I/O', async () => {
+    for (const attemptStatus of ['submitting', 'reconciling'] as const) {
+      const repository = createMemoryStudioWorkerRepository();
+      const job = repository.seedJob({
+        status: 'running',
+        attemptCount: 1,
+        pricingSnapshot: PRICING,
+        reservedCredits: 2.25,
+      });
+      const attempt = repository.seedAttempt(job.jobId, { status: attemptStatus });
+      const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+      const manifestKey = studioStagingManifestKey({
+        accountId: job.accountId,
+        projectId: job.projectId,
+        jobId: job.jobId,
+        attemptId: attempt.attemptId,
+        submissionKeyHash: studioSubmissionKeyHash(attempt.submissionKey),
+      });
+      const invalid = new TextEncoder().encode('{}');
+      await store.putObject({
+        key: manifestKey,
+        body: new Blob([invalid]).stream(),
+        content_type: 'application/json',
+        size_bytes: invalid.byteLength,
+        checksum_sha256: new Bun.CryptoHasher('sha256').update(invalid).digest('hex'),
+        metadata: { kind: 'studio-staging-manifest' },
+      });
+      let providerCalls = 0;
+      const adapter = provider({
+        submit: async () => {
+          providerCalls += 1;
+          throw new Error('must not submit with a corrupt durable manifest');
+        },
+        poll: async () => {
+          providerCalls += 1;
+          throw new Error('must not poll with a corrupt durable manifest');
+        },
+        reconcile: async () => {
+          providerCalls += 1;
+          return 'unknown';
+        },
+        cancel: async () => {
+          providerCalls += 1;
+        },
+        fetchResult: async () => {
+          providerCalls += 1;
+          throw new Error('must not fetch with a corrupt durable manifest');
+        },
+      });
+      const { worker } = makeWorker({
+        workerId: 'worker-a',
+        repository,
+        adapter,
+        stager: new StudioResultStager(store),
+      });
 
-    expect(await worker.runOnce()).toMatchObject({ status: 'failed' });
-    expect(reconciliations).toBe(0);
+      expect(await worker.runOnce()).toMatchObject({ status: 'running' });
+      expect(providerCalls).toBe(0);
+      expect(repository.getAttempts(job.jobId)[0]?.status).toBe('reconciling');
+      expect(repository.getJob(job.jobId)).toMatchObject({
+        status: 'running',
+        reservedCredits: 2.25,
+        actualCredits: null,
+      });
+      const terminalEvents = repository
+        .getEvents(job.jobId)
+        .filter((event) =>
+          ['failed', 'cancelled', 'succeeded', 'billing-settled'].includes(event.type),
+        );
+      expect(terminalEvents).toEqual([]);
+    }
   });
 
   test('an unresolved completed attempt without a reconciliation adapter remains operator-recoverable', async () => {
@@ -1073,6 +1094,95 @@ describe('StudioWorker', () => {
     expect(result).toMatchObject({ status: 'succeeded' });
     expect(providerCalls).toBe(0);
     expect(repository.getAssets(job.jobId)).toHaveLength(1);
+  });
+
+  test('retries manifest storage outages locally before polling the durable provider handle', async () => {
+    for (const attemptStatus of ['submitted', 'polling'] as const) {
+      const repository = createMemoryStudioWorkerRepository();
+      const handle: StudioProviderHandle = {
+        provider: 'fake',
+        id: `provider-job-${attemptStatus}`,
+        submission_key: `submitted-key-${attemptStatus}`,
+      };
+      const job = repository.seedJob({
+        status: 'running',
+        attemptCount: 1,
+        providerHandle: handle,
+        pricingSnapshot: PRICING,
+        reservedCredits: 2.25,
+      });
+      repository.seedAttempt(job.jobId, {
+        submissionKey: handle.submission_key,
+        providerHandle: handle,
+        status: attemptStatus,
+      });
+      const storeState = { namespace: 'studio-test', ready: false };
+      const store = new InMemoryStudioObjectStore(storeState);
+      const providerCalls = { submit: 0, poll: 0, reconcile: 0, fetch: 0, cancel: 0 };
+      const adapter = provider({
+        submit: async () => {
+          providerCalls.submit += 1;
+          throw new Error('must not resubmit a durable provider handle');
+        },
+        poll: async () => {
+          providerCalls.poll += 1;
+          return { status: 'succeeded', progress: 1 };
+        },
+        reconcile: async () => {
+          providerCalls.reconcile += 1;
+          return 'unknown';
+        },
+        fetchResult: async () => {
+          providerCalls.fetch += 1;
+          return {
+            assets: [
+              {
+                kind: 'image',
+                filename: 'recovered.png',
+                mime_type: 'image/png',
+                size_bytes: VALID_PNG.byteLength,
+                replayable_within_attempt: true,
+                openBody: async () => new Blob([VALID_PNG]).stream(),
+              },
+            ],
+            usage: { output_count: 1 },
+          };
+        },
+        cancel: async () => {
+          providerCalls.cancel += 1;
+        },
+      });
+      let currentNow = NOW;
+      const { worker } = makeWorker({
+        workerId: 'worker-a',
+        repository,
+        adapter,
+        stager: new StudioResultStager(store),
+        now: () => currentNow,
+      });
+
+      expect(await worker.runOnce()).toMatchObject({ status: 'running' });
+      expect(providerCalls).toEqual({ submit: 0, poll: 0, reconcile: 0, fetch: 0, cancel: 0 });
+      expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+        status: 'polling',
+        providerHandle: handle,
+        retryClassification: 'retryable',
+      });
+      expect(repository.getJob(job.jobId)).toMatchObject({
+        status: 'running',
+        providerHandle: handle,
+      });
+      expect(repository.getJob(job.jobId)?.availableAt.toISOString()).toBe(
+        new Date(NOW.getTime() + 5_000).toISOString(),
+      );
+
+      storeState.ready = true;
+      currentNow = new Date(NOW.getTime() + 5_000);
+      expect(await worker.runOnce()).toMatchObject({ status: 'succeeded' });
+      expect(providerCalls).toEqual({ submit: 0, poll: 1, reconcile: 0, fetch: 1, cancel: 0 });
+      expect(repository.getAttempts(job.jobId)[0]?.status).toBe('succeeded');
+      expect(repository.getAssets(job.jobId)).toHaveLength(1);
+    }
   });
 
   test('defers a manifest with a missing asset without provider I/O or a hot-loop error', async () => {

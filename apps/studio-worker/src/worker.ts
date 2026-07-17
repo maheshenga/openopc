@@ -129,9 +129,6 @@ export class StudioWorker {
     });
     if (attempt && ['submitting', 'submitted', 'polling', 'reconciling'].includes(attempt.status)) {
       const staged = await this.loadDurableStagedResult(job, attempt);
-      if (staged.kind === 'failed') {
-        return { kind: 'processed', jobId: job.jobId, status: 'failed' };
-      }
       if (staged.kind === 'deferred') {
         return { kind: 'processed', jobId: job.jobId, status: 'running' };
       }
@@ -618,10 +615,7 @@ export class StudioWorker {
     job: StudioWorkerJob,
     attempt: StudioWorkerAttempt,
   ): Promise<
-    | { kind: 'none' }
-    | { kind: 'staged'; result: StudioStagedResult }
-    | { kind: 'deferred' }
-    | { kind: 'failed' }
+    { kind: 'none' } | { kind: 'staged'; result: StudioStagedResult } | { kind: 'deferred' }
   > {
     if (!this.deps.stager || !job.pricingSnapshot) return { kind: 'none' };
     try {
@@ -629,15 +623,24 @@ export class StudioWorker {
       return result ? { kind: 'staged', result } : { kind: 'none' };
     } catch (error) {
       if (error instanceof StudioProviderCallError && error.classification === 'terminal') {
-        await this.fail(
+        await this.deferUnknown(job, attempt, error.message, this.now());
+        return { kind: 'deferred' };
+      }
+      if (
+        error instanceof StudioStorageUnavailableError &&
+        attempt.providerHandle &&
+        ['submitted', 'polling'].includes(attempt.status)
+      ) {
+        await this.scheduleContinuation(
           job,
           attempt,
-          'STUDIO_ASSET_INVALID',
+          'polling',
+          'retryable',
           error.message,
-          error.classification,
+          RETRY_JITTER_BOUNDS_MS[0],
           this.now(),
         );
-        return { kind: 'failed' };
+        return { kind: 'deferred' };
       }
       if (
         (error instanceof StudioProviderCallError && error.classification === 'unknown_outcome') ||

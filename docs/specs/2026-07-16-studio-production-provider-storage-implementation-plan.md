@@ -1218,11 +1218,11 @@ Move presign/finalize/download logic out of the repository. Repositories store r
 
 Export `createStudioReferenceAssetResolver(repository, store)` implementing `StudioReferenceAssetResolver`. It loads only finalized assets for the exact project, rejects missing/cross-project/unsafe assets, and returns bounded `openBody()` sources. Tests prove the initial `openai-images-v1-generic` definition never calls it because that profile rejects reference IDs, while fake/reference-capable definitions receive only project-owned assets.
 
-- [ ] **Step 7: Replace the fake estimate with the shared definition/pricing path**
+- [x] **Step 7: Replace the fake estimate with the shared definition/pricing path**
 
 The estimate route loads provider config and immutable pricing, resolves `StudioProviderDefinition`, validates model/input, and signs the exact provider/pricing versions. The job route repeats version validation and calls the new atomic overload. Remove the `Fake image generation` hard-coded line item except for the fake definition.
 
-- [ ] **Step 8: Write RED and GREEN recovery-route tests**
+- [x] **Step 8: Write RED and GREEN recovery-route tests**
 
 Mount `POST /v1/projects/:projectId/studio/jobs/:jobId/recovery`. Prove normal auth actor attribution, both permission checks, idempotent replay, conflicting idempotency payload rejection, only-reconciling state, settlement/release/extension behavior, audit row, and absence from public SDK exports. Assert every emitted event still validates the existing `StudioJobEventSchema`; recovery adds no event type and uses `progress.phase = 'operator-review'` when no terminal finalizer runs.
 

@@ -102,11 +102,15 @@ export function createS3StudioObjectStore(input: {
 
 export class S3StudioObjectStore implements StudioObjectStore {
   readonly namespace: string;
+  readonly required_server_side_encryption: 'AES256' | 'aws:kms';
+  readonly required_sse_kms_key_id: string | null;
   private readonly prefix: string;
   private destroyed = false;
 
   constructor(private readonly input: S3StudioObjectStoreInput) {
     this.namespace = input.config.bucket;
+    this.required_server_side_encryption = input.config.sse;
+    this.required_sse_kms_key_id = input.config.kmsKeyId;
     this.prefix = validatedPath(input.config.prefix, 'prefix');
   }
 
@@ -159,6 +163,8 @@ export class S3StudioObjectStore implements StudioObjectStore {
       checksum_sha256: input.checksum_sha256,
       etag: output.ETag ?? null,
       metadata,
+      server_side_encryption: this.required_server_side_encryption,
+      sse_kms_key_id: this.required_sse_kms_key_id,
     };
   }
 
@@ -297,7 +303,13 @@ export class S3StudioObjectStore implements StudioObjectStore {
     key: string,
     output: Pick<
       HeadObjectCommandOutput,
-      'ContentType' | 'ContentLength' | 'ChecksumSHA256' | 'ETag' | 'Metadata'
+      | 'ContentType'
+      | 'ContentLength'
+      | 'ChecksumSHA256'
+      | 'ETag'
+      | 'Metadata'
+      | 'ServerSideEncryption'
+      | 'SSEKMSKeyId'
     >,
   ): StudioObjectMetadata {
     const metadata = output.Metadata ?? {};
@@ -316,6 +328,10 @@ export class S3StudioObjectStore implements StudioObjectStore {
       checksum_sha256: checksum,
       etag: output.ETag ?? null,
       metadata: customMetadata(metadata),
+      ...(output.ServerSideEncryption === 'AES256' || output.ServerSideEncryption === 'aws:kms'
+        ? { server_side_encryption: output.ServerSideEncryption }
+        : {}),
+      sse_kms_key_id: output.SSEKMSKeyId ?? null,
     };
   }
 }

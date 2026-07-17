@@ -1,6 +1,8 @@
 import { lookup } from 'node:dns/promises';
 import { parseStudioAdapterEnvironment } from '@kortix/studio-adapters';
 import { config } from '../config';
+import { deriveRequestContext } from '../iam/cache';
+import { assertAuthorized } from '../iam/dispatcher';
 import { assertProjectCapability, loadProjectForUser } from '../projects/lib/access';
 import { db } from '../shared/db';
 import { createStudioProjectRoutes } from './index';
@@ -32,6 +34,16 @@ export function createDefaultStudioProjectRoutes() {
     }),
     loadProjectForUser,
     assertProjectCapability,
+    assertAccountCapability: async (c, userId, accountId, action) => {
+      await assertAuthorized(
+        userId,
+        accountId,
+        action,
+        undefined,
+        c.get('iamTokenId') ?? undefined,
+        deriveRequestContext(c),
+      );
+    },
     estimateSigningSecret: config.API_KEY_SECRET,
   });
 }

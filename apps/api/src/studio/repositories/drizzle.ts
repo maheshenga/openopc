@@ -3,13 +3,17 @@ import {
   StudioCredentialBindingSchema,
   type StudioPricingCatalogEntry,
   StudioPricingCatalogEntrySchema,
+  StudioRecoveryResponseSchema,
   type StudioProviderConfig,
 } from '@kortix/api-contract';
 import {
   type Database,
   studioAssetUploads,
   studioAssets,
+  studioCreditReservations,
+  studioJobAttempts,
   studioJobEvents,
+  studioJobRecoveries,
   studioJobs,
   studioPricingCatalog,
   studioProviderConfigs,
@@ -17,6 +21,11 @@ import {
 import { openAiCompatibleImageDefinition } from '@kortix/studio-adapters';
 import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
 import { StudioRepositoryError } from '../types';
+import {
+  StudioRecoveryServiceError,
+  type StudioRecoveryLockedContext,
+  type StudioRecoveryRepository,
+} from '../recovery';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
@@ -32,6 +41,9 @@ type JobRow = typeof studioJobs.$inferSelect;
 type EventRow = typeof studioJobEvents.$inferSelect;
 type UploadRow = typeof studioAssetUploads.$inferSelect;
 type AssetRow = typeof studioAssets.$inferSelect;
+type AttemptRow = typeof studioJobAttempts.$inferSelect;
+type ReservationRow = typeof studioCreditReservations.$inferSelect;
+type RecoveryRow = typeof studioJobRecoveries.$inferSelect;
 
 function numberValue(value: unknown): number {
   if (value === null || value === undefined) return 0;
@@ -318,11 +330,228 @@ function serializeRawAsset(row: Record<string, unknown>): StudioAsset {
   };
 }
 
+function serializeRecoveryResult(value: unknown) {
+  return StudioRecoveryResponseSchema.parse(value);
+}
+
+function pricingSnapshotValue(value: unknown): StudioRecoveryLockedContext['pricing_snapshot'] {
+  const record = recordValue(value);
+  if (!record) throw recoveryJobConflict();
+  if (record.unit !== 'image') throw recoveryJobConflict();
+  return {
+    pricing_catalog_id: String(record.pricing_catalog_id),
+    version: Number(record.version),
+    provider: String(record.provider),
+    model: String(record.model),
+    unit: 'image',
+    rate_credits: Number(record.rate_credits),
+    max_provider_credits: Number(record.max_provider_credits),
+    markup_credits: Number(record.markup_credits),
+  };
+}
+
+function serializeRecoveryContext(input: {
+  job: JobRow;
+  attempt: AttemptRow;
+  reservation: ReservationRow;
+  verifiedAttemptCostTotal: number;
+}): StudioRecoveryLockedContext {
+  const { job, attempt, reservation, verifiedAttemptCostTotal } = input;
+  if (!job.providerConfigVersion || !job.pricingCatalogId || !job.pricingVersion) {
+    throw recoveryJobConflict();
+  }
+  return {
+    account_id: job.accountId,
+    project_id: job.projectId,
+    job_id: job.jobId,
+    attempt_id: attempt.attemptId,
+    job_status: job.status,
+    attempt_status: attempt.status,
+    reservation_status: reservation.status,
+    reservation_created_at: timestampValue(reservation.createdAt),
+    reservation_expires_at: timestampValue(reservation.expiresAt),
+    job_available_at: job.availableAt ? timestampValue(job.availableAt) : null,
+    cancellation_requested_at: job.cancellationRequestedAt
+      ? timestampValue(job.cancellationRequestedAt)
+      : null,
+    lease_owner: job.leaseOwner ?? null,
+    lease_expires_at: job.leaseExpiresAt ? timestampValue(job.leaseExpiresAt) : null,
+    submission_key: attempt.submissionKey,
+    provider_request_id: attempt.providerRequestId ?? null,
+    provider_config_id: job.providerConfigId,
+    provider_config_version: job.providerConfigVersion,
+    attempt_provider_config_version: attempt.providerConfigVersion ?? '',
+    pricing_catalog_id: job.pricingCatalogId,
+    pricing_version: job.pricingVersion,
+    pricing_snapshot: pricingSnapshotValue(job.pricingSnapshot),
+    staging_manifest_key: attempt.stagingManifestKey ?? null,
+    staging_manifest_checksum: attempt.stagingManifestChecksum ?? null,
+    current_attempt_usage: attempt.upstreamUsage ?? {},
+    current_attempt_cost_credits: nullableNumberValue(attempt.upstreamCostCredits),
+    current_attempt_cost_recorded_at: attempt.costRecordedAt
+      ? timestampValue(attempt.costRecordedAt)
+      : null,
+    verified_attempt_cost_total: verifiedAttemptCostTotal,
+  };
+}
+
+function recoveryJobConflict(): StudioRecoveryServiceError {
+  return new StudioRecoveryServiceError('STUDIO_JOB_CONFLICT', 409);
+}
+
+function mapRecoveryRpcCode(code: unknown): StudioRecoveryServiceError {
+  if (code === 'recovery_job_not_found' || code === 'recovery_attempt_not_found') {
+    return new StudioRecoveryServiceError('STUDIO_JOB_CONFLICT', 404);
+  }
+  if (code === 'recovery_conflict') {
+    return new StudioRecoveryServiceError('STUDIO_RECOVERY_CONFLICT', 409);
+  }
+  if (
+    code === 'recovery_manifest_mismatch' ||
+    code === 'recovery_assets_required' ||
+    code === 'recovery_success_invalid' ||
+    code === 'recovery_cost_invalid'
+  ) {
+    return new StudioRecoveryServiceError('STUDIO_ASSET_INVALID', 400);
+  }
+  if (code === 'hold_cap_reached' || code === 'hold_cumulative_cap_exceeded') {
+    return new StudioRecoveryServiceError('STUDIO_BILLING_INCIDENT_REQUIRED', 409);
+  }
+  if (
+    code === 'recovery_state_invalid' ||
+    code === 'recovery_lease_live' ||
+    code === 'recovery_reservation_not_found' ||
+    code === 'recovery_reservation_time_invalid' ||
+    code === 'recovery_time_invalid' ||
+    code === 'recovery_arguments_invalid' ||
+    code === 'attempt_cost_conflict' ||
+    code === 'recovery_not_created_invalid' ||
+    code === 'current_attempt_cost_positive' ||
+    code === 'keep_unknown_invalid' ||
+    code === 'hold_not_future' ||
+    code === 'hold_not_extended' ||
+    code === 'hold_extension_too_long'
+  ) {
+    return recoveryJobConflict();
+  }
+  return new StudioRecoveryServiceError('STUDIO_INTERNAL_ERROR', 500);
+}
+
 function rowsFromExecute(value: unknown): Record<string, unknown>[] {
   if (!value || typeof (value as { [Symbol.iterator]?: unknown })[Symbol.iterator] !== 'function') {
     return [];
   }
   return Array.from(value as Iterable<Record<string, unknown>>);
+}
+
+export function createDrizzleStudioRecoveryRepository(db: Database): StudioRecoveryRepository {
+  return {
+    async recoverLocked(input, prepare) {
+      return db.transaction(
+        async (tx) => {
+          const [job] = await tx
+            .select()
+            .from(studioJobs)
+            .where(eq(studioJobs.jobId, input.job_id))
+            .for('update')
+            .limit(1);
+          if (!job || job.projectId !== input.project_id || job.accountId !== input.account_id) {
+            throw new StudioRecoveryServiceError('STUDIO_JOB_CONFLICT', 404);
+          }
+
+          await tx.execute(sql`
+            SELECT pg_catalog.pg_advisory_xact_lock(
+              pg_catalog.hashtextextended(
+                ${input.job_id}::uuid::text || pg_catalog.chr(31) || ${input.idempotency_key},
+                0
+              )
+            )
+          `);
+
+          const [existingRecovery] = await tx
+            .select()
+            .from(studioJobRecoveries)
+            .where(
+              and(
+                eq(studioJobRecoveries.jobId, input.job_id),
+                eq(studioJobRecoveries.idempotencyKey, input.idempotency_key),
+              ),
+            )
+            .for('update')
+            .limit(1);
+          if (existingRecovery) {
+            if (existingRecovery.requestHash !== input.request_hash) {
+              throw new StudioRecoveryServiceError('STUDIO_RECOVERY_CONFLICT', 409);
+            }
+            return serializeRecoveryResult(existingRecovery.result);
+          }
+
+          const attempts = await tx
+            .select()
+            .from(studioJobAttempts)
+            .where(
+              and(eq(studioJobAttempts.jobId, input.job_id), eq(studioJobAttempts.status, 'reconciling')),
+            )
+            .for('update');
+          if (attempts.length !== 1) throw recoveryJobConflict();
+          const attempt = attempts[0] as AttemptRow;
+
+          const [reservation] = await tx
+            .select()
+            .from(studioCreditReservations)
+            .where(eq(studioCreditReservations.jobId, input.job_id))
+            .for('update')
+            .limit(1);
+          if (!reservation) throw recoveryJobConflict();
+
+          const [costs] = await tx
+            .select({
+              total: sql<string>`COALESCE(SUM(${studioJobAttempts.upstreamCostCredits}), 0)`,
+            })
+            .from(studioJobAttempts)
+            .where(
+              and(
+                eq(studioJobAttempts.jobId, input.job_id),
+                sql`${studioJobAttempts.costRecordedAt} IS NOT NULL`,
+              ),
+            );
+          const context = serializeRecoveryContext({
+            job,
+            attempt,
+            reservation,
+            verifiedAttemptCostTotal: Number(costs?.total ?? 0),
+          });
+          const prepared = await prepare(context);
+          const resultRows = await tx.execute(sql`
+            SELECT public.atomic_recover_studio_job(
+              ${input.project_id}::uuid,
+              ${input.job_id}::uuid,
+              ${attempt.attemptId}::uuid,
+              ${input.actor_user_id}::uuid,
+              ${input.actor_type},
+              ${input.acting_token_id}::uuid,
+              ${input.decision},
+              ${input.idempotency_key},
+              ${input.request_hash},
+              ${input.reason},
+              ${JSON.stringify(prepared.evidence)}::jsonb,
+              ${JSON.stringify(prepared.result_assets)}::jsonb,
+              ${prepared.actual_credits == null ? null : String(prepared.actual_credits)}::numeric,
+              ${prepared.keep_unknown_until}::timestamptz,
+              ${input.recovered_at}::timestamptz
+            ) AS result
+          `);
+          const rpc = rowsFromExecute(resultRows)[0]?.result as Record<string, unknown> | undefined;
+          if (!rpc) throw new StudioRecoveryServiceError('STUDIO_INTERNAL_ERROR', 500);
+          if (rpc.success === false || typeof rpc.code === 'string') {
+            throw mapRecoveryRpcCode(rpc.code);
+          }
+          return serializeRecoveryResult(rpc);
+        },
+        { isolationLevel: 'read committed' },
+      );
+    },
+  };
 }
 
 export function createDrizzleStudioRepository(db: Database): StudioRepository {

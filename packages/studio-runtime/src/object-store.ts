@@ -9,6 +9,8 @@ export interface StudioObjectMetadata extends StudioObjectRef {
   checksum_sha256: string;
   etag: string | null;
   metadata: Record<string, string>;
+  server_side_encryption?: 'AES256' | 'aws:kms';
+  sse_kms_key_id?: string | null;
 }
 
 export interface StudioPutObjectInput extends StudioObjectRef {
@@ -41,6 +43,8 @@ export interface StudioSignedDownloadInput extends StudioObjectRef {
 
 export interface StudioObjectStore {
   readonly namespace: string;
+  readonly required_server_side_encryption?: 'AES256' | 'aws:kms';
+  readonly required_sse_kms_key_id?: string | null;
   assertReady(): Promise<void>;
   putObject(input: StudioPutObjectInput): Promise<StudioObjectMetadata>;
   headObject(ref: StudioObjectRef): Promise<StudioObjectMetadata>;
@@ -82,6 +86,8 @@ interface StoredBytes {
 
 export class InMemoryStudioObjectStore implements StudioObjectStore {
   readonly namespace: string;
+  readonly required_server_side_encryption = 'AES256' as const;
+  readonly required_sse_kms_key_id = null;
   private readonly objects = new Map<string, StoredBytes>();
 
   constructor(private readonly options: { namespace: string; ready: boolean }) {
@@ -117,6 +123,8 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
       checksum_sha256: input.checksum_sha256,
       etag: input.checksum_sha256,
       metadata: { ...input.metadata },
+      server_side_encryption: this.required_server_side_encryption,
+      sse_kms_key_id: this.required_sse_kms_key_id,
     };
     this.objects.set(input.key, { bytes, metadata });
     return cloneMetadata(metadata);

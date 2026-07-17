@@ -3,6 +3,7 @@ import {
   StudioCreateProviderConfigRequestSchema,
   StudioCredentialBindingSchema,
   StudioEstimateRequestSchema,
+  StudioRecoveryRequestSchema,
   StudioUpdateProviderConfigRequestSchema,
   studioPhase1Capabilities,
 } from '@kortix/api-contract';
@@ -10,13 +11,15 @@ import type {
   StudioCredentialBinding,
   StudioEstimateResponse,
   StudioJob,
+  StudioRecoveryRequest,
+  StudioRecoveryResponse,
 } from '@kortix/api-contract';
 import { StudioStorageUnavailableError } from '@kortix/studio-runtime';
 import { type Context, Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { canonicalStudioRequestHash } from '../../../../packages/studio-runtime/src/idempotency';
-import { PROJECT_ACTIONS } from '../iam/actions';
+import { ACCOUNT_ACTIONS, PROJECT_ACTIONS } from '../iam/actions';
 import type { AppEnv } from '../types';
 import {
   type UnsignedStudioEstimate,
@@ -28,6 +31,7 @@ import {
   type StudioEstimateResolutionError,
   resolveStudioEstimate,
 } from './estimates';
+import { StudioRecoveryServiceError } from './recovery';
 import type { StudioProviderConfigService } from './providers';
 import { createMemoryStudioRepository } from './repositories/memory';
 import { type StudioStorageService, StudioStorageServiceError } from './storage';
@@ -51,6 +55,25 @@ type AssertProjectCapability = (
   action: string,
 ) => Promise<void>;
 
+type AssertAccountCapability = (
+  c: Context<AppEnv>,
+  userId: string,
+  accountId: string,
+  action: string,
+) => Promise<void>;
+
+export interface StudioRecoveryExecutor {
+  recover(input: {
+    accountId: string;
+    projectId: string;
+    jobId: string;
+    actorUserId: string;
+    actorType: 'user' | 'agent' | 'system';
+    actingTokenId: string | null;
+    request: StudioRecoveryRequest;
+  }): Promise<StudioRecoveryResponse>;
+}
+
 export type StudioCredentialBindingExists = (input: {
   accountId: string;
   projectId: string;
@@ -61,8 +84,10 @@ export type StudioProjectRouteDeps = {
   repository?: StudioRepository;
   loadProjectForUser?: LoadProjectForUser;
   assertProjectCapability?: AssertProjectCapability;
+  assertAccountCapability?: AssertAccountCapability;
   providerConfigService?: StudioProviderConfigService;
   storageService?: StudioStorageService;
+  recoveryService?: StudioRecoveryExecutor;
   credentialBindingExists?: StudioCredentialBindingExists;
   estimateSigningSecret?: string;
 };
@@ -107,6 +132,28 @@ function storageErrorResponse(c: Context<AppEnv>, error: unknown): Response {
     return c.json({ error: 'Invalid Studio asset', code: error.code }, status);
   }
   throw error;
+}
+
+function recoveryErrorResponse(c: Context<AppEnv>, error: unknown): Response {
+  if (!(error instanceof StudioRecoveryServiceError)) throw error;
+  if (error.status === 404) return c.json({ error: 'Not found' }, 404);
+  if (error.status === 500) {
+    return c.json({ error: 'Studio recovery failed', code: 'STUDIO_INTERNAL_ERROR' }, 500);
+  }
+  const messages: Partial<Record<typeof error.code, string>> = {
+    STUDIO_ASSET_INVALID: 'Invalid Studio recovery evidence',
+    STUDIO_STORAGE_UNAVAILABLE: 'Studio storage unavailable',
+    STUDIO_RECOVERY_CONFLICT: 'Studio recovery idempotency conflict',
+    STUDIO_JOB_CONFLICT: 'Studio job is not recoverable',
+    STUDIO_BILLING_INCIDENT_REQUIRED: 'Studio recovery requires billing incident review',
+  };
+  return c.json(
+    {
+      error: messages[error.code] ?? 'Studio recovery failed',
+      code: error.code,
+    },
+    error.status,
+  );
 }
 
 function idempotencyMismatch(c: Context<AppEnv>) {
@@ -209,8 +256,10 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
     repository: inputDeps.repository,
     loadProjectForUser: inputDeps.loadProjectForUser,
     assertProjectCapability: inputDeps.assertProjectCapability,
+    assertAccountCapability: inputDeps.assertAccountCapability,
     providerConfigService: inputDeps.providerConfigService,
     storageService: inputDeps.storageService,
+    recoveryService: inputDeps.recoveryService,
     credentialBindingExists: inputDeps.credentialBindingExists,
     estimateSigningSecret: inputDeps.estimateSigningSecret,
   };
@@ -593,6 +642,44 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
     const job = await deps.repository.requestCancellation(projectId, c.req.param('jobId'));
     if (!job) throw new HTTPException(409, { message: 'STUDIO_JOB_NOT_CANCELLABLE' });
     return c.json(job);
+  });
+
+  app.post('/:projectId/studio/jobs/:jobId/recovery', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_CANCEL,
+    );
+    if (!deps.assertAccountCapability || !deps.recoveryService) {
+      return c.json({ error: 'Studio recovery unavailable', code: 'STUDIO_INTERNAL_ERROR' }, 503);
+    }
+    await deps.assertAccountCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      ACCOUNT_ACTIONS.BILLING_WRITE,
+    );
+    const parsed = StudioRecoveryRequestSchema.safeParse(await c.req.json());
+    if (!parsed.success) return badRequest(c, parsed.error.flatten());
+    const actor = studioActorContext(c);
+    try {
+      return c.json(await deps.recoveryService.recover({
+        accountId: loaded.row.accountId,
+        projectId,
+        jobId: c.req.param('jobId'),
+        actorUserId: loaded.userId,
+        actorType: actor.actor_type,
+        actingTokenId: actor.acting_token_id,
+        request: parsed.data,
+      }));
+    } catch (error) {
+      return recoveryErrorResponse(c, error);
+    }
   });
 
   app.get('/:projectId/studio/jobs/:jobId/events', async (c) => {

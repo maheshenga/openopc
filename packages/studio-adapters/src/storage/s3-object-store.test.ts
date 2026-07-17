@@ -255,6 +255,8 @@ describe('S3StudioObjectStore', () => {
       checksum_sha256: CHECKSUM_HEX,
       etag: '"etag-1"',
       metadata: { project_id: 'p' },
+      server_side_encryption: 'AES256',
+      sse_kms_key_id: null,
     });
   });
 
@@ -329,7 +331,11 @@ describe('S3StudioObjectStore', () => {
       checksum_sha256: CHECKSUM_HEX,
       etag: '"etag-1"',
       metadata: { project_id: 'p' },
+      server_side_encryption: 'AES256',
+      sse_kms_key_id: null,
     });
+    expect(store.required_server_side_encryption).toBe('AES256');
+    expect(store.required_sse_kms_key_id).toBeNull();
     expect(await readWebBody(object.body)).toEqual(BYTES);
     expect(client.commands[0]).toBeInstanceOf(HeadObjectCommand);
     expect((client.commands[0] as HeadObjectCommand).input).toMatchObject({
@@ -636,6 +642,8 @@ function storedOutput() {
     ContentLength: BYTES.byteLength,
     ChecksumSHA256: CHECKSUM_BASE64,
     ETag: '"etag-1"',
+    ServerSideEncryption: 'AES256' as const,
+    SSEKMSKeyId: undefined,
     Metadata: {
       project_id: 'p',
       'studio-checksum-sha256': CHECKSUM_HEX,

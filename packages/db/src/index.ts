@@ -96,6 +96,7 @@ export {
   studioPricingCatalog,
   studioJobs,
   studioJobAttempts,
+  studioJobRecoveries,
   studioJobEvents,
   studioAssets,
   studioJobAssets,

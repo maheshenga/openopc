@@ -113,17 +113,16 @@ export async function runStudioMaintenanceOnce(input: {
   }
 }
 
-export async function runStudioWorkerTick(input: {
+export async function runStudioWorkerTick<T>(input: {
   assertReady: () => Promise<void>;
-  claim: () => Promise<void>;
-}): Promise<boolean> {
+  claim: () => Promise<T>;
+}): Promise<{ ready: false } | { ready: true; result: T }> {
   try {
     await input.assertReady();
   } catch {
-    return false;
+    return { ready: false };
   }
-  await input.claim();
-  return true;
+  return { ready: true, result: await input.claim() };
 }
 
 export async function shutdownStudioWorker(input: {
@@ -232,17 +231,14 @@ async function main(): Promise<void> {
       signal: controller.signal,
       idleMs: env.idleMs,
       async tick() {
-        let result: Awaited<ReturnType<typeof worker.runOnce>> | null = null;
-        const ready = await runStudioWorkerTick({
+        const tick = await runStudioWorkerTick({
           assertReady: runtime.assertReadyBeforeClaim,
-          async claim() {
-            result = await worker.runOnce();
-          },
+          claim: () => worker.runOnce(),
         });
-        if (ready && result?.kind === 'error') {
+        if (tick.ready && tick.result.kind === 'error') {
           console.error('[studio-worker] tick failed', {
-            code: result.code,
-            jobId: result.jobId,
+            code: tick.result.code,
+            jobId: tick.result.jobId,
           });
         }
         const now = Date.now();

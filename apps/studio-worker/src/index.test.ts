@@ -53,7 +53,7 @@ describe('studio worker bootstrap loop', () => {
         claims += 1;
       },
     });
-    expect(unavailable).toBe(false);
+    expect(unavailable).toEqual({ ready: false });
     expect(claims).toBe(0);
 
     expect(
@@ -61,18 +61,25 @@ describe('studio worker bootstrap loop', () => {
         assertReady: async () => {},
         claim: async () => {
           claims += 1;
+          return 'claimed';
         },
       }),
-    ).toBe(true);
+    ).toEqual({ ready: true, result: 'claimed' });
     expect(claims).toBe(1);
   });
 
   test('shuts down maintenance, database, and storage exactly once', async () => {
     const calls: string[] = [];
     await shutdownStudioWorker({
-      releaseMaintenance: async () => calls.push('maintenance'),
-      closeDatabase: async () => calls.push('database'),
-      closeStorage: async () => calls.push('storage'),
+      releaseMaintenance: async () => {
+        calls.push('maintenance');
+      },
+      closeDatabase: async () => {
+        calls.push('database');
+      },
+      closeStorage: async () => {
+        calls.push('storage');
+      },
     });
     expect(calls).toEqual(['maintenance', 'database', 'storage']);
   });
@@ -80,12 +87,16 @@ describe('studio worker bootstrap loop', () => {
   test('attempts every cleanup step when the database close fails', async () => {
     const calls: string[] = [];
     await shutdownStudioWorker({
-      releaseMaintenance: async () => calls.push('maintenance'),
+      releaseMaintenance: async () => {
+        calls.push('maintenance');
+      },
       closeDatabase: async () => {
         calls.push('database');
         throw new Error('database close failed');
       },
-      closeStorage: async () => calls.push('storage'),
+      closeStorage: async () => {
+        calls.push('storage');
+      },
     });
     expect(calls).toEqual(['maintenance', 'database', 'storage']);
   });

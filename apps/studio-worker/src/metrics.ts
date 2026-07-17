@@ -1,7 +1,6 @@
-export const STUDIO_TELEMETRY_PROFILES = [
-  'fake',
-  'openai-images-v1-generic',
-] as const;
+import { type StudioProviderAdapter, StudioProviderCallError } from '@kortix/studio-runtime';
+
+export const STUDIO_TELEMETRY_PROFILES = ['fake', 'openai-images-v1-generic'] as const;
 
 export type StudioTelemetryProfile = (typeof STUDIO_TELEMETRY_PROFILES)[number];
 export type StudioProviderOperation = 'submit' | 'poll' | 'reconcile';
@@ -16,10 +15,7 @@ export type StudioStorageOperation =
   | 'presign_download';
 export type StudioStorageOutcome = 'succeeded' | 'failed';
 export type StudioReservationState = 'active' | 'settled' | 'released';
-export type StudioRecoveryDecision =
-  | 'confirm_succeeded'
-  | 'confirm_not_created'
-  | 'keep_unknown';
+export type StudioRecoveryDecision = 'confirm_succeeded' | 'confirm_not_created' | 'keep_unknown';
 export type StudioRecoveryOutcome = 'applied' | 'replayed' | 'rejected';
 export type StudioReservationAgeSeverity = 'normal' | 'warning' | 'critical';
 
@@ -72,14 +68,24 @@ type GaugeEmission =
       value: number;
       labels: { role: 'api' | 'worker' };
     }
-  | { kind: 'gauge'; name: 'studio_queue_oldest_age_seconds'; value: number; labels: {} }
+  | {
+      kind: 'gauge';
+      name: 'studio_queue_oldest_age_seconds';
+      value: number;
+      labels: Record<string, never>;
+    }
   | {
       kind: 'gauge';
       name: 'studio_reservation_oldest_age_seconds';
       value: number;
       labels: { state: StudioReservationState };
     }
-  | { kind: 'gauge'; name: 'studio_orphan_staging_objects'; value: number; labels: {} };
+  | {
+      kind: 'gauge';
+      name: 'studio_orphan_staging_objects';
+      value: number;
+      labels: Record<string, never>;
+    };
 
 type HistogramEmission =
   | {
@@ -114,8 +120,14 @@ export type StudioTelemetry = {
     profile: StudioTelemetryProfile;
     seconds: number;
   }): void;
-  unknownOutcome(input: { phase: StudioUnknownOutcomePhase; profile: StudioTelemetryProfile }): void;
-  storageOperation(input: { operation: StudioStorageOperation; outcome: StudioStorageOutcome }): void;
+  unknownOutcome(input: {
+    phase: StudioUnknownOutcomePhase;
+    profile: StudioTelemetryProfile;
+  }): void;
+  storageOperation(input: {
+    operation: StudioStorageOperation;
+    outcome: StudioStorageOutcome;
+  }): void;
   storageOperationDuration(input: { operation: StudioStorageOperation; seconds: number }): void;
   storageReadiness(input: { role: 'api' | 'worker'; ready: boolean }): void;
   queueOldestAge(seconds: number): void;
@@ -139,7 +151,14 @@ export type InMemoryStudioTelemetrySink = StudioTelemetrySinks & {
 const PROVIDER_OPERATIONS = ['submit', 'poll', 'reconcile'] as const;
 const PROVIDER_OUTCOMES = ['succeeded', 'failed', 'unknown'] as const;
 const UNKNOWN_OUTCOME_PHASES = ['submitting', 'polling', 'reconciling'] as const;
-const STORAGE_OPERATIONS = ['put', 'get', 'head', 'delete', 'presign_upload', 'presign_download'] as const;
+const STORAGE_OPERATIONS = [
+  'put',
+  'get',
+  'head',
+  'delete',
+  'presign_upload',
+  'presign_download',
+] as const;
 const STORAGE_OUTCOMES = ['succeeded', 'failed'] as const;
 const RESERVATION_STATES = ['active', 'settled', 'released'] as const;
 const RECOVERY_DECISIONS = ['confirm_succeeded', 'confirm_not_created', 'keep_unknown'] as const;
@@ -243,7 +262,12 @@ export function createStudioTelemetry(sinks: StudioTelemetrySinks): StudioTeleme
     },
     queueOldestAge(seconds) {
       assertNonNegative(seconds, 'queue oldest age');
-      sinks.gauge({ kind: 'gauge', name: 'studio_queue_oldest_age_seconds', value: seconds, labels: {} });
+      sinks.gauge({
+        kind: 'gauge',
+        name: 'studio_queue_oldest_age_seconds',
+        value: seconds,
+        labels: {},
+      });
     },
     reservationOldestAge({ state, seconds }) {
       assertAllowed(state, RESERVATION_STATES, 'reservation state');
@@ -258,7 +282,12 @@ export function createStudioTelemetry(sinks: StudioTelemetrySinks): StudioTeleme
     },
     orphanStagingObjects(count) {
       assertNonNegative(count, 'orphan staging object count');
-      sinks.gauge({ kind: 'gauge', name: 'studio_orphan_staging_objects', value: count, labels: {} });
+      sinks.gauge({
+        kind: 'gauge',
+        name: 'studio_orphan_staging_objects',
+        value: count,
+        labels: {},
+      });
     },
     estimateViolation({ profile }) {
       assertAllowed(profile, STUDIO_TELEMETRY_PROFILES, 'profile');
@@ -289,5 +318,66 @@ export function createStudioTelemetry(sinks: StudioTelemetrySinks): StudioTeleme
         labels: { decision, outcome },
       });
     },
+  };
+}
+
+export function instrumentStudioProviderAdapter(
+  adapter: StudioProviderAdapter,
+  profile: StudioTelemetryProfile,
+  telemetry: StudioTelemetry,
+  nowMilliseconds: () => number = performance.now.bind(performance),
+): StudioProviderAdapter {
+  const observe = async <T>(
+    operation: StudioProviderOperation,
+    phase: StudioUnknownOutcomePhase,
+    call: () => Promise<T>,
+    returnedUnknown: (result: T) => boolean = () => false,
+  ): Promise<T> => {
+    const startedAt = nowMilliseconds();
+    try {
+      const result = await call();
+      const outcome = returnedUnknown(result) ? 'unknown' : 'succeeded';
+      telemetry.providerRequest({ operation, outcome, profile });
+      if (outcome === 'unknown') telemetry.unknownOutcome({ phase, profile });
+      return result;
+    } catch (error) {
+      const outcome =
+        error instanceof StudioProviderCallError && error.classification === 'unknown_outcome'
+          ? 'unknown'
+          : 'failed';
+      telemetry.providerRequest({ operation, outcome, profile });
+      if (outcome === 'unknown') telemetry.unknownOutcome({ phase, profile });
+      throw error;
+    } finally {
+      telemetry.providerRequestDuration({
+        operation,
+        profile,
+        seconds: Math.max(0, nowMilliseconds() - startedAt) / 1_000,
+      });
+    }
+  };
+  const reconcile = adapter.reconcile;
+  return {
+    ...adapter,
+    submit: (context, input) =>
+      observe('submit', 'submitting', () => adapter.submit(context, input)),
+    poll: (context, handle) =>
+      observe(
+        'poll',
+        'polling',
+        () => adapter.poll(context, handle),
+        (status) => status.status === 'unknown',
+      ),
+    ...(reconcile
+      ? {
+          reconcile: (context, submissionKey) =>
+            observe(
+              'reconcile',
+              'reconciling',
+              () => reconcile(context, submissionKey),
+              (result) => result === 'unknown',
+            ),
+        }
+      : {}),
   };
 }

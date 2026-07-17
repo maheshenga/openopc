@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import { StudioProviderCallError } from '@kortix/studio-runtime';
 import {
-  createStudioTelemetry,
   type StudioMetricEmission,
+  createStudioTelemetry,
+  instrumentStudioProviderAdapter,
 } from './metrics';
 
 function recordingTelemetry() {
@@ -117,6 +119,194 @@ describe('Studio worker telemetry', () => {
         name: 'studio_recovery_decisions_total',
         value: 1,
         labels: { decision: 'keep_unknown', outcome: 'applied' },
+      },
+    ]);
+  });
+
+  test('records a successful provider request through the invocation adapter', async () => {
+    const { telemetry, emissions } = recordingTelemetry();
+    const adapter = instrumentStudioProviderAdapter(
+      {
+        id: 'fake',
+        submit: async (context) => ({
+          kind: 'completed' as const,
+          provider: 'fake',
+          submission_key: context.submissionKey,
+          result: { assets: [], usage: {} },
+        }),
+        poll: async () => ({ status: 'succeeded' as const }),
+        cancel: async () => {},
+        fetchResult: async () => ({ assets: [], usage: {} }),
+      },
+      'fake',
+      telemetry,
+      (() => {
+        const values = [1_000, 1_250];
+        return () => values.shift() ?? 1_250;
+      })(),
+    );
+
+    await adapter.submit(
+      { correlationId: 'job-a', submissionKey: 'submission-a' },
+      {
+        capability: 'image.generate',
+        image: {
+          prompt: 'test',
+          reference_asset_ids: [],
+          aspect_ratio: '1:1',
+          quality: 'standard',
+          output_count: 1,
+        },
+      },
+    );
+
+    expect(emissions).toEqual([
+      {
+        kind: 'counter',
+        name: 'studio_provider_requests_total',
+        value: 1,
+        labels: { operation: 'submit', outcome: 'succeeded', profile: 'fake' },
+      },
+      {
+        kind: 'histogram',
+        name: 'studio_provider_request_duration_seconds',
+        value: 0.25,
+        labels: { operation: 'submit', profile: 'fake' },
+      },
+    ]);
+  });
+
+  test('records an unknown reconciliation without leaking diagnostic labels', async () => {
+    const { telemetry, emissions } = recordingTelemetry();
+    const adapter = instrumentStudioProviderAdapter(
+      {
+        id: 'fake',
+        submit: async () => {
+          throw new Error('unused');
+        },
+        reconcile: async () => {
+          throw new StudioProviderCallError('unknown_outcome', 'sensitive provider detail');
+        },
+        poll: async () => ({ status: 'succeeded' as const }),
+        cancel: async () => {},
+        fetchResult: async () => ({ assets: [], usage: {} }),
+      },
+      'fake',
+      telemetry,
+      (() => {
+        const values = [2_000, 2_500];
+        return () => values.shift() ?? 2_500;
+      })(),
+    );
+
+    await expect(
+      adapter.reconcile?.(
+        { correlationId: 'job-a', submissionKey: 'submission-a' },
+        'submission-a',
+      ),
+    ).rejects.toMatchObject({ classification: 'unknown_outcome' });
+    expect(emissions).toEqual([
+      {
+        kind: 'counter',
+        name: 'studio_provider_requests_total',
+        value: 1,
+        labels: { operation: 'reconcile', outcome: 'unknown', profile: 'fake' },
+      },
+      {
+        kind: 'counter',
+        name: 'studio_unknown_outcomes_total',
+        value: 1,
+        labels: { phase: 'reconciling', profile: 'fake' },
+      },
+      {
+        kind: 'histogram',
+        name: 'studio_provider_request_duration_seconds',
+        value: 0.5,
+        labels: { operation: 'reconcile', profile: 'fake' },
+      },
+    ]);
+    expect(JSON.stringify(emissions)).not.toContain('sensitive provider detail');
+  });
+
+  test('records a returned unknown poll status as an unknown outcome', async () => {
+    const { telemetry, emissions } = recordingTelemetry();
+    const adapter = instrumentStudioProviderAdapter(
+      {
+        id: 'fake',
+        submit: async () => {
+          throw new Error('unused');
+        },
+        poll: async () => ({ status: 'unknown' as const }),
+        cancel: async () => {},
+        fetchResult: async () => ({ assets: [], usage: {} }),
+      },
+      'fake',
+      telemetry,
+      (() => {
+        const values = [3_000, 3_100];
+        return () => values.shift() ?? 3_100;
+      })(),
+    );
+
+    await adapter.poll(
+      { correlationId: 'job-a', submissionKey: 'submission-a' },
+      { provider: 'fake', id: 'handle-a', submission_key: 'submission-a' },
+    );
+
+    expect(emissions.slice(0, 2)).toEqual([
+      {
+        kind: 'counter',
+        name: 'studio_provider_requests_total',
+        value: 1,
+        labels: { operation: 'poll', outcome: 'unknown', profile: 'fake' },
+      },
+      {
+        kind: 'counter',
+        name: 'studio_unknown_outcomes_total',
+        value: 1,
+        labels: { phase: 'polling', profile: 'fake' },
+      },
+    ]);
+  });
+
+  test('records a returned unknown reconciliation as an unknown outcome', async () => {
+    const { telemetry, emissions } = recordingTelemetry();
+    const adapter = instrumentStudioProviderAdapter(
+      {
+        id: 'fake',
+        submit: async () => {
+          throw new Error('unused');
+        },
+        reconcile: async () => 'unknown' as const,
+        poll: async () => ({ status: 'succeeded' as const }),
+        cancel: async () => {},
+        fetchResult: async () => ({ assets: [], usage: {} }),
+      },
+      'fake',
+      telemetry,
+      (() => {
+        const values = [4_000, 4_100];
+        return () => values.shift() ?? 4_100;
+      })(),
+    );
+
+    await adapter.reconcile?.(
+      { correlationId: 'job-a', submissionKey: 'submission-a' },
+      'submission-a',
+    );
+
+    expect(emissions.slice(0, 2)).toEqual([
+      {
+        kind: 'counter',
+        name: 'studio_provider_requests_total',
+        value: 1,
+        labels: { operation: 'reconcile', outcome: 'unknown', profile: 'fake' },
+      },
+      {
+        kind: 'counter',
+        name: 'studio_unknown_outcomes_total',
+        value: 1,
+        labels: { phase: 'reconciling', profile: 'fake' },
       },
     ]);
   });

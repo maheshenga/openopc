@@ -253,7 +253,7 @@ describe('Studio worker telemetry', () => {
       { provider: 'fake', id: 'handle-a', submission_key: 'submission-a' },
     );
 
-    expect(emissions.slice(0, 2)).toEqual([
+    expect(emissions).toEqual([
       {
         kind: 'counter',
         name: 'studio_provider_requests_total',
@@ -265,6 +265,12 @@ describe('Studio worker telemetry', () => {
         name: 'studio_unknown_outcomes_total',
         value: 1,
         labels: { phase: 'polling', profile: 'fake' },
+      },
+      {
+        kind: 'histogram',
+        name: 'studio_provider_request_duration_seconds',
+        value: 0.1,
+        labels: { operation: 'poll', profile: 'fake' },
       },
     ]);
   });
@@ -295,7 +301,7 @@ describe('Studio worker telemetry', () => {
       'submission-a',
     );
 
-    expect(emissions.slice(0, 2)).toEqual([
+    expect(emissions).toEqual([
       {
         kind: 'counter',
         name: 'studio_provider_requests_total',
@@ -308,6 +314,202 @@ describe('Studio worker telemetry', () => {
         value: 1,
         labels: { phase: 'reconciling', profile: 'fake' },
       },
+      {
+        kind: 'histogram',
+        name: 'studio_provider_request_duration_seconds',
+        value: 0.1,
+        labels: { operation: 'reconcile', profile: 'fake' },
+      },
     ]);
+  });
+
+  test('records and rethrows ordinary failures for every instrumented operation', async () => {
+    const { telemetry, emissions } = recordingTelemetry();
+    const failures = {
+      submit: new Error('submit failed'),
+      poll: new Error('poll failed'),
+      reconcile: new Error('reconcile failed'),
+    };
+    const adapter = instrumentStudioProviderAdapter(
+      {
+        id: 'fake',
+        submit: async () => {
+          throw failures.submit;
+        },
+        poll: async () => {
+          throw failures.poll;
+        },
+        reconcile: async () => {
+          throw failures.reconcile;
+        },
+        cancel: async () => {},
+        fetchResult: async () => ({ assets: [], usage: {} }),
+      },
+      'fake',
+      telemetry,
+      (() => {
+        let now = 5_000;
+        return () => {
+          const value = now;
+          now += 100;
+          return value;
+        };
+      })(),
+    );
+    const context = { correlationId: 'job-a', submissionKey: 'submission-a' };
+    const handle = { provider: 'fake', id: 'handle-a', submission_key: 'submission-a' };
+
+    await expect(
+      adapter.submit(context, {
+        capability: 'image.generate',
+        image: {
+          prompt: 'test',
+          reference_asset_ids: [],
+          aspect_ratio: '1:1',
+          quality: 'standard',
+          output_count: 1,
+        },
+      }),
+    ).rejects.toBe(failures.submit);
+    await expect(adapter.poll(context, handle)).rejects.toBe(failures.poll);
+    await expect(adapter.reconcile?.(context, 'submission-a')).rejects.toBe(failures.reconcile);
+
+    expect(emissions).toEqual(
+      (['submit', 'poll', 'reconcile'] as const).flatMap((operation) => [
+        {
+          kind: 'counter',
+          name: 'studio_provider_requests_total',
+          value: 1,
+          labels: { operation, outcome: 'failed', profile: 'fake' },
+        },
+        {
+          kind: 'histogram',
+          name: 'studio_provider_request_duration_seconds',
+          value: 0.1,
+          labels: { operation, profile: 'fake' },
+        },
+      ]),
+    );
+  });
+
+  test('records thrown unknown outcomes for submit and poll without diagnostic labels', async () => {
+    const { telemetry, emissions } = recordingTelemetry();
+    const adapter = instrumentStudioProviderAdapter(
+      {
+        id: 'fake',
+        submit: async () => {
+          throw new StudioProviderCallError('unknown_outcome', 'sensitive submit detail');
+        },
+        poll: async () => {
+          throw new StudioProviderCallError('unknown_outcome', 'sensitive poll detail');
+        },
+        cancel: async () => {},
+        fetchResult: async () => ({ assets: [], usage: {} }),
+      },
+      'fake',
+      telemetry,
+      (() => {
+        let now = 6_000;
+        return () => {
+          const value = now;
+          now += 100;
+          return value;
+        };
+      })(),
+    );
+    const context = { correlationId: 'job-a', submissionKey: 'submission-a' };
+
+    await expect(
+      adapter.submit(context, {
+        capability: 'image.generate',
+        image: {
+          prompt: 'test',
+          reference_asset_ids: [],
+          aspect_ratio: '1:1',
+          quality: 'standard',
+          output_count: 1,
+        },
+      }),
+    ).rejects.toMatchObject({ classification: 'unknown_outcome' });
+    await expect(
+      adapter.poll(context, {
+        provider: 'fake',
+        id: 'handle-a',
+        submission_key: 'submission-a',
+      }),
+    ).rejects.toMatchObject({ classification: 'unknown_outcome' });
+
+    expect(emissions).toEqual(
+      (
+        [
+          ['submit', 'submitting'],
+          ['poll', 'polling'],
+        ] as const
+      ).flatMap(([operation, phase]) => [
+        {
+          kind: 'counter',
+          name: 'studio_provider_requests_total',
+          value: 1,
+          labels: { operation, outcome: 'unknown', profile: 'fake' },
+        },
+        {
+          kind: 'counter',
+          name: 'studio_unknown_outcomes_total',
+          value: 1,
+          labels: { phase, profile: 'fake' },
+        },
+        {
+          kind: 'histogram',
+          name: 'studio_provider_request_duration_seconds',
+          value: 0.1,
+          labels: { operation, profile: 'fake' },
+        },
+      ]),
+    );
+    expect(JSON.stringify(emissions)).not.toContain('sensitive');
+  });
+
+  test('preserves prototype-backed adapter methods and their receiver', async () => {
+    class PrototypeAdapter {
+      readonly id = 'fake';
+      #cancelled = false;
+
+      async submit(context: { submissionKey: string }) {
+        return {
+          kind: 'completed' as const,
+          provider: 'fake',
+          submission_key: context.submissionKey,
+          result: { assets: [], usage: {} },
+        };
+      }
+
+      async poll() {
+        return { status: 'succeeded' as const };
+      }
+
+      async cancel() {
+        this.#cancelled = true;
+      }
+
+      async reconcile() {
+        return this.#cancelled ? ('not-found' as const) : ('unknown' as const);
+      }
+
+      async fetchResult() {
+        if (!this.#cancelled) throw new Error('cancel receiver was lost');
+        return { assets: [], usage: {} };
+      }
+    }
+
+    const source = new PrototypeAdapter();
+    const { telemetry } = recordingTelemetry();
+    const adapter = instrumentStudioProviderAdapter(source, 'fake', telemetry);
+    const context = { correlationId: 'job-a', submissionKey: 'submission-a' };
+    const handle = { provider: 'fake', id: 'handle-a', submission_key: 'submission-a' };
+
+    expect(adapter.id).toBe(source.id);
+    await adapter.cancel(context, handle);
+    await expect(adapter.fetchResult(context, handle)).resolves.toEqual({ assets: [], usage: {} });
+    await expect(adapter.reconcile?.(context, 'submission-a')).resolves.toBe('not-found');
   });
 });

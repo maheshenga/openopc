@@ -356,18 +356,23 @@ export function instrumentStudioProviderAdapter(
       });
     }
   };
-  const reconcile = adapter.reconcile;
+  const submit = adapter.submit.bind(adapter);
+  const poll = adapter.poll.bind(adapter);
+  const cancel = adapter.cancel.bind(adapter);
+  const fetchResult = adapter.fetchResult.bind(adapter);
+  const reconcile = adapter.reconcile?.bind(adapter);
   return {
-    ...adapter,
-    submit: (context, input) =>
-      observe('submit', 'submitting', () => adapter.submit(context, input)),
+    id: adapter.id,
+    submit: (context, input) => observe('submit', 'submitting', () => submit(context, input)),
     poll: (context, handle) =>
       observe(
         'poll',
         'polling',
-        () => adapter.poll(context, handle),
+        () => poll(context, handle),
         (status) => status.status === 'unknown',
       ),
+    cancel: (context, handle) => cancel(context, handle),
+    fetchResult: (context, handle) => fetchResult(context, handle),
     ...(reconcile
       ? {
           reconcile: (context, submissionKey) =>

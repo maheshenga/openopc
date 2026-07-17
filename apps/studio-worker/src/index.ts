@@ -131,11 +131,8 @@ export async function shutdownStudioWorker(input: {
   closeDatabase: () => Promise<void>;
   closeStorage: () => Promise<void>;
 }): Promise<void> {
-  await Promise.allSettled([
-    input.releaseMaintenance(),
-    input.closeDatabase(),
-    input.closeStorage(),
-  ]);
+  await Promise.allSettled([input.releaseMaintenance()]);
+  await Promise.allSettled([input.closeDatabase(), input.closeStorage()]);
 }
 
 async function main(): Promise<void> {

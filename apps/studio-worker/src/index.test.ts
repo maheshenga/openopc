@@ -90,6 +90,31 @@ describe('studio worker bootstrap loop', () => {
     expect(calls).toEqual(['maintenance', 'database', 'storage']);
   });
 
+  test('waits for maintenance release before starting database close', async () => {
+    let releaseSettled = false;
+    let closeDatabaseStarted = false;
+    let release!: () => void;
+    const releasePromise = new Promise<void>((resolve) => {
+      release = () => {
+        releaseSettled = true;
+        resolve();
+      };
+    });
+    const closing = shutdownStudioWorker({
+      releaseMaintenance: async () => releasePromise,
+      closeDatabase: async () => {
+        closeDatabaseStarted = true;
+        expect(releaseSettled).toBe(true);
+      },
+      closeStorage: async () => {},
+    });
+    await Promise.resolve();
+    expect(closeDatabaseStarted).toBe(false);
+    release();
+    await closing;
+    expect(closeDatabaseStarted).toBe(true);
+  });
+
   test('does not make a second claim after an abort', async () => {
     const controller = new AbortController();
     let claims = 0;

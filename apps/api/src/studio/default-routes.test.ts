@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
+import type { StudioRecoveryResponse } from '@kortix/api-contract';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { Hono } from 'hono';
 
 mock.module('../config', () => ({
   SANDBOX_VERSION: 'test',
@@ -7,12 +10,172 @@ mock.module('../config', () => ({
   config: { API_KEY_SECRET: 'test-signing-secret' },
 }));
 mock.module('../shared/db', () => ({ db: {}, hasDatabase: false }));
+mock.module('../projects/lib/access', () => ({
+  loadProjectForUser: async (_context: unknown, projectId: string) => ({
+    row: { accountId: ACCOUNT_ID, projectId },
+    userId: USER_ID,
+  }),
+  assertProjectCapability: async () => {},
+}));
+mock.module('../iam/dispatcher', () => ({ assertAuthorized: async () => {} }));
 
-const { buildStudioApiRuntime } = await import('./default-routes');
+const { buildStudioApiRuntime, createDefaultStudioProjectRoutes } = await import(
+  './default-routes'
+);
+const { createMemoryStudioRepository } = await import('./repositories/memory');
+
+const ACCOUNT_ID = '91000000-0000-4000-a000-000000000001';
+const PROJECT_ID = '92000000-0000-4000-a000-000000000001';
+const USER_ID = '93000000-0000-4000-a000-000000000001';
+const JOB_ID = '94000000-0000-4000-a000-000000000001';
+const ATTEMPT_ID = '95000000-0000-4000-a000-000000000001';
+const RECOVERY_ID = '96000000-0000-4000-a000-000000000001';
+const FAKE_PROVIDER_ID = '97000000-0000-4000-a000-000000000001';
+const PRICE_ID = '99000000-0000-4000-a000-000000000001';
+
+const imageInput = {
+  capability: 'image.generate' as const,
+  image: {
+    prompt: 'A production runtime wiring test',
+    reference_asset_ids: [],
+    aspect_ratio: '1:1' as const,
+    quality: 'standard' as const,
+    output_count: 1,
+  },
+};
+
+const fakeProvider = {
+  provider_config_id: FAKE_PROVIDER_ID,
+  account_id: ACCOUNT_ID,
+  project_id: PROJECT_ID,
+  provider: 'fake' as const,
+  display_name: 'Legacy fake provider',
+  base_url: null,
+  region: null,
+  credential_binding: { kind: 'none' as const },
+  capabilities: ['image.generate' as const],
+  enabled: true,
+  created_at: '2026-07-17T00:00:00.000Z',
+  updated_at: '2026-07-17T00:00:00.000Z',
+};
+
+const capabilityMap = {
+  definition_id: 'openai-compatible',
+  capabilities: {
+    'image.generate': {
+      models: [
+        {
+          model: 'gpt-image-1',
+          pricing_catalog_id: PRICE_ID,
+          dialect_profile_id: 'openai-images-v1-generic',
+          supports_reference_images: false,
+          allowed_advanced_fields: [],
+          size_map: {
+            '1:1': '1024x1024',
+            '4:3': '1536x1024',
+            '3:4': '1024x1536',
+            '16:9': '1536x864',
+            '9:16': '864x1536',
+          },
+        },
+      ],
+    },
+  },
+};
+
+function enabledEnv(input: { fake: boolean; openai: boolean }) {
+  return {
+    NODE_ENV: 'test',
+    STUDIO_ENABLED: 'true',
+    STUDIO_FAKE_PROVIDER_ENABLED: String(input.fake),
+    STUDIO_OPENAI_COMPATIBLE_ENABLED: String(input.openai),
+    STUDIO_OBJECT_STORE_MODE: 'memory',
+    STUDIO_ALLOW_EPHEMERAL_STORAGE: 'true',
+  };
+}
+
+async function createOpenAiRepository(
+  binding: { kind: 'secret'; identifier: string } | { kind: 'connector'; slug: string },
+) {
+  const repository = createMemoryStudioRepository({
+    pricing: [
+      {
+        pricing_catalog_id: PRICE_ID,
+        account_id: ACCOUNT_ID,
+        provider: 'openai-compatible',
+        model: 'gpt-image-1',
+        unit: 'image',
+        rate_data: { rate_credits: 2 },
+        maximum_cost_rule: { max_provider_credits: 8 },
+        markup_rule: { markup_credits: 0.25 },
+        version: 1,
+        active: true,
+        created_by_user_id: USER_ID,
+        created_at: '2026-07-17T00:00:00.000Z',
+      },
+    ],
+  });
+  const created = await repository.createProviderConfig(
+    {
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      provider: 'openai-compatible',
+      display_name: 'Production OpenAI-compatible provider',
+      base_url: 'https://images.example.test/v1',
+      region: null,
+      credential_binding: binding,
+      capability_map: capabilityMap,
+      enabled: true,
+    },
+    [{ pricing_catalog_id: PRICE_ID, provider: 'openai-compatible', model: 'gpt-image-1' }],
+  );
+  if (!created.ok) throw new Error('OpenAI-compatible fixture failed');
+  return { repository, providerId: created.value.provider_config_id };
+}
+
+function mountDefaultRoutes(input: Record<string, unknown>) {
+  const routes = (
+    createDefaultStudioProjectRoutes as unknown as (input: Record<string, unknown>) => Hono
+  )(input);
+  const app = new Hono();
+  app.route('/v1/projects', routes);
+  return app;
+}
+
+function defaultRouteInput(input: Record<string, unknown>) {
+  return {
+    loadProjectForUser: async (_context: unknown, projectId: string) => ({
+      row: { accountId: ACCOUNT_ID, projectId },
+      userId: USER_ID,
+    }),
+    assertProjectCapability: async () => {},
+    assertAccountCapability: async () => {},
+    ...input,
+  };
+}
+
+async function estimate(app: Hono, providerConfigId: string) {
+  return app.request(`/v1/projects/${PROJECT_ID}/studio/estimates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      capability: 'image.generate',
+      provider_config_id: providerConfigId,
+      model: providerConfigId === FAKE_PROVIDER_ID ? 'fake/image-v1' : 'gpt-image-1',
+      input: imageInput,
+    }),
+  });
+}
 
 describe('Studio API runtime assembly', () => {
   test('keeps Studio disabled without adapter configuration', () => {
-    expect(buildStudioApiRuntime({ STUDIO_ENABLED: 'false' })).toEqual({ enabled: false });
+    expect(
+      buildStudioApiRuntime({
+        STUDIO_ENABLED: 'false',
+        STUDIO_OBJECT_STORE_MODE: 'broken',
+        STUDIO_S3_SECRET_ACCESS_KEY: 'must-not-be-validated',
+      }),
+    ).toEqual({ enabled: false });
   });
 
   test('uses the same ephemeral storage policy as the worker runtime', () => {
@@ -33,5 +196,214 @@ describe('Studio API runtime assembly', () => {
         STUDIO_ALLOW_EPHEMERAL_STORAGE: 'true',
       }),
     ).toThrow(/STUDIO_OPENAI_COMPATIBLE_ENABLED/);
+  });
+
+  test('keeps disabled routes empty or unavailable without touching provider configuration', async () => {
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    let providerReads = 0;
+    const originalListProviders = repository.listProviders.bind(repository);
+    repository.listProviders = async (...args) => {
+      providerReads += 1;
+      return originalListProviders(...args);
+    };
+    const app = mountDefaultRoutes(
+      defaultRouteInput({ env: { STUDIO_ENABLED: 'false' }, repository }),
+    );
+
+    const capabilities = await app.request(`/v1/projects/${PROJECT_ID}/studio/capabilities`);
+    expect(capabilities.status).toBe(200);
+    expect(await capabilities.json()).toEqual({ items: [], next_cursor: null });
+    expect((await estimate(app, FAKE_PROVIDER_ID)).status).toBe(503);
+    expect(
+      (
+        await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs/${JOB_ID}/recovery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            decision: 'confirm_not_created',
+            idempotency_key: 'disabled-runtime-recovery-0001',
+            reason: 'Provider confirms no upstream request was created.',
+            evidence: {},
+          }),
+        })
+      ).status,
+    ).toBe(503);
+    expect(providerReads).toBe(0);
+  });
+
+  test('filters persisted fake providers from capabilities, estimates, and jobs when fake is disabled', async () => {
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    let createJobCalls = 0;
+    const originalCreateJob = repository.createJob.bind(repository);
+    repository.createJob = async (...args) => {
+      createJobCalls += 1;
+      return originalCreateJob(...args);
+    };
+    const enabledApp = mountDefaultRoutes(
+      defaultRouteInput({ env: enabledEnv({ fake: true, openai: false }), repository }),
+    );
+    const enabledEstimate = await estimate(enabledApp, FAKE_PROVIDER_ID);
+    expect(enabledEstimate.status).toBe(200);
+    const estimateBody = (await enabledEstimate.json()) as Record<string, unknown>;
+
+    const disabledApp = mountDefaultRoutes(
+      defaultRouteInput({ env: enabledEnv({ fake: false, openai: true }), repository }),
+    );
+    const capabilities = await disabledApp.request(
+      `/v1/projects/${PROJECT_ID}/studio/capabilities`,
+    );
+    expect(await capabilities.json()).toEqual({ items: [], next_cursor: null });
+    expect((await estimate(disabledApp, FAKE_PROVIDER_ID)).status).toBe(404);
+
+    const job = await disabledApp.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        capability: 'image.generate',
+        provider_config_id: FAKE_PROVIDER_ID,
+        model: 'fake/image-v1',
+        input: imageInput,
+        estimate_id: estimateBody.estimate_id,
+        estimate_token: estimateBody.estimate_token,
+        idempotency_key: 'fake-disabled-job-request-0001',
+        request_hash: estimateBody.input_hash,
+      }),
+    });
+    expect(job.status).toBe(404);
+    expect(createJobCalls).toBe(0);
+  });
+
+  test('filters persisted OpenAI-compatible providers when the production provider is disabled', async () => {
+    const { repository, providerId } = await createOpenAiRepository({
+      kind: 'secret',
+      identifier: 'OPENAI_STUDIO_KEY',
+    });
+    let createJobCalls = 0;
+    const originalCreateJob = repository.createJob.bind(repository);
+    repository.createJob = async (...args) => {
+      createJobCalls += 1;
+      return originalCreateJob(...args);
+    };
+    const credentialBindingExists = async () => true;
+    const enabledApp = mountDefaultRoutes(
+      defaultRouteInput({
+        env: enabledEnv({ fake: false, openai: true }),
+        repository,
+        credentialBindingExists,
+      }),
+    );
+    const enabledEstimate = await estimate(enabledApp, providerId);
+    expect(enabledEstimate.status).toBe(200);
+    const estimateBody = (await enabledEstimate.json()) as Record<string, unknown>;
+
+    const app = mountDefaultRoutes(
+      defaultRouteInput({ env: enabledEnv({ fake: true, openai: false }), repository }),
+    );
+
+    const capabilities = await app.request(`/v1/projects/${PROJECT_ID}/studio/capabilities`);
+    expect(await capabilities.json()).toEqual({ items: [], next_cursor: null });
+    expect((await estimate(app, providerId)).status).toBe(404);
+
+    const job = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        capability: 'image.generate',
+        provider_config_id: providerId,
+        model: 'gpt-image-1',
+        input: imageInput,
+        estimate_id: estimateBody.estimate_id,
+        estimate_token: estimateBody.estimate_token,
+        idempotency_key: 'openai-disabled-job-request-0001',
+        request_hash: estimateBody.input_hash,
+      }),
+    });
+    expect(job.status).toBe(404);
+    expect(createJobCalls).toBe(0);
+  });
+
+  test('checks Secret and Connector bindings by account and project without selecting ciphertext', async () => {
+    for (const testCase of [
+      {
+        binding: { kind: 'secret' as const, identifier: 'OPENAI_STUDIO_KEY' },
+        requiredSql: ['project_secrets', 'project.account_id', 'secret.project_id'],
+      },
+      {
+        binding: { kind: 'connector' as const, slug: 'studio-images' },
+        requiredSql: [
+          'executor_connectors',
+          'executor_connection_profiles',
+          'executor_credentials',
+        ],
+      },
+    ]) {
+      const { repository, providerId } = await createOpenAiRepository(testCase.binding);
+      const queries: Array<{ sql: string; params: unknown[] }> = [];
+      const database = {
+        execute: async (query: unknown) => {
+          const compiled = new PgDialect().sqlToQuery(query as never);
+          queries.push({ sql: compiled.sql.toLowerCase(), params: [...compiled.params] });
+          return [{ credential_exists: true }];
+        },
+      };
+      const app = mountDefaultRoutes(
+        defaultRouteInput({
+          env: enabledEnv({ fake: false, openai: true }),
+          repository,
+          database,
+        }),
+      );
+
+      const response = await estimate(app, providerId);
+      expect(response.status).toBe(200);
+      expect(queries).toHaveLength(1);
+      for (const fragment of testCase.requiredSql) expect(queries[0].sql).toContain(fragment);
+      expect(queries[0].params).toContain(ACCOUNT_ID);
+      expect(queries[0].params).toContain(PROJECT_ID);
+      expect(queries[0].sql).not.toMatch(/select\s+(secret|credential)\.value_enc/);
+    }
+  });
+
+  test('assembles recovery with the enabled runtime repository and object store', async () => {
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const response: StudioRecoveryResponse = {
+      recovery_id: RECOVERY_ID,
+      job_id: JOB_ID,
+      attempt_id: ATTEMPT_ID,
+      decision: 'confirm_not_created',
+      job_status: 'failed',
+      attempt_status: 'failed',
+      reservation_status: 'released',
+      hold_expires_at: null,
+    };
+    const recoveryCalls: unknown[] = [];
+    const recoveryRepository = {
+      recoverLocked: async (input: unknown) => {
+        recoveryCalls.push(input);
+        return response;
+      },
+    };
+    const app = mountDefaultRoutes(
+      defaultRouteInput({
+        env: enabledEnv({ fake: true, openai: false }),
+        repository,
+        recoveryRepository,
+      }),
+    );
+
+    const result = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs/${JOB_ID}/recovery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision: 'confirm_not_created',
+        idempotency_key: 'production-recovery-wiring-0001',
+        reason: 'Provider confirms no upstream request was created.',
+        evidence: {},
+      }),
+    });
+
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual(response);
+    expect(recoveryCalls).toHaveLength(1);
   });
 });

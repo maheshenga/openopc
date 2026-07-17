@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { afterAll, describe, expect, mock, test } from 'bun:test';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
@@ -6,8 +6,28 @@ const ACCOUNT_ID = '00000000-0000-4000-a000-000000000101';
 const PROJECT_ID = '00000000-0000-4000-a000-000000000201';
 const USER_ID = '00000000-0000-4000-a000-000000000001';
 const JOB_ID = '00000000-0000-4000-a000-000000000301';
+const ATTEMPT_ID = '00000000-0000-4000-a000-000000000302';
+const RECOVERY_ID = '00000000-0000-4000-a000-000000000303';
 
 const projectActions: string[] = [];
+const recoveryCalls: unknown[] = [];
+
+const originalStudioEnvironment = {
+  NODE_ENV: process.env.NODE_ENV,
+  STUDIO_ENABLED: process.env.STUDIO_ENABLED,
+  STUDIO_FAKE_PROVIDER_ENABLED: process.env.STUDIO_FAKE_PROVIDER_ENABLED,
+  STUDIO_OPENAI_COMPATIBLE_ENABLED: process.env.STUDIO_OPENAI_COMPATIBLE_ENABLED,
+  STUDIO_OBJECT_STORE_MODE: process.env.STUDIO_OBJECT_STORE_MODE,
+  STUDIO_ALLOW_EPHEMERAL_STORAGE: process.env.STUDIO_ALLOW_EPHEMERAL_STORAGE,
+};
+Object.assign(process.env, {
+  NODE_ENV: 'test',
+  STUDIO_ENABLED: 'true',
+  STUDIO_FAKE_PROVIDER_ENABLED: 'true',
+  STUDIO_OPENAI_COMPATIBLE_ENABLED: 'false',
+  STUDIO_OBJECT_STORE_MODE: 'memory',
+  STUDIO_ALLOW_EPHEMERAL_STORAGE: 'true',
+});
 
 mock.module('../shared/db', () => ({ db: {} }));
 mock.module('../config', () => ({
@@ -41,8 +61,28 @@ mock.module('../iam/dispatcher', () => ({
     _resource: unknown,
     tokenId: string | undefined,
     _context: unknown,
-  ) => {
-  },
+  ) => {},
+}));
+
+const { createMemoryStudioRepository } = await import('../studio/repositories/memory');
+const productionRepository = createMemoryStudioRepository();
+mock.module('../studio/repositories/drizzle', () => ({
+  createDrizzleStudioRepository: () => productionRepository,
+  createDrizzleStudioRecoveryRepository: () => ({
+    recoverLocked: async (input: unknown) => {
+      recoveryCalls.push(input);
+      return {
+        recovery_id: RECOVERY_ID,
+        job_id: JOB_ID,
+        attempt_id: ATTEMPT_ID,
+        decision: 'confirm_not_created',
+        job_status: 'failed',
+        attempt_status: 'failed',
+        reservation_status: 'released',
+        hold_expires_at: null,
+      };
+    },
+  }),
 }));
 
 const { projectsApp } = await import('../projects/lib/app');
@@ -68,7 +108,7 @@ function createApp() {
 }
 
 describe('Studio production API contract', () => {
-  test('mounts the recovery route in the production projects app but keeps it disabled until runtime assembly lands', async () => {
+  test('mounts an executable recovery service in the production projects app', async () => {
     const app = createApp();
     const res = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs/${JOB_ID}/recovery`, {
       method: 'POST',
@@ -83,11 +123,25 @@ describe('Studio production API contract', () => {
       }),
     });
 
-    expect(res.status).toBe(503);
-    expect(await res.json()).toMatchObject({
-      error: 'Studio recovery unavailable',
-      code: 'STUDIO_INTERNAL_ERROR',
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      recovery_id: RECOVERY_ID,
+      job_id: JOB_ID,
+      attempt_id: ATTEMPT_ID,
+      decision: 'confirm_not_created',
+      job_status: 'failed',
+      attempt_status: 'failed',
+      reservation_status: 'released',
+      hold_expires_at: null,
     });
     expect(projectActions).toEqual(['project.studio.jobs.cancel']);
+    expect(recoveryCalls).toHaveLength(1);
   });
+});
+
+afterAll(() => {
+  for (const [key, value] of Object.entries(originalStudioEnvironment)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });

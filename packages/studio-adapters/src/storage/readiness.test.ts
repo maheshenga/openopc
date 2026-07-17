@@ -8,6 +8,8 @@ import type {
   StudioSignedDownloadInput,
   StudioSignedUploadInput,
   StudioStoredObject,
+  StudioListObjectsInput,
+  StudioListObjectsResult,
 } from '@kortix/studio-runtime';
 import { createCachedStudioReadinessProbe } from './readiness';
 
@@ -206,6 +208,10 @@ class RecordingStore implements StudioObjectStore {
   async deleteObject(input: StudioDeleteObjectInput): Promise<void> {
     await this.record('delete', input.key);
     this.objects.delete(input.key);
+  }
+
+  async listObjects(_input: StudioListObjectsInput): Promise<StudioListObjectsResult> {
+    return { objects: [], next_cursor: null };
   }
 
   async createSignedUploadUrl(_input: StudioSignedUploadInput): Promise<string> {

@@ -4,6 +4,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import type { StudioS3StorageConfig } from '../config';
@@ -357,6 +358,63 @@ describe('S3StudioObjectStore', () => {
       Key: 'fixed-prefix/projects/p/file.png',
       IfMatch: '"etag-1"',
       ExpectedBucketOwner: '123456789012',
+    });
+  });
+
+  test('lists a bounded exact prefix and heads every returned object for trusted metadata', async () => {
+    const modified = new Date('2026-07-01T10:00:00.000Z');
+    const client = new RecordingClient(async (command) => {
+      if (command instanceof ListObjectsV2Command) {
+        return {
+          Contents: [
+            {
+              Key: 'fixed-prefix/accounts/a/submissions/hash/a.png',
+              ETag: '"etag-1"',
+              Size: BYTES.byteLength,
+              LastModified: modified,
+            },
+          ],
+          IsTruncated: true,
+          NextContinuationToken: 'next-page-token',
+        };
+      }
+      if (command instanceof HeadObjectCommand) {
+        return { ...storedOutput(), LastModified: modified };
+      }
+      throw new Error('unexpected command');
+    });
+    const { store } = makeStore({ client });
+
+    const result = await store.listObjects({
+      prefix: 'accounts/a/submissions/hash/',
+      cursor: 'opaque-cursor',
+      limit: 1,
+    });
+
+    expect(result).toEqual({
+      objects: [
+        {
+          namespace: 'configured-private-bucket',
+          key: 'accounts/a/submissions/hash/a.png',
+          content_type: 'image/png',
+          size_bytes: BYTES.byteLength,
+          checksum_sha256: CHECKSUM_HEX,
+          etag: '"etag-1"',
+          last_modified: modified.toISOString(),
+        },
+      ],
+      next_cursor: 'next-page-token',
+    });
+    expect((client.commands[0] as ListObjectsV2Command).input).toMatchObject({
+      Bucket: 'configured-private-bucket',
+      Prefix: 'fixed-prefix/accounts/a/submissions/hash/',
+      ContinuationToken: 'opaque-cursor',
+      MaxKeys: 1,
+      ExpectedBucketOwner: '123456789012',
+    });
+    expect((client.commands[1] as HeadObjectCommand).input).toMatchObject({
+      Key: 'fixed-prefix/accounts/a/submissions/hash/a.png',
+      ChecksumMode: 'ENABLED',
     });
   });
 

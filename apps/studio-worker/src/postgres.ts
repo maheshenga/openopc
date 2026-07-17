@@ -12,7 +12,10 @@ import type {
   StudioWorkerProviderConfig,
   StudioWorkerRepository,
 } from './contracts';
-import type { StudioMaintenanceRepository } from './maintenance';
+import type {
+  StudioMaintenanceRepository,
+  StudioOrphanStagingCandidate,
+} from './maintenance';
 import { assertProcessRole } from './memory-repository';
 
 export interface StudioSqlClient {
@@ -930,6 +933,83 @@ export class PostgresStudioMaintenanceRepository implements StudioMaintenanceRep
         ],
       );
     }
+  }
+
+  async listOrphanStagingCandidates(input: {
+    retentionBefore: Date;
+    limit: number;
+  }): Promise<StudioOrphanStagingCandidate[]> {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+      throw new Error('Studio orphan candidate limit must be between 1 and 100');
+    }
+    const rows = await this.client.unsafe(
+      `
+      SELECT
+        job.account_id,
+        job.project_id,
+        job.job_id,
+        attempt.attempt_id,
+        attempt.submission_key,
+        COALESCE(attempt.ended_at, job.completed_at) AS terminal_at
+      FROM kortix.studio_job_attempts attempt
+      JOIN kortix.studio_jobs job ON job.job_id = attempt.job_id
+      WHERE job.status IN ('succeeded', 'failed', 'cancelled')
+        AND attempt.status IN ('succeeded', 'failed', 'cancelled')
+        AND attempt.staging_manifest_key IS NULL
+        AND attempt.staging_manifest_checksum IS NULL
+        AND COALESCE(attempt.ended_at, job.completed_at) <= $1::timestamptz
+      ORDER BY COALESCE(attempt.ended_at, job.completed_at) ASC, attempt.attempt_id ASC
+      LIMIT $2
+    `,
+      [input.retentionBefore.toISOString(), input.limit],
+    );
+    return rows.map((row) => {
+      const terminalAt = nullableDate(row.terminal_at);
+      if (!terminalAt) throw new Error('Studio orphan candidate terminal time is invalid');
+      return {
+        accountId: String(row.account_id),
+        projectId: String(row.project_id),
+        jobId: String(row.job_id),
+        attemptId: String(row.attempt_id),
+        submissionKey: String(row.submission_key),
+        terminalAt,
+      };
+    });
+  }
+
+  async isOrphanStagingCandidate(input: {
+    candidate: StudioOrphanStagingCandidate;
+    retentionBefore: Date;
+  }): Promise<boolean> {
+    const rows = await this.client.unsafe(
+      `
+      SELECT 1 AS eligible
+      FROM kortix.studio_job_attempts attempt
+      JOIN kortix.studio_jobs job ON job.job_id = attempt.job_id
+      WHERE job.account_id = $1::uuid
+        AND job.project_id = $2::uuid
+        AND job.job_id = $3::uuid
+        AND attempt.attempt_id = $4::uuid
+        AND attempt.submission_key = $5
+        AND COALESCE(attempt.ended_at, job.completed_at) = $6::timestamptz
+        AND COALESCE(attempt.ended_at, job.completed_at) <= $7::timestamptz
+        AND job.status IN ('succeeded', 'failed', 'cancelled')
+        AND attempt.status IN ('succeeded', 'failed', 'cancelled')
+        AND attempt.staging_manifest_key IS NULL
+        AND attempt.staging_manifest_checksum IS NULL
+      LIMIT 1
+    `,
+      [
+        input.candidate.accountId,
+        input.candidate.projectId,
+        input.candidate.jobId,
+        input.candidate.attemptId,
+        input.candidate.submissionKey,
+        input.candidate.terminalAt.toISOString(),
+        input.retentionBefore.toISOString(),
+      ],
+    );
+    return rows.length > 0;
   }
 }
 

@@ -472,4 +472,49 @@ describe('PostgresStudioWorkerRepository', () => {
     expect(queries[1]?.text).toContain('public.atomic_expire_studio_unknown_hold');
     expect(queries[1]?.text).toContain("reservation.created_at + interval '30 days'");
   });
+
+  test('derives orphan prefixes only from retained terminal attempts without manifests and re-fences them', async () => {
+    const queries: Array<{ text: string; values: unknown[] }> = [];
+    const maintenance = new PostgresStudioMaintenanceRepository({
+      unsafe: async (text, values = []) => {
+        queries.push({ text, values });
+        if (text.includes('SELECT 1 AS eligible')) return [{ eligible: 1 }];
+        return [
+          {
+            account_id: '11111111-1111-4111-8111-111111111111',
+            project_id: '22222222-2222-4222-8222-222222222222',
+            job_id: '33333333-3333-4333-8333-333333333333',
+            attempt_id: '44444444-4444-4444-8444-444444444444',
+            submission_key: 'submission-orphan',
+            terminal_at: '2026-06-01T00:00:00.000Z',
+          },
+        ];
+      },
+    });
+    const retentionBefore = new Date('2026-07-01T00:00:00.000Z');
+
+    const candidates = await maintenance.listOrphanStagingCandidates({
+      retentionBefore,
+      limit: 25,
+    });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ submissionKey: 'submission-orphan' });
+    expect(queries[0]?.text).toContain("job.status IN ('succeeded', 'failed', 'cancelled')");
+    expect(queries[0]?.text).toContain("attempt.status IN ('succeeded', 'failed', 'cancelled')");
+    expect(queries[0]?.text).toContain('attempt.staging_manifest_key IS NULL');
+    expect(queries[0]?.text).toContain('attempt.staging_manifest_checksum IS NULL');
+    expect(queries[0]?.text).toContain('COALESCE(attempt.ended_at, job.completed_at) <= $1::timestamptz');
+    expect(queries[0]?.values).toContain(25);
+
+    expect(
+      await maintenance.isOrphanStagingCandidate({
+        candidate: candidates[0]!,
+        retentionBefore,
+      }),
+    ).toBe(true);
+    expect(queries[1]?.text).toContain('SELECT 1 AS eligible');
+    expect(queries[1]?.text).toContain('attempt.submission_key = $5');
+    expect(queries[1]?.text).toContain('attempt.staging_manifest_key IS NULL');
+    expect(queries[1]?.text).toContain("job.status IN ('succeeded', 'failed', 'cancelled')");
+  });
 });

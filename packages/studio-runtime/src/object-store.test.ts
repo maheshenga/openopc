@@ -36,3 +36,14 @@ test('InMemoryStudioObjectStore exposes required and observed server-side encryp
   expect(head.server_side_encryption).toBe('AES256');
   expect(head.sse_kms_key_id).toBeNull();
 });
+
+test('InMemoryStudioObjectStore rejects an exclusive cursor outside the exact prefix', async () => {
+  const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+  await expect(
+    store.listObjects({
+      prefix: 'accounts/a/submissions/hash/',
+      cursor: 'accounts/a/submissions/hash-other/object.png',
+      limit: 1,
+    }),
+  ).rejects.toThrow(/cursor/i);
+});

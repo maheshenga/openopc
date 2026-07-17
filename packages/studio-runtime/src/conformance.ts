@@ -25,7 +25,7 @@ export function runStudioObjectStoreConformance(
         metadata: { project_id: 'p' },
       });
       expect(written.etag).toBeString();
-      expect(await store.headObject({ key: KEY })).toEqual(written);
+      expect(await store.headObject({ key: KEY })).toMatchObject(written);
       const object = await store.getObject({ key: KEY });
       expect(await readAll(object.body)).toEqual(PNG);
       expect(object).toMatchObject(written);
@@ -182,6 +182,62 @@ export function runStudioObjectStoreConformance(
       await store.deleteObject({ key: KEY, if_match: written.etag ?? undefined });
       await expect(store.headObject({ key: KEY })).rejects.toMatchObject({ code: 'NOT_FOUND' });
       expect(readinessCalls).toBe(0);
+    });
+
+    test('lists only an exact bounded prefix with stable cursor pagination and trusted metadata', async () => {
+      const store = await createStore();
+      const prefix = 'accounts/a/projects/p/jobs/j/attempts/t/submissions/h/';
+      for (const [index, suffix] of ['a.png', 'b.png', 'nested/c.png'].entries()) {
+        await store.putObject({
+          key: `${prefix}${suffix}`,
+          body: new Blob([PNG]).stream(),
+          content_type: 'image/png',
+          size_bytes: PNG.byteLength,
+          checksum_sha256: SHA256,
+          metadata: { index: String(index) },
+        });
+      }
+      await store.putObject({
+        key: `${prefix.slice(0, -1)}-other/ignored.png`,
+        body: new Blob([PNG]).stream(),
+        content_type: 'image/png',
+        size_bytes: PNG.byteLength,
+        checksum_sha256: SHA256,
+        metadata: {},
+      });
+
+      const first = await store.listObjects({ prefix, limit: 2 });
+      expect(first.objects).toHaveLength(2);
+      expect(first.next_cursor).toBeString();
+      expect(first.objects.map((object) => object.key)).toEqual([
+        `${prefix}a.png`,
+        `${prefix}b.png`,
+      ]);
+      for (const object of first.objects) {
+        expect(object).toMatchObject({
+          namespace: store.namespace,
+          etag: expect.any(String),
+          checksum_sha256: SHA256,
+          size_bytes: PNG.byteLength,
+        });
+        expect(Number.isFinite(Date.parse(object.last_modified))).toBe(true);
+      }
+
+      const second = await store.listObjects({
+        prefix,
+        cursor: first.next_cursor ?? undefined,
+        limit: 2,
+      });
+      expect(second).toMatchObject({
+        objects: [{ key: `${prefix}nested/c.png` }],
+        next_cursor: null,
+      });
+      await expect(store.listObjects({ prefix: prefix.slice(0, -1), limit: 2 })).rejects.toThrow(
+        /prefix/i,
+      );
+      await expect(store.listObjects({ prefix, limit: 0 })).rejects.toThrow(/limit/i);
+      await expect(store.listObjects({ prefix, limit: 101 })).rejects.toThrow(/limit/i);
+      await expect(store.listObjects({ prefix, cursor: '', limit: 2 })).rejects.toThrow(/cursor/i);
     });
   });
 }

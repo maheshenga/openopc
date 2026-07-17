@@ -11,6 +11,7 @@ export interface StudioObjectMetadata extends StudioObjectRef {
   metadata: Record<string, string>;
   server_side_encryption?: 'AES256' | 'aws:kms';
   sse_kms_key_id?: string | null;
+  last_modified?: string;
 }
 
 export interface StudioPutObjectInput extends StudioObjectRef {
@@ -27,6 +28,26 @@ export interface StudioStoredObject extends StudioObjectMetadata {
 
 export interface StudioDeleteObjectInput extends StudioObjectRef {
   if_match?: string;
+}
+
+export interface StudioListObjectsInput {
+  prefix: string;
+  cursor?: string;
+  limit: number;
+}
+
+export interface StudioListedObject extends StudioObjectRef {
+  namespace: string;
+  content_type: string;
+  size_bytes: number;
+  checksum_sha256: string;
+  etag: string;
+  last_modified: string;
+}
+
+export interface StudioListObjectsResult {
+  objects: StudioListedObject[];
+  next_cursor: string | null;
 }
 
 export interface StudioSignedUploadInput extends StudioObjectRef {
@@ -49,6 +70,7 @@ export interface StudioObjectStore {
   putObject(input: StudioPutObjectInput): Promise<StudioObjectMetadata>;
   headObject(ref: StudioObjectRef): Promise<StudioObjectMetadata>;
   getObject(ref: StudioObjectRef): Promise<StudioStoredObject>;
+  listObjects(input: StudioListObjectsInput): Promise<StudioListObjectsResult>;
   deleteObject(input: StudioDeleteObjectInput): Promise<void>;
   createSignedUploadUrl(input: StudioSignedUploadInput): Promise<string>;
   createSignedDownloadUrl(input: StudioSignedDownloadInput): Promise<string>;
@@ -82,6 +104,7 @@ export class StudioObjectStoreError extends Error {
 interface StoredBytes {
   bytes: Uint8Array;
   metadata: StudioObjectMetadata;
+  lastModified: string;
 }
 
 export class InMemoryStudioObjectStore implements StudioObjectStore {
@@ -90,7 +113,9 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
   readonly required_sse_kms_key_id = null;
   private readonly objects = new Map<string, StoredBytes>();
 
-  constructor(private readonly options: { namespace: string; ready: boolean }) {
+  constructor(
+    private readonly options: { namespace: string; ready: boolean; now?: () => Date },
+  ) {
     this.namespace = options.namespace;
   }
 
@@ -115,6 +140,7 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
         `Studio object checksum did not match: ${input.key}`,
       );
     }
+    const lastModified = (this.options.now ?? (() => new Date()))().toISOString();
     const metadata: StudioObjectMetadata = {
       namespace: this.namespace,
       key: input.key,
@@ -125,8 +151,13 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
       metadata: { ...input.metadata },
       server_side_encryption: this.required_server_side_encryption,
       sse_kms_key_id: this.required_sse_kms_key_id,
+      last_modified: lastModified,
     };
-    this.objects.set(input.key, { bytes, metadata });
+    this.objects.set(input.key, {
+      bytes,
+      metadata,
+      lastModified,
+    });
     return cloneMetadata(metadata);
   }
 
@@ -139,6 +170,39 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
     return {
       ...cloneMetadata(object.metadata),
       body: byteStream(object.bytes),
+    };
+  }
+
+  async listObjects(input: StudioListObjectsInput): Promise<StudioListObjectsResult> {
+    assertListInput(input);
+    const keys = [...this.objects.keys()]
+      .filter((key) => key.startsWith(input.prefix))
+      .sort((left, right) => left.localeCompare(right));
+    let start = 0;
+    if (input.cursor !== undefined) {
+      if (!safeListedKey(input.cursor, input.prefix)) {
+        throw new Error('Invalid Studio object list cursor');
+      }
+      const nextIndex = keys.findIndex((key) => key.localeCompare(input.cursor!) > 0);
+      start = nextIndex < 0 ? keys.length : nextIndex;
+    }
+    const pageKeys = keys.slice(start, start + input.limit);
+    const hasMore = start + pageKeys.length < keys.length;
+    return {
+      objects: pageKeys.map((key) => {
+        const object = this.objects.get(key);
+        if (!object?.metadata.etag) throw new StudioStorageUnavailableError();
+        return {
+          namespace: this.namespace,
+          key,
+          content_type: object.metadata.content_type,
+          size_bytes: object.metadata.size_bytes,
+          checksum_sha256: object.metadata.checksum_sha256,
+          etag: object.metadata.etag,
+          last_modified: object.lastModified,
+        };
+      }),
+      next_cursor: hasMore ? (pageKeys.at(-1) ?? null) : null,
     };
   }
 
@@ -212,4 +276,45 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Arra
     offset += chunk.byteLength;
   }
   return bytes;
+}
+
+export function assertStudioListObjectsInput(input: StudioListObjectsInput): void {
+  assertListInput(input);
+}
+
+function assertListInput(input: StudioListObjectsInput): void {
+  const prefix = input.prefix;
+  if (
+    prefix.length < 2 ||
+    prefix.length > 1024 ||
+    !prefix.endsWith('/') ||
+    prefix.startsWith('/') ||
+    prefix.includes('\\') ||
+    prefix.includes('\0') ||
+    prefix
+      .slice(0, -1)
+      .split('/')
+      .some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+  ) {
+    throw new Error('Invalid Studio object list prefix');
+  }
+  if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+    throw new Error('Invalid Studio object list limit');
+  }
+  if (
+    input.cursor !== undefined &&
+    (input.cursor.length < 1 || input.cursor.length > 2048 || input.cursor.includes('\0'))
+  ) {
+    throw new Error('Invalid Studio object list cursor');
+  }
+}
+
+function safeListedKey(key: string, prefix: string): boolean {
+  return (
+    key.startsWith(prefix) &&
+    key.length > prefix.length &&
+    !key.includes('\\') &&
+    !key.includes('\0') &&
+    key.split('/').every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
+  );
 }

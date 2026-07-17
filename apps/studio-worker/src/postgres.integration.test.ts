@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { resolve } from 'node:path';
 import postgres from 'postgres';
 import {
+  PostgresStudioMaintenanceRepository,
   PostgresStudioWorkerRepository,
   type StudioSqlClient,
   createPostgresStudioCredentialValidator,
@@ -271,7 +272,9 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
       await applyMigration(firstConnection, '20260715180000000_studio_worker_hardening.sql');
       await firstConnection.unsafe(`
         ALTER TABLE kortix.studio_job_attempts
-          ADD COLUMN IF NOT EXISTS provider_config_version text;
+          ADD COLUMN IF NOT EXISTS provider_config_version text,
+          ADD COLUMN IF NOT EXISTS staging_manifest_key text,
+          ADD COLUMN IF NOT EXISTS staging_manifest_checksum text;
       `);
       await firstConnection.unsafe(`
         INSERT INTO kortix.accounts(account_id) VALUES ('${accountId}');
@@ -695,5 +698,83 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
       usage_count: 0,
       asset_count: 0,
     });
+  });
+
+  test('orphan candidates exclude active, reconciling, and manifest-attached attempts and re-fence terminal rows', async () => {
+    const [sql] = getConnections();
+    const worker = new PostgresStudioWorkerRepository(asStudioClient(sql));
+    const maintenance = new PostgresStudioMaintenanceRepository(asStudioClient(sql));
+    const claimed = await worker.claimNextJob({
+      processRole: 'studio-worker',
+      workerId: 'worker-a:orphan-candidate',
+      now: new Date('2026-07-15T10:00:00.000Z'),
+      leaseMs: 60_000,
+    });
+    if (!claimed) throw new Error('expected orphan fixture job to be claimed');
+    const config = await worker.loadProviderConfigForSubmission({
+      jobId: claimed.jobId,
+      workerId: claimed.leaseOwner!,
+    });
+    if (!config) throw new Error('expected orphan fixture provider config');
+    const attempt = await worker.prepareAttempt({
+      jobId: claimed.jobId,
+      workerId: claimed.leaseOwner!,
+      submissionKey: 'submission:orphan-candidate',
+      adapterVersion: 'integration-v1',
+      providerConfigVersion: config.versionToken,
+      now: new Date('2026-06-01T00:00:00.000Z'),
+    });
+    if (!attempt) throw new Error('expected orphan fixture attempt');
+    await sql.unsafe(`
+      UPDATE kortix.studio_job_attempts
+      SET status = 'failed', ended_at = '2026-06-02T00:00:00Z'
+      WHERE attempt_id = '${attempt.attemptId}';
+      UPDATE kortix.studio_jobs
+      SET status = 'failed', completed_at = '2026-06-02T00:00:00Z',
+          lease_owner = NULL, lease_expires_at = NULL
+      WHERE job_id = '${claimed.jobId}';
+    `);
+    const retentionBefore = new Date('2026-07-01T00:00:00.000Z');
+
+    const terminal = await maintenance.listOrphanStagingCandidates({
+      retentionBefore,
+      limit: 10,
+    });
+    expect(terminal).toHaveLength(1);
+    expect(
+      await maintenance.isOrphanStagingCandidate({
+        candidate: terminal[0]!,
+        retentionBefore,
+      }),
+    ).toBe(true);
+
+    await sql.unsafe(`
+      UPDATE kortix.studio_job_attempts
+      SET staging_manifest_key = 'accounts/a/manifest.json',
+          staging_manifest_checksum = '${'a'.repeat(64)}'
+      WHERE attempt_id = '${attempt.attemptId}';
+    `);
+    expect(
+      await maintenance.listOrphanStagingCandidates({ retentionBefore, limit: 10 }),
+    ).toEqual([]);
+    expect(
+      await maintenance.isOrphanStagingCandidate({
+        candidate: terminal[0]!,
+        retentionBefore,
+      }),
+    ).toBe(false);
+
+    await sql.unsafe(`
+      UPDATE kortix.studio_job_attempts
+      SET status = 'reconciling', ended_at = NULL,
+          staging_manifest_key = NULL, staging_manifest_checksum = NULL
+      WHERE attempt_id = '${attempt.attemptId}';
+      UPDATE kortix.studio_jobs
+      SET status = 'running', completed_at = NULL
+      WHERE job_id = '${claimed.jobId}';
+    `);
+    expect(
+      await maintenance.listOrphanStagingCandidates({ retentionBefore, limit: 10 }),
+    ).toEqual([]);
   });
 });

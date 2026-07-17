@@ -6,6 +6,8 @@ import {
   type GetObjectCommandOutput,
   HeadObjectCommand,
   type HeadObjectCommandOutput,
+  ListObjectsV2Command,
+  type ListObjectsV2CommandOutput,
   PutObjectCommand,
   type PutObjectCommandOutput,
   S3Client,
@@ -16,12 +18,15 @@ import {
   type StudioObjectMetadata,
   type StudioObjectRef,
   type StudioObjectStore,
+  type StudioListObjectsInput,
+  type StudioListObjectsResult,
   StudioObjectStoreError,
   type StudioPutObjectInput,
   type StudioSignedDownloadInput,
   type StudioSignedUploadInput,
   StudioStorageUnavailableError,
   type StudioStoredObject,
+  assertStudioListObjectsInput,
 } from '@kortix/studio-runtime';
 import type { StudioS3StorageConfig } from '../config';
 import { createCachedStudioReadinessProbe } from './readiness';
@@ -48,6 +53,7 @@ type StudioS3Command =
   | PutObjectCommand
   | HeadObjectCommand
   | GetObjectCommand
+  | ListObjectsV2Command
   | DeleteObjectCommand;
 
 export interface StudioS3Client {
@@ -195,6 +201,68 @@ export class S3StudioObjectStore implements StudioObjectStore {
     };
   }
 
+  async listObjects(input: StudioListObjectsInput): Promise<StudioListObjectsResult> {
+    assertStudioListObjectsInput(input);
+    const storagePrefix = this.objectListPrefix(input.prefix);
+    const output = await this.send<ListObjectsV2CommandOutput>(
+      this.input.client,
+      new ListObjectsV2Command({
+        Bucket: this.namespace,
+        Prefix: storagePrefix,
+        MaxKeys: input.limit,
+        ...(input.cursor === undefined ? {} : { ContinuationToken: input.cursor }),
+        ...this.expectedOwnerInput(),
+      }),
+    );
+    const contents = output.Contents ?? [];
+    if (
+      contents.length > input.limit ||
+      (output.IsTruncated === true && !output.NextContinuationToken)
+    ) {
+      throw new StudioStorageUnavailableError();
+    }
+    const objects = await Promise.all(
+      contents.map(async (listed) => {
+        if (
+          !listed.Key ||
+          !listed.Key.startsWith(storagePrefix) ||
+          !listed.ETag ||
+          listed.Size === undefined ||
+          listed.Size < 0 ||
+          !listed.LastModified
+        ) {
+          throw new StudioStorageUnavailableError();
+        }
+        const key = this.logicalKey(listed.Key);
+        if (!key.startsWith(input.prefix)) throw new StudioStorageUnavailableError();
+        const head = await this.headObject({ key });
+        const listedLastModified = listed.LastModified.toISOString();
+        if (
+          !head.etag ||
+          !head.last_modified ||
+          head.etag !== listed.ETag ||
+          head.size_bytes !== listed.Size ||
+          head.last_modified !== listedLastModified
+        ) {
+          throw new StudioStorageUnavailableError();
+        }
+        return {
+          namespace: head.namespace,
+          key: head.key,
+          content_type: head.content_type,
+          size_bytes: head.size_bytes,
+          checksum_sha256: head.checksum_sha256,
+          etag: head.etag,
+          last_modified: head.last_modified,
+        };
+      }),
+    );
+    return {
+      objects,
+      next_cursor: output.IsTruncated ? (output.NextContinuationToken ?? null) : null,
+    };
+  }
+
   async deleteObject(input: StudioDeleteObjectInput): Promise<void> {
     if (input.if_match !== undefined) {
       await this.send(
@@ -281,6 +349,16 @@ export class S3StudioObjectStore implements StudioObjectStore {
     return `${this.prefix}/${validatedPath(key, 'key')}`;
   }
 
+  private objectListPrefix(prefix: string): string {
+    return `${this.prefix}/${validatedPath(prefix, 'key')}/`;
+  }
+
+  private logicalKey(storageKey: string): string {
+    const root = `${this.prefix}/`;
+    if (!storageKey.startsWith(root)) throw new StudioStorageUnavailableError();
+    return validatedPath(storageKey.slice(root.length), 'key');
+  }
+
   private encryptionInput(): {
     ServerSideEncryption: 'AES256' | 'aws:kms';
     SSEKMSKeyId?: string;
@@ -310,6 +388,7 @@ export class S3StudioObjectStore implements StudioObjectStore {
       | 'Metadata'
       | 'ServerSideEncryption'
       | 'SSEKMSKeyId'
+      | 'LastModified'
     >,
   ): StudioObjectMetadata {
     const metadata = output.Metadata ?? {};
@@ -332,6 +411,7 @@ export class S3StudioObjectStore implements StudioObjectStore {
         ? { server_side_encryption: output.ServerSideEncryption }
         : {}),
       sse_kms_key_id: output.SSEKMSKeyId ?? null,
+      ...(output.LastModified ? { last_modified: output.LastModified.toISOString() } : {}),
     };
   }
 }

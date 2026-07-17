@@ -147,26 +147,23 @@ export class StudioWorker {
         );
         return { kind: 'processed', jobId: job.jobId, status: 'running' };
       }
+      if (attempt?.providerHandle && ['submitted', 'polling'].includes(attempt.status)) {
+        const adapter = await this.resolveActiveAttemptAdapter(job, attempt, now);
+        if (!adapter) return { kind: 'processed', jobId: job.jobId, status: 'running' };
+        return this.cancel(job, attempt, adapter, now);
+      }
       return this.cancel(job, attempt, this.deps.providers.get(job), now);
     }
 
     if (attempt && ['submitting', 'reconciling'].includes(attempt.status)) {
-      const adapter = this.deps.providers.get(job);
-      if (!adapter) {
-        await this.deferUnknown(
-          job,
-          attempt,
-          'Provider reconciliation is unavailable; operator review is required',
-          now,
-        );
-        return { kind: 'processed', jobId: job.jobId, status: 'running' };
-      }
+      const adapter = await this.resolveActiveAttemptAdapter(job, attempt, now);
+      if (!adapter) return { kind: 'processed', jobId: job.jobId, status: 'running' };
       return this.reconcile(job, attempt, adapter, now);
     }
 
     if (attempt?.providerHandle && ['submitted', 'polling'].includes(attempt.status)) {
-      const adapter = this.deps.providers.get(job);
-      if (!adapter) return this.failUnavailableProvider(job, attempt, now);
+      const adapter = await this.resolveActiveAttemptAdapter(job, attempt, now);
+      if (!adapter) return { kind: 'processed', jobId: job.jobId, status: 'running' };
       return this.poll(job, attempt, adapter, attempt.providerHandle, now);
     }
 
@@ -187,6 +184,124 @@ export class StudioWorker {
     }
 
     return this.submit(job, now);
+  }
+
+  private async resolveActiveAttemptAdapter(
+    job: StudioWorkerJob,
+    attempt: StudioWorkerAttempt,
+    now: Date,
+  ): Promise<StudioProviderAdapter | null> {
+    let providerConfig: StudioWorkerProviderConfig | null;
+    try {
+      providerConfig = await this.deps.repository.loadProviderConfigForSubmission({
+        jobId: job.jobId,
+        workerId: this.owner(job),
+        now,
+      });
+    } catch {
+      await this.deferUnknown(
+        job,
+        attempt,
+        'Provider configuration is unavailable for active attempt recovery',
+        this.now(),
+      );
+      return null;
+    }
+    const validProviderConfig =
+      providerConfig?.enabled &&
+      providerConfig.providerConfigId === job.providerConfigId &&
+      providerConfig.accountId === job.accountId &&
+      providerConfig.projectId === job.projectId &&
+      providerConfig.provider === job.provider &&
+      providerConfig.versionToken === attempt.providerConfigVersion &&
+      providerSupportsCapability(providerConfig.capabilityMap, job.capability);
+    if (!validProviderConfig || !providerConfig) {
+      await this.deferUnknown(
+        job,
+        attempt,
+        'Provider configuration is unavailable for active attempt recovery',
+        now,
+      );
+      return null;
+    }
+    job.providerEnabled = true;
+    job.credentialBinding = providerConfig.credentialBinding;
+
+    let authorization: StudioAuthorizationResult;
+    try {
+      authorization = await this.deps.authorization.revalidate(job);
+    } catch {
+      await this.deferUnknown(
+        job,
+        attempt,
+        'Authorization is unavailable for active attempt recovery',
+        this.now(),
+      );
+      return null;
+    }
+    if (!authorization.authorized) {
+      await this.deferUnknown(
+        job,
+        attempt,
+        'Authorization is unavailable for active attempt recovery',
+        this.now(),
+      );
+      return null;
+    }
+
+    let credential: Awaited<ReturnType<StudioCredentialResolver['resolve']>>;
+    try {
+      credential = await this.deps.credentialResolver.resolve({
+        accountId: job.accountId,
+        projectId: job.projectId,
+        binding: job.credentialBinding as never,
+      });
+    } catch {
+      await this.deferUnknown(
+        job,
+        attempt,
+        'Provider credential is unavailable for active attempt recovery',
+        this.now(),
+      );
+      return null;
+    }
+    if (!credential && providerConfig.credentialBinding.kind !== 'none') {
+      await this.deferUnknown(
+        job,
+        attempt,
+        'Provider credential is unavailable for active attempt recovery',
+        this.now(),
+      );
+      return null;
+    }
+
+    let adapter: StudioProviderAdapter | null;
+    try {
+      adapter = await this.deps.providers.resolve({
+        job,
+        config: providerConfig,
+        credential,
+        referenceAssets: this.deps.referenceAssets,
+      });
+    } catch {
+      await this.deferUnknown(
+        job,
+        attempt,
+        'Provider adapter is unavailable for active attempt recovery',
+        this.now(),
+      );
+      return null;
+    }
+    if (!adapter) {
+      await this.deferUnknown(
+        job,
+        attempt,
+        'Provider adapter is unavailable for active attempt recovery',
+        this.now(),
+      );
+      return null;
+    }
+    return adapter;
   }
 
   private async submit(job: StudioWorkerJob, now: Date): Promise<StudioWorkerTickResult> {

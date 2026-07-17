@@ -1,101 +1,11 @@
-import os from 'node:os';
-import {
-  type StudioObjectStore,
-  createFakeStudioProvider,
-  decryptProjectSecretEnvelope,
-  studioMaintenanceLeaseName,
-} from '@kortix/studio-runtime';
-import postgres from 'postgres';
-import { z } from 'zod';
-import { createStudioCredentialResolver } from '../../api/src/studio/credentials';
-import { createStudioSubmissionAuthorization } from './authorization';
-import { PostgresStudioCredentialLookup } from './credential-lookup';
-import {
-  STUDIO_ORPHAN_CLEANUP_DEFAULTS,
-  StudioMaintenanceCoordinator,
-  type StudioMaintenanceRepository,
-} from './maintenance';
-import {
-  PostgresStudioMaintenanceRepository,
-  PostgresStudioWorkerRepository,
-  type StudioSqlClient,
-  createPostgresStudioCredentialValidator,
-  createPostgresStudioServiceAccountLoader,
-  createPostgresStudioTokenLoader,
-} from './postgres';
-import { createStudioProviderRegistry } from './provider-registry';
-import { StudioResultStager } from './result-stager';
 import { buildStudioWorkerRuntime } from './runtime';
-import {
-  StudioWorker,
-  type StudioWorkerDependencies,
-  createObjectStoreAssetWriter,
-} from './worker';
 
-const EnabledEnvironmentSchema = z
-  .object({
-    DATABASE_URL: z.string().min(1),
-    API_KEY_SECRET: z.string().min(1),
-    STUDIO_WORKER_ID: z.string().min(1).optional(),
-    STUDIO_FAKE_PROVIDER_ENABLED: z.enum(['true', 'false']).default('false'),
-    STUDIO_OPENAI_COMPATIBLE_ENABLED: z.enum(['true', 'false']).default('false'),
-    STUDIO_WORKER_IDLE_MS: z.coerce.number().int().nonnegative().max(60_000).default(1_000),
-    STUDIO_WORKER_LEASE_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .max(15 * 60_000)
-      .default(60_000),
-    STUDIO_WORKER_POLL_MS: z.coerce
-      .number()
-      .int()
-      .nonnegative()
-      .max(15 * 60_000)
-      .default(2_000),
-    STUDIO_WORKER_MAINTENANCE_MS: z.coerce
-      .number()
-      .int()
-      .positive()
-      .max(15 * 60_000)
-      .default(20_000),
-  })
-  .passthrough();
-
-export type StudioWorkerEnvironment =
-  | { enabled: false }
-  | {
-      enabled: true;
-      databaseUrl: string;
-      apiKeySecret: string;
-      workerId: string;
-      fakeProviderEnabled: boolean;
-      openAiCompatibleEnabled: boolean;
-      idleMs: number;
-      leaseMs: number;
-      pollMs: number;
-      maintenanceMs: number;
-    };
-
-export function parseStudioWorkerEnvironment(
-  env: Record<string, string | undefined> = process.env,
-): StudioWorkerEnvironment {
-  if (env.STUDIO_ENABLED !== 'true') return { enabled: false };
-  const parsed = EnabledEnvironmentSchema.parse(env);
-  return {
-    enabled: true,
-    databaseUrl: parsed.DATABASE_URL,
-    apiKeySecret: parsed.API_KEY_SECRET,
-    workerId:
-      parsed.STUDIO_WORKER_ID ??
-      `${os.hostname()}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`,
-    fakeProviderEnabled: parsed.STUDIO_FAKE_PROVIDER_ENABLED === 'true',
-    openAiCompatibleEnabled: parsed.STUDIO_OPENAI_COMPATIBLE_ENABLED === 'true',
-    idleMs: parsed.STUDIO_WORKER_IDLE_MS,
-    leaseMs: parsed.STUDIO_WORKER_LEASE_MS,
-    pollMs: parsed.STUDIO_WORKER_POLL_MS,
-    maintenanceMs: parsed.STUDIO_WORKER_MAINTENANCE_MS,
-  };
-}
+export {
+  closeStudioWorkerResources as shutdownStudioWorker,
+  createProductionStudioMaintenanceCoordinator,
+  createProductionStudioWorker,
+  parseStudioWorkerEnvironment,
+} from './runtime';
 
 export async function runStudioWorkerLoop(input: {
   signal: AbortSignal;
@@ -123,43 +33,6 @@ export async function runStudioMaintenanceOnce(input: {
   }
 }
 
-export function createProductionStudioMaintenanceCoordinator(input: {
-  repository: StudioMaintenanceRepository;
-  objectStore: StudioObjectStore;
-  ownerId: string;
-  lockKey: string;
-  ttlMs: number;
-  now?: () => Date;
-}): StudioMaintenanceCoordinator {
-  return new StudioMaintenanceCoordinator({
-    repository: input.repository,
-    objectStore: input.objectStore,
-    ownerId: input.ownerId,
-    lockKey: input.lockKey,
-    ttlMs: input.ttlMs,
-    ...(input.now ? { now: input.now } : {}),
-    orphanRetentionMs: STUDIO_ORPHAN_CLEANUP_DEFAULTS.retentionMs,
-    orphanCandidatePageLimit: STUDIO_ORPHAN_CLEANUP_DEFAULTS.candidatePageLimit,
-    orphanObjectPageLimit: STUDIO_ORPHAN_CLEANUP_DEFAULTS.objectPageLimit,
-    orphanCandidateBudget: STUDIO_ORPHAN_CLEANUP_DEFAULTS.candidateBudget,
-    orphanPageBudget: STUDIO_ORPHAN_CLEANUP_DEFAULTS.pageBudget,
-    orphanObjectBudget: STUDIO_ORPHAN_CLEANUP_DEFAULTS.objectBudget,
-  });
-}
-
-export function createProductionStudioWorker(
-  input: Omit<StudioWorkerDependencies, 'assets' | 'stager'> & {
-    objectStore: StudioObjectStore;
-  },
-): StudioWorker {
-  const { objectStore, ...dependencies } = input;
-  return new StudioWorker({
-    ...dependencies,
-    assets: createObjectStoreAssetWriter(objectStore),
-    stager: new StudioResultStager(objectStore),
-  });
-}
-
 export async function runStudioWorkerTick<T>(input: {
   signal?: AbortSignal;
   assertReady: () => Promise<void>;
@@ -175,152 +48,84 @@ export async function runStudioWorkerTick<T>(input: {
   return { ready: true, result: await input.claim() };
 }
 
-export async function shutdownStudioWorker(input: {
-  releaseMaintenance: () => Promise<void>;
-  closeDatabase: () => Promise<void>;
-  closeStorage: () => Promise<void>;
+export async function runStudioWorkerBootstrap<
+  TRuntime extends { enabled: false } | { enabled: true; close(): Promise<void> },
+>(input: {
+  controller: AbortController;
+  buildRuntime: (signal: AbortSignal) => Promise<TRuntime>;
+  runRuntime: (runtime: Extract<TRuntime, { enabled: true }>, signal: AbortSignal) => Promise<void>;
 }): Promise<void> {
-  await Promise.allSettled([input.releaseMaintenance()]);
-  await Promise.allSettled([input.closeDatabase(), input.closeStorage()]);
+  let runtime: TRuntime | null = null;
+  try {
+    runtime = await input.buildRuntime(input.controller.signal);
+    if (!runtime.enabled || input.controller.signal.aborted) return;
+    await input.runRuntime(
+      runtime as Extract<TRuntime, { enabled: true }>,
+      input.controller.signal,
+    );
+  } finally {
+    if (runtime?.enabled) await runtime.close();
+  }
 }
 
 async function main(): Promise<void> {
-  const env = parseStudioWorkerEnvironment();
-  if (!env.enabled) {
-    console.info('[studio-worker] STUDIO_ENABLED is not true; worker remains disabled');
-    return;
-  }
-  const runtime = buildStudioWorkerRuntime();
-  if (!runtime.enabled) return;
-  if (!env.fakeProviderEnabled && !env.openAiCompatibleEnabled) {
-    throw new Error(
-      'Studio worker has no provider driver. Set STUDIO_FAKE_PROVIDER_ENABLED=true or STUDIO_OPENAI_COMPATIBLE_ENABLED=true.',
-    );
-  }
-
-  const raw = postgres(env.databaseUrl, {
-    prepare: false,
-    max: 4,
-    idle_timeout: 30,
-    connect_timeout: 10,
-    connection: { statement_timeout: 25_000 },
-  });
-  const client: StudioSqlClient = {
-    async unsafe(text, values = []) {
-      const rows = await raw.unsafe(text, values as never[]);
-      return Array.from(rows) as Record<string, unknown>[];
-    },
-  };
-  const repository = new PostgresStudioWorkerRepository(client);
-  const credentialResolver = createStudioCredentialResolver({
-    lookup: new PostgresStudioCredentialLookup(client),
-    decrypt: (projectId, valueEnc) =>
-      decryptProjectSecretEnvelope(env.apiKeySecret, projectId, valueEnc),
-  });
-  const maintenanceRepository = new PostgresStudioMaintenanceRepository(client);
-  const [{ authorize }, { invalidateIamCacheForUsers }] = await Promise.all([
-    import('../../api/src/iam/dispatcher'),
-    import('../../api/src/iam/cache-invalidation'),
-  ]);
-  const authorization = createStudioSubmissionAuthorization({
-    loadToken: createPostgresStudioTokenLoader(client),
-    loadServiceAccount: createPostgresStudioServiceAccountLoader(client),
-    validateCredentialBinding: createPostgresStudioCredentialValidator(client),
-    async invalidateAuthorizationCache(principalIds) {
-      invalidateIamCacheForUsers(principalIds);
-    },
-    async authorizeProjectAction(input) {
-      const result = await authorize(
-        input.userId,
-        input.accountId,
-        input.action,
-        { type: 'project', id: input.projectId },
-        input.actingTokenId,
-      );
-      return result.allowed;
-    },
-  });
-  const fakeProvider = createFakeStudioProvider();
-  const providerRegistry = createStudioProviderRegistry({
-    fakeProviderEnabled: env.fakeProviderEnabled,
-    openAiCompatibleEnabled: env.openAiCompatibleEnabled,
-    privateProviderOrigins: runtime.privateProviderOrigins,
-    allowInsecureLocalEndpoints: runtime.allowInsecureLocalEndpoints,
-  });
-  const objectStore = runtime.store;
   const controller = new AbortController();
-  const worker = createProductionStudioWorker({
-    config: {
-      workerId: env.workerId,
-      leaseMs: env.leaseMs,
-      pollIntervalMs: env.pollMs,
-      unknownOutcomeTimeoutMs: 15 * 60_000,
-    },
-    repository,
-    providers: {
-      get: (job) => (job.provider === 'fake' ? fakeProvider : null),
-      resolve: providerRegistry.resolve,
-    },
-    credentialResolver,
-    referenceAssets: { resolve: async () => [] },
-    authorization,
-    objectStore,
-    signal: controller.signal,
-  });
-  const maintenance = createProductionStudioMaintenanceCoordinator({
-    repository: maintenanceRepository,
-    objectStore,
-    ownerId: env.workerId,
-    lockKey: studioMaintenanceLeaseName(),
-    ttlMs: Math.max(60_000, env.maintenanceMs * 3),
-  });
   const stop = () => controller.abort();
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
-
-  let nextMaintenanceAt = 0;
-  console.info('[studio-worker] started', { workerId: env.workerId, provider: 'fake' });
   try {
-    await runStudioWorkerLoop({
-      signal: controller.signal,
-      idleMs: env.idleMs,
-      async tick() {
-        const tick = await runStudioWorkerTick({
-          signal: controller.signal,
-          assertReady: runtime.assertReadyBeforeClaim,
-          claim: () => worker.runOnce(),
+    await runStudioWorkerBootstrap({
+      controller,
+      async buildRuntime(signal) {
+        const runtime = await buildStudioWorkerRuntime(process.env, { signal });
+        if (!runtime.enabled) {
+          console.info('[studio-worker] STUDIO_ENABLED is not true; worker remains disabled');
+        }
+        return runtime;
+      },
+      async runRuntime(runtime, signal) {
+        let nextMaintenanceAt = 0;
+        console.info('[studio-worker] started', {
+          workerId: runtime.workerId,
+          fakeProviderEnabled: runtime.fakeProviderEnabled,
+          openAiCompatibleEnabled: runtime.openAiCompatibleEnabled,
         });
-        if (tick.ready && tick.result.kind === 'error') {
-          console.error('[studio-worker] tick failed', {
-            code: tick.result.code,
-            jobId: tick.result.jobId,
-          });
-        }
-        const now = Date.now();
-        if (now >= nextMaintenanceAt) {
-          await runStudioMaintenanceOnce({
-            async runOnce() {
-              await maintenance.runOnce();
-            },
-          });
-          nextMaintenanceAt = now + env.maintenanceMs;
-        }
+        await runStudioWorkerLoop({
+          signal,
+          idleMs: runtime.idleMs,
+          async tick() {
+            const tick = await runStudioWorkerTick({
+              signal,
+              assertReady: runtime.assertReadyBeforeClaim,
+              claim: () => runtime.worker.runOnce(),
+            });
+            if (tick.ready && tick.result.kind === 'error') {
+              console.error('[studio-worker] tick failed', {
+                code: tick.result.code,
+                jobId: tick.result.jobId,
+              });
+            }
+            const now = Date.now();
+            if (now >= nextMaintenanceAt) {
+              await runStudioMaintenanceOnce({
+                async runOnce() {
+                  await runtime.maintenance.runOnce();
+                },
+              });
+              nextMaintenanceAt = now + runtime.maintenanceMs;
+            }
+          },
+        });
       },
     });
   } finally {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
-    await shutdownStudioWorker({
-      releaseMaintenance: () => maintenance.release(),
-      closeDatabase: () => raw.end({ timeout: 5 }),
-      closeStorage: () => runtime.close(),
-    });
   }
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve();
-  if (ms === 0) return Promise.resolve();
+  if (signal.aborted || ms === 0) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(done, ms);
     signal.addEventListener('abort', done, { once: true });

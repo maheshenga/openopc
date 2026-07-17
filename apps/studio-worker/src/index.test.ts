@@ -259,20 +259,26 @@ describe('studio worker bootstrap loop', () => {
     expect(calls).toEqual(['maintenance', 'database', 'storage']);
   });
 
-  test('attempts every cleanup step when the database close fails', async () => {
+  test('reports every cleanup failure after attempting maintenance, database, and storage', async () => {
     const calls: string[] = [];
-    await shutdownStudioWorker({
-      releaseMaintenance: async () => {
-        calls.push('maintenance');
-      },
-      closeDatabase: async () => {
-        calls.push('database');
-        throw new Error('database close failed');
-      },
-      closeStorage: async () => {
-        calls.push('storage');
-      },
-    });
+    await expect(
+      shutdownStudioWorker({
+        releaseMaintenance: async () => {
+          calls.push('maintenance');
+          throw new Error('maintenance release failed');
+        },
+        closeDatabase: async () => {
+          calls.push('database');
+          throw new Error('database close failed');
+        },
+        closeStorage: async () => {
+          calls.push('storage');
+          throw new Error('storage close failed');
+        },
+      }),
+    ).rejects.toThrow(
+      'Studio worker shutdown failed: maintenance release failed; database close failed; storage close failed',
+    );
     expect(calls).toEqual(['maintenance', 'database', 'storage']);
   });
 
@@ -313,5 +319,42 @@ describe('studio worker bootstrap loop', () => {
       },
     });
     expect(claims).toBe(1);
+  });
+
+  test('closes a runtime built after shutdown without entering the worker loop', async () => {
+    const module = await import('./index');
+    const bootstrap = (
+      module as typeof module & {
+        runStudioWorkerBootstrap?: (input: Record<string, unknown>) => Promise<void>;
+      }
+    ).runStudioWorkerBootstrap;
+    expect(bootstrap).toBeFunction();
+    if (!bootstrap) return;
+
+    const controller = new AbortController();
+    let finishBuild!: (runtime: Record<string, unknown>) => void;
+    const pendingBuild = new Promise<Record<string, unknown>>((resolve) => {
+      finishBuild = resolve;
+    });
+    let runs = 0;
+    let closes = 0;
+    const boot = bootstrap({
+      controller,
+      buildRuntime: async () => pendingBuild,
+      runRuntime: async () => {
+        runs += 1;
+      },
+    });
+
+    controller.abort();
+    finishBuild({
+      enabled: true,
+      close: async () => {
+        closes += 1;
+      },
+    });
+    await boot;
+
+    expect({ runs, closes }).toEqual({ runs: 0, closes: 1 });
   });
 });

@@ -15,6 +15,7 @@ import { createMemoryStudioWorkerRepository } from './memory-repository';
 import { StudioResultStager } from './result-stager';
 import {
   type StudioAssetWriter,
+  type StudioProviderRegistry,
   type StudioSubmissionAuthorization,
   StudioWorker,
   createObjectStoreAssetWriter,
@@ -98,6 +99,7 @@ function makeWorker(input: {
   assets?: StudioAssetWriter;
   now?: () => Date;
   credentialResolver?: { resolve: () => Promise<null> };
+  providerResolve?: StudioProviderRegistry['resolve'];
   stager?: StudioResultStager;
   signal?: AbortSignal;
 }) {
@@ -113,7 +115,9 @@ function makeWorker(input: {
       repository: input.repository,
       providers: {
         get: () => (input.adapter === null ? null : (input.adapter ?? provider())),
-        resolve: async () => (input.adapter === null ? null : (input.adapter ?? provider())),
+        resolve:
+          input.providerResolve ??
+          (async () => (input.adapter === null ? null : (input.adapter ?? provider()))),
       },
       credentialResolver: input.credentialResolver ?? { resolve: async () => null },
       referenceAssets: { resolve: async () => [] },
@@ -1583,6 +1587,483 @@ describe('StudioWorker', () => {
     expect(submitCalls).toBe(0);
     expect(pollCalls).toBe(2);
     expect(repository.getAttempts(job.jobId)).toHaveLength(1);
+  });
+
+  test('rebuilds an invocation adapter before polling a restarted OpenAI attempt', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const handle: StudioProviderHandle = {
+      provider: 'openai-compatible',
+      id: 'accepted-openai-job',
+      submission_key: 'durable-openai-submission-key',
+    };
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      provider: 'openai-compatible',
+      model: 'image-model-v1',
+      providerHandle: handle,
+      credentialBinding: { kind: 'secret', identifier: 'IMAGE_PROVIDER' },
+    });
+    repository.seedAttempt(job.jobId, {
+      status: 'polling',
+      submissionKey: handle.submission_key,
+      providerHandle: handle,
+    });
+    const credential = {
+      source: 'secret' as const,
+      value: 'invocation-only-secret',
+      version_token: 'credential-v1',
+    };
+    const calls = { authorize: 0, credentials: 0, resolve: 0, submit: 0, poll: 0, fetch: 0 };
+    const adapter = provider({
+      id: 'openai-compatible',
+      submit: async () => {
+        calls.submit += 1;
+        throw new Error('a restarted accepted attempt must not submit again');
+      },
+      poll: async () => {
+        calls.poll += 1;
+        return { status: 'succeeded', progress: 1 };
+      },
+      fetchResult: async () => {
+        calls.fetch += 1;
+        return { assets: [] };
+      },
+    });
+    const worker = new StudioWorker({
+      config: {
+        workerId: 'worker-after-restart',
+        leaseMs: 30_000,
+        pollIntervalMs: 0,
+        unknownOutcomeTimeoutMs: 15 * 60_000,
+      },
+      repository,
+      providers: {
+        get: () => null,
+        async resolve(input) {
+          calls.resolve += 1;
+          expect(input.job.jobId).toBe(job.jobId);
+          expect(input.config.providerConfigId).toBe(job.providerConfigId);
+          expect(input.credential).toBe(credential);
+          return adapter;
+        },
+      },
+      credentialResolver: {
+        async resolve() {
+          calls.credentials += 1;
+          return credential;
+        },
+      },
+      referenceAssets: { resolve: async () => [] },
+      authorization: {
+        async revalidate() {
+          calls.authorize += 1;
+          return { authorized: true };
+        },
+      },
+      assets: { persist: async () => [] },
+      now: () => NOW,
+      random: () => 0,
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: 'processed',
+      jobId: job.jobId,
+      status: 'succeeded',
+    });
+    expect(calls).toEqual({
+      authorize: 1,
+      credentials: 1,
+      resolve: 1,
+      submit: 0,
+      poll: 1,
+      fetch: 1,
+    });
+  });
+
+  test('holds a restarted active cancellation when authorization revalidation is denied', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const handle: StudioProviderHandle = {
+      provider: 'openai-compatible',
+      id: 'accepted-openai-job',
+      submission_key: 'durable-openai-submission-key',
+    };
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      provider: 'openai-compatible',
+      model: 'image-model-v1',
+      providerHandle: handle,
+      credentialBinding: { kind: 'secret', identifier: 'IMAGE_PROVIDER' },
+    });
+    repository.seedAttempt(job.jobId, {
+      status: 'polling',
+      submissionKey: handle.submission_key,
+      providerHandle: handle,
+    });
+    repository.requestCancellation(job.jobId);
+    const calls = { authorize: 0, resolve: 0, provider: 0 };
+    const adapter = provider({
+      id: 'openai-compatible',
+      cancel: async () => {
+        calls.provider += 1;
+      },
+    });
+    const worker = new StudioWorker({
+      config: {
+        workerId: 'worker-after-restart',
+        leaseMs: 30_000,
+        pollIntervalMs: 0,
+        unknownOutcomeTimeoutMs: 15 * 60_000,
+      },
+      repository,
+      providers: {
+        get: () => adapter,
+        async resolve() {
+          calls.resolve += 1;
+          return adapter;
+        },
+      },
+      credentialResolver: {
+        resolve: async () => {
+          throw new Error('credentials must not resolve after denied authorization');
+        },
+      },
+      referenceAssets: { resolve: async () => [] },
+      authorization: {
+        async revalidate() {
+          calls.authorize += 1;
+          return { authorized: false, code: 'STUDIO_PERMISSION_DENIED', message: 'denied' };
+        },
+      },
+      assets: { persist: async () => [] },
+      now: () => NOW,
+      random: () => 0,
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: 'processed',
+      jobId: job.jobId,
+      status: 'running',
+    });
+    expect(calls).toEqual({ authorize: 1, resolve: 0, provider: 0 });
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      status: 'reconciling',
+      retryClassification: 'unknown_outcome',
+    });
+  });
+
+  test('holds a restarted reconciliation when credential resolution fails', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      provider: 'openai-compatible',
+      model: 'image-model-v1',
+      credentialBinding: { kind: 'secret', identifier: 'IMAGE_PROVIDER' },
+    });
+    repository.seedAttempt(job.jobId, {
+      status: 'reconciling',
+      submissionKey: 'durable-openai-submission-key',
+    });
+    const calls = { authorize: 0, credentials: 0, resolve: 0, provider: 0 };
+    const adapter = provider({
+      id: 'openai-compatible',
+      submit: async () => {
+        calls.provider += 1;
+        throw new Error('must not submit an ambiguous active attempt');
+      },
+      reconcile: async () => {
+        calls.provider += 1;
+        return 'unknown';
+      },
+    });
+    const worker = new StudioWorker({
+      config: {
+        workerId: 'worker-after-restart',
+        leaseMs: 30_000,
+        pollIntervalMs: 0,
+        unknownOutcomeTimeoutMs: 15 * 60_000,
+      },
+      repository,
+      providers: {
+        get: () => adapter,
+        async resolve() {
+          calls.resolve += 1;
+          return adapter;
+        },
+      },
+      credentialResolver: {
+        async resolve() {
+          calls.credentials += 1;
+          throw new Error('credential backend unavailable');
+        },
+      },
+      referenceAssets: { resolve: async () => [] },
+      authorization: {
+        async revalidate() {
+          calls.authorize += 1;
+          return { authorized: true };
+        },
+      },
+      assets: { persist: async () => [] },
+      now: () => NOW,
+      random: () => 0,
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: 'processed',
+      jobId: job.jobId,
+      status: 'running',
+    });
+    expect(calls).toEqual({ authorize: 1, credentials: 1, resolve: 0, provider: 0 });
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      status: 'reconciling',
+      retryClassification: 'unknown_outcome',
+    });
+  });
+
+  test('holds a restarted reconciliation when credential resolution returns null', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      provider: 'openai-compatible',
+      model: 'image-model-v1',
+      credentialBinding: { kind: 'secret', identifier: 'IMAGE_PROVIDER' },
+    });
+    repository.seedAttempt(job.jobId, {
+      status: 'reconciling',
+      submissionKey: 'durable-openai-submission-key',
+    });
+    let providerCalls = 0;
+    const adapter = provider({
+      id: 'openai-compatible',
+      reconcile: async () => {
+        providerCalls += 1;
+        return 'unknown';
+      },
+    });
+
+    const result = await makeWorker({
+      workerId: 'worker-after-restart',
+      repository,
+      adapter,
+      credentialResolver: { resolve: async () => null },
+    }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'running' });
+    expect(providerCalls).toBe(0);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      status: 'reconciling',
+      retryClassification: 'unknown_outcome',
+    });
+  });
+
+  test('holds active recovery when authorization revalidation throws without persisting details', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({ status: 'running', attemptCount: 1 });
+    repository.seedAttempt(job.jobId, {
+      status: 'reconciling',
+      submissionKey: 'durable-submission-key',
+    });
+    let providerCalls = 0;
+    const adapter = provider({
+      reconcile: async () => {
+        providerCalls += 1;
+        return 'unknown';
+      },
+    });
+
+    const result = await makeWorker({
+      workerId: 'worker-after-restart',
+      repository,
+      adapter,
+      authorization: {
+        revalidate: async () => {
+          throw new Error(
+            'authorization backend failed secret=do-not-persist https://iam.internal.test/signed?token=private',
+          );
+        },
+      },
+    }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'running' });
+    expect(providerCalls).toBe(0);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      status: 'reconciling',
+      retryClassification: 'unknown_outcome',
+    });
+    expect(repository.getJob(job.jobId)?.errorMessage).toBe(
+      'Authorization is unavailable for active attempt recovery',
+    );
+  });
+
+  test('holds active recovery when the owner-fenced provider config reload throws', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({ status: 'running', attemptCount: 1 });
+    repository.seedAttempt(job.jobId, {
+      status: 'reconciling',
+      submissionKey: 'durable-submission-key',
+    });
+    repository.loadProviderConfigForSubmission = async () => {
+      throw new Error('config query failed password=do-not-persist');
+    };
+    let providerCalls = 0;
+    let authorizationCalls = 0;
+    const adapter = provider({
+      reconcile: async () => {
+        providerCalls += 1;
+        return 'unknown';
+      },
+    });
+
+    const result = await makeWorker({
+      workerId: 'worker-after-restart',
+      repository,
+      adapter,
+      authorization: {
+        revalidate: async () => {
+          authorizationCalls += 1;
+          return { authorized: true };
+        },
+      },
+    }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'running' });
+    expect({ authorizationCalls, providerCalls }).toEqual({
+      authorizationCalls: 0,
+      providerCalls: 0,
+    });
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      status: 'reconciling',
+      retryClassification: 'unknown_outcome',
+    });
+    expect(repository.getJob(job.jobId)?.errorMessage).toBe(
+      'Provider configuration is unavailable for active attempt recovery',
+    );
+  });
+
+  test('holds active recovery when invocation adapter resolution throws without persisting details', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({ status: 'running', attemptCount: 1 });
+    repository.seedAttempt(job.jobId, {
+      status: 'reconciling',
+      submissionKey: 'durable-submission-key',
+    });
+    let providerCalls = 0;
+    let resolveCalls = 0;
+    const adapter = provider({
+      reconcile: async () => {
+        providerCalls += 1;
+        return 'unknown';
+      },
+    });
+
+    const result = await makeWorker({
+      workerId: 'worker-after-restart',
+      repository,
+      adapter,
+      providerResolve: async () => {
+        resolveCalls += 1;
+        throw new Error(
+          'adapter construction failed api_key=do-not-persist https://provider.test/signed?token=private',
+        );
+      },
+    }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'running' });
+    expect({ resolveCalls, providerCalls }).toEqual({ resolveCalls: 1, providerCalls: 0 });
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      status: 'reconciling',
+      retryClassification: 'unknown_outcome',
+    });
+    expect(repository.getJob(job.jobId)?.errorMessage).toBe(
+      'Provider adapter is unavailable for active attempt recovery',
+    );
+  });
+
+  test('holds active recovery when durable provider fences no longer match', async () => {
+    const cases = [
+      { name: 'version', config: { versionToken: 'different-version' } },
+      { name: 'account tenant', config: { accountId: crypto.randomUUID() } },
+      { name: 'project tenant', config: { projectId: crypto.randomUUID() } },
+      { name: 'provider', config: { provider: 'different-provider' } },
+      { name: 'capability', config: { capabilityMap: { capabilities: [] } } },
+    ];
+
+    for (const mismatch of cases) {
+      const repository = createMemoryStudioWorkerRepository();
+      const job = repository.seedJob({ status: 'running', attemptCount: 1 });
+      repository.seedAttempt(job.jobId, {
+        status: 'reconciling',
+        submissionKey: `durable-${mismatch.name}-submission-key`,
+      });
+      repository.loadProviderConfigForSubmission = async () => ({
+        providerConfigId: job.providerConfigId,
+        accountId: job.accountId,
+        projectId: job.projectId,
+        provider: job.provider,
+        enabled: true,
+        baseUrl: null,
+        region: null,
+        definitionId: job.provider,
+        credentialBinding: { ...job.credentialBinding },
+        capabilityMap: { capabilities: [job.capability] },
+        versionToken: job.createdAt.toISOString(),
+        ...mismatch.config,
+      });
+      const calls = { authorization: 0, credentials: 0, resolve: 0, submit: 0, provider: 0 };
+      const adapter = provider({
+        submit: async () => {
+          calls.submit += 1;
+          throw new Error('active recovery must never resubmit');
+        },
+        reconcile: async () => {
+          calls.provider += 1;
+          return 'unknown';
+        },
+      });
+
+      const result = await makeWorker({
+        workerId: `worker-${mismatch.name}`,
+        repository,
+        adapter,
+        authorization: {
+          revalidate: async () => {
+            calls.authorization += 1;
+            return { authorized: true };
+          },
+        },
+        credentialResolver: {
+          resolve: async () => {
+            calls.credentials += 1;
+            return null;
+          },
+        },
+        providerResolve: async () => {
+          calls.resolve += 1;
+          return adapter;
+        },
+      }).worker.runOnce();
+
+      expect(result, mismatch.name).toMatchObject({
+        kind: 'processed',
+        jobId: job.jobId,
+        status: 'running',
+      });
+      expect(calls, mismatch.name).toEqual({
+        authorization: 0,
+        credentials: 0,
+        resolve: 0,
+        submit: 0,
+        provider: 0,
+      });
+      expect(repository.getAttempts(job.jobId)[0], mismatch.name).toMatchObject({
+        status: 'reconciling',
+        retryClassification: 'unknown_outcome',
+      });
+    }
   });
 
   test('retries reconciliation without resubmitting an unresolved provider outcome', async () => {

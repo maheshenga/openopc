@@ -42,7 +42,7 @@ export interface StudioSignedDownload {
 }
 
 export function createStudioReferenceAssetResolver(
-  repository: StudioRepository,
+  repository: Pick<StudioRepository, 'getAsset'>,
   store: StudioObjectStore,
 ): StudioReferenceAssetResolver {
   return {

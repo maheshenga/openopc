@@ -61,8 +61,8 @@ function dockerPsql(sql: string) {
   }
 }
 
-function dockerPsqlScalar(query: string): string {
-  const result = Bun.spawnSync(
+async function dockerPsqlScalar(query: string): Promise<string> {
+  const proc = Bun.spawn(
     [
       'docker',
       'exec',
@@ -80,16 +80,19 @@ function dockerPsqlScalar(query: string): string {
     ],
     { env: dockerEnvironment, stdout: 'pipe', stderr: 'pipe' },
   );
-  if (result.exitCode !== 0) {
-    throw new Error(`${result.stdout.toString()}${result.stderr.toString()}`);
+  const exitCode = await proc.exited;
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  if (exitCode !== 0) {
+    throw new Error(`${stdout}${stderr}`);
   }
-  return result.stdout.toString().trim();
+  return stdout.trim();
 }
 
 async function waitForPostgresCount(query: string, minimum: number): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    if (Number(dockerPsqlScalar(query)) >= minimum) return;
+    if (Number(await dockerPsqlScalar(query)) >= minimum) return;
     await Bun.sleep(25);
   }
   throw new Error('Timed out waiting for the expected PostgreSQL lock state');

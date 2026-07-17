@@ -60,18 +60,23 @@ jobs:
             api:
               - *pnpm
               - 'apps/api/**'
+              - 'apps/api/src/studio/**'
               - 'packages/agent-tunnel/**'
               - 'packages/api-contract/**'
               - 'packages/db/**'
               - 'packages/manifest-schema/**'
               - 'packages/shared/**'
               - 'packages/starter/**'
+              - 'packages/studio-adapters/**'
+              - 'packages/studio-runtime/**'
             studio_worker:
               - *pnpm
               - 'apps/studio-worker/**'
               - 'apps/api/src/iam/**'
+              - 'apps/api/src/studio/**'
               - 'packages/api-contract/**'
               - 'packages/db/**'
+              - 'packages/studio-adapters/**'
               - 'packages/studio-runtime/**'
             frontend:
               - *pnpm
@@ -246,11 +251,51 @@ jobs:
         env:
           npm_config_engine_strict: "false"
 
-      - name: Test
-        run: pnpm --filter @kortix/studio-worker test
+      - name: Test Studio runtime, adapters, and worker
+        run: |
+          set -euo pipefail
+          pnpm --filter @kortix/studio-runtime test
+          pnpm --filter @kortix/studio-adapters test
+          pnpm --filter @kortix/studio-worker test
 
-      - name: Typecheck
-        run: pnpm --filter @kortix/studio-worker typecheck
+      - name: Typecheck Studio runtime, adapters, and worker
+        run: |
+          set -euo pipefail
+          pnpm --filter @kortix/studio-runtime typecheck
+          pnpm --filter @kortix/studio-adapters typecheck
+          pnpm --filter @kortix/studio-worker typecheck
+
+      - name: Start required MinIO conformance target
+        run: |
+          set -euo pipefail
+          docker run -d --name kortix-studio-minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            -e MINIO_KMS_SECRET_KEY=studio-key:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+            minio/minio:RELEASE.2025-04-22T22-12-26Z server /data
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:9000/minio/health/live; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo '::error::MinIO did not become healthy within 30 seconds.'
+          docker logs kortix-studio-minio || true
+          exit 1
+
+      - name: Run required MinIO S3 conformance
+        env:
+          STUDIO_S3_INTEGRATION_URL: http://127.0.0.1:9000
+          STUDIO_S3_ACCESS_KEY_ID: minioadmin
+          STUDIO_S3_SECRET_ACCESS_KEY: minioadmin
+        run: |
+          set -euo pipefail
+          # The suite creates studio-test itself, then empties and deletes it in afterAll.
+          pnpm --filter @kortix/studio-adapters test src/storage/s3-object-store.integration.test.ts
+
+      - name: Stop MinIO conformance target
+        if: always()
+        run: docker rm -f kortix-studio-minio || true
 
   frontend-build:
     name: Frontend build

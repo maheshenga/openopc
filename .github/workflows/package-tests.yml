@@ -150,6 +150,13 @@ jobs:
                --filter "kortix" \
                --if-present test
 
+      - name: Typecheck Studio runtime, adapters, and worker
+        run: |
+          set -euo pipefail
+          pnpm --filter @kortix/studio-runtime typecheck
+          pnpm --filter @kortix/studio-adapters typecheck
+          pnpm --filter @kortix/studio-worker typecheck
+
       - name: Typecheck and compile enterprise release tooling
         run: |
           pnpm --filter "@kortix/enterprise-updater" typecheck

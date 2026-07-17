@@ -59,7 +59,40 @@ check_focused() {
 # ── package-tests.yml: co-located bun:test suites ─────────────────────────────
 run_pkg_tests()  { pnpm --filter "./packages/**" --if-present test; }
 run_app_tests()  { pnpm --filter "Kortix-Computer-Frontend" --filter "@kortix/cli" \
-                     --filter "@kortix/sandbox-agent-server" --filter "kortix" --if-present test; }
+                     --filter "@kortix/sandbox-agent-server" --filter "@kortix/studio-worker" \
+                     --filter "kortix" --if-present test; }
+
+# ci.yml: Studio's shared runtime and storage adapter are explicit gates. The
+# Docker-backed S3 conformance suite is intentionally optional only locally.
+run_studio_gates() {
+  pnpm --filter @kortix/studio-runtime test &&
+    pnpm --filter @kortix/studio-runtime typecheck &&
+    pnpm --filter @kortix/studio-adapters test &&
+    pnpm --filter @kortix/studio-adapters typecheck &&
+    pnpm --filter @kortix/studio-worker test &&
+    pnpm --filter @kortix/studio-worker typecheck
+}
+
+run_studio_minio_conformance() {
+  local container="kortix-studio-minio-local"
+  docker rm -f "$container" >/dev/null 2>&1 || true
+  cleanup_studio_minio() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+  trap cleanup_studio_minio RETURN
+  docker run -d --name "$container" -p 9000:9000 \
+    -e MINIO_ROOT_USER=minioadmin \
+    -e MINIO_ROOT_PASSWORD=minioadmin \
+    -e MINIO_KMS_SECRET_KEY=studio-key:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+    minio/minio:RELEASE.2025-04-22T22-12-26Z server /data >/dev/null
+  for _ in $(seq 1 30); do
+    curl --fail --silent --show-error http://127.0.0.1:9000/minio/health/live >/dev/null && break
+    sleep 1
+  done
+  curl --fail --silent --show-error http://127.0.0.1:9000/minio/health/live >/dev/null
+  STUDIO_S3_INTEGRATION_URL=http://127.0.0.1:9000 \
+    STUDIO_S3_ACCESS_KEY_ID=minioadmin \
+    STUDIO_S3_SECRET_ACCESS_KEY=minioadmin \
+    pnpm --filter @kortix/studio-adapters test src/storage/s3-object-store.integration.test.ts
+}
 
 # ── ci.yml: per-app typecheck ─────────────────────────────────────────────────
 run_typechecks() { pnpm -r --if-present typecheck; }
@@ -92,8 +125,15 @@ pass "tests-required (package-tests.yml)" check_tests_required
 pass "focused-test guard (package-tests.yml)" check_focused
 pass "unit: packages (package-tests.yml)" run_pkg_tests
 pass "unit: apps (package-tests.yml)" run_app_tests
+pass "Studio runtime, adapters, and worker gates (ci.yml)" run_studio_gates
 pass "typecheck workspaces (ci.yml)" run_typechecks
 pass "lint: biome" pnpm lint:biome
+
+if docker_ok; then
+  pass "Studio MinIO S3 conformance (ci.yml)" run_studio_minio_conformance
+else
+  skip "Studio MinIO S3 conformance (ci.yml)" "Docker not running; GitHub CI treats this as required"
+fi
 
 # qa-pr.yml runs `make ci-pr`; needs tests/ deps (bun) + Docker for integration.
 if have bun; then

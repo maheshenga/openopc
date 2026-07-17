@@ -1,5 +1,13 @@
 # Kortix End-to-End Flows
 
+## Studio Provider and Storage Gates
+
+`STUDIO-10` Required CI runs runtime, adapter, and worker test/typecheck gates plus a pinned MinIO S3 conformance run. The MinIO target must pass `/minio/health/live`; its integration suite creates and removes `studio-test`, proves anonymous object GET is denied, and runs with cleanup even after a failure. Local CI may report Docker unavailable as a skip, but GitHub CI must fail instead of silently skipping it.
+
+`STUDIO-11` Protected live-provider smoke is opt-in only (`STUDIO_LIVE_PROVIDER_TESTS=true`) and requires a dedicated project/provider, explicit lifecycle cleanup confirmation, concurrency `1`, output count `1`, maximum credits from `1` through `5`, and a timeout no greater than 300 seconds. It asserts one job/submission/persisted manifest/asset/settlement, signed download, and response redaction without emitting credentials or signed URLs.
+
+`STUDIO-12` Alibaba OSS compatibility smoke is opt-in only (`STUDIO_ALIYUN_OSS_SMOKE=true`) and uses an exact dedicated `studio-smoke/...` prefix. It validates HTTPS, configured path-style behavior, direct and signed put/head/get/delete, checksum/metadata, private anonymous GET denial, and `HeadObject` SSE/KMS state, then verifies exact-prefix cleanup. A failed smoke blocks approval of that endpoint.
+
 Single source of truth for the e2e suite. Every flow the platform supports, start→finish, enumerated. Each step is `METHOD /path → expected`. CLI steps are `kortix …`. Negatives (`→ 4xx`) are part of the flow, not optional. Each flow has a stable ID (`PROJ-3`, `IAM-7`) so a test maps 1:1 to a line here.
 
 Stack: TypeScript/Hono on Bun (`apps/api`), Drizzle→Postgres (`kortix` schema), Next.js (`apps/web`), `kortix` CLI (`apps/cli`). **No RLS** — all authz is app-layer via the IAM engine, so every assertion must go through the HTTP API. Sessions run **OpenCode** inside an ephemeral per-session sandbox reached through the preview proxy.

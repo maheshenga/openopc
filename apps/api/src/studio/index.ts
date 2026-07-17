@@ -135,7 +135,9 @@ function storageErrorResponse(c: Context<AppEnv>, error: unknown): Response {
 }
 
 function recoveryErrorResponse(c: Context<AppEnv>, error: unknown): Response {
-  if (!(error instanceof StudioRecoveryServiceError)) throw error;
+  if (!(error instanceof StudioRecoveryServiceError)) {
+    return c.json({ error: 'Studio recovery failed', code: 'STUDIO_INTERNAL_ERROR' }, 500);
+  }
   if (error.status === 404) return c.json({ error: 'Not found' }, 404);
   if (error.status === 500) {
     return c.json({ error: 'Studio recovery failed', code: 'STUDIO_INTERNAL_ERROR' }, 500);

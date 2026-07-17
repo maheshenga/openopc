@@ -391,6 +391,7 @@ function serializeRecoveryContext(input: {
     current_attempt_cost_recorded_at: attempt.costRecordedAt
       ? timestampValue(attempt.costRecordedAt)
       : null,
+    current_attempt_cost_outcome: attempt.costOutcome ?? null,
     verified_attempt_cost_total: verifiedAttemptCostTotal,
   };
 }
@@ -447,8 +448,9 @@ function rowsFromExecute(value: unknown): Record<string, unknown>[] {
 export function createDrizzleStudioRecoveryRepository(db: Database): StudioRecoveryRepository {
   return {
     async recoverLocked(input, prepare) {
-      return db.transaction(
-        async (tx) => {
+      try {
+        return await db.transaction(
+          async (tx) => {
           const [job] = await tx
             .select()
             .from(studioJobs)
@@ -547,9 +549,13 @@ export function createDrizzleStudioRecoveryRepository(db: Database): StudioRecov
             throw mapRecoveryRpcCode(rpc.code);
           }
           return serializeRecoveryResult(rpc);
-        },
-        { isolationLevel: 'read committed' },
-      );
+          },
+          { isolationLevel: 'read committed' },
+        );
+      } catch (error) {
+        if (error instanceof StudioRecoveryServiceError) throw error;
+        throw new StudioRecoveryServiceError('STUDIO_INTERNAL_ERROR', 500);
+      }
     },
   };
 }

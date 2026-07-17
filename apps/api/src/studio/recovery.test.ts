@@ -62,6 +62,7 @@ const lockedContext: StudioRecoveryLockedContext = {
   current_attempt_usage: {},
   current_attempt_cost_credits: null,
   current_attempt_cost_recorded_at: null,
+  current_attempt_cost_outcome: null,
   verified_attempt_cost_total: 1.5,
 };
 
@@ -269,6 +270,21 @@ describe('Studio recovery route', () => {
       expect(result.status, name).toBe(status);
       expect(await result.json(), name).toMatchObject(body);
     }
+
+    const genericFailure = await recoveryRouteApp({
+      recover: async () => {
+        throw new Error('database detail must not leak');
+      },
+    }).request(`/v1/projects/${PROJECT_ID}/studio/jobs/${JOB_ID}/recovery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validRouteRecoveryRequest()),
+    });
+    expect(genericFailure.status).toBe(500);
+    expect(await genericFailure.json()).toEqual({
+      error: 'Studio recovery failed',
+      code: 'STUDIO_INTERNAL_ERROR',
+    });
 
     const app = recoveryRouteApp({
       recover: async () => {
@@ -606,6 +622,21 @@ describe('Studio recovery service', () => {
     });
     expect(unavailable.repository.commits).toBe(0);
   });
+
+  test('rejects a recorded current-attempt cost whose outcome is not unknown', async () => {
+    const fixture = await createStagedSuccessFixture(undefined, {
+      current_attempt_usage: { output_count: 1 },
+      current_attempt_cost_credits: 2,
+      current_attempt_cost_recorded_at: '2026-07-17T07:59:00.000Z',
+      current_attempt_cost_outcome: 'failed',
+      verified_attempt_cost_total: 2,
+    });
+    await expect(fixture.service.recover(fixture.input)).rejects.toMatchObject({
+      code: 'STUDIO_ASSET_INVALID',
+      status: 400,
+    });
+    expect(fixture.repository.commits).toBe(0);
+  });
 });
 
 function sha256(bytes: Uint8Array): string {
@@ -614,6 +645,7 @@ function sha256(bytes: Uint8Array): string {
 
 async function createStagedSuccessFixture(
   mutate?: (manifest: Record<string, unknown>) => void,
+  contextPatch: Partial<StudioRecoveryLockedContext> = {},
 ) {
   const store = new InMemoryStudioObjectStore({ namespace: 'recovery-test', ready: true });
   const submissionHash = sha256(new TextEncoder().encode(lockedContext.submission_key));
@@ -680,6 +712,7 @@ async function createStagedSuccessFixture(
     ...lockedContext,
     staging_manifest_key: manifestKey,
     staging_manifest_checksum: manifestChecksum,
+    ...contextPatch,
   });
   const headKeys: string[] = [];
   const headObject = store.headObject.bind(store);

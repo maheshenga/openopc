@@ -1152,6 +1152,7 @@ BEGIN
       AND (
         v_attempt.upstream_usage IS DISTINCT FROM v_upstream_usage
         OR v_attempt.upstream_cost_credits IS DISTINCT FROM v_upstream_cost_credits
+        OR v_attempt.cost_outcome IS DISTINCT FROM 'unknown'
       ) THEN
       RETURN jsonb_build_object(
         'success', false,

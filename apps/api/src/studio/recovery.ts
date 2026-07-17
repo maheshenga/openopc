@@ -57,6 +57,7 @@ export type StudioRecoveryLockedContext = {
   current_attempt_usage: Record<string, unknown>;
   current_attempt_cost_credits: number | null;
   current_attempt_cost_recorded_at: string | null;
+  current_attempt_cost_outcome: string | null;
   verified_attempt_cost_total: number;
 };
 
@@ -287,6 +288,7 @@ export class StudioRecoveryService {
     try {
       if (context.current_attempt_cost_recorded_at) {
         if (
+          context.current_attempt_cost_outcome !== 'unknown' ||
           context.current_attempt_cost_credits !== priced.upstream_cost_credits ||
           canonicalStudioRequestHash(context.current_attempt_usage) !==
             canonicalStudioRequestHash(priced.usage)

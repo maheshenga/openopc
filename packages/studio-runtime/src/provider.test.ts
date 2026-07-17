@@ -1,17 +1,19 @@
 import { describe, expect, test } from 'bun:test';
+import type { StudioCredentialResolver, StudioResolvedCredential } from './index';
 import type {
   StudioPricingSnapshot,
   StudioProviderDefinition,
   StudioProviderDefinitionConfig,
+  StudioProviderStatus,
   StudioProviderSubmission,
 } from './provider';
-import type { StudioCredentialResolver, StudioResolvedCredential } from './index';
 import {
   STUDIO_MAX_PROVIDER_ATTEMPTS,
   StudioProviderCallError,
   classifyProviderRetry,
   createFakeStudioProvider,
   parseRetryAfterMs,
+  parseStudioTrustedCostEvidence,
 } from './provider';
 
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
@@ -101,6 +103,31 @@ describe('Studio provider runtime', () => {
     expect(new StudioProviderCallError('unknown_outcome', 'ambiguous')).toMatchObject({
       classification: 'unknown_outcome',
     });
+  });
+
+  test('accepts only strict adapter-owned usage evidence and never provider credits', () => {
+    const evidence = { usage: { output_count: 2 } };
+    const status: StudioProviderStatus = {
+      status: 'failed',
+      trusted_cost_evidence: evidence,
+    };
+    const error = new StudioProviderCallError('retryable', 'charged retry', undefined, evidence);
+
+    expect(parseStudioTrustedCostEvidence(status.trusted_cost_evidence)).toEqual(evidence);
+    expect(error.trustedCostEvidence).toEqual(evidence);
+    expect(parseStudioTrustedCostEvidence({ usage: { output_count: 0 } })).toBeNull();
+    expect(parseStudioTrustedCostEvidence({ usage: { output_count: 17 } })).toBeNull();
+    expect(
+      parseStudioTrustedCostEvidence({
+        usage: { output_count: 1 },
+        actual_credits: 999,
+      }),
+    ).toBeNull();
+    expect(
+      parseStudioTrustedCostEvidence({
+        usage: { output_count: 1, provider_credits: 999 },
+      }),
+    ).toBeNull();
   });
 
   test('restores output count from a persisted fake provider handle after restart', async () => {

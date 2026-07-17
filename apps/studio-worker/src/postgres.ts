@@ -12,10 +12,7 @@ import type {
   StudioWorkerProviderConfig,
   StudioWorkerRepository,
 } from './contracts';
-import type {
-  StudioMaintenanceRepository,
-  StudioOrphanStagingCandidate,
-} from './maintenance';
+import type { StudioMaintenanceRepository, StudioOrphanStagingCandidate } from './maintenance';
 import { assertProcessRole } from './memory-repository';
 
 export interface StudioSqlClient {
@@ -71,6 +68,7 @@ WITH locked AS (
   FROM kortix.studio_jobs j
   WHERE j.job_id = $1::uuid
     AND j.lease_owner = $2
+    AND j.lease_expires_at > GREATEST(clock_timestamp(), $6::timestamptz)
     AND j.status IN ('queued', 'running')
     AND j.attempt_count < 3
     AND j.cancellation_requested_at IS NULL
@@ -143,19 +141,40 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
     return mapJob(rows[0]);
   }
 
-  async getLatestAttempt(jobId: string): Promise<StudioWorkerAttempt | null> {
+  async getLatestAttempt(input: {
+    jobId: string;
+    workerId: string;
+    now: Date;
+  }): Promise<StudioWorkerAttempt | null> {
     const rows = await this.client.unsafe(
       `
-      SELECT a.*, j.attempt_count AS attempt_number, j.provider_handle
-      FROM kortix.studio_job_attempts a
-      JOIN kortix.studio_jobs j ON j.job_id = a.job_id
-      WHERE a.job_id = $1::uuid
-      ORDER BY a.started_at DESC, a.attempt_id DESC
-      LIMIT 1
+      WITH owned AS MATERIALIZED (
+        SELECT job_id, attempt_count, provider_handle
+        FROM kortix.studio_jobs
+        WHERE job_id = $1::uuid
+          AND lease_owner = $2
+          AND lease_expires_at > GREATEST(clock_timestamp(), $3::timestamptz)
+          AND status IN ('queued', 'running')
+        FOR UPDATE
+      )
+      SELECT
+        owned.job_id AS owned_job_id,
+        latest.*,
+        owned.attempt_count AS attempt_number,
+        owned.provider_handle
+      FROM owned
+      LEFT JOIN LATERAL (
+        SELECT attempt.*
+        FROM kortix.studio_job_attempts attempt
+        WHERE attempt.job_id = owned.job_id
+        ORDER BY attempt.started_at DESC, attempt.attempt_id DESC
+        LIMIT 1
+      ) latest ON true
     `,
-      [jobId],
+      [input.jobId, input.workerId, input.now.toISOString()],
     );
-    return rows[0] ? mapAttempt(rows[0]) : null;
+    if (!rows[0]) throw new Error('Studio job lease is not owned by this worker');
+    return rows[0].attempt_id ? mapAttempt(rows[0]) : null;
   }
 
   async heartbeatLease(input: {
@@ -170,6 +189,7 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
       SET lease_expires_at = $3::timestamptz, updated_at = $4::timestamptz
       WHERE job_id = $1::uuid
         AND lease_owner = $2
+        AND lease_expires_at > GREATEST(clock_timestamp(), $4::timestamptz)
         AND status IN ('queued', 'running')
       RETURNING job_id
     `,
@@ -183,16 +203,21 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
     return rows.length > 0;
   }
 
-  async isCancellationRequested(input: { jobId: string; workerId: string }): Promise<boolean> {
+  async isCancellationRequested(input: {
+    jobId: string;
+    workerId: string;
+    now: Date;
+  }): Promise<boolean> {
     const rows = await this.client.unsafe(
       `
       SELECT cancellation_requested_at
       FROM kortix.studio_jobs
       WHERE job_id = $1::uuid
         AND lease_owner = $2
+        AND lease_expires_at > GREATEST(clock_timestamp(), $3::timestamptz)
         AND status IN ('queued', 'running')
     `,
-      [input.jobId, input.workerId],
+      [input.jobId, input.workerId, input.now.toISOString()],
     );
     if (!rows[0]) throw new Error('Studio job lease is not owned by this worker');
     return rows[0].cancellation_requested_at != null;
@@ -201,6 +226,7 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
   async loadProviderConfigForSubmission(input: {
     jobId: string;
     workerId: string;
+    now: Date;
   }): Promise<StudioWorkerProviderConfig | null> {
     const rows = await this.client.unsafe(
       `
@@ -233,10 +259,11 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
        AND config.project_id = job.project_id
       WHERE job.job_id = $1::uuid
         AND job.lease_owner = $2
+        AND job.lease_expires_at > GREATEST(clock_timestamp(), $3::timestamptz)
         AND job.status IN ('queued', 'running')
       LIMIT 1
     `,
-      [input.jobId, input.workerId],
+      [input.jobId, input.workerId, input.now.toISOString()],
     );
     if (!rows[0]) return null;
     const versionToken = String(rows[0].version_token ?? '');
@@ -289,6 +316,7 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
         FROM kortix.studio_jobs
         WHERE job_id = $1::uuid
           AND lease_owner = $3
+          AND lease_expires_at > GREATEST(clock_timestamp(), $6::timestamptz)
           AND status IN ('queued', 'running')
         FOR UPDATE
       ), attempt_update AS (
@@ -455,9 +483,19 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
   }): Promise<'succeeded' | 'cancelled'> {
     const rows = await this.client.unsafe(
       `
+      WITH owned AS MATERIALIZED (
+        SELECT job_id
+        FROM kortix.studio_jobs
+        WHERE job_id = $1::uuid
+          AND lease_owner = $3
+          AND lease_expires_at > GREATEST(clock_timestamp(), $6::timestamptz)
+          AND status IN ('queued', 'running')
+        FOR UPDATE
+      )
       SELECT public.atomic_finalize_studio_job_success(
         $1::uuid, $2::uuid, $3, $4::numeric, $5::jsonb, $6::timestamptz
       ) AS result
+      FROM owned
     `,
       [
         input.jobId,
@@ -494,6 +532,7 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
         FROM kortix.studio_jobs
         WHERE job_id = $1::uuid
           AND lease_owner = $3
+          AND lease_expires_at > GREATEST(clock_timestamp(), $7::timestamptz)
           AND status IN ('queued', 'running')
         FOR UPDATE
       )
@@ -518,6 +557,7 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
         input.submissionKind,
         input.manifestKey,
         input.manifestChecksum,
+        input.now.toISOString(),
       ],
     );
   }
@@ -556,6 +596,7 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
   async getRecordedAttemptCostTotal(input: {
     jobId: string;
     workerId: string;
+    now: Date;
   }): Promise<number> {
     const rows = await this.client.unsafe(
       `
@@ -564,6 +605,7 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
         FROM kortix.studio_jobs
         WHERE job_id = $1::uuid
           AND lease_owner = $2
+          AND lease_expires_at > GREATEST(clock_timestamp(), $3::timestamptz)
           AND status IN ('queued', 'running')
       )
       SELECT COALESCE(SUM(attempt.upstream_cost_credits), 0) AS total
@@ -573,7 +615,7 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
        AND attempt.cost_recorded_at IS NOT NULL
       GROUP BY owned.job_id
     `,
-      [input.jobId, input.workerId],
+      [input.jobId, input.workerId, input.now.toISOString()],
     );
     if (!rows[0]) throw new Error('Studio job lease is not owned by this worker');
     const total = Number(rows[0].total ?? 0);
@@ -615,14 +657,22 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
     });
   }
 
-  async abandonLease(input: { jobId: string; workerId: string; availableAt: Date }): Promise<void> {
-    await this.client.unsafe(
+  async abandonLease(input: {
+    jobId: string;
+    workerId: string;
+    availableAt: Date;
+    now: Date;
+  }): Promise<void> {
+    await this.requireOwnedMutation(
       `
       UPDATE kortix.studio_jobs
       SET lease_owner = NULL, lease_expires_at = NULL, available_at = $3::timestamptz, updated_at = now()
-      WHERE job_id = $1::uuid AND lease_owner = $2
+      WHERE job_id = $1::uuid
+        AND lease_owner = $2
+        AND lease_expires_at > GREATEST(clock_timestamp(), $4::timestamptz)
+      RETURNING job_id
     `,
-      [input.jobId, input.workerId, input.availableAt.toISOString()],
+      [input.jobId, input.workerId, input.availableAt.toISOString(), input.now.toISOString()],
     );
   }
 
@@ -646,6 +696,7 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
         FROM kortix.studio_jobs
         WHERE job_id = $1::uuid
           AND lease_owner = $3
+          AND lease_expires_at > GREATEST(clock_timestamp(), $8::timestamptz)
           AND status IN ('queued', 'running')
         FOR UPDATE
       ), attempt_update AS (
@@ -710,9 +761,19 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
   }) {
     const rows = await this.client.unsafe(
       `
+      WITH owned AS MATERIALIZED (
+        SELECT job_id
+        FROM kortix.studio_jobs
+        WHERE job_id = $1::uuid
+          AND lease_owner = $3
+          AND lease_expires_at > GREATEST(clock_timestamp(), $9::timestamptz)
+          AND status IN ('queued', 'running')
+        FOR UPDATE
+      )
       SELECT public.atomic_finalize_studio_job_terminal(
         $1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9::timestamptz
       ) AS result
+      FROM owned
     `,
       [
         input.jobId,
@@ -937,10 +998,17 @@ export class PostgresStudioMaintenanceRepository implements StudioMaintenanceRep
 
   async listOrphanStagingCandidates(input: {
     retentionBefore: Date;
+    after?: { terminalAt: Date; attemptId: string };
     limit: number;
   }): Promise<StudioOrphanStagingCandidate[]> {
     if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
       throw new Error('Studio orphan candidate limit must be between 1 and 100');
+    }
+    if (
+      input.after &&
+      (!Number.isFinite(input.after.terminalAt.getTime()) || !input.after.attemptId.trim())
+    ) {
+      throw new Error('Studio orphan candidate cursor is invalid');
     }
     const rows = await this.client.unsafe(
       `
@@ -955,13 +1023,35 @@ export class PostgresStudioMaintenanceRepository implements StudioMaintenanceRep
       JOIN kortix.studio_jobs job ON job.job_id = attempt.job_id
       WHERE job.status IN ('succeeded', 'failed', 'cancelled')
         AND attempt.status IN ('succeeded', 'failed', 'cancelled')
+        AND attempt.retry_classification IS DISTINCT FROM 'unknown_outcome'
         AND attempt.staging_manifest_key IS NULL
         AND attempt.staging_manifest_checksum IS NULL
+        AND job.error_code IS DISTINCT FROM 'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM kortix.studio_billing_incidents incident
+          WHERE incident.job_id = job.job_id
+            AND incident.attempt_id = attempt.attempt_id
+            AND incident.status = 'open'
+        )
         AND COALESCE(attempt.ended_at, job.completed_at) <= $1::timestamptz
+        AND (
+          $2::timestamptz IS NULL
+          OR COALESCE(attempt.ended_at, job.completed_at) > $2::timestamptz
+          OR (
+            COALESCE(attempt.ended_at, job.completed_at) = $2::timestamptz
+            AND attempt.attempt_id > $3::uuid
+          )
+        )
       ORDER BY COALESCE(attempt.ended_at, job.completed_at) ASC, attempt.attempt_id ASC
-      LIMIT $2
+      LIMIT $4
     `,
-      [input.retentionBefore.toISOString(), input.limit],
+      [
+        input.retentionBefore.toISOString(),
+        input.after?.terminalAt.toISOString() ?? null,
+        input.after?.attemptId ?? null,
+        input.limit,
+      ],
     );
     return rows.map((row) => {
       const terminalAt = nullableDate(row.terminal_at);
@@ -995,8 +1085,17 @@ export class PostgresStudioMaintenanceRepository implements StudioMaintenanceRep
         AND COALESCE(attempt.ended_at, job.completed_at) <= $7::timestamptz
         AND job.status IN ('succeeded', 'failed', 'cancelled')
         AND attempt.status IN ('succeeded', 'failed', 'cancelled')
+        AND attempt.retry_classification IS DISTINCT FROM 'unknown_outcome'
         AND attempt.staging_manifest_key IS NULL
         AND attempt.staging_manifest_checksum IS NULL
+        AND job.error_code IS DISTINCT FROM 'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM kortix.studio_billing_incidents incident
+          WHERE incident.job_id = job.job_id
+            AND incident.attempt_id = attempt.attempt_id
+            AND incident.status = 'open'
+        )
       LIMIT 1
     `,
       [

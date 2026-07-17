@@ -103,6 +103,8 @@ describe('PostgresStudioWorkerRepository', () => {
     expect(outcome).toBe('succeeded');
     expect(queries).toHaveLength(1);
     expect(queries[0]?.text).toContain('public.atomic_finalize_studio_job_success');
+    expect(queries[0]?.text).toContain('FOR UPDATE');
+    expect(queries[0]?.text).toContain('lease_expires_at > GREATEST(clock_timestamp()');
     expect(queries[0]?.values).toContain('worker-a:claim-1');
     expect(String(queries[0]?.values.at(4))).toContain('result.png');
   });
@@ -138,9 +140,14 @@ describe('PostgresStudioWorkerRepository', () => {
 
     expect(queries).toHaveLength(2);
     expect(queries[0]?.text).toContain('staging_manifest_key');
+    expect(queries[0]?.text).toContain('lease_expires_at > GREATEST(clock_timestamp()');
     expect(queries[0]?.text).toContain('submission_kind');
-    expect(queries[0]?.text).toContain("status = CASE WHEN attempt.status = 'submitting' THEN 'reconciling'");
-    expect(queries[0]?.text).toContain('attempt.submission_kind IS NULL OR attempt.submission_kind = $4');
+    expect(queries[0]?.text).toContain(
+      "status = CASE WHEN attempt.status = 'submitting' THEN 'reconciling'",
+    );
+    expect(queries[0]?.text).toContain(
+      'attempt.submission_kind IS NULL OR attempt.submission_kind = $4',
+    );
     expect(queries[1]?.text).toContain('public.atomic_record_studio_attempt_cost');
     expect(queries[1]?.values).toContain('worker-a:claim-1');
   });
@@ -158,9 +165,11 @@ describe('PostgresStudioWorkerRepository', () => {
       repository.getRecordedAttemptCostTotal({
         jobId: '11111111-1111-4111-8111-111111111111',
         workerId: 'lost-owner',
+        now: new Date('2026-07-15T10:00:00.000Z'),
       }),
     ).rejects.toThrow(/lease/i);
     expect(queries[0]).toContain('WITH owned AS');
+    expect(queries[0]).toContain('lease_expires_at > GREATEST(clock_timestamp()');
     expect(queries[0]).toContain('GROUP BY owned.job_id');
   });
 
@@ -176,11 +185,13 @@ describe('PostgresStudioWorkerRepository', () => {
     const requested = await repository.isCancellationRequested({
       jobId: '11111111-1111-4111-8111-111111111111',
       workerId: 'worker-a:claim-1',
+      now: new Date('2026-07-15T10:00:00.000Z'),
     });
 
     expect(requested).toBe(true);
     expect(queries).toHaveLength(1);
     expect(queries[0]?.text).toContain('lease_owner = $2');
+    expect(queries[0]?.text).toContain('lease_expires_at > GREATEST(clock_timestamp()');
     expect(queries[0]?.values).toContain('worker-a:claim-1');
   });
 
@@ -209,6 +220,7 @@ describe('PostgresStudioWorkerRepository', () => {
     const config = await repository.loadProviderConfigForSubmission({
       jobId: '11111111-1111-4111-8111-111111111111',
       workerId: 'worker-a:claim-1',
+      now: new Date('2026-07-15T10:00:00.000Z'),
     });
 
     expect(config).toMatchObject({
@@ -223,6 +235,7 @@ describe('PostgresStudioWorkerRepository', () => {
     expect(queries[0]?.text).toContain('config.project_id = job.project_id');
     expect(queries[0]?.text).toContain('config.base_url');
     expect(queries[0]?.text).toContain('config.region');
+    expect(queries[0]?.text).toContain('lease_expires_at > GREATEST(clock_timestamp()');
     expect(queries[0]?.values).toContain('worker-a:claim-1');
   });
 
@@ -357,6 +370,34 @@ describe('PostgresStudioWorkerRepository', () => {
 
     expect(queries).toHaveLength(1);
     expect(queries[0]).toContain('public.atomic_finalize_studio_job_terminal');
+    expect(queries[0]).toContain('FOR UPDATE');
+    expect(queries[0]).toContain('lease_expires_at > GREATEST(clock_timestamp()');
+  });
+
+  test('loads the latest attempt only through a live owner fence', async () => {
+    const queries: Array<{ text: string; values: unknown[] }> = [];
+    const repository = new PostgresStudioWorkerRepository({
+      unsafe: async (text, values = []) => {
+        queries.push({ text, values });
+        return [{ owned_job_id: '11111111-1111-4111-8111-111111111111' }];
+      },
+    });
+    const now = new Date('2026-07-15T10:00:00.000Z');
+
+    await repository.getLatestAttempt({
+      jobId: '11111111-1111-4111-8111-111111111111',
+      workerId: 'worker-a:claim-1',
+      now,
+    });
+
+    expect(queries[0]?.text).toContain('lease_owner = $2');
+    expect(queries[0]?.text).toContain('lease_expires_at > GREATEST(clock_timestamp()');
+    expect(queries[0]?.text).toContain('FOR UPDATE');
+    expect(queries[0]?.values).toEqual([
+      '11111111-1111-4111-8111-111111111111',
+      'worker-a:claim-1',
+      now.toISOString(),
+    ]);
   });
 
   test('guards every attempt mutation behind the currently owned job row', async () => {
@@ -495,26 +536,48 @@ describe('PostgresStudioWorkerRepository', () => {
 
     const candidates = await maintenance.listOrphanStagingCandidates({
       retentionBefore,
+      after: {
+        terminalAt: new Date('2026-05-01T00:00:00.000Z'),
+        attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
       limit: 25,
     });
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({ submissionKey: 'submission-orphan' });
     expect(queries[0]?.text).toContain("job.status IN ('succeeded', 'failed', 'cancelled')");
     expect(queries[0]?.text).toContain("attempt.status IN ('succeeded', 'failed', 'cancelled')");
+    expect(queries[0]?.text).toContain(
+      "attempt.retry_classification IS DISTINCT FROM 'unknown_outcome'",
+    );
+    expect(queries[0]?.text).toContain('kortix.studio_billing_incidents');
     expect(queries[0]?.text).toContain('attempt.staging_manifest_key IS NULL');
     expect(queries[0]?.text).toContain('attempt.staging_manifest_checksum IS NULL');
-    expect(queries[0]?.text).toContain('COALESCE(attempt.ended_at, job.completed_at) <= $1::timestamptz');
+    expect(queries[0]?.text).toContain('STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED');
+    expect(queries[0]?.text).toContain(
+      'COALESCE(attempt.ended_at, job.completed_at) <= $1::timestamptz',
+    );
+    expect(queries[0]?.text).toContain('$2::timestamptz IS NULL');
+    expect(queries[0]?.text).toContain('attempt.attempt_id > $3::uuid');
     expect(queries[0]?.values).toContain(25);
+    expect(queries[0]?.values).toContain('2026-05-01T00:00:00.000Z');
+    expect(queries[0]?.values).toContain('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
 
+    const [candidate] = candidates;
+    if (!candidate) throw new Error('Expected one orphan staging candidate');
     expect(
       await maintenance.isOrphanStagingCandidate({
-        candidate: candidates[0]!,
+        candidate,
         retentionBefore,
       }),
     ).toBe(true);
     expect(queries[1]?.text).toContain('SELECT 1 AS eligible');
     expect(queries[1]?.text).toContain('attempt.submission_key = $5');
+    expect(queries[1]?.text).toContain(
+      "attempt.retry_classification IS DISTINCT FROM 'unknown_outcome'",
+    );
+    expect(queries[1]?.text).toContain('kortix.studio_billing_incidents');
     expect(queries[1]?.text).toContain('attempt.staging_manifest_key IS NULL');
     expect(queries[1]?.text).toContain("job.status IN ('succeeded', 'failed', 'cancelled')");
+    expect(queries[1]?.text).toContain('STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED');
   });
 });

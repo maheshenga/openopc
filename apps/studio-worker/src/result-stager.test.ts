@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   InMemoryStudioObjectStore,
+  StudioStorageUnavailableError,
   studioStagingManifestKey,
   studioStagingPrefix,
   studioSubmissionKeyHash,
@@ -24,9 +25,11 @@ const PNG = new Uint8Array(
   ),
 );
 
-function asset(input: { openBody: StudioProviderAsset['openBody']; replayable?: boolean } = {
-  openBody: async () => new Blob([PNG]).stream(),
-}) {
+function asset(
+  input: { openBody: StudioProviderAsset['openBody']; replayable?: boolean } = {
+    openBody: async () => new Blob([PNG]).stream(),
+  },
+) {
   return {
     kind: 'image' as const,
     filename: 'result.png',
@@ -88,7 +91,10 @@ describe('StudioResultStager', () => {
       attemptId: IDS.attemptId,
       submissionKeyHash: studioSubmissionKeyHash('submission-key-1'),
     });
-    const conflictingStore = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const conflictingStore = new InMemoryStudioObjectStore({
+      namespace: 'studio-test',
+      ready: true,
+    });
     const conflicting = new StudioResultStager(conflictingStore);
     await conflictingStore.putObject({
       key: conflictingKey,
@@ -158,8 +164,197 @@ describe('StudioResultStager', () => {
       ),
     ).rejects.toMatchObject({ classification: 'unknown_outcome' });
   });
+
+  test('reuses an exact existing asset without overwriting it', async () => {
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const key = stagingAssetKey();
+    await store.putObject({
+      key,
+      body: new Blob([PNG]).stream(),
+      content_type: 'image/png',
+      size_bytes: PNG.byteLength,
+      checksum_sha256: checksum(PNG),
+      metadata: { kind: 'studio-staging-asset' },
+    });
+    const originalPut = store.putObject.bind(store);
+    let assetPuts = 0;
+    store.putObject = async (input) => {
+      if (input.key === key) assetPuts += 1;
+      return originalPut(input);
+    };
+
+    await expect(new StudioResultStager(store).stage(stageInput())).resolves.toMatchObject({
+      manifest: { assets: [{ key }] },
+    });
+    expect(assetPuts).toBe(0);
+  });
+
+  test('rejects a conflicting existing asset without overwriting it', async () => {
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const key = stagingAssetKey();
+    const conflictingBytes = new Uint8Array([1, 2, 3, 4]);
+    const conflictingChecksum = checksum(conflictingBytes);
+    await store.putObject({
+      key,
+      body: new Blob([conflictingBytes]).stream(),
+      content_type: 'application/octet-stream',
+      size_bytes: conflictingBytes.byteLength,
+      checksum_sha256: conflictingChecksum,
+      metadata: { kind: 'studio-staging-asset' },
+    });
+
+    await expect(new StudioResultStager(store).stage(stageInput())).rejects.toMatchObject({
+      classification: 'terminal',
+    });
+    await expect(store.headObject({ key })).resolves.toMatchObject({
+      checksum_sha256: conflictingChecksum,
+      content_type: 'application/octet-stream',
+    });
+  });
+
+  test('replays a transient asset put only within the configured source-open cap', async () => {
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const originalPut = store.putObject.bind(store);
+    let assetPuts = 0;
+    let opens = 0;
+    store.putObject = async (input) => {
+      if (input.key.includes('/assets/')) {
+        assetPuts += 1;
+        if (assetPuts === 1) throw new StudioStorageUnavailableError();
+      }
+      return originalPut(input);
+    };
+
+    await expect(
+      new StudioResultStager(store).stage(
+        stageInput({
+          assets: [
+            asset({
+              openBody: async () => {
+                opens += 1;
+                return new Blob([PNG]).stream();
+              },
+            }),
+          ],
+        }),
+      ),
+    ).resolves.toMatchObject({ manifest: { assets: [{ mime_type: 'image/png' }] } });
+    expect(assetPuts).toBe(2);
+    expect(opens).toBe(2);
+    expect(opens).toBeLessThanOrEqual(3);
+  });
+
+  test('recovers an exact asset after the object store loses the put acknowledgement', async () => {
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const originalPut = store.putObject.bind(store);
+    let lostAcknowledgement = true;
+    let opens = 0;
+    store.putObject = async (input) => {
+      const written = await originalPut(input);
+      if (input.key.includes('/assets/') && lostAcknowledgement) {
+        lostAcknowledgement = false;
+        throw new StudioStorageUnavailableError();
+      }
+      return written;
+    };
+
+    await expect(
+      new StudioResultStager(store).stage(
+        stageInput({
+          assets: [
+            asset({
+              openBody: async () => {
+                opens += 1;
+                return new Blob([PNG]).stream();
+              },
+            }),
+          ],
+        }),
+      ),
+    ).resolves.toMatchObject({ manifest: { assets: [{ mime_type: 'image/png' }] } });
+    expect(opens).toBe(1);
+  });
+
+  test('recovers the manifest after the object store loses the put acknowledgement', async () => {
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const originalPut = store.putObject.bind(store);
+    let lostAcknowledgement = true;
+    store.putObject = async (input) => {
+      const written = await originalPut(input);
+      if (input.key.endsWith('/manifest.json') && lostAcknowledgement) {
+        lostAcknowledgement = false;
+        throw new StudioStorageUnavailableError();
+      }
+      return written;
+    };
+
+    await expect(new StudioResultStager(store).stage(stageInput())).resolves.toMatchObject({
+      manifest: { usage: { output_count: 1 } },
+    });
+  });
+
+  test('retries an absent manifest without reopening or rewriting staged assets', async () => {
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const originalPut = store.putObject.bind(store);
+    let assetPuts = 0;
+    let manifestPuts = 0;
+    let opens = 0;
+    store.putObject = async (input) => {
+      if (input.key.includes('/assets/')) assetPuts += 1;
+      if (input.key.endsWith('/manifest.json')) {
+        manifestPuts += 1;
+        if (manifestPuts < 3) throw new StudioStorageUnavailableError();
+      }
+      return originalPut(input);
+    };
+
+    await expect(
+      new StudioResultStager(store).stage(
+        stageInput({
+          assets: [
+            asset({
+              openBody: async () => {
+                opens += 1;
+                return new Blob([PNG]).stream();
+              },
+            }),
+          ],
+        }),
+      ),
+    ).resolves.toMatchObject({ manifest: { usage: { output_count: 1 } } });
+    expect(manifestPuts).toBe(3);
+    expect(assetPuts).toBe(1);
+    expect(opens).toBe(1);
+  });
+
+  test('uses conditional create for every staged asset and manifest', async () => {
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const originalPut = store.putObject.bind(store);
+    const conditions: unknown[] = [];
+    store.putObject = async (input) => {
+      conditions.push((input as unknown as Record<string, unknown>).if_none_match);
+      return originalPut(input);
+    };
+
+    await new StudioResultStager(store).stage(stageInput());
+    expect(conditions).toEqual(['*', '*']);
+  });
 });
 
 async function sha256(value: string): Promise<string> {
   return new Bun.CryptoHasher('sha256').update(value).digest('hex');
+}
+
+function checksum(bytes: Uint8Array): string {
+  return new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+}
+
+function stagingAssetKey(): string {
+  return `${studioStagingPrefix({
+    accountId: IDS.accountId,
+    projectId: IDS.projectId,
+    jobId: IDS.jobId,
+    attemptId: IDS.attemptId,
+    submissionKeyHash: studioSubmissionKeyHash('submission-key-1'),
+  })}assets/000-result.png`;
 }

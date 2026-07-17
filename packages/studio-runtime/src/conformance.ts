@@ -148,6 +148,28 @@ export function runStudioObjectStoreConformance(
       await expect(store.headObject({ key: KEY })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     });
 
+    test('conditionally creates without overwriting an existing object', async () => {
+      const store = await createStore();
+      const written = await putPng(store);
+      const replacement = new Uint8Array([1, 2, 3, 4]);
+      const replacementChecksum = new Bun.CryptoHasher('sha256').update(replacement).digest('hex');
+
+      await expect(
+        store.putObject({
+          key: KEY,
+          body: new Blob([replacement]).stream(),
+          content_type: 'application/octet-stream',
+          size_bytes: replacement.byteLength,
+          checksum_sha256: replacementChecksum,
+          metadata: { project_id: 'replacement' },
+          if_none_match: '*',
+        }),
+      ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+
+      expect(await store.headObject({ key: KEY })).toMatchObject(written);
+      expect(await readAll((await store.getObject({ key: KEY })).body)).toEqual(PNG);
+    });
+
     test('deletes conditionally with typed errors and never invokes readiness from CRUD', async () => {
       const store = await createStore();
       let readinessCalls = 0;
@@ -174,9 +196,9 @@ export function runStudioObjectStoreConformance(
           expires_in_seconds: 60,
         }),
       ).resolves.toBeString();
-      await expect(
-        store.deleteObject({ key: KEY, if_match: 'wrong-etag' }),
-      ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      await expect(store.deleteObject({ key: KEY, if_match: 'wrong-etag' })).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED',
+      });
       await expect(store.headObject({ key: KEY })).resolves.toMatchObject({ etag: written.etag });
 
       await store.deleteObject({ key: KEY, if_match: written.etag ?? undefined });

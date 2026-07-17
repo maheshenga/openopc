@@ -223,6 +223,7 @@ describe('S3StudioObjectStore', () => {
       content_type: 'image/png',
       size_bytes: BYTES.byteLength,
       checksum_sha256: CHECKSUM_HEX,
+      if_none_match: '*',
       metadata: {
         project_id: 'p',
         'Studio-Checksum-Sha256': 'caller-controlled',
@@ -239,6 +240,7 @@ describe('S3StudioObjectStore', () => {
       ContentType: 'image/png',
       ContentLength: BYTES.byteLength,
       ChecksumSHA256: CHECKSUM_BASE64,
+      IfNoneMatch: '*',
       ServerSideEncryption: 'AES256',
       ExpectedBucketOwner: '123456789012',
     });

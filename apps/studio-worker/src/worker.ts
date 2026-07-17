@@ -1,4 +1,5 @@
 import type {
+  StudioCredentialResolver,
   StudioObjectStore,
   StudioProviderAdapter,
   StudioProviderContext,
@@ -6,14 +7,15 @@ import type {
   StudioProviderResult,
   StudioReferenceAssetResolver,
   StudioRetryClassification,
-  StudioCredentialResolver,
 } from '@kortix/studio-runtime';
 import {
   STUDIO_MAX_PROVIDER_ATTEMPTS,
   StudioObjectStoreError,
   StudioProviderCallError,
+  StudioStorageUnavailableError,
   addStudioCreditAmounts,
   calculateStudioImageUsageCredits,
+  parseStudioTrustedCostEvidence,
 } from '@kortix/studio-runtime';
 import { assertStudioTransition } from '@kortix/studio-runtime';
 import {
@@ -23,11 +25,11 @@ import {
   type StudioWorkerConfig,
   StudioWorkerConfigSchema,
   type StudioWorkerJob,
+  type StudioWorkerProviderConfig,
   type StudioWorkerRepository,
   type StudioWorkerTickResult,
-  type StudioWorkerProviderConfig,
 } from './contracts';
-import { type StudioStagedResult, StudioResultStager } from './result-stager';
+import type { StudioResultStager, StudioStagedResult } from './result-stager';
 
 const RETRY_JITTER_BOUNDS_MS = [5_000, 30_000, 120_000] as const;
 const MAX_RETRY_AFTER_MS = 15 * 60_000;
@@ -92,6 +94,7 @@ export class StudioWorker {
           jobId: job.jobId,
           workerId: this.owner(job),
           availableAt: now,
+          now,
         });
         return { kind: 'idle' };
       }
@@ -103,6 +106,7 @@ export class StudioWorker {
             jobId: job.jobId,
             workerId: this.owner(job),
             availableAt: new Date(now.getTime() + 5_000),
+            now,
           });
         } catch {
           // Lease expiry remains the final recovery mechanism.
@@ -118,23 +122,38 @@ export class StudioWorker {
   }
 
   private async process(job: StudioWorkerJob, now: Date): Promise<StudioWorkerTickResult> {
-    const attempt = await this.deps.repository.getLatestAttempt(job.jobId);
-    if (job.cancellationRequestedAt) {
-      return this.cancel(job, attempt, this.deps.providers.get(job), now);
-    }
-
-    if (
-      attempt &&
-      ['submitting', 'reconciling'].includes(attempt.status) &&
-      !attempt.providerHandle
-    ) {
+    const attempt = await this.deps.repository.getLatestAttempt({
+      jobId: job.jobId,
+      workerId: this.owner(job),
+      now,
+    });
+    if (attempt && ['submitting', 'submitted', 'polling', 'reconciling'].includes(attempt.status)) {
       const staged = await this.loadDurableStagedResult(job, attempt);
       if (staged.kind === 'failed') {
         return { kind: 'processed', jobId: job.jobId, status: 'failed' };
       }
+      if (staged.kind === 'deferred') {
+        return { kind: 'processed', jobId: job.jobId, status: 'running' };
+      }
       if (staged.kind === 'staged') {
         return this.finalizeStagedResult(job, attempt, staged.result, now);
       }
+    }
+
+    if (job.cancellationRequestedAt) {
+      if (attempt && ['submitting', 'reconciling'].includes(attempt.status)) {
+        await this.deferUnknown(
+          job,
+          attempt,
+          'Cancellation is pending while the provider submission outcome remains unknown',
+          now,
+        );
+        return { kind: 'processed', jobId: job.jobId, status: 'running' };
+      }
+      return this.cancel(job, attempt, this.deps.providers.get(job), now);
+    }
+
+    if (attempt && ['submitting', 'reconciling'].includes(attempt.status)) {
       const adapter = this.deps.providers.get(job);
       if (!adapter) {
         await this.deferUnknown(
@@ -177,6 +196,7 @@ export class StudioWorker {
     const providerConfig = await this.deps.repository.loadProviderConfigForSubmission({
       jobId: job.jobId,
       workerId: this.owner(job),
+      now,
     });
     const validProviderConfig =
       providerConfig !== null &&
@@ -254,6 +274,7 @@ export class StudioWorker {
         jobId: job.jobId,
         workerId: this.owner(job),
         availableAt: new Date(this.now().getTime() + 1_000),
+        now: this.now(),
       });
       return {
         kind: 'error',
@@ -288,7 +309,8 @@ export class StudioWorker {
             'Provider returned a mismatched completed submission identity',
           );
         }
-        if (!this.deps.stager || !job.pricingSnapshot) {
+        const stager = this.deps.stager;
+        if (!stager || !job.pricingSnapshot) {
           throw new StudioProviderCallError(
             'terminal',
             'Completed provider submissions are not enabled in this worker version',
@@ -297,20 +319,14 @@ export class StudioWorker {
         let staged: StudioStagedResult;
         try {
           staged = await this.withLeaseHeartbeat(job, () =>
-            this.deps.stager!.stage({
+            stager.stage({
               ...this.stagingIdentity(job, attempt),
               assets: submission.result.assets,
               usage: this.pricedUsage(job, submission.result).usage,
             }),
           );
         } catch (error) {
-          return this.handleStagingFailure(
-            job,
-            attempt,
-            submission.result,
-            error,
-            this.now(),
-          );
+          return this.handleStagingFailure(job, attempt, submission.result, error, this.now());
         }
         return this.finalizeStagedResult(job, attempt, staged, this.now());
       }
@@ -364,6 +380,13 @@ export class StudioWorker {
         error instanceof StudioProviderCallError &&
         (error.classification === 'retryable' || error.classification === 'rate_limited')
       ) {
+        await this.recordTrustedCostEvidence(
+          job,
+          attempt,
+          error.trustedCostEvidence,
+          'unknown',
+          this.now(),
+        );
         return this.scheduleContinuation(
           job,
           attempt,
@@ -441,6 +464,13 @@ export class StudioWorker {
         error instanceof StudioProviderCallError &&
         (error.classification === 'retryable' || error.classification === 'rate_limited')
       ) {
+        await this.recordTrustedCostEvidence(
+          job,
+          attempt,
+          error.trustedCostEvidence,
+          'unknown',
+          this.now(),
+        );
         return this.scheduleContinuation(
           job,
           attempt,
@@ -454,12 +484,51 @@ export class StudioWorker {
       return this.handleProviderFailure(job, attempt, adapter, error, this.now());
     }
     const polledAt = this.now();
+    if (status.status === 'succeeded') {
+      return this.complete(job, attempt, adapter, handle, polledAt);
+    }
+    if (status.status === 'failed') {
+      await this.recordTrustedCostEvidence(
+        job,
+        attempt,
+        status.trusted_cost_evidence,
+        'failed',
+        polledAt,
+      );
+      await this.fail(
+        job,
+        attempt,
+        'STUDIO_PROVIDER_REJECTED',
+        'Provider reported a terminal failure',
+        'terminal',
+        polledAt,
+      );
+      return { kind: 'processed', jobId: job.jobId, status: 'failed' };
+    }
+    if (status.status === 'cancelled') {
+      await this.recordTrustedCostEvidence(
+        job,
+        attempt,
+        status.trusted_cost_evidence,
+        'cancelled',
+        polledAt,
+      );
+      return this.cancel(job, attempt, adapter, polledAt, false);
+    }
     if (
       await this.deps.repository.isCancellationRequested({
         jobId: job.jobId,
         workerId: this.owner(job),
+        now: polledAt,
       })
     ) {
+      await this.recordTrustedCostEvidence(
+        job,
+        attempt,
+        status.trusted_cost_evidence,
+        'cancelled',
+        polledAt,
+      );
       return this.cancel(job, attempt, adapter, polledAt);
     }
     if (status.status === 'submitted' || status.status === 'running') {
@@ -476,21 +545,7 @@ export class StudioWorker {
     if (status.status === 'unknown') {
       return this.reconcile(job, attempt, adapter, polledAt);
     }
-    if (status.status === 'failed') {
-      await this.fail(
-        job,
-        attempt,
-        'STUDIO_PROVIDER_REJECTED',
-        'Provider reported a terminal failure',
-        'terminal',
-        polledAt,
-      );
-      return { kind: 'processed', jobId: job.jobId, status: 'failed' };
-    }
-    if (status.status === 'cancelled') {
-      return this.cancel(job, attempt, adapter, polledAt, false);
-    }
-    return this.complete(job, attempt, adapter, handle, polledAt);
+    throw new StudioProviderCallError('terminal', 'Provider returned an invalid status');
   }
 
   private async complete(
@@ -503,19 +558,12 @@ export class StudioWorker {
     const result = await this.withLeaseHeartbeat(job, () =>
       adapter.fetchResult(this.providerContext(job, attempt), handle),
     );
-    if (
-      await this.deps.repository.isCancellationRequested({
-        jobId: job.jobId,
-        workerId: this.owner(job),
-      })
-    ) {
-      return this.cancel(job, attempt, adapter, this.now());
-    }
-    if (this.deps.stager && job.pricingSnapshot) {
+    const stager = this.deps.stager;
+    if (stager && job.pricingSnapshot) {
       let staged: StudioStagedResult;
       try {
         staged = await this.withLeaseHeartbeat(job, () =>
-          this.deps.stager!.stage({
+          stager.stage({
             ...this.stagingIdentity(job, attempt),
             assets: result.assets,
             usage: this.pricedUsage(job, result).usage,
@@ -572,6 +620,7 @@ export class StudioWorker {
   ): Promise<
     | { kind: 'none' }
     | { kind: 'staged'; result: StudioStagedResult }
+    | { kind: 'deferred' }
     | { kind: 'failed' }
   > {
     if (!this.deps.stager || !job.pricingSnapshot) return { kind: 'none' };
@@ -589,6 +638,13 @@ export class StudioWorker {
           this.now(),
         );
         return { kind: 'failed' };
+      }
+      if (
+        (error instanceof StudioProviderCallError && error.classification === 'unknown_outcome') ||
+        error instanceof StudioStorageUnavailableError
+      ) {
+        await this.deferUnknown(job, attempt, error.message, this.now());
+        return { kind: 'deferred' };
       }
       throw error;
     }
@@ -634,15 +690,13 @@ export class StudioWorker {
     const recordedAttemptCost = await this.deps.repository.getRecordedAttemptCostTotal({
       jobId: job.jobId,
       workerId: this.owner(job),
+      now,
     });
     const outcome = await this.deps.repository.finalizeSuccess({
       jobId: job.jobId,
       attemptId: attempt.attemptId,
       workerId: this.owner(job),
-      actualCredits: addStudioCreditAmounts([
-        recordedAttemptCost,
-        priced.outputMarkupCredits,
-      ]),
+      actualCredits: addStudioCreditAmounts([recordedAttemptCost, priced.outputMarkupCredits]),
       assets: staged.assets,
       now: this.now(),
     });
@@ -679,7 +733,10 @@ export class StudioWorker {
     };
   }
 
-  private pricedUsage(job: StudioWorkerJob, result: Pick<StudioProviderResult, 'assets' | 'usage'>) {
+  private pricedUsage(
+    job: StudioWorkerJob,
+    result: Pick<StudioProviderResult, 'assets' | 'usage'>,
+  ) {
     const pricing = job.pricingSnapshot;
     if (!pricing) {
       const actualCredits = actualCreditsFrom(result as StudioProviderResult, job.reservedCredits);
@@ -713,14 +770,15 @@ export class StudioWorker {
     now: Date,
   ): Promise<StudioWorkerTickResult> {
     const priced = this.pricedUsage(job, result);
-    const terminal = error instanceof StudioProviderCallError && error.classification === 'terminal';
+    const terminal =
+      error instanceof StudioProviderCallError && error.classification === 'terminal';
     await this.deps.repository.recordAttemptCost({
       jobId: job.jobId,
       attemptId: attempt.attemptId,
       workerId: this.owner(job),
       usage: priced.usage,
       upstreamCostCredits: priced.upstreamCostCredits,
-      outcome: terminal ? 'failed' : 'succeeded',
+      outcome: 'succeeded',
       now,
     });
     if (terminal) {
@@ -751,6 +809,13 @@ export class StudioWorker {
     now: Date,
   ): Promise<StudioWorkerTickResult> {
     if (error instanceof StudioProviderCallError) {
+      await this.recordTrustedCostEvidence(
+        job,
+        attempt,
+        error.trustedCostEvidence,
+        error.classification === 'unknown_outcome' ? 'unknown' : 'failed',
+        now,
+      );
       if (error.classification === 'unknown_outcome') {
         return this.reconcile(job, attempt, adapter, now);
       }
@@ -783,6 +848,46 @@ export class StudioWorker {
       now,
     );
     return { kind: 'processed', jobId: job.jobId, status: 'failed' };
+  }
+
+  private async recordTrustedCostEvidence(
+    job: StudioWorkerJob,
+    attempt: StudioWorkerAttempt,
+    rawEvidence: unknown,
+    outcome: 'failed' | 'cancelled' | 'unknown',
+    now: Date,
+  ): Promise<void> {
+    if (!job.pricingSnapshot) return;
+    const evidence = parseStudioTrustedCostEvidence(rawEvidence);
+    if (!evidence) return;
+    const priced = calculateStudioImageUsageCredits({
+      pricing: job.pricingSnapshot,
+      outputCount: evidence.usage.output_count,
+    });
+    const persistedOutcome = attempt.costRecordedAt ? attempt.costOutcome : null;
+    if (
+      attempt.costRecordedAt &&
+      persistedOutcome !== 'succeeded' &&
+      persistedOutcome !== 'failed' &&
+      persistedOutcome !== 'cancelled' &&
+      persistedOutcome !== 'unknown'
+    ) {
+      throw new Error('Studio attempt recorded cost has an invalid immutable outcome');
+    }
+    await this.deps.repository.recordAttemptCost({
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      workerId: this.owner(job),
+      usage: priced.usage,
+      upstreamCostCredits: priced.upstream_cost_credits,
+      outcome: persistedOutcome ?? outcome,
+      now,
+    });
+    if (attempt.costRecordedAt) return;
+    attempt.upstreamUsage = priced.usage;
+    attempt.upstreamCostCredits = priced.upstream_cost_credits;
+    attempt.costOutcome = outcome;
+    attempt.costRecordedAt = now;
   }
 
   private async scheduleRetryOrFail(

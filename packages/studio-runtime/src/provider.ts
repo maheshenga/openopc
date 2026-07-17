@@ -61,9 +61,16 @@ export interface StudioProviderHandle {
   submission_key: string;
 }
 
+export interface StudioTrustedCostEvidence {
+  usage: {
+    output_count: number;
+  };
+}
+
 export interface StudioProviderStatus {
   status: 'submitted' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown';
   progress?: number;
+  trusted_cost_evidence?: StudioTrustedCostEvidence;
 }
 
 export interface StudioProviderAsset {
@@ -101,10 +108,27 @@ export class StudioProviderCallError extends Error {
     readonly classification: StudioRetryClassification,
     message: string,
     readonly retryAfterMs?: number,
+    readonly trustedCostEvidence?: StudioTrustedCostEvidence,
   ) {
     super(message);
     this.name = 'StudioProviderCallError';
   }
+}
+
+export function parseStudioTrustedCostEvidence(value: unknown): StudioTrustedCostEvidence | null {
+  if (!isExactRecord(value, ['usage'])) return null;
+  const usage = value.usage;
+  if (!isExactRecord(usage, ['output_count'])) return null;
+  const outputCount = usage.output_count;
+  if (
+    typeof outputCount !== 'number' ||
+    !Number.isInteger(outputCount) ||
+    outputCount < 1 ||
+    outputCount > 16
+  ) {
+    return null;
+  }
+  return { usage: { output_count: outputCount } };
 }
 
 export interface StudioProviderAdapter {
@@ -218,6 +242,12 @@ export function createFakeStudioProvider(): StudioProviderAdapter {
       };
     },
   };
+}
+
+function isExactRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const actualKeys = Object.keys(value);
+  return actualKeys.length === keys.length && keys.every((key) => actualKeys.includes(key));
 }
 
 function byteStream(bytes: Uint8Array): ReadableStream<Uint8Array> {

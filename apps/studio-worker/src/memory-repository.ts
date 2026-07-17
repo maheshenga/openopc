@@ -39,9 +39,30 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     events.set(jobId, list);
   }
 
-  function ownedJob(jobId: string, workerId: string): MutableJob {
+  function settleRecordedCost(jobId: string, job: MutableJob, now: Date): void {
+    if (!job.pricingSnapshot) return;
+    const verifiedCost = recordedAttemptCost(attempts.get(jobId) ?? []);
+    job.actualCredits = Math.min(job.reservedCredits, verifiedCost);
+    append(
+      jobId,
+      'billing-settled',
+      {
+        actual_credits: job.actualCredits,
+        verified_upstream_cost_credits: verifiedCost,
+        capped: job.actualCredits < verifiedCost,
+      },
+      now,
+    );
+  }
+
+  function ownedJob(jobId: string, workerId: string, now: Date): MutableJob {
     const job = jobs.get(jobId);
-    if (!job || job.leaseOwner !== workerId)
+    if (
+      !job ||
+      job.leaseOwner !== workerId ||
+      !job.leaseExpiresAt ||
+      job.leaseExpiresAt.getTime() <= now.getTime()
+    )
       throw new Error('Studio job lease is not owned by this worker');
     return job;
   }
@@ -166,26 +187,34 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
       return cloneJob(candidate);
     },
 
-    async getLatestAttempt(jobId) {
-      const list = attempts.get(jobId) ?? [];
+    async getLatestAttempt(input) {
+      ownedJob(input.jobId, input.workerId, input.now);
+      const list = attempts.get(input.jobId) ?? [];
       const latest = list.at(-1);
       return latest ? cloneAttempt(latest) : null;
     },
 
     async heartbeatLease(input) {
       const job = jobs.get(input.jobId);
-      if (!job || job.terminalStatus || job.leaseOwner !== input.workerId) return false;
+      if (
+        !job ||
+        job.terminalStatus ||
+        job.leaseOwner !== input.workerId ||
+        !job.leaseExpiresAt ||
+        job.leaseExpiresAt.getTime() <= input.now.getTime()
+      )
+        return false;
       heartbeatCounts.set(input.jobId, (heartbeatCounts.get(input.jobId) ?? 0) + 1);
       job.leaseExpiresAt = new Date(input.now.getTime() + input.leaseMs);
       return true;
     },
 
     async isCancellationRequested(input) {
-      return ownedJob(input.jobId, input.workerId).cancellationRequestedAt !== null;
+      return ownedJob(input.jobId, input.workerId, input.now).cancellationRequestedAt !== null;
     },
 
     async loadProviderConfigForSubmission(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       return {
         providerConfigId: job.providerConfigId,
         accountId: job.accountId,
@@ -202,7 +231,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async prepareAttempt(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       if (job.attemptCount >= 3 || job.cancellationRequestedAt) return null;
       const list = attempts.get(input.jobId) ?? [];
       const active = list.find((attempt) =>
@@ -229,7 +258,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async markSubmitted(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       const attempt = findAttempt(attempts, input.jobId, input.attemptId);
       if (attempt.submissionKey !== input.handle.submission_key) {
         throw new Error('Studio provider handle does not match the durable submission key');
@@ -246,7 +275,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async markReconciling(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       const attempt = findAttempt(attempts, input.jobId, input.attemptId);
       attempt.status = 'reconciling';
       attempt.retryClassification = 'unknown_outcome';
@@ -257,7 +286,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async schedulePoll(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       const attempt = findAttempt(attempts, input.jobId, input.attemptId);
       attempt.status = 'polling';
       release(job, input.availableAt);
@@ -270,7 +299,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async scheduleContinuation(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       const attempt = findAttempt(attempts, input.jobId, input.attemptId);
       attempt.status = input.phase;
       attempt.retryClassification = input.classification;
@@ -290,7 +319,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async scheduleRetry(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       const attempt = findAttempt(attempts, input.jobId, input.attemptId);
       attempt.status = 'failed';
       attempt.retryClassification = input.classification;
@@ -309,9 +338,10 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async finalizeSuccess(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       const attempt = findAttempt(attempts, input.jobId, input.attemptId);
       if (job.cancellationRequestedAt) {
+        settleRecordedCost(input.jobId, job, input.now);
         attempt.status = 'cancelled';
         attempt.endedAt = input.now;
         job.terminalStatus = 'cancelled';
@@ -343,7 +373,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async recordStagedManifest(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       const attempt = findAttempt(attempts, input.jobId, input.attemptId);
       if (!['submitting', 'submitted', 'polling', 'reconciling'].includes(attempt.status)) {
         throw new Error('Studio attempt is not active');
@@ -351,7 +381,8 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
       if (
         (attempt.submissionKind && attempt.submissionKind !== input.submissionKind) ||
         (attempt.stagingManifestKey && attempt.stagingManifestKey !== input.manifestKey) ||
-        (attempt.stagingManifestChecksum && attempt.stagingManifestChecksum !== input.manifestChecksum)
+        (attempt.stagingManifestChecksum &&
+          attempt.stagingManifestChecksum !== input.manifestChecksum)
       ) {
         throw new Error('Studio staging manifest identity conflict');
       }
@@ -363,7 +394,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async recordAttemptCost(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       const attempt = findAttempt(attempts, input.jobId, input.attemptId);
       if (attempt.costRecordedAt) {
         if (
@@ -383,15 +414,16 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async getRecordedAttemptCostTotal(input) {
-      ownedJob(input.jobId, input.workerId);
+      ownedJob(input.jobId, input.workerId, input.now);
       return (attempts.get(input.jobId) ?? []).reduce(
-        (total, attempt) => total + (attempt.costRecordedAt ? attempt.upstreamCostCredits ?? 0 : 0),
+        (total, attempt) =>
+          total + (attempt.costRecordedAt ? (attempt.upstreamCostCredits ?? 0) : 0),
         0,
       );
     },
 
     async markFailed(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       if (input.attemptId) {
         const attempt = findAttempt(attempts, input.jobId, input.attemptId);
         attempt.status = 'failed';
@@ -400,13 +432,14 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
       }
       job.errorCode = input.code;
       job.errorMessage = input.message;
+      settleRecordedCost(input.jobId, job, input.now);
       job.terminalStatus = 'failed';
       release(job, input.now);
       append(input.jobId, 'failed', { code: input.code }, input.now);
     },
 
     async markCancelled(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       if (input.attemptId) {
         const attempt = findAttempt(attempts, input.jobId, input.attemptId);
         attempt.status = 'cancelled';
@@ -414,6 +447,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
       }
       job.errorCode = input.code ?? null;
       job.errorMessage = input.message ?? null;
+      settleRecordedCost(input.jobId, job, input.now);
       job.terminalStatus = 'cancelled';
       release(job, input.now);
       append(
@@ -425,7 +459,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
     },
 
     async abandonLease(input) {
-      const job = ownedJob(input.jobId, input.workerId);
+      const job = ownedJob(input.jobId, input.workerId, input.now);
       release(job, input.availableAt);
     },
   } as ReturnType<typeof createMemoryStudioWorkerRepository>;
@@ -455,6 +489,13 @@ function release(job: MutableJob, availableAt: Date) {
   job.availableAt = availableAt;
   job.leaseOwner = null;
   job.leaseExpiresAt = null;
+}
+
+function recordedAttemptCost(attempts: readonly StudioWorkerAttempt[]): number {
+  return attempts.reduce(
+    (total, attempt) => total + (attempt.costRecordedAt ? (attempt.upstreamCostCredits ?? 0) : 0),
+    0,
+  );
 }
 
 function cloneJob(job: MutableJob): StudioWorkerJob {

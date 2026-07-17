@@ -20,6 +20,7 @@ export interface StudioPutObjectInput extends StudioObjectRef {
   size_bytes: number;
   checksum_sha256: string;
   metadata: Record<string, string>;
+  if_none_match?: '*';
 }
 
 export interface StudioStoredObject extends StudioObjectMetadata {
@@ -113,9 +114,7 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
   readonly required_sse_kms_key_id = null;
   private readonly objects = new Map<string, StoredBytes>();
 
-  constructor(
-    private readonly options: { namespace: string; ready: boolean; now?: () => Date },
-  ) {
+  constructor(private readonly options: { namespace: string; ready: boolean; now?: () => Date }) {
     this.namespace = options.namespace;
   }
 
@@ -138,6 +137,12 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
       throw new StudioObjectStoreError(
         'CHECKSUM_MISMATCH',
         `Studio object checksum did not match: ${input.key}`,
+      );
+    }
+    if (input.if_none_match === '*' && this.objects.has(input.key)) {
+      throw new StudioObjectStoreError(
+        'PRECONDITION_FAILED',
+        `Studio object already exists: ${input.key}`,
       );
     }
     const lastModified = (this.options.now ?? (() => new Date()))().toISOString();
@@ -179,11 +184,12 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
       .filter((key) => key.startsWith(input.prefix))
       .sort((left, right) => left.localeCompare(right));
     let start = 0;
-    if (input.cursor !== undefined) {
-      if (!safeListedKey(input.cursor, input.prefix)) {
+    const cursor = input.cursor;
+    if (cursor !== undefined) {
+      if (!safeListedKey(cursor, input.prefix)) {
         throw new Error('Invalid Studio object list cursor');
       }
-      const nextIndex = keys.findIndex((key) => key.localeCompare(input.cursor!) > 0);
+      const nextIndex = keys.findIndex((key) => key.localeCompare(cursor) > 0);
       start = nextIndex < 0 ? keys.length : nextIndex;
     }
     const pageKeys = keys.slice(start, start + input.limit);

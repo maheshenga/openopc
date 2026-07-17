@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'bun:test';
-import type { StudioProviderAdapter, StudioProviderHandle } from '@kortix/studio-runtime';
+import type {
+  StudioPricingSnapshot,
+  StudioProviderAdapter,
+  StudioProviderHandle,
+} from '@kortix/studio-runtime';
 import {
   InMemoryStudioObjectStore,
   StudioProviderCallError,
   studioStagingManifestKey,
   studioSubmissionKeyHash,
 } from '@kortix/studio-runtime';
+import type { StudioWorkerAttempt, StudioWorkerJob } from './contracts';
 import { createMemoryStudioWorkerRepository } from './memory-repository';
 import { StudioResultStager } from './result-stager';
 import {
@@ -17,6 +22,22 @@ import {
 } from './worker';
 
 const NOW = new Date('2026-07-15T10:00:00.000Z');
+const VALID_PNG = new Uint8Array(
+  Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  ),
+);
+const PRICING: StudioPricingSnapshot = {
+  pricing_catalog_id: '77777777-7777-4777-8777-777777777777',
+  version: 1,
+  provider: 'fake',
+  model: 'fake-image-v1',
+  unit: 'image',
+  rate_credits: 1,
+  max_provider_credits: 2,
+  markup_credits: 0.25,
+};
 
 function imageInput(prompt = 'A professional product photograph') {
   return {
@@ -104,6 +125,42 @@ function makeWorker(input: {
       random: () => 0,
     }),
   };
+}
+
+async function stageDurableResult(
+  store: InMemoryStudioObjectStore,
+  job: StudioWorkerJob,
+  attempt: StudioWorkerAttempt,
+) {
+  const stager = new StudioResultStager(store);
+  const providerConfigVersion = attempt.providerConfigVersion;
+  const pricing = job.pricingSnapshot;
+  if (!providerConfigVersion || !pricing) {
+    throw new Error('Expected durable staging snapshots');
+  }
+  const result = await stager.stage({
+    accountId: job.accountId,
+    projectId: job.projectId,
+    jobId: job.jobId,
+    attemptId: attempt.attemptId,
+    submissionKey: attempt.submissionKey,
+    providerConfigId: job.providerConfigId,
+    providerConfigVersion,
+    pricingCatalogId: pricing.pricing_catalog_id,
+    pricingVersion: pricing.version,
+    assets: [
+      {
+        kind: 'image',
+        filename: 'recovered.png',
+        mime_type: 'image/png',
+        size_bytes: VALID_PNG.byteLength,
+        replayable_within_attempt: true,
+        openBody: async () => new Blob([VALID_PNG]).stream(),
+      },
+    ],
+    usage: { output_count: 1 },
+  });
+  return { stager, result };
 }
 
 describe('StudioWorker', () => {
@@ -229,6 +286,68 @@ describe('StudioWorker', () => {
     expect(claimOwners[0]).toStartWith('worker-a:');
     expect(claimOwners[1]).toStartWith('worker-a:');
     expect(claimOwners[0]).not.toBe(claimOwners[1]);
+  });
+
+  test('rejects an expired owner before cost or finalization and lets the new owner settle once', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      pricingSnapshot: PRICING,
+      reservedCredits: 2.25,
+    });
+    const attempt = repository.seedAttempt(job.jobId, { status: 'polling' });
+    const oldClaim = await repository.claimNextJob({
+      processRole: 'studio-worker',
+      workerId: 'old-owner',
+      now: NOW,
+      leaseMs: 1_000,
+    });
+    if (!oldClaim?.leaseOwner) throw new Error('failed to claim with old owner');
+    const afterExpiry = new Date(NOW.getTime() + 1_001);
+    const costInput = {
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      workerId: oldClaim.leaseOwner,
+      usage: { output_count: 1 },
+      upstreamCostCredits: 1,
+      outcome: 'succeeded' as const,
+      now: afterExpiry,
+    };
+
+    await expect(repository.recordAttemptCost(costInput)).rejects.toThrow(/lease/i);
+    await expect(
+      repository.finalizeSuccess({
+        jobId: job.jobId,
+        attemptId: attempt.attemptId,
+        workerId: oldClaim.leaseOwner,
+        actualCredits: 1.25,
+        assets: [],
+        now: afterExpiry,
+      }),
+    ).rejects.toThrow(/lease/i);
+
+    const newClaim = await repository.claimNextJob({
+      processRole: 'studio-worker',
+      workerId: 'new-owner',
+      now: afterExpiry,
+      leaseMs: 30_000,
+    });
+    if (!newClaim?.leaseOwner) throw new Error('failed to recover with new owner');
+    await repository.recordAttemptCost({ ...costInput, workerId: newClaim.leaseOwner });
+    await repository.finalizeSuccess({
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      workerId: newClaim.leaseOwner,
+      actualCredits: 1.25,
+      assets: [],
+      now: afterExpiry,
+    });
+
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(1.25);
+    expect(
+      repository.getEvents(job.jobId).filter((event) => event.type === 'billing-settled'),
+    ).toHaveLength(1);
   });
 
   test('claim lease expiry permits recovery and rejects API claimers', async () => {
@@ -454,6 +573,221 @@ describe('StudioWorker', () => {
     expect(repository.getJob(job.jobId)?.actualCredits).toBe(2);
   });
 
+  test('records trusted failed status cost before terminal settlement', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      pricingSnapshot: PRICING,
+      reservedCredits: 2.25,
+    });
+    const calls: string[] = [];
+    const recordAttemptCost = repository.recordAttemptCost.bind(repository);
+    repository.recordAttemptCost = async (input) => {
+      calls.push('cost');
+      return recordAttemptCost(input);
+    };
+    const markFailed = repository.markFailed.bind(repository);
+    repository.markFailed = async (input) => {
+      calls.push('failed');
+      return markFailed(input);
+    };
+    const adapter = provider({
+      poll: async () => ({
+        status: 'failed',
+        trusted_cost_evidence: { usage: { output_count: 1 } },
+      }),
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ status: 'failed' });
+    expect(calls).toEqual(['cost', 'failed']);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      costOutcome: 'failed',
+      upstreamUsage: { output_count: 1 },
+      upstreamCostCredits: 1,
+    });
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(1);
+  });
+
+  test('records trusted cancelled status cost before terminal settlement', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      pricingSnapshot: PRICING,
+      reservedCredits: 2.25,
+    });
+    const calls: string[] = [];
+    const recordAttemptCost = repository.recordAttemptCost.bind(repository);
+    repository.recordAttemptCost = async (input) => {
+      calls.push('cost');
+      return recordAttemptCost(input);
+    };
+    const markCancelled = repository.markCancelled.bind(repository);
+    repository.markCancelled = async (input) => {
+      calls.push('cancelled');
+      return markCancelled(input);
+    };
+    const adapter = provider({
+      poll: async () => ({
+        status: 'cancelled',
+        trusted_cost_evidence: { usage: { output_count: 1 } },
+      }),
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ status: 'cancelled' });
+    expect(calls).toEqual(['cost', 'cancelled']);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      costOutcome: 'cancelled',
+      upstreamUsage: { output_count: 1 },
+      upstreamCostCredits: 1,
+    });
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(1);
+  });
+
+  test('rejects conflicting terminal cost evidence after a retryable poll recorded immutable cost', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      pricingSnapshot: { ...PRICING, max_provider_credits: 4 },
+      reservedCredits: 4.25,
+    });
+    const recordedCosts: Array<{
+      usage: Record<string, number>;
+      outcome: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
+    }> = [];
+    const recordAttemptCost = repository.recordAttemptCost.bind(repository);
+    repository.recordAttemptCost = async (input) => {
+      recordedCosts.push({ usage: input.usage, outcome: input.outcome });
+      return recordAttemptCost(input);
+    };
+    let polls = 0;
+    const adapter = provider({
+      poll: async () => {
+        polls += 1;
+        if (polls === 1) {
+          throw new StudioProviderCallError(
+            'retryable',
+            'provider charged before a retryable poll failure',
+            undefined,
+            { usage: { output_count: 1 } },
+          );
+        }
+        return {
+          status: 'failed',
+          trusted_cost_evidence: { usage: { output_count: 2 } },
+        };
+      },
+    });
+    const worker = makeWorker({ workerId: 'worker-a', repository, adapter }).worker;
+
+    expect(await worker.runOnce()).toMatchObject({ status: 'running' });
+    expect(await worker.runOnce()).toMatchObject({ kind: 'error', jobId: job.jobId });
+
+    expect(recordedCosts).toEqual([
+      { usage: { output_count: 1 }, outcome: 'unknown' },
+      { usage: { output_count: 2 }, outcome: 'unknown' },
+    ]);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      status: 'polling',
+      costOutcome: 'unknown',
+      upstreamUsage: { output_count: 1 },
+      upstreamCostCredits: 1,
+    });
+    expect(repository.getJob(job.jobId)).toMatchObject({ status: 'running', actualCredits: null });
+    expect(repository.getEvents(job.jobId).map((event) => event.type)).not.toContain('failed');
+  });
+
+  test('fails closed when recorded cost has a corrupt immutable outcome', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const handle: StudioProviderHandle = {
+      provider: 'fake',
+      id: 'provider-job-corrupt-cost',
+      submission_key: 'durable-corrupt-cost-submission',
+    };
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      providerHandle: handle,
+      pricingSnapshot: PRICING,
+    });
+    repository.seedAttempt(job.jobId, {
+      status: 'polling',
+      submissionKey: handle.submission_key,
+      providerHandle: handle,
+      costRecordedAt: NOW,
+      costOutcome: 'corrupt' as never,
+      upstreamUsage: { output_count: 1 },
+      upstreamCostCredits: 1,
+    });
+    const adapter = provider({
+      poll: async () => ({
+        status: 'failed',
+        trusted_cost_evidence: { usage: { output_count: 1 } },
+      }),
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'error', jobId: job.jobId });
+    expect(repository.getJob(job.jobId)).toMatchObject({ status: 'running', actualCredits: null });
+    expect(repository.getEvents(job.jobId).map((event) => event.type)).not.toContain('failed');
+  });
+
+  test('aggregates trusted retry cost with the later successful attempt', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      pricingSnapshot: { ...PRICING, max_provider_credits: 4 },
+      reservedCredits: 4.25,
+    });
+    let submissions = 0;
+    const adapter = provider({
+      submit: async (ctx) => {
+        submissions += 1;
+        if (submissions === 1) {
+          throw new StudioProviderCallError(
+            'retryable',
+            'provider charged before a retryable failure',
+            undefined,
+            { usage: { output_count: 1 } },
+          );
+        }
+        return {
+          kind: 'completed',
+          provider: 'fake',
+          submission_key: ctx.submissionKey,
+          result: {
+            assets: [
+              {
+                kind: 'image',
+                filename: 'retry-result.png',
+                mime_type: 'image/png',
+                size_bytes: VALID_PNG.byteLength,
+                replayable_within_attempt: true,
+                openBody: async () => new Blob([VALID_PNG]).stream(),
+              },
+            ],
+          },
+        };
+      },
+    });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const worker = makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter,
+      stager: new StudioResultStager(store),
+    }).worker;
+
+    expect(await worker.runOnce()).toMatchObject({ status: 'running' });
+    expect(await worker.runOnce()).toMatchObject({ status: 'succeeded' });
+
+    expect(repository.getAttempts(job.jobId)).toMatchObject([
+      { costOutcome: 'failed', upstreamCostCredits: 1, status: 'failed' },
+      { costOutcome: 'succeeded', upstreamCostCredits: 1, status: 'succeeded' },
+    ]);
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(2.25);
+  });
+
   test('a terminal durable manifest failure stops before provider reconciliation', async () => {
     const repository = createMemoryStudioWorkerRepository();
     const job = repository.seedJob({
@@ -517,6 +851,322 @@ describe('StudioWorker', () => {
     expect(repository.getEvents(job.jobId).some((event) => event.type === 'failed')).toBe(false);
   });
 
+  test('keeps a cancelled ambiguous submission reserved without provider I/O', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      cancellationRequestedAt: NOW,
+      reservedCredits: 2,
+    });
+    repository.seedAttempt(job.jobId, { status: 'reconciling', providerHandle: null });
+    let providerCalls = 0;
+    const adapter = provider({
+      submit: async () => {
+        providerCalls += 1;
+        throw new Error('must not submit an ambiguous attempt');
+      },
+      poll: async () => {
+        providerCalls += 1;
+        throw new Error('must not poll an ambiguous attempt');
+      },
+      reconcile: async () => {
+        providerCalls += 1;
+        throw new Error('must not reconcile after cancellation intent');
+      },
+      cancel: async () => {
+        providerCalls += 1;
+      },
+      fetchResult: async () => {
+        providerCalls += 1;
+        throw new Error('must not fetch an ambiguous attempt');
+      },
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ status: 'running' });
+    expect(providerCalls).toBe(0);
+    expect(repository.getAttempts(job.jobId)[0]?.status).toBe('reconciling');
+    expect(repository.getJob(job.jobId)).toMatchObject({ status: 'running', actualCredits: null });
+    expect(repository.getEvents(job.jobId).map((event) => event.type)).not.toContain('cancelled');
+  });
+
+  test('keeps cancelled submitting and reconciling attempts with a durable handle reserved', async () => {
+    for (const attemptStatus of ['submitting', 'reconciling'] as const) {
+      const repository = createMemoryStudioWorkerRepository();
+      const handle: StudioProviderHandle = {
+        provider: 'fake',
+        id: `provider-job-${attemptStatus}`,
+        submission_key: `durable-submission-${attemptStatus}`,
+      };
+      const job = repository.seedJob({
+        status: 'running',
+        attemptCount: 1,
+        cancellationRequestedAt: NOW,
+        providerHandle: handle,
+        reservedCredits: 2,
+      });
+      repository.seedAttempt(job.jobId, {
+        status: attemptStatus,
+        submissionKey: handle.submission_key,
+        providerHandle: handle,
+      });
+      let providerCalls = 0;
+      const adapter = provider({
+        submit: async () => {
+          providerCalls += 1;
+          throw new Error('must not submit after cancellation intent');
+        },
+        poll: async () => {
+          providerCalls += 1;
+          throw new Error('must not poll after cancellation intent');
+        },
+        reconcile: async () => {
+          providerCalls += 1;
+          throw new Error('must not reconcile after cancellation intent');
+        },
+        cancel: async () => {
+          providerCalls += 1;
+        },
+        fetchResult: async () => {
+          providerCalls += 1;
+          throw new Error('must not fetch after cancellation intent');
+        },
+      });
+
+      const result = await makeWorker({
+        workerId: 'worker-a',
+        repository,
+        adapter,
+      }).worker.runOnce();
+
+      expect(result).toMatchObject({ status: 'running' });
+      expect(providerCalls).toBe(0);
+      expect(repository.getAttempts(job.jobId)[0]?.status).toBe('reconciling');
+      expect(repository.getJob(job.jobId)).toMatchObject({
+        status: 'running',
+        actualCredits: null,
+      });
+      expect(repository.getEvents(job.jobId).map((event) => event.type)).not.toContain('cancelled');
+    }
+  });
+
+  test('recovers a durable manifest before cancellation and settles only verified provider cost', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const handle: StudioProviderHandle = {
+      provider: 'fake',
+      id: 'provider-job',
+      submission_key: 'submitted-key',
+    };
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      providerHandle: handle,
+      cancellationRequestedAt: NOW,
+      pricingSnapshot: PRICING,
+      reservedCredits: 2.25,
+    });
+    const attempt = repository.seedAttempt(job.jobId, {
+      submissionKey: handle.submission_key,
+      providerHandle: handle,
+      status: 'polling',
+    });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const { stager } = await stageDurableResult(store, job, attempt);
+    let providerCalls = 0;
+    const adapter = provider({
+      poll: async () => {
+        providerCalls += 1;
+        throw new Error('must recover the durable manifest before polling');
+      },
+      fetchResult: async () => {
+        providerCalls += 1;
+        throw new Error('must not fetch a recovered manifest');
+      },
+      cancel: async () => {
+        providerCalls += 1;
+      },
+    });
+
+    const result = await makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter,
+      stager,
+    }).worker.runOnce();
+
+    expect(result).toMatchObject({ status: 'cancelled' });
+    expect(providerCalls).toBe(0);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      status: 'cancelled',
+      upstreamCostCredits: 1,
+      costOutcome: 'succeeded',
+    });
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(1);
+    expect(repository.getAssets(job.jobId)).toEqual([]);
+    expect(repository.getEvents(job.jobId).map((event) => event.type)).toContain('billing-settled');
+  });
+
+  test('recovers a polling durable manifest without any provider I/O', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const handle: StudioProviderHandle = {
+      provider: 'fake',
+      id: 'provider-job',
+      submission_key: 'submitted-key',
+    };
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      providerHandle: handle,
+      pricingSnapshot: PRICING,
+      reservedCredits: 2.25,
+    });
+    const attempt = repository.seedAttempt(job.jobId, {
+      submissionKey: handle.submission_key,
+      providerHandle: handle,
+      status: 'polling',
+    });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const { stager, result: staged } = await stageDurableResult(store, job, attempt);
+    const crashedClaim = await repository.claimNextJob({
+      processRole: 'studio-worker',
+      workerId: 'crashed-worker',
+      now: NOW,
+      leaseMs: 30_000,
+    });
+    if (!crashedClaim?.leaseOwner) throw new Error('failed to seed the crashed worker claim');
+    await repository.recordStagedManifest({
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      workerId: crashedClaim.leaseOwner,
+      submissionKind: 'async',
+      manifestKey: staged.manifestKey,
+      manifestChecksum: staged.manifestChecksum,
+      now: NOW,
+    });
+    await repository.abandonLease({
+      jobId: job.jobId,
+      workerId: crashedClaim.leaseOwner,
+      availableAt: NOW,
+      now: NOW,
+    });
+    let providerCalls = 0;
+    const adapter = provider({
+      poll: async () => {
+        providerCalls += 1;
+        throw new Error('must not poll after durable staging');
+      },
+      fetchResult: async () => {
+        providerCalls += 1;
+        throw new Error('must not fetch after durable staging');
+      },
+    });
+
+    const result = await makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter,
+      stager,
+    }).worker.runOnce();
+
+    expect(result).toMatchObject({ status: 'succeeded' });
+    expect(providerCalls).toBe(0);
+    expect(repository.getAssets(job.jobId)).toHaveLength(1);
+  });
+
+  test('defers a manifest with a missing asset without provider I/O or a hot-loop error', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const handle: StudioProviderHandle = {
+      provider: 'fake',
+      id: 'provider-job',
+      submission_key: 'submitted-key',
+    };
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      providerHandle: handle,
+      pricingSnapshot: PRICING,
+      reservedCredits: 2.25,
+    });
+    const attempt = repository.seedAttempt(job.jobId, {
+      submissionKey: handle.submission_key,
+      providerHandle: handle,
+      status: 'polling',
+    });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const { stager, result: staged } = await stageDurableResult(store, job, attempt);
+    const [stagedAsset] = staged.assets;
+    if (!stagedAsset) throw new Error('Expected one staged asset');
+    await store.deleteObject({ key: stagedAsset.objectKey });
+    let providerCalls = 0;
+    const adapter = provider({
+      poll: async () => {
+        providerCalls += 1;
+        throw new Error('must not poll with incomplete durable staging');
+      },
+      fetchResult: async () => {
+        providerCalls += 1;
+        throw new Error('must not fetch with incomplete durable staging');
+      },
+      reconcile: async () => {
+        providerCalls += 1;
+        return 'unknown';
+      },
+    });
+
+    const result = await makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter,
+      stager,
+    }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', status: 'running' });
+    expect(providerCalls).toBe(0);
+    expect(repository.getAttempts(job.jobId)[0]?.status).toBe('reconciling');
+    expect(repository.getJob(job.jobId)?.availableAt.toISOString()).toBe(
+      new Date(NOW.getTime() + 15 * 60_000).toISOString(),
+    );
+  });
+
+  test('does not hide an unexpected manifest loader defect as provider reconciliation', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const handle: StudioProviderHandle = {
+      provider: 'fake',
+      id: 'provider-job',
+      submission_key: 'submitted-key',
+    };
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      providerHandle: handle,
+      pricingSnapshot: PRICING,
+    });
+    repository.seedAttempt(job.jobId, {
+      submissionKey: handle.submission_key,
+      providerHandle: handle,
+      status: 'polling',
+    });
+    const brokenStager = {
+      loadManifest: async () => {
+        throw new Error('manifest loader programming defect');
+      },
+    } as unknown as StudioResultStager;
+
+    const result = await makeWorker({
+      workerId: 'worker-a',
+      repository,
+      stager: brokenStager,
+    }).worker.runOnce();
+
+    expect(result).toMatchObject({
+      kind: 'error',
+      code: 'STUDIO_WORKER_INTERNAL_ERROR',
+    });
+    expect(repository.getAttempts(job.jobId)[0]?.status).toBe('polling');
+  });
+
   test('records trusted completed usage before terminal staging failure', async () => {
     const repository = createMemoryStudioWorkerRepository();
     const job = repository.seedJob({
@@ -562,7 +1212,7 @@ describe('StudioWorker', () => {
     expect(await worker.runOnce()).toMatchObject({ status: 'failed' });
     expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
       upstreamCostCredits: 1,
-      costOutcome: 'failed',
+      costOutcome: 'succeeded',
       status: 'failed',
     });
   });
@@ -599,6 +1249,11 @@ describe('StudioWorker', () => {
     );
     const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
     const stager = new StudioResultStager(store);
+    const providerConfigVersion = attempt.providerConfigVersion;
+    const pricing = job.pricingSnapshot;
+    if (!providerConfigVersion || !pricing) {
+      throw new Error('Expected durable staging snapshots');
+    }
     await stager.stage({
       accountId: job.accountId,
       projectId: job.projectId,
@@ -606,9 +1261,9 @@ describe('StudioWorker', () => {
       attemptId: attempt.attemptId,
       submissionKey: attempt.submissionKey,
       providerConfigId: job.providerConfigId,
-      providerConfigVersion: attempt.providerConfigVersion!,
-      pricingCatalogId: job.pricingSnapshot!.pricing_catalog_id,
-      pricingVersion: job.pricingSnapshot!.version,
+      providerConfigVersion,
+      pricingCatalogId: pricing.pricing_catalog_id,
+      pricingVersion: pricing.version,
       assets: [
         {
           kind: 'image',
@@ -856,6 +1511,46 @@ describe('StudioWorker', () => {
     ]);
   });
 
+  test('continues reconciliation for a durable handle whose attempt remains reconciling', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const handle: StudioProviderHandle = {
+      provider: 'fake',
+      id: 'durable-provider-job',
+      submission_key: 'durable-submission-key',
+    };
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      providerHandle: handle,
+    });
+    const attempt = repository.seedAttempt(job.jobId, {
+      status: 'reconciling',
+      submissionKey: handle.submission_key,
+      providerHandle: handle,
+    });
+    let submitCalls = 0;
+    let reconcileCalls = 0;
+    const adapter = provider({
+      submit: async () => {
+        submitCalls += 1;
+        throw new Error('a reconciling attempt must not create another submission');
+      },
+      reconcile: async (_ctx, submissionKey) => {
+        reconcileCalls += 1;
+        return { ...handle, submission_key: submissionKey };
+      },
+    });
+
+    const result = await makeWorker({ workerId: 'worker-a', repository, adapter }).worker.runOnce();
+
+    expect(result).toMatchObject({ kind: 'processed', status: 'succeeded' });
+    expect(submitCalls).toBe(0);
+    expect(reconcileCalls).toBe(1);
+    expect(repository.getAttempts(job.jobId)).toEqual([
+      expect.objectContaining({ attemptId: attempt.attemptId, status: 'succeeded' }),
+    ]);
+  });
+
   test('quarantines a reconciled handle whose submission key differs from the durable attempt', async () => {
     const repository = createMemoryStudioWorkerRepository();
     const job = repository.seedJob({ status: 'running', attemptCount: 1 });
@@ -1071,6 +1766,7 @@ describe('StudioWorker', () => {
       workerId: 'worker-a',
       repository,
       adapter,
+      leaseMs: 120_000,
       now: () => now,
     });
 
@@ -1156,7 +1852,7 @@ describe('StudioWorker', () => {
     expect(repository.getJob(job.jobId)?.status).toBe('cancelled');
   });
 
-  test('a fresh cancellation after provider polling wins before result fetch or settlement', async () => {
+  test('a fresh cancellation after a succeeded poll still fetches, stages, and settles provider cost', async () => {
     const repository = createMemoryStudioWorkerRepository();
     const handle: StudioProviderHandle = {
       provider: 'fake',
@@ -1167,6 +1863,8 @@ describe('StudioWorker', () => {
       status: 'running',
       attemptCount: 1,
       providerHandle: handle,
+      pricingSnapshot: PRICING,
+      reservedCredits: 2.25,
     });
     repository.seedAttempt(job.jobId, {
       submissionKey: handle.submission_key,
@@ -1181,22 +1879,47 @@ describe('StudioWorker', () => {
       },
       fetchResult: async () => {
         fetchCalls += 1;
-        throw new Error('must not fetch after cancellation');
+        return {
+          assets: [
+            {
+              kind: 'image',
+              filename: 'late-result.png',
+              mime_type: 'image/png',
+              size_bytes: VALID_PNG.byteLength,
+              replayable_within_attempt: true,
+              openBody: async () => new Blob([VALID_PNG]).stream(),
+            },
+          ],
+        };
       },
     });
-    const { worker } = makeWorker({ workerId: 'worker-a', repository, adapter });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const { worker } = makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter,
+      stager: new StudioResultStager(store),
+    });
 
     const result = await worker.runOnce();
 
     expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'cancelled' });
-    expect(fetchCalls).toBe(0);
+    expect(fetchCalls).toBe(1);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      upstreamCostCredits: 1,
+      costOutcome: 'succeeded',
+    });
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(1);
     expect(repository.getAssets(job.jobId)).toEqual([]);
   });
 
-  test('a cancellation during result fetch wins before output objects become visible', async () => {
+  test('a cancellation during result fetch still stages and settles before hiding output assets', async () => {
     const repository = createMemoryStudioWorkerRepository();
-    const job = repository.seedJob();
-    let persistCalls = 0;
+    const job = repository.seedJob({
+      pricingSnapshot: PRICING,
+      reservedCredits: 2.25,
+    });
+    let opens = 0;
     const adapter = provider({
       fetchResult: async () => {
         repository.requestCancellation(job.jobId, new Date(NOW.getTime() + 1_000));
@@ -1206,33 +1929,34 @@ describe('StudioWorker', () => {
               kind: 'image',
               filename: 'late-result.png',
               mime_type: 'image/png',
-              size_bytes: 4,
+              size_bytes: VALID_PNG.byteLength,
               replayable_within_attempt: true,
               async openBody() {
-                return new Blob([new Uint8Array([137, 80, 78, 71])]).stream();
+                opens += 1;
+                return new Blob([VALID_PNG]).stream();
               },
             },
           ],
-          usage: { actual_credits: 1 },
         };
       },
     });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
     const { worker } = makeWorker({
       workerId: 'worker-a',
       repository,
       adapter,
-      assets: {
-        persist: async () => {
-          persistCalls += 1;
-          throw new Error('must not persist after cancellation');
-        },
-      },
+      stager: new StudioResultStager(store),
     });
 
     const result = await worker.runOnce();
 
     expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'cancelled' });
-    expect(persistCalls).toBe(0);
+    expect(opens).toBe(1);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      upstreamCostCredits: 1,
+      costOutcome: 'succeeded',
+    });
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(1);
     expect(repository.getAssets(job.jobId)).toEqual([]);
   });
 
@@ -1347,7 +2071,9 @@ describe('StudioWorker', () => {
 
   test('does not invoke the provider when credential resolution fails after authorization', async () => {
     const repository = createMemoryStudioWorkerRepository();
-    const job = repository.seedJob({ credentialBinding: { kind: 'secret', identifier: 'IMAGE_PROVIDER' } });
+    const job = repository.seedJob({
+      credentialBinding: { kind: 'secret', identifier: 'IMAGE_PROVIDER' },
+    });
     let providerCalls = 0;
     const worker = new StudioWorker({
       config: {
@@ -1370,7 +2096,9 @@ describe('StudioWorker', () => {
       },
       referenceAssets: { resolve: async () => [] },
       authorization: allow,
-      assets: createObjectStoreAssetWriter(new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true })),
+      assets: createObjectStoreAssetWriter(
+        new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true }),
+      ),
       now: () => NOW,
     } as never);
 

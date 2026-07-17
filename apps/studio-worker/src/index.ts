@@ -1,15 +1,20 @@
 import os from 'node:os';
 import {
+  type StudioObjectStore,
   createFakeStudioProvider,
   decryptProjectSecretEnvelope,
   studioMaintenanceLeaseName,
 } from '@kortix/studio-runtime';
 import postgres from 'postgres';
 import { z } from 'zod';
-import { createStudioSubmissionAuthorization } from './authorization';
 import { createStudioCredentialResolver } from '../../api/src/studio/credentials';
+import { createStudioSubmissionAuthorization } from './authorization';
 import { PostgresStudioCredentialLookup } from './credential-lookup';
-import { StudioMaintenanceCoordinator } from './maintenance';
+import {
+  STUDIO_ORPHAN_CLEANUP_DEFAULTS,
+  StudioMaintenanceCoordinator,
+  type StudioMaintenanceRepository,
+} from './maintenance';
 import {
   PostgresStudioMaintenanceRepository,
   PostgresStudioWorkerRepository,
@@ -19,8 +24,13 @@ import {
   createPostgresStudioTokenLoader,
 } from './postgres';
 import { createStudioProviderRegistry } from './provider-registry';
+import { StudioResultStager } from './result-stager';
 import { buildStudioWorkerRuntime } from './runtime';
-import { StudioWorker, createObjectStoreAssetWriter } from './worker';
+import {
+  StudioWorker,
+  type StudioWorkerDependencies,
+  createObjectStoreAssetWriter,
+} from './worker';
 
 const EnabledEnvironmentSchema = z
   .object({
@@ -113,6 +123,43 @@ export async function runStudioMaintenanceOnce(input: {
   }
 }
 
+export function createProductionStudioMaintenanceCoordinator(input: {
+  repository: StudioMaintenanceRepository;
+  objectStore: StudioObjectStore;
+  ownerId: string;
+  lockKey: string;
+  ttlMs: number;
+  now?: () => Date;
+}): StudioMaintenanceCoordinator {
+  return new StudioMaintenanceCoordinator({
+    repository: input.repository,
+    objectStore: input.objectStore,
+    ownerId: input.ownerId,
+    lockKey: input.lockKey,
+    ttlMs: input.ttlMs,
+    ...(input.now ? { now: input.now } : {}),
+    orphanRetentionMs: STUDIO_ORPHAN_CLEANUP_DEFAULTS.retentionMs,
+    orphanCandidatePageLimit: STUDIO_ORPHAN_CLEANUP_DEFAULTS.candidatePageLimit,
+    orphanObjectPageLimit: STUDIO_ORPHAN_CLEANUP_DEFAULTS.objectPageLimit,
+    orphanCandidateBudget: STUDIO_ORPHAN_CLEANUP_DEFAULTS.candidateBudget,
+    orphanPageBudget: STUDIO_ORPHAN_CLEANUP_DEFAULTS.pageBudget,
+    orphanObjectBudget: STUDIO_ORPHAN_CLEANUP_DEFAULTS.objectBudget,
+  });
+}
+
+export function createProductionStudioWorker(
+  input: Omit<StudioWorkerDependencies, 'assets' | 'stager'> & {
+    objectStore: StudioObjectStore;
+  },
+): StudioWorker {
+  const { objectStore, ...dependencies } = input;
+  return new StudioWorker({
+    ...dependencies,
+    assets: createObjectStoreAssetWriter(objectStore),
+    stager: new StudioResultStager(objectStore),
+  });
+}
+
 export async function runStudioWorkerTick<T>(input: {
   signal?: AbortSignal;
   assertReady: () => Promise<void>;
@@ -202,7 +249,7 @@ async function main(): Promise<void> {
   });
   const objectStore = runtime.store;
   const controller = new AbortController();
-  const worker = new StudioWorker({
+  const worker = createProductionStudioWorker({
     config: {
       workerId: env.workerId,
       leaseMs: env.leaseMs,
@@ -217,11 +264,12 @@ async function main(): Promise<void> {
     credentialResolver,
     referenceAssets: { resolve: async () => [] },
     authorization,
-    assets: createObjectStoreAssetWriter(objectStore),
+    objectStore,
     signal: controller.signal,
   });
-  const maintenance = new StudioMaintenanceCoordinator({
+  const maintenance = createProductionStudioMaintenanceCoordinator({
     repository: maintenanceRepository,
+    objectStore,
     ownerId: env.workerId,
     lockKey: studioMaintenanceLeaseName(),
     ttlMs: Math.max(60_000, env.maintenanceMs * 3),

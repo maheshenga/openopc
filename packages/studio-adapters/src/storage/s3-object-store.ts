@@ -15,11 +15,11 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   type StudioDeleteObjectInput,
+  type StudioListObjectsInput,
+  type StudioListObjectsResult,
   type StudioObjectMetadata,
   type StudioObjectRef,
   type StudioObjectStore,
-  type StudioListObjectsInput,
-  type StudioListObjectsResult,
   StudioObjectStoreError,
   type StudioPutObjectInput,
   type StudioSignedDownloadInput,
@@ -141,6 +141,7 @@ export class S3StudioObjectStore implements StudioObjectStore {
       ContentType: input.content_type,
       ContentLength: input.size_bytes,
       ChecksumSHA256: hexChecksumToBase64(input.checksum_sha256),
+      IfNoneMatch: input.if_none_match,
       Metadata: {
         ...metadata,
         [CHECKSUM_METADATA_KEY]: input.checksum_sha256,

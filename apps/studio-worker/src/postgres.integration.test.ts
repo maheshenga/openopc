@@ -275,6 +275,23 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
           ADD COLUMN IF NOT EXISTS provider_config_version text,
           ADD COLUMN IF NOT EXISTS staging_manifest_key text,
           ADD COLUMN IF NOT EXISTS staging_manifest_checksum text;
+
+        CREATE TABLE kortix.studio_billing_incidents (
+          incident_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          account_id uuid NOT NULL REFERENCES kortix.accounts(account_id) ON DELETE CASCADE,
+          project_id uuid NOT NULL REFERENCES kortix.projects(project_id) ON DELETE CASCADE,
+          job_id uuid NOT NULL REFERENCES kortix.studio_jobs(job_id) ON DELETE CASCADE,
+          attempt_id uuid NOT NULL REFERENCES kortix.studio_job_attempts(attempt_id) ON DELETE CASCADE,
+          kind text NOT NULL CHECK (kind = 'unknown_outcome_hold_expired'),
+          status text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
+          verified_cost_credits numeric(12,4) NOT NULL,
+          potential_liability_credits numeric(12,4) NOT NULL,
+          metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+          opened_at timestamptz NOT NULL DEFAULT now(),
+          resolved_at timestamptz,
+          resolved_by_user_id uuid,
+          UNIQUE (job_id, attempt_id, kind)
+        );
       `);
       await firstConnection.unsafe(`
         INSERT INTO kortix.accounts(account_id) VALUES ('${accountId}');
@@ -341,7 +358,7 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
     const [sqlA, sqlB] = getConnections();
     const repositoryA = new PostgresStudioWorkerRepository(asStudioClient(sqlA));
     const repositoryB = new PostgresStudioWorkerRepository(asStudioClient(sqlB));
-    const now = new Date('2026-07-15T12:00:00Z');
+    const now = new Date();
 
     const claims = await Promise.all([
       repositoryA.claimNextJob({
@@ -436,7 +453,7 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
   test('prepares against the fresh config fence and replays handle persistence idempotently', async () => {
     const [sql] = getConnections();
     const repository = new PostgresStudioWorkerRepository(asStudioClient(sql));
-    const now = new Date('2026-07-15T12:00:00Z');
+    const now = new Date();
     const claimed = await repository.claimNextJob({
       processRole: 'studio-worker',
       workerId: 'worker-a:submission-claim',
@@ -447,6 +464,7 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
     const config = await repository.loadProviderConfigForSubmission({
       jobId,
       workerId: 'worker-a:submission-claim',
+      now,
     });
     if (!config) throw new Error('Expected a fresh provider configuration');
     const attempt = await repository.prepareAttempt({
@@ -502,7 +520,7 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
   test('rejects attempt preparation when any provider configuration field changes', async () => {
     const [sql] = getConnections();
     const repository = new PostgresStudioWorkerRepository(asStudioClient(sql));
-    const now = new Date('2026-07-15T12:00:00Z');
+    const now = new Date();
     const claimed = await repository.claimNextJob({
       processRole: 'studio-worker',
       workerId: 'worker-a:stale-config-claim',
@@ -513,6 +531,7 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
     const config = await repository.loadProviderConfigForSubmission({
       jobId,
       workerId: 'worker-a:stale-config-claim',
+      now,
     });
     if (!config) throw new Error('Expected a fresh provider configuration');
 
@@ -704,25 +723,28 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
     const [sql] = getConnections();
     const worker = new PostgresStudioWorkerRepository(asStudioClient(sql));
     const maintenance = new PostgresStudioMaintenanceRepository(asStudioClient(sql));
+    const claimNow = new Date();
     const claimed = await worker.claimNextJob({
       processRole: 'studio-worker',
       workerId: 'worker-a:orphan-candidate',
-      now: new Date('2026-07-15T10:00:00.000Z'),
+      now: claimNow,
       leaseMs: 60_000,
     });
     if (!claimed) throw new Error('expected orphan fixture job to be claimed');
+    if (!claimed.leaseOwner) throw new Error('expected orphan fixture lease owner');
     const config = await worker.loadProviderConfigForSubmission({
       jobId: claimed.jobId,
-      workerId: claimed.leaseOwner!,
+      workerId: claimed.leaseOwner,
+      now: claimNow,
     });
     if (!config) throw new Error('expected orphan fixture provider config');
     const attempt = await worker.prepareAttempt({
       jobId: claimed.jobId,
-      workerId: claimed.leaseOwner!,
+      workerId: claimed.leaseOwner,
       submissionKey: 'submission:orphan-candidate',
       adapterVersion: 'integration-v1',
       providerConfigVersion: config.versionToken,
-      now: new Date('2026-06-01T00:00:00.000Z'),
+      now: claimNow,
     });
     if (!attempt) throw new Error('expected orphan fixture attempt');
     await sql.unsafe(`
@@ -741,12 +763,82 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
       limit: 10,
     });
     expect(terminal).toHaveLength(1);
+    const terminalCandidate = terminal[0];
+    if (!terminalCandidate) throw new Error('expected terminal orphan candidate');
     expect(
       await maintenance.isOrphanStagingCandidate({
-        candidate: terminal[0]!,
+        candidate: terminalCandidate,
         retentionBefore,
       }),
     ).toBe(true);
+    expect(
+      await maintenance.listOrphanStagingCandidates({
+        retentionBefore,
+        after: {
+          terminalAt: terminalCandidate.terminalAt,
+          attemptId: terminalCandidate.attemptId,
+        },
+        limit: 10,
+      }),
+    ).toEqual([]);
+
+    await sql.unsafe(`
+      UPDATE kortix.studio_jobs
+      SET error_code = 'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED'
+      WHERE job_id = '${claimed.jobId}';
+    `);
+    expect(await maintenance.listOrphanStagingCandidates({ retentionBefore, limit: 10 })).toEqual(
+      [],
+    );
+    expect(
+      await maintenance.isOrphanStagingCandidate({
+        candidate: terminalCandidate,
+        retentionBefore,
+      }),
+    ).toBe(false);
+    await sql.unsafe(`
+      UPDATE kortix.studio_jobs SET error_code = NULL WHERE job_id = '${claimed.jobId}';
+    `);
+
+    await sql.unsafe(`
+      UPDATE kortix.studio_job_attempts
+      SET retry_classification = 'unknown_outcome'
+      WHERE attempt_id = '${attempt.attemptId}';
+    `);
+    expect(await maintenance.listOrphanStagingCandidates({ retentionBefore, limit: 10 })).toEqual(
+      [],
+    );
+    expect(
+      await maintenance.isOrphanStagingCandidate({
+        candidate: terminalCandidate,
+        retentionBefore,
+      }),
+    ).toBe(false);
+    await sql.unsafe(`
+      UPDATE kortix.studio_job_attempts
+      SET retry_classification = NULL
+      WHERE attempt_id = '${attempt.attemptId}';
+      INSERT INTO kortix.studio_billing_incidents(
+        account_id, project_id, job_id, attempt_id, kind, status,
+        verified_cost_credits, potential_liability_credits
+      ) VALUES (
+        '${accountId}', '${projectId}', '${claimed.jobId}', '${attempt.attemptId}',
+        'unknown_outcome_hold_expired', 'open', 0, 1
+      );
+    `);
+    expect(await maintenance.listOrphanStagingCandidates({ retentionBefore, limit: 10 })).toEqual(
+      [],
+    );
+    expect(
+      await maintenance.isOrphanStagingCandidate({
+        candidate: terminalCandidate,
+        retentionBefore,
+      }),
+    ).toBe(false);
+    await sql.unsafe(`
+      DELETE FROM kortix.studio_billing_incidents
+      WHERE job_id = '${claimed.jobId}' AND attempt_id = '${attempt.attemptId}';
+    `);
 
     await sql.unsafe(`
       UPDATE kortix.studio_job_attempts
@@ -754,12 +846,12 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
           staging_manifest_checksum = '${'a'.repeat(64)}'
       WHERE attempt_id = '${attempt.attemptId}';
     `);
-    expect(
-      await maintenance.listOrphanStagingCandidates({ retentionBefore, limit: 10 }),
-    ).toEqual([]);
+    expect(await maintenance.listOrphanStagingCandidates({ retentionBefore, limit: 10 })).toEqual(
+      [],
+    );
     expect(
       await maintenance.isOrphanStagingCandidate({
-        candidate: terminal[0]!,
+        candidate: terminalCandidate,
         retentionBefore,
       }),
     ).toBe(false);
@@ -773,8 +865,8 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
       SET status = 'running', completed_at = NULL
       WHERE job_id = '${claimed.jobId}';
     `);
-    expect(
-      await maintenance.listOrphanStagingCandidates({ retentionBefore, limit: 10 }),
-    ).toEqual([]);
+    expect(await maintenance.listOrphanStagingCandidates({ retentionBefore, limit: 10 })).toEqual(
+      [],
+    );
   });
 });

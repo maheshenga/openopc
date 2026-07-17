@@ -1,9 +1,9 @@
 import type { StudioJobEvent, StudioJobInput, StudioJobState } from '@kortix/api-contract';
 import type {
+  StudioPricingSnapshot,
   StudioProviderAsset,
   StudioProviderDefinitionConfig,
   StudioProviderHandle,
-  StudioPricingSnapshot,
   StudioRetryClassification,
 } from '@kortix/studio-runtime';
 import { z } from 'zod';
@@ -137,12 +137,17 @@ export interface StudioWorkerRepository {
     now: Date;
     leaseMs: number;
   }): Promise<boolean>;
-  isCancellationRequested(input: { jobId: string; workerId: string }): Promise<boolean>;
+  isCancellationRequested(input: { jobId: string; workerId: string; now: Date }): Promise<boolean>;
   loadProviderConfigForSubmission(input: {
     jobId: string;
     workerId: string;
+    now: Date;
   }): Promise<StudioWorkerProviderConfig | null>;
-  getLatestAttempt(jobId: string): Promise<StudioWorkerAttempt | null>;
+  getLatestAttempt(input: {
+    jobId: string;
+    workerId: string;
+    now: Date;
+  }): Promise<StudioWorkerAttempt | null>;
   prepareAttempt(input: {
     jobId: string;
     workerId: string;
@@ -223,6 +228,7 @@ export interface StudioWorkerRepository {
   getRecordedAttemptCostTotal(input: {
     jobId: string;
     workerId: string;
+    now: Date;
   }): Promise<number>;
   markFailed(input: {
     jobId: string;
@@ -246,6 +252,7 @@ export interface StudioWorkerRepository {
     jobId: string;
     workerId: string;
     availableAt: Date;
+    now: Date;
   }): Promise<void>;
 }
 

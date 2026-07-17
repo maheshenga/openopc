@@ -1,16 +1,16 @@
+import { StudioImageValidationError, validateStudioImage } from '@kortix/studio-adapters';
 import {
+  type StudioObjectMetadata,
+  type StudioObjectStore,
   StudioObjectStoreError,
   StudioProviderCallError,
+  type StudioStagingManifest,
   parseStudioStagingManifest,
   studioStagingManifestKey,
   studioStagingPrefix,
   studioSubmissionKeyHash,
-  type StudioObjectMetadata,
-  type StudioObjectStore,
-  type StudioStagingManifest,
 } from '@kortix/studio-runtime';
 import type { StudioProviderAsset } from '@kortix/studio-runtime';
-import { validateStudioImage, StudioImageValidationError } from '@kortix/studio-adapters';
 
 const MAX_ASSET_REPLAYS = 3;
 const MAX_MANIFEST_BYTES = 256 * 1024;
@@ -87,28 +87,53 @@ export class StudioResultStager {
     });
     const manifestBytes = encodeManifest(manifest);
     const manifestChecksum = checksum(manifestBytes);
-    await this.store.putObject({
-      key: manifestKey,
-      body: byteStream(manifestBytes),
-      content_type: 'application/json',
-      size_bytes: manifestBytes.byteLength,
-      checksum_sha256: manifestChecksum,
-      metadata: {
-        project_id: identity.projectId,
-        job_id: identity.jobId,
-        attempt_id: identity.attemptId,
-        kind: 'studio-staging-manifest',
-      },
-    });
-    return toStagedResult(
-      { manifest, manifestKey, manifestChecksum },
-      this.store.namespace,
-    );
+    let manifestPublished = false;
+    for (let attempt = 0; attempt < MAX_ASSET_REPLAYS; attempt += 1) {
+      try {
+        await this.store.putObject({
+          key: manifestKey,
+          body: byteStream(manifestBytes),
+          content_type: 'application/json',
+          size_bytes: manifestBytes.byteLength,
+          checksum_sha256: manifestChecksum,
+          metadata: {
+            project_id: identity.projectId,
+            job_id: identity.jobId,
+            attempt_id: identity.attemptId,
+            kind: 'studio-staging-manifest',
+          },
+          if_none_match: '*',
+        });
+        manifestPublished = true;
+        break;
+      } catch {
+        let recovered: StudioStagedResult | null = null;
+        try {
+          recovered = await this.loadManifest(identity);
+        } catch (error) {
+          if (error instanceof StudioProviderCallError && error.classification === 'terminal') {
+            throw error;
+          }
+        }
+        if (recovered) {
+          if (recovered.manifestChecksum === manifestChecksum) return recovered;
+          throw new StudioProviderCallError(
+            'terminal',
+            'Studio staging manifest conflicts with an existing result',
+          );
+        }
+      }
+    }
+    if (!manifestPublished) {
+      throw new StudioProviderCallError(
+        'unknown_outcome',
+        'Studio staging manifest acknowledgement is unknown',
+      );
+    }
+    return toStagedResult({ manifest, manifestKey, manifestChecksum }, this.store.namespace);
   }
 
-  async loadManifest(
-    identity: StudioResultStageIdentity,
-  ): Promise<StudioStagedResult | null> {
+  async loadManifest(identity: StudioResultStageIdentity): Promise<StudioStagedResult | null> {
     await this.store.assertReady();
     const normalized = normalizeIdentity(identity);
     const prefix = stagingPrefix(normalized);
@@ -140,7 +165,10 @@ export class StudioResultStager {
     const expectedPrefix = prefix;
     for (const asset of manifest.assets) {
       if (!asset.key.startsWith(expectedPrefix) || asset.key === manifestKey) {
-        throw new StudioProviderCallError('terminal', 'Studio staging asset key escaped its prefix');
+        throw new StudioProviderCallError(
+          'terminal',
+          'Studio staging asset key escaped its prefix',
+        );
       }
       let assetMetadata: StudioObjectMetadata;
       try {
@@ -157,10 +185,7 @@ export class StudioResultStager {
         throw new StudioProviderCallError('terminal', 'Studio staging asset identity is invalid');
       }
     }
-    return toStagedResult(
-      { manifest, manifestKey, manifestChecksum },
-      this.store.namespace,
-    );
+    return toStagedResult({ manifest, manifestKey, manifestChecksum }, this.store.namespace);
   }
 
   private async stageAsset(input: {
@@ -169,10 +194,7 @@ export class StudioResultStager {
     asset: StudioProviderAsset;
   }): Promise<StudioStagingManifest['assets'][number]> {
     const maxReplays = input.asset.replayable_within_attempt
-      ? Math.max(
-          1,
-          Math.min(MAX_ASSET_REPLAYS, this.options.maxAssetReplays ?? MAX_ASSET_REPLAYS),
-        )
+      ? Math.max(1, Math.min(MAX_ASSET_REPLAYS, this.options.maxAssetReplays ?? MAX_ASSET_REPLAYS))
       : 1;
     const filename = safeFilename(input.asset.filename, input.index);
     const key = `${input.prefix}assets/${String(input.index).padStart(3, '0')}-${filename}`;
@@ -201,7 +223,16 @@ export class StudioResultStager {
         throw new StudioProviderCallError('terminal', 'Studio provider asset validation failed');
       }
       const checksumSha256 = checksum(bytes);
+      const stagedAsset = {
+        kind: 'image' as const,
+        key,
+        filename,
+        mime_type: validated.mimeType,
+        size_bytes: bytes.byteLength,
+        checksum_sha256: checksumSha256,
+      };
       try {
+        if (await this.reuseExistingAsset(stagedAsset)) return stagedAsset;
         await this.store.putObject({
           key,
           body: byteStream(bytes),
@@ -212,31 +243,57 @@ export class StudioResultStager {
             project_id: input.prefix.split('/')[3] ?? '',
             kind: 'studio-staging-asset',
           },
+          if_none_match: '*',
         });
       } catch (error) {
         lastError = error;
-        if (
-          !(error instanceof StudioObjectStoreError) ||
-          (error.code !== 'CHECKSUM_MISMATCH' && error.code !== 'SIZE_MISMATCH')
-        ) {
+        if (error instanceof StudioProviderCallError && error.classification === 'terminal') {
           throw error;
+        }
+        try {
+          if (await this.reuseExistingAsset(stagedAsset)) return stagedAsset;
+        } catch (recoveryError) {
+          if (
+            recoveryError instanceof StudioProviderCallError &&
+            recoveryError.classification === 'terminal'
+          ) {
+            throw recoveryError;
+          }
+          lastError = recoveryError;
         }
         continue;
       }
-      return {
-        kind: 'image',
-        key,
-        filename,
-        mime_type: validated.mimeType,
-        size_bytes: bytes.byteLength,
-        checksum_sha256: checksumSha256,
-      };
+      return stagedAsset;
     }
     if (lastError instanceof StudioProviderCallError) throw lastError;
     throw new StudioProviderCallError(
       'unknown_outcome',
       'Studio provider result asset could not be staged after replay attempts',
     );
+  }
+
+  private async reuseExistingAsset(
+    expected: StudioStagingManifest['assets'][number],
+  ): Promise<boolean> {
+    let metadata: StudioObjectMetadata;
+    try {
+      metadata = await this.store.headObject({ key: expected.key });
+    } catch (error) {
+      if (error instanceof StudioObjectStoreError && error.code === 'NOT_FOUND') return false;
+      throw error;
+    }
+    assertBoundObject(metadata, expected.key, this.store);
+    if (
+      metadata.content_type !== expected.mime_type ||
+      metadata.size_bytes !== expected.size_bytes ||
+      metadata.checksum_sha256 !== expected.checksum_sha256
+    ) {
+      throw new StudioProviderCallError(
+        'terminal',
+        'Studio staging asset conflicts with an existing object',
+      );
+    }
+    return true;
   }
 }
 
@@ -286,7 +343,10 @@ function assertManifestIdentity(
     manifest.pricing_catalog_id !== identity.pricingCatalogId ||
     manifest.pricing_version !== identity.pricingVersion
   ) {
-    throw new StudioProviderCallError('terminal', 'Studio staging manifest identity does not match');
+    throw new StudioProviderCallError(
+      'terminal',
+      'Studio staging manifest identity does not match',
+    );
   }
 }
 
@@ -338,7 +398,10 @@ function checksum(bytes: Uint8Array): string {
   return new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
 }
 
-async function readBytes(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+async function readBytes(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+): Promise<Uint8Array> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -347,7 +410,8 @@ async function readBytes(stream: ReadableStream<Uint8Array>, maxBytes: number): 
       const next = await reader.read();
       if (next.done) break;
       size += next.value.byteLength;
-      if (size > maxBytes) throw new StudioProviderCallError('terminal', 'Studio object is too large');
+      if (size > maxBytes)
+        throw new StudioProviderCallError('terminal', 'Studio object is too large');
       chunks.push(next.value);
     }
   } finally {

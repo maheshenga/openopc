@@ -3,19 +3,22 @@ import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runner } from 'node-pg-migrate';
 import pg from 'pg';
-import { createDb } from '../src/client';
-import { InMemoryStudioObjectStore } from '../../studio-runtime/src';
+import { createStudioProjectRoutes } from '../../../apps/api/src/studio';
 import { createStudioCredentialBindingExists } from '../../../apps/api/src/studio/credential-existence';
 import { StudioRecoveryService } from '../../../apps/api/src/studio/recovery';
-import { createDrizzleStudioRecoveryRepository } from '../../../apps/api/src/studio/repositories/drizzle';
 import {
-  StudioMaintenanceCoordinator,
-} from '../../../apps/studio-worker/src/maintenance';
+  createDrizzleStudioRecoveryRepository,
+  createDrizzleStudioRepository,
+} from '../../../apps/api/src/studio/repositories/drizzle';
+import { StudioStorageService } from '../../../apps/api/src/studio/storage';
+import { StudioMaintenanceCoordinator } from '../../../apps/studio-worker/src/maintenance';
 import {
   PostgresStudioMaintenanceRepository,
   type StudioSqlClient,
 } from '../../../apps/studio-worker/src/postgres';
 import { StudioResultStager } from '../../../apps/studio-worker/src/result-stager';
+import { InMemoryStudioObjectStore } from '../../studio-runtime/src';
+import { createDb } from '../src/client';
 
 const dockerAvailable =
   Bun.spawnSync(['docker', 'version'], { stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
@@ -986,19 +989,54 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     });
   }, 30_000);
 
-  test('credential existence rejects cross-tenant secret and connector decoys', async () => {
-    const accountA = '81000000-0000-4000-a000-000000000001';
-    const accountB = '81000000-0000-4000-a000-000000000002';
-    const projectA = '82000000-0000-4000-a000-000000000001';
-    const projectB = '82000000-0000-4000-a000-000000000002';
-    const connectorA = '83000000-0000-4000-a000-000000000001';
-    const connectorB = '83000000-0000-4000-a000-000000000002';
-    const profileA = '84000000-0000-4000-a000-000000000001';
-    const profileB = '84000000-0000-4000-a000-000000000002';
+  test('API routes reject cross-tenant secret and connector credential decoys', async () => {
+    const scope = seedProductionScope({ suffix: '29' });
+    const accountB = '81000000-0000-4000-a000-000000000029';
+    const projectB = '82000000-0000-4000-a000-000000000029';
+    const connectorProviderId = '72000000-0000-4000-a000-000000000129';
+    const connectorA = '83000000-0000-4000-a000-000000000029';
+    const connectorB = '83000000-0000-4000-a000-000000000129';
+    const profileA = '84000000-0000-4000-a000-000000000029';
+    const profileB = '84000000-0000-4000-a000-000000000129';
+    const capabilityMap = {
+      definition_id: 'openai-compatible',
+      capabilities: {
+        'image.generate': {
+          models: [
+            {
+              model: PRODUCTION_MODEL,
+              pricing_catalog_id: scope.pricingId,
+              dialect_profile_id: 'openai-images-v1-generic',
+              supports_reference_images: false,
+              allowed_advanced_fields: [],
+              size_map: {
+                '1:1': '1024x1024',
+                '4:3': '1536x1024',
+                '3:4': '1024x1536',
+                '16:9': '1536x864',
+                '9:16': '864x1536',
+              },
+            },
+          ],
+        },
+      },
+    };
     dockerPsql(`
-      INSERT INTO kortix.accounts(account_id) VALUES ('${accountA}'), ('${accountB}');
-      INSERT INTO kortix.projects(project_id, account_id) VALUES
-        ('${projectA}', '${accountA}'), ('${projectB}', '${accountB}');
+      UPDATE kortix.studio_provider_configs
+      SET credential_binding = jsonb_build_object('kind', 'secret', 'identifier', 'STUDIO_IMAGE_KEY'),
+          capability_map = '${JSON.stringify(capabilityMap)}'::jsonb
+      WHERE provider_config_id = '${scope.providerId}';
+      INSERT INTO kortix.studio_provider_configs(
+        provider_config_id, account_id, project_id, provider, display_name,
+        base_url, credential_binding, capability_map, enabled
+      ) VALUES (
+        '${connectorProviderId}', '${scope.accountId}', '${scope.projectId}', '${PRODUCTION_PROVIDER}',
+        'Connector integration provider', 'https://provider.invalid/v1',
+        jsonb_build_object('kind', 'connector', 'slug', 'studio-images'),
+        '${JSON.stringify(capabilityMap)}'::jsonb, true
+      );
+      INSERT INTO kortix.accounts(account_id) VALUES ('${accountB}');
+      INSERT INTO kortix.projects(project_id, account_id) VALUES ('${projectB}', '${accountB}');
       INSERT INTO kortix.project_secrets(project_id, identifier, owner_user_id, active, value_enc)
       VALUES ('${projectB}', 'STUDIO_IMAGE_KEY', NULL, true, 'encrypted-decoy');
       INSERT INTO kortix.executor_connectors(
@@ -1011,56 +1049,107 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       VALUES ('${connectorB}', '${profileB}', 'encrypted-decoy');
     `);
     const database = createDb(postgresUrl('testdb'), { max: 1 });
-    const credentialExists = createStudioCredentialBindingExists(database);
+    const repository = createDrizzleStudioRepository(database);
+    const app = createStudioProjectRoutes({
+      repository,
+      storageService: new StudioStorageService({
+        repository,
+        store: new InMemoryStudioObjectStore({ namespace: 'credential-decoy', ready: true }),
+      }),
+      credentialBindingExists: createStudioCredentialBindingExists(database),
+      loadProjectForUser: async (_context, projectId) =>
+        projectId === scope.projectId
+          ? {
+              row: { accountId: scope.accountId, projectId },
+              userId: '60000000-0000-4000-a000-000000000001',
+            }
+          : null,
+      assertProjectCapability: async () => {},
+      estimateSigningSecret: 'studio-cross-tenant-credential-decoy-test',
+    });
+    const request = {
+      capability: 'image.generate',
+      model: PRODUCTION_MODEL,
+      input: {
+        capability: 'image.generate',
+        image: {
+          prompt: 'Cross-tenant credential decoy',
+          reference_asset_ids: [],
+          aspect_ratio: '1:1',
+          quality: 'standard',
+          output_count: 1,
+        },
+      },
+    };
+    const requestEstimate = (providerConfigId: string) =>
+      app.request(`/${scope.projectId}/studio/estimates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...request, provider_config_id: providerConfigId }),
+      });
     try {
-      await expect(
-        credentialExists({
-          accountId: accountA,
-          projectId: projectA,
-          binding: { kind: 'secret', identifier: 'STUDIO_IMAGE_KEY' },
-        }),
-      ).resolves.toBe(false);
-      await expect(
-        credentialExists({
-          accountId: accountA,
-          projectId: projectA,
-          binding: { kind: 'connector', slug: 'studio-images' },
-        }),
-      ).resolves.toBe(false);
+      const capabilities = await app.request(`/${scope.projectId}/studio/capabilities`);
+      expect(await capabilities.json()).toEqual({ items: [], next_cursor: null });
+      for (const providerConfigId of [scope.providerId, connectorProviderId]) {
+        const estimate = await requestEstimate(providerConfigId);
+        expect(estimate.status).toBe(409);
+        expect(await estimate.json()).toMatchObject({ code: 'STUDIO_CREDENTIAL_UNAVAILABLE' });
+      }
 
       dockerPsql(`
         INSERT INTO kortix.project_secrets(project_id, identifier, owner_user_id, active, value_enc)
-        VALUES ('${projectA}', 'STUDIO_IMAGE_KEY', NULL, true, 'encrypted-owned');
+        VALUES ('${scope.projectId}', 'STUDIO_IMAGE_KEY', NULL, true, 'encrypted-owned');
         INSERT INTO kortix.executor_connectors(
           connector_id, account_id, project_id, slug, enabled, status
-        ) VALUES ('${connectorA}', '${accountA}', '${projectA}', 'studio-images', true, 'active');
+        ) VALUES ('${connectorA}', '${scope.accountId}', '${scope.projectId}', 'studio-images', true, 'active');
         INSERT INTO kortix.executor_connection_profiles(
           profile_id, connector_id, account_id, project_id, is_default, status
-        ) VALUES ('${profileA}', '${connectorA}', '${accountA}', '${projectA}', true, 'active');
+        ) VALUES ('${profileA}', '${connectorA}', '${scope.accountId}', '${scope.projectId}', true, 'active');
         INSERT INTO kortix.executor_credentials(connector_id, profile_id, value_enc)
         VALUES ('${connectorA}', '${profileA}', 'encrypted-owned');
       `);
 
-      await expect(
-        credentialExists({
-          accountId: accountA,
-          projectId: projectA,
-          binding: { kind: 'secret', identifier: 'STUDIO_IMAGE_KEY' },
+      const executableCapabilities = await app.request(`/${scope.projectId}/studio/capabilities`);
+      expect(
+        ((await executableCapabilities.json()) as { items: unknown[] }).items,
+      ).not.toHaveLength(0);
+      const secretEstimate = await requestEstimate(scope.providerId);
+      expect(secretEstimate.status).toBe(200);
+      const secretEstimateBody = (await secretEstimate.json()) as Record<string, unknown>;
+      expect((await requestEstimate(connectorProviderId)).status).toBe(200);
+
+      dockerPsql(`
+        DELETE FROM kortix.project_secrets
+        WHERE project_id = '${scope.projectId}' AND identifier = 'STUDIO_IMAGE_KEY';
+      `);
+      const job = await app.request(`/${scope.projectId}/studio/jobs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...request,
+          provider_config_id: scope.providerId,
+          estimate_id: secretEstimateBody.estimate_id,
+          estimate_token: secretEstimateBody.estimate_token,
+          idempotency_key: 'cross-tenant-secret-decoy-job',
+          request_hash: secretEstimateBody.input_hash,
         }),
-      ).resolves.toBe(true);
-      await expect(
-        credentialExists({
-          accountId: accountA,
-          projectId: projectA,
-          binding: { kind: 'connector', slug: 'studio-images' },
-        }),
-      ).resolves.toBe(true);
-    } finally {
-      await (database as unknown as { $client: { end(options?: unknown): Promise<void> } }).$client.end({
-        timeout: 1,
       });
+      expect(job.status).toBe(409);
+      expect(await job.json()).toMatchObject({ code: 'STUDIO_CREDENTIAL_UNAVAILABLE' });
+      expect(
+        dockerPsqlJson(`
+          SELECT jsonb_build_object(
+            'job_count', count(*)
+          ) FROM kortix.studio_jobs
+          WHERE account_id = '${scope.accountId}' AND project_id = '${scope.projectId}';
+        `),
+      ).toEqual({ job_count: 0 });
+    } finally {
+      await (
+        database as unknown as { $client: { end(options?: unknown): Promise<void> } }
+      ).$client.end({ timeout: 1 });
     }
-  });
+  }, 30_000);
 
   test('applies the recorded B2 and B3 forward-upgrade paths with dirty reservation anchors', async () => {
     for (const variant of ['b2', 'b3'] as const) {

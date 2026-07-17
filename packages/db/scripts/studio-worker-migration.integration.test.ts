@@ -5,6 +5,7 @@ import { runner } from 'node-pg-migrate';
 import pg from 'pg';
 import { createDb } from '../src/client';
 import { InMemoryStudioObjectStore } from '../../studio-runtime/src';
+import { createStudioCredentialBindingExists } from '../../../apps/api/src/studio/credential-existence';
 import { StudioRecoveryService } from '../../../apps/api/src/studio/recovery';
 import { createDrizzleStudioRecoveryRepository } from '../../../apps/api/src/studio/repositories/drizzle';
 import {
@@ -163,6 +164,40 @@ const PRE_STUDIO_SCHEMA = `
   CREATE TABLE kortix.projects (
     project_id uuid PRIMARY KEY,
     account_id uuid NOT NULL REFERENCES kortix.accounts(account_id)
+  );
+
+  CREATE TABLE kortix.project_secrets (
+    secret_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id uuid NOT NULL REFERENCES kortix.projects(project_id),
+    identifier text NOT NULL,
+    owner_user_id uuid,
+    active boolean NOT NULL DEFAULT true,
+    value_enc text NOT NULL
+  );
+
+  CREATE TABLE kortix.executor_connectors (
+    connector_id uuid PRIMARY KEY,
+    account_id uuid NOT NULL REFERENCES kortix.accounts(account_id),
+    project_id uuid NOT NULL REFERENCES kortix.projects(project_id),
+    slug text NOT NULL,
+    enabled boolean NOT NULL DEFAULT true,
+    status text NOT NULL DEFAULT 'active'
+  );
+
+  CREATE TABLE kortix.executor_connection_profiles (
+    profile_id uuid PRIMARY KEY,
+    connector_id uuid NOT NULL REFERENCES kortix.executor_connectors(connector_id),
+    account_id uuid NOT NULL,
+    project_id uuid NOT NULL,
+    is_default boolean NOT NULL DEFAULT false,
+    status text NOT NULL DEFAULT 'active'
+  );
+
+  CREATE TABLE kortix.executor_credentials (
+    credential_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    connector_id uuid NOT NULL REFERENCES kortix.executor_connectors(connector_id),
+    profile_id uuid NOT NULL,
+    value_enc text NOT NULL
   );
 
   CREATE TABLE kortix.worker_leader_lease (
@@ -950,6 +985,82 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       authenticated_can_finalize_terminal: false,
     });
   }, 30_000);
+
+  test('credential existence rejects cross-tenant secret and connector decoys', async () => {
+    const accountA = '81000000-0000-4000-a000-000000000001';
+    const accountB = '81000000-0000-4000-a000-000000000002';
+    const projectA = '82000000-0000-4000-a000-000000000001';
+    const projectB = '82000000-0000-4000-a000-000000000002';
+    const connectorA = '83000000-0000-4000-a000-000000000001';
+    const connectorB = '83000000-0000-4000-a000-000000000002';
+    const profileA = '84000000-0000-4000-a000-000000000001';
+    const profileB = '84000000-0000-4000-a000-000000000002';
+    dockerPsql(`
+      INSERT INTO kortix.accounts(account_id) VALUES ('${accountA}'), ('${accountB}');
+      INSERT INTO kortix.projects(project_id, account_id) VALUES
+        ('${projectA}', '${accountA}'), ('${projectB}', '${accountB}');
+      INSERT INTO kortix.project_secrets(project_id, identifier, owner_user_id, active, value_enc)
+      VALUES ('${projectB}', 'STUDIO_IMAGE_KEY', NULL, true, 'encrypted-decoy');
+      INSERT INTO kortix.executor_connectors(
+        connector_id, account_id, project_id, slug, enabled, status
+      ) VALUES ('${connectorB}', '${accountB}', '${projectB}', 'studio-images', true, 'active');
+      INSERT INTO kortix.executor_connection_profiles(
+        profile_id, connector_id, account_id, project_id, is_default, status
+      ) VALUES ('${profileB}', '${connectorB}', '${accountB}', '${projectB}', true, 'active');
+      INSERT INTO kortix.executor_credentials(connector_id, profile_id, value_enc)
+      VALUES ('${connectorB}', '${profileB}', 'encrypted-decoy');
+    `);
+    const database = createDb(postgresUrl('testdb'), { max: 1 });
+    const credentialExists = createStudioCredentialBindingExists(database);
+    try {
+      await expect(
+        credentialExists({
+          accountId: accountA,
+          projectId: projectA,
+          binding: { kind: 'secret', identifier: 'STUDIO_IMAGE_KEY' },
+        }),
+      ).resolves.toBe(false);
+      await expect(
+        credentialExists({
+          accountId: accountA,
+          projectId: projectA,
+          binding: { kind: 'connector', slug: 'studio-images' },
+        }),
+      ).resolves.toBe(false);
+
+      dockerPsql(`
+        INSERT INTO kortix.project_secrets(project_id, identifier, owner_user_id, active, value_enc)
+        VALUES ('${projectA}', 'STUDIO_IMAGE_KEY', NULL, true, 'encrypted-owned');
+        INSERT INTO kortix.executor_connectors(
+          connector_id, account_id, project_id, slug, enabled, status
+        ) VALUES ('${connectorA}', '${accountA}', '${projectA}', 'studio-images', true, 'active');
+        INSERT INTO kortix.executor_connection_profiles(
+          profile_id, connector_id, account_id, project_id, is_default, status
+        ) VALUES ('${profileA}', '${connectorA}', '${accountA}', '${projectA}', true, 'active');
+        INSERT INTO kortix.executor_credentials(connector_id, profile_id, value_enc)
+        VALUES ('${connectorA}', '${profileA}', 'encrypted-owned');
+      `);
+
+      await expect(
+        credentialExists({
+          accountId: accountA,
+          projectId: projectA,
+          binding: { kind: 'secret', identifier: 'STUDIO_IMAGE_KEY' },
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        credentialExists({
+          accountId: accountA,
+          projectId: projectA,
+          binding: { kind: 'connector', slug: 'studio-images' },
+        }),
+      ).resolves.toBe(true);
+    } finally {
+      await (database as unknown as { $client: { end(options?: unknown): Promise<void> } }).$client.end({
+        timeout: 1,
+      });
+    }
+  });
 
   test('applies the recorded B2 and B3 forward-upgrade paths with dirty reservation anchors', async () => {
     for (const variant of ['b2', 'b3'] as const) {

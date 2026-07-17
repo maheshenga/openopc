@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test';
 import type { StudioRecoveryResponse } from '@kortix/api-contract';
+import { InMemoryStudioObjectStore, type StudioObjectStore } from '@kortix/studio-runtime';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { Hono } from 'hono';
 
@@ -19,9 +20,12 @@ mock.module('../projects/lib/access', () => ({
 }));
 mock.module('../iam/dispatcher', () => ({ assertAuthorized: async () => {} }));
 
-const { buildStudioApiRuntime, createDefaultStudioProjectRoutes } = await import(
-  './default-routes'
-);
+const {
+  buildStudioApiRuntime,
+  closeDefaultStudioApiRuntime,
+  createDefaultStudioProjectRoutes,
+  getDefaultStudioApiRuntime,
+} = await import('./default-routes');
 const { createMemoryStudioRepository } = await import('./repositories/memory');
 
 const ACCOUNT_ID = '91000000-0000-4000-a000-000000000001';
@@ -92,6 +96,14 @@ function enabledEnv(input: { fake: boolean; openai: boolean }) {
     STUDIO_OBJECT_STORE_MODE: 'memory',
     STUDIO_ALLOW_EPHEMERAL_STORAGE: 'true',
   };
+}
+
+function buildRuntimeWithObjectStore(env: Record<string, string>, store: StudioObjectStore) {
+  const build = buildStudioApiRuntime as unknown as (
+    input: Record<string, string>,
+    options: { createObjectStore: () => StudioObjectStore },
+  ) => ReturnType<typeof buildStudioApiRuntime>;
+  return build(env, { createObjectStore: () => store });
 }
 
 async function createOpenAiRepository(
@@ -178,6 +190,23 @@ describe('Studio API runtime assembly', () => {
     ).toEqual({ enabled: false });
   });
 
+  test('does not construct an object store while Studio is disabled', () => {
+    let factoryCalls = 0;
+
+    expect(
+      buildStudioApiRuntime(
+        { STUDIO_ENABLED: 'false' },
+        {
+          createObjectStore: () => {
+            factoryCalls += 1;
+            throw new Error('disabled Studio must not create an object store');
+          },
+        },
+      ),
+    ).toEqual({ enabled: false });
+    expect(factoryCalls).toBe(0);
+  });
+
   test('uses the same ephemeral storage policy as the worker runtime', () => {
     expect(
       buildStudioApiRuntime({
@@ -196,6 +225,116 @@ describe('Studio API runtime assembly', () => {
         STUDIO_ALLOW_EPHEMERAL_STORAGE: 'true',
       }),
     ).toThrow(/STUDIO_OPENAI_COMPATIBLE_ENABLED/);
+  });
+
+  test('owns an injected store and waits for exactly one close', async () => {
+    const store = new InMemoryStudioObjectStore({
+      namespace: 'api-runtime',
+      ready: true,
+    }) as InMemoryStudioObjectStore & { destroy(): Promise<void> };
+    let destroyCalls = 0;
+    let releaseDestroy: (() => void) | undefined;
+    const destroyPending = new Promise<void>((resolve) => {
+      releaseDestroy = resolve;
+    });
+    store.destroy = () => {
+      destroyCalls += 1;
+      return destroyPending;
+    };
+
+    const runtime = buildRuntimeWithObjectStore(enabledEnv({ fake: true, openai: false }), store);
+
+    expect(runtime).toMatchObject({ enabled: true, store });
+    if (!runtime.enabled) throw new Error('expected enabled Studio API runtime');
+    let closeSettled = false;
+    const close = runtime.close().then(() => {
+      closeSettled = true;
+    });
+    await Promise.resolve();
+    expect({ destroyCalls, closeSettled }).toEqual({ destroyCalls: 1, closeSettled: false });
+    releaseDestroy?.();
+    await close;
+    await runtime.close();
+    expect(destroyCalls).toBe(1);
+  });
+
+  test('retains the default store across route assembly and closes it once', async () => {
+    const store = new InMemoryStudioObjectStore({
+      namespace: 'api-default-runtime',
+      ready: true,
+    }) as InMemoryStudioObjectStore & { destroy(): Promise<void> };
+    let factoryCalls = 0;
+    let destroyCalls = 0;
+    let releaseDestroy: (() => void) | undefined;
+    const destroyPending = new Promise<void>((resolve) => {
+      releaseDestroy = resolve;
+    });
+    store.destroy = () => {
+      destroyCalls += 1;
+      return destroyPending;
+    };
+
+    const runtime = getDefaultStudioApiRuntime(enabledEnv({ fake: true, openai: false }), {
+      createObjectStore: () => {
+        factoryCalls += 1;
+        return store;
+      },
+    });
+
+    expect(runtime).toMatchObject({ enabled: true, store });
+    expect(
+      getDefaultStudioApiRuntime(enabledEnv({ fake: true, openai: false }), {
+        createObjectStore: () => {
+          factoryCalls += 1;
+          return new InMemoryStudioObjectStore({ namespace: 'must-not-be-created', ready: true });
+        },
+      }),
+    ).toBe(runtime);
+    createDefaultStudioProjectRoutes();
+    createDefaultStudioProjectRoutes();
+    expect(factoryCalls).toBe(1);
+
+    let closeSettled = false;
+    const close = closeDefaultStudioApiRuntime().then(() => {
+      closeSettled = true;
+    });
+    const duplicateClose = closeDefaultStudioApiRuntime();
+    await Promise.resolve();
+    expect({ destroyCalls, closeSettled }).toEqual({ destroyCalls: 1, closeSettled: false });
+    releaseDestroy?.();
+    await Promise.all([close, duplicateClose]);
+    expect(destroyCalls).toBe(1);
+  });
+
+  test('uses the injected unready store before executable capabilities or job creation', async () => {
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    let createJobCalls = 0;
+    const originalCreateJob = repository.createJob.bind(repository);
+    repository.createJob = async (...args) => {
+      createJobCalls += 1;
+      return originalCreateJob(...args);
+    };
+    const store = new InMemoryStudioObjectStore({ namespace: 'api-unready', ready: false });
+    const runtime = buildRuntimeWithObjectStore(enabledEnv({ fake: true, openai: false }), store);
+    const app = mountDefaultRoutes(
+      defaultRouteInput({
+        env: enabledEnv({ fake: true, openai: false }),
+        repository,
+        runtime,
+      }),
+    );
+
+    const capabilities = await app.request(`/v1/projects/${PROJECT_ID}/studio/capabilities`);
+    expect(await capabilities.json()).toEqual({ items: [], next_cursor: null });
+    expect((await estimate(app, FAKE_PROVIDER_ID)).status).toBe(503);
+    const job = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(job.status).toBe(503);
+    expect(createJobCalls).toBe(0);
+    if (runtime.enabled) await runtime.close();
   });
 
   test('keeps disabled routes empty or unavailable without touching provider configuration', async () => {

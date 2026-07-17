@@ -74,6 +74,7 @@ import { accountInvitesRouter } from './accounts/invites';
 import { auditStateChangingRequest } from './shared/audit';
 import { opsApp } from './ops';
 import { adminApp } from './admin';
+import { closeDefaultStudioApiRuntime } from './studio/default-routes';
 
 // ─── Process-level crash guards ───────────────────────────────────────────────
 // A stray rejected promise or throw escaping any fire-and-forget path — the
@@ -1019,8 +1020,9 @@ async function shutdown(signal: string) {
   stopTunnelService();
   stopAccessControlCache();
   stopTmpReaper();
-  // Flush observability data before exit
-  await Promise.allSettled([appLogger.flush(), flushSentry()]);
+  // Flush observability data before exit. The Studio runtime owns its object
+  // store client; the API-wide database client remains outside this boundary.
+  await Promise.allSettled([closeDefaultStudioApiRuntime(), appLogger.flush(), flushSentry()]);
   process.exit(0);
 }
 

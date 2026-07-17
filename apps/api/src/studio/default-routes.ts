@@ -40,12 +40,22 @@ export type StudioApiRuntime =
       allowInsecureLocalEndpoints: boolean;
     };
 
+export type StudioApiRuntimeOptions = {
+  createObjectStore?: (
+    adapter: Extract<StudioAdapterEnvironment, { enabled: true }>,
+    role: 'api',
+  ) => StudioObjectStore;
+};
+
+let defaultStudioApiRuntime: StudioApiRuntime | null = null;
+
 export function buildStudioApiRuntime(
   env: Record<string, string | undefined> = process.env,
+  options: StudioApiRuntimeOptions = {},
 ): StudioApiRuntime {
   const adapter = parseStudioAdapterEnvironment(env, { test: env.NODE_ENV === 'test' });
   if (!adapter.enabled) return { enabled: false };
-  const store = createStudioObjectStore(adapter, 'api');
+  const store = (options.createObjectStore ?? createStudioObjectStore)(adapter, 'api');
   return {
     enabled: true,
     fakeProviderEnabled: adapter.fakeProviderEnabled,
@@ -53,12 +63,22 @@ export function buildStudioApiRuntime(
     storageMode: adapter.storage.mode,
     store,
     assertReadyBeforeReservation: () => store.assertReady(),
-    async close() {
-      if ('destroy' in store && typeof store.destroy === 'function') store.destroy();
-    },
+    close: createIdempotentClose(() => closeStudioObjectStore(store)),
     privateProviderOrigins: adapter.privateProviderOrigins,
     allowInsecureLocalEndpoints: adapter.allowInsecureLocalEndpoints,
   };
+}
+
+export function getDefaultStudioApiRuntime(
+  env: Record<string, string | undefined> = process.env,
+  options: StudioApiRuntimeOptions = {},
+): StudioApiRuntime {
+  defaultStudioApiRuntime ??= buildStudioApiRuntime(env, options);
+  return defaultStudioApiRuntime;
+}
+
+export async function closeDefaultStudioApiRuntime(): Promise<void> {
+  if (defaultStudioApiRuntime?.enabled) await defaultStudioApiRuntime.close();
 }
 
 type StudioProviderEnablement = {
@@ -68,6 +88,7 @@ type StudioProviderEnablement = {
 
 export type DefaultStudioProjectRoutesInput = {
   env?: Record<string, string | undefined>;
+  runtime?: StudioApiRuntime;
   database?: Database;
   repository?: StudioRepository;
   recoveryRepository?: StudioRecoveryRepository;
@@ -81,7 +102,11 @@ export type DefaultStudioProjectRoutesInput = {
 };
 
 export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRoutesInput = {}) {
-  const runtime = buildStudioApiRuntime(input.env);
+  const runtime =
+    input.runtime ??
+    (Object.keys(input).length === 0
+      ? getDefaultStudioApiRuntime()
+      : buildStudioApiRuntime(input.env));
   const database = input.database ?? db;
   const defaultRepository = input.repository
     ? input.repository
@@ -207,4 +232,18 @@ function createStudioObjectStore(
     return new InMemoryStudioObjectStore({ namespace: adapter.storage.namespace, ready: true });
   }
   return createS3StudioObjectStore({ config: adapter.storage, role });
+}
+
+function createIdempotentClose(close: () => Promise<void>): () => Promise<void> {
+  let closing: Promise<void> | null = null;
+  return () => {
+    closing ??= Promise.resolve().then(close);
+    return closing;
+  };
+}
+
+async function closeStudioObjectStore(store: StudioObjectStore): Promise<void> {
+  if ('destroy' in store && typeof store.destroy === 'function') {
+    await store.destroy();
+  }
 }

@@ -1,4 +1,5 @@
 import os from 'node:os';
+import { type Database, createDbFromClient } from '@kortix/db';
 import {
   type StudioAdapterEnvironment,
   createS3StudioObjectStore,
@@ -16,6 +17,7 @@ import {
 } from '@kortix/studio-runtime';
 import postgres from 'postgres';
 import { z } from 'zod';
+import { createIamV2Facade } from '../../api/src/iam/engine-v2';
 import { createStudioCredentialResolver } from '../../api/src/studio/credentials';
 import { createStudioReferenceAssetResolver } from '../../api/src/studio/storage';
 import { PostgresStudioReferenceAssetLookup } from './asset-lookup';
@@ -125,6 +127,7 @@ export type StudioWorkerRuntime =
 
 export interface StudioWorkerDatabase {
   client: StudioSqlClient;
+  database: Database;
   close(): Promise<void>;
 }
 
@@ -136,7 +139,7 @@ export interface StudioWorkerRuntimeFactories {
   createDatabase(databaseUrl: string): Promise<StudioWorkerDatabase>;
   createWorkerRepository(client: StudioSqlClient): StudioWorkerRepository;
   createMaintenanceRepository(client: StudioSqlClient): StudioMaintenanceRepository;
-  createAuthorization(client: StudioSqlClient): Promise<StudioSubmissionAuthorization>;
+  createAuthorization(database: StudioWorkerDatabase): Promise<StudioSubmissionAuthorization>;
   createCredentialResolver(client: StudioSqlClient, apiKeySecret: string): StudioCredentialResolver;
   createProviderRegistry(input: {
     fakeProviderEnabled: boolean;
@@ -191,6 +194,7 @@ export async function buildStudioWorkerRuntime(
   if (!adapter.enabled) return { enabled: false };
   const workerEnvironment = parseStudioWorkerEnvironment(env);
   if (!workerEnvironment.enabled) return { enabled: false };
+  const sanitizeError = createStudioErrorSanitizer(env);
   const factories: StudioWorkerRuntimeFactories = {
     ...defaultStudioWorkerRuntimeFactories,
     ...options.factories,
@@ -204,7 +208,7 @@ export async function buildStudioWorkerRuntime(
     database = await factories.createDatabase(workerEnvironment.databaseUrl);
     const repository = factories.createWorkerRepository(database.client);
     const maintenanceRepository = factories.createMaintenanceRepository(database.client);
-    const authorization = await factories.createAuthorization(database.client);
+    const authorization = await factories.createAuthorization(database);
     const credentialResolver = factories.createCredentialResolver(
       database.client,
       workerEnvironment.apiKeySecret,
@@ -243,11 +247,14 @@ export async function buildStudioWorkerRuntime(
       stager: new StudioResultStager(store),
       ...(options.signal ? { signal: options.signal } : {}),
     });
-    const close = createIdempotentWorkerClose({
-      releaseMaintenance: () => maintenance?.release() ?? Promise.resolve(),
-      closeDatabase: () => database?.close() ?? Promise.resolve(),
-      closeStorage: () => closeStudioObjectStore(store),
-    });
+    const close = createIdempotentWorkerClose(
+      {
+        releaseMaintenance: () => maintenance?.release() ?? Promise.resolve(),
+        closeDatabase: () => database?.close() ?? Promise.resolve(),
+        closeStorage: () => closeStudioObjectStore(store),
+      },
+      sanitizeError,
+    );
     return {
       enabled: true,
       workerId: workerEnvironment.workerId,
@@ -267,21 +274,23 @@ export async function buildStudioWorkerRuntime(
   } catch (startupError) {
     let cleanupError: unknown = null;
     try {
-      await closeStudioWorkerResources({
-        releaseMaintenance: () => maintenance?.release() ?? Promise.resolve(),
-        closeDatabase: () => database?.close() ?? Promise.resolve(),
-        closeStorage: () => closeStudioObjectStore(store),
-      });
+      await closeStudioWorkerResourcesWithSanitizer(
+        {
+          releaseMaintenance: () => maintenance?.release() ?? Promise.resolve(),
+          closeDatabase: () => database?.close() ?? Promise.resolve(),
+          closeStorage: () => closeStudioObjectStore(store),
+        },
+        sanitizeError,
+      );
     } catch (error) {
       cleanupError = error;
     }
-    const startup = new Error(
-      `Studio worker startup failed: ${redactStudioStartupDiagnostic(errorMessage(startupError))}`,
-    );
+    const startupMessage = sanitizeError(startupError).message;
+    const startup = new Error(`Studio worker startup failed: ${startupMessage}`);
     if (cleanupError) {
       throw new AggregateError(
-        [startup, sanitizeStudioError(cleanupError)],
-        `Studio worker startup and cleanup failed: ${redactStudioStartupDiagnostic(errorMessage(startupError))}`,
+        [startup, sanitizeError(cleanupError)],
+        `Studio worker startup and cleanup failed: ${startupMessage}`,
       );
     }
     throw startup;
@@ -360,11 +369,46 @@ export function createProductionStudioWorker(
   });
 }
 
+export function createProductionStudioAuthorization(
+  input: Pick<StudioWorkerDatabase, 'client' | 'database'>,
+): StudioSubmissionAuthorization {
+  const iam = createIamV2Facade(input.database);
+  return createStudioSubmissionAuthorization({
+    loadToken: createPostgresStudioTokenLoader(input.client),
+    loadServiceAccount: createPostgresStudioServiceAccountLoader(input.client),
+    validateCredentialBinding: createPostgresStudioCredentialValidator(input.client),
+    async invalidateAuthorizationCache(principalIds) {
+      iam.invalidatePrincipals(principalIds);
+    },
+    async authorizeProjectAction(request) {
+      const result = await iam.authorize(
+        request.userId,
+        request.accountId,
+        request.action,
+        { type: 'project', id: request.projectId },
+        request.actingTokenId,
+      );
+      return result.allowed;
+    },
+  });
+}
+
 export async function closeStudioWorkerResources(input: {
   releaseMaintenance: () => Promise<void>;
   closeDatabase: () => Promise<void>;
   closeStorage: () => Promise<void>;
 }): Promise<void> {
+  return closeStudioWorkerResourcesWithSanitizer(input, sanitizeStudioError);
+}
+
+async function closeStudioWorkerResourcesWithSanitizer(
+  input: {
+    releaseMaintenance: () => Promise<void>;
+    closeDatabase: () => Promise<void>;
+    closeStorage: () => Promise<void>;
+  },
+  sanitizeError: (error: unknown) => Error,
+): Promise<void> {
   const results: PromiseSettledResult<void>[] = [];
   results.push(...(await Promise.allSettled([Promise.resolve().then(input.releaseMaintenance)])));
   results.push(
@@ -377,7 +421,7 @@ export async function closeStudioWorkerResources(input: {
     .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
     .map((result) => result.reason);
   if (failures.length > 0) {
-    const sanitizedFailures = failures.map(sanitizeStudioError);
+    const sanitizedFailures = failures.map((failure) => sanitizeError(failure));
     const messages = sanitizedFailures.map((failure) => failure.message);
     throw new AggregateError(
       sanitizedFailures,
@@ -410,6 +454,7 @@ const defaultStudioWorkerRuntimeFactories: StudioWorkerRuntimeFactories = {
       connection: { statement_timeout: 25_000 },
     });
     return {
+      database: createDbFromClient(raw),
       client: {
         async unsafe(text, values = []) {
           const rows = await raw.unsafe(text, values as never[]);
@@ -421,29 +466,8 @@ const defaultStudioWorkerRuntimeFactories: StudioWorkerRuntimeFactories = {
   },
   createWorkerRepository: (client) => new PostgresStudioWorkerRepository(client),
   createMaintenanceRepository: (client) => new PostgresStudioMaintenanceRepository(client),
-  async createAuthorization(client) {
-    const [{ authorize }, { invalidateIamCacheForUsers }] = await Promise.all([
-      import('../../api/src/iam/dispatcher'),
-      import('../../api/src/iam/cache-invalidation'),
-    ]);
-    return createStudioSubmissionAuthorization({
-      loadToken: createPostgresStudioTokenLoader(client),
-      loadServiceAccount: createPostgresStudioServiceAccountLoader(client),
-      validateCredentialBinding: createPostgresStudioCredentialValidator(client),
-      async invalidateAuthorizationCache(principalIds) {
-        invalidateIamCacheForUsers(principalIds);
-      },
-      async authorizeProjectAction(input) {
-        const result = await authorize(
-          input.userId,
-          input.accountId,
-          input.action,
-          { type: 'project', id: input.projectId },
-          input.actingTokenId,
-        );
-        return result.allowed;
-      },
-    });
+  async createAuthorization(database) {
+    return createProductionStudioAuthorization(database);
   },
   createCredentialResolver(client, apiKeySecret) {
     return createStudioCredentialResolver({
@@ -464,14 +488,17 @@ const defaultStudioWorkerRuntimeFactories: StudioWorkerRuntimeFactories = {
   createMaintenance: (input) => createProductionStudioMaintenanceCoordinator(input),
 };
 
-function createIdempotentWorkerClose(input: {
-  releaseMaintenance: () => Promise<void>;
-  closeDatabase: () => Promise<void>;
-  closeStorage: () => Promise<void>;
-}): () => Promise<void> {
+function createIdempotentWorkerClose(
+  input: {
+    releaseMaintenance: () => Promise<void>;
+    closeDatabase: () => Promise<void>;
+    closeStorage: () => Promise<void>;
+  },
+  sanitizeError: (error: unknown) => Error = sanitizeStudioError,
+): () => Promise<void> {
   let closing: Promise<void> | null = null;
   return () => {
-    closing ??= closeStudioWorkerResources(input);
+    closing ??= closeStudioWorkerResourcesWithSanitizer(input, sanitizeError);
     return closing;
   };
 }
@@ -495,20 +522,56 @@ function errorMessage(error: unknown): string {
 }
 
 function redactStudioStartupDiagnostic(value: string): string {
-  return redactStudioDiagnostic(value).replace(
-    /\bpostgres(?:ql)?:\/\/[^\s"'<>]+/gi,
-    '[REDACTED_DATABASE_URL]',
-  );
+  return redactStudioDiagnostic(value)
+    .replace(/\bauthorization\s*:\s*(?:bearer|basic)\s+[^\s,;]+/gi, '[REDACTED_CREDENTIAL]')
+    .replace(/\bpostgres(?:ql)?:\/\/[^\s"'<>]+/gi, '[REDACTED_DATABASE_URL]');
 }
 
-function sanitizeStudioError(error: unknown): Error {
-  const message = redactStudioStartupDiagnostic(errorMessage(error));
+function sanitizeStudioError(
+  error: unknown,
+  redactDiagnostic: (value: string) => string = redactStudioStartupDiagnostic,
+): Error {
+  const message = redactDiagnostic(errorMessage(error));
   if (error instanceof AggregateError) {
-    const sanitized = new AggregateError(Array.from(error.errors, sanitizeStudioError), message);
+    const sanitized = new AggregateError(
+      Array.from(error.errors, (nested) => sanitizeStudioError(nested, redactDiagnostic)),
+      message,
+    );
     sanitized.name = error.name;
     return sanitized;
   }
   const sanitized = new Error(message);
   if (error instanceof Error) sanitized.name = error.name;
   return sanitized;
+}
+
+function createStudioErrorSanitizer(
+  env: Record<string, string | undefined>,
+): (error: unknown) => Error {
+  const exactValues = [
+    env.DATABASE_URL,
+    env.API_KEY_SECRET,
+    env.STUDIO_S3_ACCESS_KEY_ID,
+    env.STUDIO_S3_SECRET_ACCESS_KEY,
+    env.STUDIO_S3_SESSION_TOKEN,
+    env.STUDIO_S3_KMS_KEY_ID,
+    env.STUDIO_S3_ENDPOINT,
+    env.STUDIO_S3_PUBLIC_ENDPOINT,
+    env.STUDIO_PROVIDER_PRIVATE_ORIGIN_ALLOWLIST,
+    ...(env.STUDIO_PROVIDER_PRIVATE_ORIGIN_ALLOWLIST?.split(',').map((value) => value.trim()) ??
+      []),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => right.length - left.length)
+    .filter((value, index, values) => values.indexOf(value) === index);
+
+  const redactDiagnostic = (value: string) => {
+    let redacted = value;
+    for (const exactValue of exactValues) {
+      redacted = redacted.split(exactValue).join('[REDACTED_ENV_VALUE]');
+    }
+    redacted = redacted.replace(/\[REDACTED_ENV_VALUE\]\/[^\s"'<>]+/g, '[REDACTED_URL]');
+    return redactStudioStartupDiagnostic(redacted);
+  };
+  return (error) => sanitizeStudioError(error, redactDiagnostic);
 }

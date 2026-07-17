@@ -89,6 +89,10 @@ export function createDb(databaseUrl: string, options?: postgres.Options<{}>) {
     ...options,
   });
 
+  return createDbFromClient(client);
+}
+
+export function createDbFromClient(client: ReturnType<typeof postgres>) {
   return drizzle(client, { schema });
 }
 

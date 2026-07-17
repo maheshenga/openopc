@@ -17,8 +17,9 @@
 // The pure-function helpers (deriveEffectiveProjectRole, scopeForActionV2,
 // customPolicyAllows) are exported so they can be unit-tested without a DB.
 
-import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
+  type AgentGrant,
+  type Database,
   accountGroupMembers,
   accountMembers,
   accountTokens,
@@ -29,30 +30,25 @@ import {
   projectMembers,
   projects,
   serviceAccounts,
-  type AgentGrant,
 } from '@kortix/db';
-import { db } from '../shared/db';
+import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import { ttlMemo } from '../shared/ttl-memo';
 import { agentMayPerform } from './agent-scope';
-import { registerPrincipalScopedMemo } from './cache-invalidation';
 import {
-  filterAccessibleResourceIds,
-  isResourceAccessible,
-  loadProjectResourceGrants,
-} from './resource-grants';
-import type {
-  AuthorizeResult,
-  AuthorizeTarget,
-  RequestContext,
-} from './engine';
+  type IamCacheRegistry,
+  createIamCacheRegistry,
+  defaultIamCacheRegistry,
+} from './cache-registry';
+import type { AuthorizeResult, AuthorizeTarget, RequestContext } from './engine';
+import { createResourceGrantReader, isResourceAccessible } from './resource-grants';
 import {
+  type AccountRole,
+  type ProjectRole,
   accountRoleAllows,
   implicitProjectRoleForAccount,
   maxProjectRole,
   normalizeProjectRole,
   projectRoleAllows,
-  type AccountRole,
-  type ProjectRole,
 } from './role-perms';
 
 // ─── Pure helpers (exported for unit tests) ────────────────────────────────
@@ -153,6 +149,7 @@ type ResolvedActorV2 = {
 };
 
 async function resolveActorV2Uncached(
+  database: Database,
   userId: string,
   accountId: string,
 ): Promise<ResolvedActorV2 | null> {
@@ -160,7 +157,7 @@ async function resolveActorV2Uncached(
   // so all three run in ONE parallel batch — no added latency depth. It returns
   // [] for the overwhelmingly common account with no custom roles.
   const [memberRows, groups, policyRows] = await Promise.all([
-    db
+    database
       .select({
         isSuperAdmin: accountMembers.isSuperAdmin,
         accountRole: accountMembers.accountRole,
@@ -170,11 +167,11 @@ async function resolveActorV2Uncached(
       .innerJoin(accounts, eq(accounts.accountId, accountMembers.accountId))
       .where(and(eq(accountMembers.userId, userId), eq(accountMembers.accountId, accountId)))
       .limit(1),
-    db
+    database
       .select({ groupId: accountGroupMembers.groupId })
       .from(accountGroupMembers)
       .where(eq(accountGroupMembers.userId, userId)),
-    db
+    database
       .select({
         scopeType: iamPolicies.scopeType,
         scopeId: iamPolicies.scopeId,
@@ -192,7 +189,7 @@ async function resolveActorV2Uncached(
               eq(iamPolicies.principalType, 'group'),
               inArray(
                 iamPolicies.principalId,
-                db
+                database
                   .select({ gid: accountGroupMembers.groupId })
                   .from(accountGroupMembers)
                   .where(eq(accountGroupMembers.userId, userId)),
@@ -230,7 +227,7 @@ async function resolveActorV2Uncached(
   // so the extra query never touches the hot human/PAT path.) A service account
   // has NO membership baseline and NO built-in role: its entire authority is its
   // own iam_policies (principal_type='token'), already loaded into customActions.
-  const saRows = await db
+  const saRows = await database
     .select({ id: serviceAccounts.serviceAccountId })
     .from(serviceAccounts)
     .where(
@@ -246,7 +243,7 @@ async function resolveActorV2Uncached(
     // This is what lets the agent-session opt-in switch flip ON, and lets an
     // admin pin an agent to deny-by-default (bind a minimal role) vs. leaving it
     // unmanaged (no binding → the session falls back to the launching user).
-    const bindingRows = await db
+    const bindingRows = await database
       .select({ id: iamPolicies.policyId })
       .from(iamPolicies)
       .where(
@@ -295,22 +292,31 @@ export function customPolicyAllows(
   for (const ca of customActions) {
     if (ca.action !== action) continue;
     if (ca.scopeType === 'account') return true;
-    if (scope === 'project' && target.type === 'project' && ca.scopeType === 'project' && ca.scopeId === target.id) {
+    if (
+      scope === 'project' &&
+      target.type === 'project' &&
+      ca.scopeType === 'project' &&
+      ca.scopeId === target.id
+    ) {
       return true;
     }
   }
   return false;
 }
 
-const resolveActorV2 = ttlMemo({
-  ttlMs: IAM_CACHE_TTL_MS,
-  keyFn: (userId: string, accountId: string) => `${userId}|${accountId}`,
-  loader: resolveActorV2Uncached,
-  shouldCache: (actor) => actor !== null,
-});
+function createResolveActorV2(database: Database, cacheRegistry: IamCacheRegistry) {
+  const resolveActorV2 = ttlMemo({
+    ttlMs: IAM_CACHE_TTL_MS,
+    keyFn: (userId: string, accountId: string) => `${userId}|${accountId}`,
+    loader: (userId: string, accountId: string) =>
+      resolveActorV2Uncached(database, userId, accountId),
+    shouldCache: (actor) => actor !== null,
+  });
+  cacheRegistry.registerPrincipalScopedMemo(resolveActorV2);
+  return resolveActorV2;
+}
 // Key is `${userId}|…` → bust per principal on account-member / group-membership
 // changes (see cache-invalidation.ts).
-registerPrincipalScopedMemo(resolveActorV2);
 
 /**
  * Look up the actor's effective role on a specific project. Combines
@@ -323,61 +329,62 @@ registerPrincipalScopedMemo(resolveActorV2);
 // to every authorize() call the moment the clock crosses the line —
 // no waiting on the sweeper. (The sweeper just emits the audit
 // event afterwards; correctness doesn't depend on it.)
-const loadProjectRoleRows = ttlMemo({
-  ttlMs: IAM_CACHE_TTL_MS,
-  keyFn: (userId: string, projectId: string, groupIds: string[]) =>
-    `${userId}|${projectId}|${groupIds.join(',')}`,
-  loader: async (userId: string, projectId: string, groupIds: string[]) => {
-    const [directRows, grantRows] = await Promise.all([
-      db
-        .select({ role: projectMembers.projectRole })
-        .from(projectMembers)
-        .where(
-          and(
-            eq(projectMembers.projectId, projectId),
-            eq(projectMembers.userId, userId),
-            or(
-              isNull(projectMembers.expiresAt),
-              gt(projectMembers.expiresAt, sql`now()`),
+function createLoadProjectRoleRows(database: Database, cacheRegistry: IamCacheRegistry) {
+  const loadProjectRoleRows = ttlMemo({
+    ttlMs: IAM_CACHE_TTL_MS,
+    keyFn: (userId: string, projectId: string, groupIds: string[]) =>
+      `${userId}|${projectId}|${groupIds.join(',')}`,
+    loader: async (userId: string, projectId: string, groupIds: string[]) => {
+      const [directRows, grantRows] = await Promise.all([
+        database
+          .select({ role: projectMembers.projectRole })
+          .from(projectMembers)
+          .where(
+            and(
+              eq(projectMembers.projectId, projectId),
+              eq(projectMembers.userId, userId),
+              or(isNull(projectMembers.expiresAt), gt(projectMembers.expiresAt, sql`now()`)),
             ),
-          ),
-        )
-        .limit(1),
-      groupIds.length > 0
-        ? db
-            .select({ role: projectGroupGrants.role })
-            .from(projectGroupGrants)
-            .where(
-              and(
-                eq(projectGroupGrants.projectId, projectId),
-                inArray(projectGroupGrants.groupId, groupIds),
-                or(
-                  isNull(projectGroupGrants.expiresAt),
-                  gt(projectGroupGrants.expiresAt, sql`now()`),
+          )
+          .limit(1),
+        groupIds.length > 0
+          ? database
+              .select({ role: projectGroupGrants.role })
+              .from(projectGroupGrants)
+              .where(
+                and(
+                  eq(projectGroupGrants.projectId, projectId),
+                  inArray(projectGroupGrants.groupId, groupIds),
+                  or(
+                    isNull(projectGroupGrants.expiresAt),
+                    gt(projectGroupGrants.expiresAt, sql`now()`),
+                  ),
                 ),
-              ),
-            )
-        : Promise.resolve([] as Array<{ role: string }>),
-    ]);
-    return {
-      // Normalize at the DB-read boundary so a legacy `viewer` row resolves
-      // to `user` (the tier it was folded into) rather than an unknown role.
-      directRole: normalizeProjectRole(directRows[0]?.role),
-      groupRoles: grantRows.flatMap((r) => {
-        const role = normalizeProjectRole(r.role);
-        return role ? [role] : [];
-      }),
-    };
-  },
-  // Never cache "no path to this project" — a freshly granted member must
-  // see access on their next request, not after a TTL window.
-  shouldCache: (v) => v.directRole !== null || v.groupRoles.length > 0,
-});
+              )
+          : Promise.resolve([] as Array<{ role: string }>),
+      ]);
+      return {
+        // Normalize at the DB-read boundary so a legacy `viewer` row resolves
+        // to `user` (the tier it was folded into) rather than an unknown role.
+        directRole: normalizeProjectRole(directRows[0]?.role),
+        groupRoles: grantRows.flatMap((r) => {
+          const role = normalizeProjectRole(r.role);
+          return role ? [role] : [];
+        }),
+      };
+    },
+    // Never cache "no path to this project" — a freshly granted member must
+    // see access on their next request, not after a TTL window.
+    shouldCache: (v) => v.directRole !== null || v.groupRoles.length > 0,
+  });
+  cacheRegistry.registerPrincipalScopedMemo(loadProjectRoleRows);
+  return loadProjectRoleRows;
+}
 // Key is `${userId}|${projectId}|…` → bust per principal on project-member /
 // project-group-grant changes.
-registerPrincipalScopedMemo(loadProjectRoleRows);
 
 async function loadEffectiveProjectRole(
+  state: IamV2DatabaseState,
   actor: ResolvedActorV2,
   userId: string,
   projectId: string,
@@ -388,7 +395,7 @@ async function loadEffectiveProjectRole(
   // never exceed it (manager is the top rank), so skip the lookups entirely.
   if (implicitProjectRoleForAccount(accountRole)) return 'manager';
 
-  const rows = await loadProjectRoleRows(userId, projectId, actor.groupIds);
+  const rows = await state.loadProjectRoleRows(userId, projectId, actor.groupIds);
   return deriveEffectiveProjectRole(accountRole, rows.directRole, rows.groupRoles);
 }
 
@@ -401,29 +408,76 @@ async function loadEffectiveProjectRole(
 // A token's project binding is immutable after mint, so caching it is safe;
 // "token row missing" is never cached (a just-minted token must work, and
 // revocation is enforced upstream by validateAccountToken at auth time).
-const loadTokenProjectBinding = ttlMemo({
-  ttlMs: IAM_CACHE_TTL_MS,
-  keyFn: (tokenId: string) => tokenId,
-  loader: async (
-    tokenId: string,
-  ): Promise<{ projectId: string | null; agentGrant: AgentGrant | null; serviceAccountId: string | null } | null> => {
-    const [row] = await db
-      .select({
-        projectId: accountTokens.projectId,
-        agentGrant: accountTokens.agentGrant,
-        serviceAccountId: accountTokens.serviceAccountId,
-      })
-      .from(accountTokens)
-      .where(eq(accountTokens.tokenId, tokenId))
-      .limit(1);
-    return row
-      ? { projectId: row.projectId, agentGrant: row.agentGrant ?? null, serviceAccountId: row.serviceAccountId ?? null }
-      : null;
-  },
-  shouldCache: (row) => row !== null,
-});
+type TokenBinding = {
+  projectId: string | null;
+  agentGrant: AgentGrant | null;
+  serviceAccountId: string | null;
+};
 
-type TokenBinding = NonNullable<Awaited<ReturnType<typeof loadTokenProjectBinding>>>;
+function createLoadTokenProjectBinding(database: Database) {
+  return ttlMemo({
+    ttlMs: IAM_CACHE_TTL_MS,
+    keyFn: (tokenId: string) => tokenId,
+    loader: async (tokenId: string): Promise<TokenBinding | null> => {
+      const [row] = await database
+        .select({
+          projectId: accountTokens.projectId,
+          agentGrant: accountTokens.agentGrant,
+          serviceAccountId: accountTokens.serviceAccountId,
+        })
+        .from(accountTokens)
+        .where(eq(accountTokens.tokenId, tokenId))
+        .limit(1);
+      return row
+        ? {
+            projectId: row.projectId,
+            agentGrant: row.agentGrant ?? null,
+            serviceAccountId: row.serviceAccountId ?? null,
+          }
+        : null;
+    },
+    shouldCache: (row) => row !== null,
+  });
+}
+
+type IamV2DatabaseState = {
+  resolveActorV2: ReturnType<typeof createResolveActorV2>;
+  loadProjectRoleRows: ReturnType<typeof createLoadProjectRoleRows>;
+  loadTokenProjectBinding: ReturnType<typeof createLoadTokenProjectBinding>;
+  resourceGrants: ReturnType<typeof createResourceGrantReader>;
+};
+
+function createIamV2DatabaseState(
+  database: Database,
+  cacheRegistry: IamCacheRegistry,
+  resourceGrants = createResourceGrantReader(database, cacheRegistry),
+): IamV2DatabaseState {
+  return {
+    resolveActorV2: createResolveActorV2(database, cacheRegistry),
+    loadProjectRoleRows: createLoadProjectRoleRows(database, cacheRegistry),
+    loadTokenProjectBinding: createLoadTokenProjectBinding(database),
+    resourceGrants,
+  };
+}
+
+const defaultIamV2DatabaseStates = new WeakMap<Database, IamV2DatabaseState>();
+const injectedIamV2DatabaseStates = new WeakMap<Database, IamV2DatabaseState>();
+
+function defaultIamV2DatabaseState(database: Database): IamV2DatabaseState {
+  const existing = defaultIamV2DatabaseStates.get(database);
+  if (existing) return existing;
+  const created = createIamV2DatabaseState(database, defaultIamCacheRegistry);
+  defaultIamV2DatabaseStates.set(database, created);
+  return created;
+}
+
+function injectedIamV2DatabaseState(database: Database): IamV2DatabaseState {
+  const existing = injectedIamV2DatabaseStates.get(database);
+  if (existing) return existing;
+  const created = createIamV2DatabaseState(database, createIamCacheRegistry());
+  injectedIamV2DatabaseStates.set(database, created);
+  return created;
+}
 
 /**
  * Token project-scope, computed from the already-loaded binding (no extra
@@ -455,10 +509,7 @@ export function computeTokenScope(
 // the route's own leaf assertAuthorized is what the grant gates. Every OTHER
 // project action (gitops.*, secret.*, trigger.*, deploy, members.manage, …) is a
 // specific capability the agent must hold in its grant.
-const AGENT_GRANT_EXEMPT_ACTIONS: ReadonlySet<string> = new Set([
-  'project.read',
-  'project.write',
-]);
+const AGENT_GRANT_EXEMPT_ACTIONS: ReadonlySet<string> = new Set(['project.read', 'project.write']);
 
 /** Should the agent grant gate this action? Pure — exported for unit tests. */
 export function agentGrantGates(scope: ActionScopeV2, action: string): boolean {
@@ -482,12 +533,13 @@ export function agentGrantGates(scope: ActionScopeV2, action: string): boolean {
  * no role assigned → denied.
  */
 async function resolveActingActor(
+  state: IamV2DatabaseState,
   binding: TokenBinding | null,
   userId: string,
   accountId: string,
 ): Promise<{ actor: ResolvedActorV2 | null; principalId: string }> {
   if (binding?.serviceAccountId) {
-    const sa = await resolveActorV2(binding.serviceAccountId, accountId);
+    const sa = await state.resolveActorV2(binding.serviceAccountId, accountId);
     if (sa && sa.kind === 'service_account' && sa.activated) {
       // Activated (has a role binding) → authorize AS the SA. An empty role here
       // correctly DENIES (deny-by-default), which is how an admin locks an agent
@@ -495,11 +547,10 @@ async function resolveActingActor(
       return { actor: sa, principalId: binding.serviceAccountId };
     }
     // Unmanaged agent SA (no binding) or unresolved → authorize as the launcher.
-    return { actor: await resolveActorV2(userId, accountId), principalId: userId };
+    return { actor: await state.resolveActorV2(userId, accountId), principalId: userId };
   }
-  return { actor: await resolveActorV2(userId, accountId), principalId: userId };
+  return { actor: await state.resolveActorV2(userId, accountId), principalId: userId };
 }
-
 
 // ─── Public surface ────────────────────────────────────────────────────────
 
@@ -508,7 +559,9 @@ async function resolveActingActor(
  * dispatch layer can swap them. requestCtx kept for compatibility but
  * unused — V2 has no policy conditions.
  */
-export async function authorizeV2(
+async function authorizeV2WithState(
+  database: Database,
+  state: IamV2DatabaseState,
   userId: string,
   accountId: string,
   action: string,
@@ -524,14 +577,14 @@ export async function authorizeV2(
   // scope, the agent grant, AND the standing-identity service account. JWT/
   // browser requests have no actingTokenId, so they skip this entirely (the
   // common dashboard path resolves the actor directly, unchanged).
-  const binding = actingTokenId ? await loadTokenProjectBinding(actingTokenId) : null;
+  const binding = actingTokenId ? await state.loadTokenProjectBinding(actingTokenId) : null;
 
   // STANDING IDENTITY (opt-in): an agent-session token bound to a service account
   // authorizes AS that SA — but ONLY once it has a role; otherwise it falls back
   // to the launching user (see resolveActingActor). effective = (SA role | user
   // role) ∩ agentGrant ∩ the token's project scope. A token WITHOUT a
   // service_account_id is unchanged (authorize as the user) — default-safe.
-  const { actor } = await resolveActingActor(binding, userId, accountId);
+  const { actor } = await resolveActingActor(state, binding, userId, accountId);
   if (!actor) return { allowed: false, reason: 'not_a_member' };
 
   // Token project-scope short-circuit (computed from the binding, no extra query).
@@ -547,11 +600,7 @@ export async function authorizeV2(
 
   // Account-wide MFA gate. JWT/browser sessions only — PATs gate via
   // their own surface (we just verified scope above).
-  if (
-    actor.accountMfaRequired &&
-    !actingTokenId &&
-    _requestCtx.mfaAal !== 'aal2'
-  ) {
+  if (actor.accountMfaRequired && !actingTokenId && _requestCtx.mfaAal !== 'aal2') {
     return { allowed: false, reason: 'account_mfa_required' };
   }
 
@@ -582,14 +631,16 @@ export async function authorizeV2(
   // member-role resolution entirely for it.
   const effective =
     actor.kind === 'member'
-      ? await loadEffectiveProjectRole(actor, userId, effectiveTarget.id)
+      ? await loadEffectiveProjectRole(state, actor, userId, effectiveTarget.id)
       : null;
   let reason: string | null = null;
   if (effective && projectRoleAllows(effective, action)) reason = 'project_role';
-  else if (customPolicyAllows(actor.customActions, scope, action, effectiveTarget)) reason = 'custom_policy';
+  else if (customPolicyAllows(actor.customActions, scope, action, effectiveTarget))
+    reason = 'custom_policy';
 
   if (!reason) {
-    if (actor.kind === 'service_account') return { allowed: false, reason: 'service_account_scope_insufficient' };
+    if (actor.kind === 'service_account')
+      return { allowed: false, reason: 'service_account_scope_insufficient' };
     if (!effective) return { allowed: false, reason: 'no_project_membership' };
     return { allowed: false, reason: 'project_role_insufficient' };
   }
@@ -607,7 +658,10 @@ export async function authorizeV2(
     actor.kind === 'member' &&
     !implicitProjectRoleForAccount(actor.accountRole ?? 'member')
   ) {
-    const grants = await loadProjectResourceGrants(effectiveTarget.id, effectiveTarget.resource.type);
+    const grants = await state.resourceGrants.loadProjectResourceGrants(
+      effectiveTarget.id,
+      effectiveTarget.resource.type,
+    );
     if (!isResourceAccessible(grants.get(effectiveTarget.resource.id), userId, actor.groupIds)) {
       return { allowed: false, reason: 'resource_scope_insufficient' };
     }
@@ -628,6 +682,48 @@ export async function authorizeV2(
   return { allowed: true, reason };
 }
 
+export async function authorizeV2WithDatabase(
+  database: Database,
+  userId: string,
+  accountId: string,
+  action: string,
+  target?: AuthorizeTarget,
+  actingTokenId?: string,
+  requestCtx: RequestContext = {},
+): Promise<AuthorizeResult> {
+  return authorizeV2WithState(
+    database,
+    injectedIamV2DatabaseState(database),
+    userId,
+    accountId,
+    action,
+    target,
+    actingTokenId,
+    requestCtx,
+  );
+}
+
+export async function authorizeV2(
+  userId: string,
+  accountId: string,
+  action: string,
+  target?: AuthorizeTarget,
+  actingTokenId?: string,
+  requestCtx: RequestContext = {},
+): Promise<AuthorizeResult> {
+  const { db } = await import('../shared/db');
+  return authorizeV2WithState(
+    db,
+    defaultIamV2DatabaseState(db),
+    userId,
+    accountId,
+    action,
+    target,
+    actingTokenId,
+    requestCtx,
+  );
+}
+
 /**
  * Batch per-resource filter for list endpoints: given the project's agent names
  * / skill slugs, return only the ones the user may access — so the agent/skill
@@ -636,7 +732,9 @@ export async function authorizeV2(
  * memory. Owner/admins, super-admins, and service accounts see everything (they
  * bypass per-resource scoping, exactly like authorizeV2's fold).
  */
-export async function filterAccessibleProjectResources(
+async function filterAccessibleProjectResourcesWithState(
+  database: Database,
+  state: IamV2DatabaseState,
   userId: string,
   accountId: string,
   projectId: string,
@@ -645,15 +743,63 @@ export async function filterAccessibleProjectResources(
   actingTokenId?: string,
 ): Promise<string[]> {
   if (resourceIds.length === 0) return [];
-  const binding = actingTokenId ? await loadTokenProjectBinding(actingTokenId) : null;
-  const { actor } = await resolveActingActor(binding, userId, accountId);
+  const binding = actingTokenId ? await state.loadTokenProjectBinding(actingTokenId) : null;
+  const { actor } = await resolveActingActor(state, binding, userId, accountId);
   if (!actor) return [];
   if (actor.isSuperAdmin) return resourceIds;
   // SAs are governed by their own policies/agentGrant, not the human fold; and
   // owner/admins keep implicit Manager — both see the full list.
   if (actor.kind !== 'member') return resourceIds;
   if (implicitProjectRoleForAccount(actor.accountRole ?? 'member')) return resourceIds;
-  return filterAccessibleResourceIds(projectId, resourceType, resourceIds, userId, actor.groupIds);
+  return state.resourceGrants.filterAccessibleResourceIds(
+    projectId,
+    resourceType,
+    resourceIds,
+    userId,
+    actor.groupIds,
+  );
+}
+
+export async function filterAccessibleProjectResourcesWithDatabase(
+  database: Database,
+  userId: string,
+  accountId: string,
+  projectId: string,
+  resourceType: 'agent' | 'skill' | 'secret',
+  resourceIds: string[],
+  actingTokenId?: string,
+): Promise<string[]> {
+  return filterAccessibleProjectResourcesWithState(
+    database,
+    injectedIamV2DatabaseState(database),
+    userId,
+    accountId,
+    projectId,
+    resourceType,
+    resourceIds,
+    actingTokenId,
+  );
+}
+
+export async function filterAccessibleProjectResources(
+  userId: string,
+  accountId: string,
+  projectId: string,
+  resourceType: 'agent' | 'skill' | 'secret',
+  resourceIds: string[],
+  actingTokenId?: string,
+): Promise<string[]> {
+  const { db } = await import('../shared/db');
+  return filterAccessibleProjectResourcesWithState(
+    db,
+    defaultIamV2DatabaseState(db),
+    userId,
+    accountId,
+    projectId,
+    resourceType,
+    resourceIds,
+    actingTokenId,
+  );
 }
 
 // ─── List accessible resources ─────────────────────────────────────────────
@@ -665,22 +811,20 @@ export async function filterAccessibleProjectResources(
  * V2 only supports projectresource type — sandboxes/triggers/channels
  * are listed via their owning project, not standalone.
  */
-export async function listAccessibleProjectsV2(
+async function listAccessibleProjectsV2WithState(
+  database: Database,
+  state: IamV2DatabaseState,
   userId: string,
   accountId: string,
   action: string,
   actingTokenId?: string,
   _requestCtx: RequestContext = {},
-): Promise<
-  | { mode: 'all' }
-  | { mode: 'none' }
-  | { mode: 'allow_only'; allowed: Set<string> }
-> {
+): Promise<{ mode: 'all' } | { mode: 'none' } | { mode: 'allow_only'; allowed: Set<string> }> {
   // Standing identity (opt-in): an activated agent-session SA lists the SA's
   // accessible projects; a role-less agent SA falls back to the launching user.
   // (Mirror authorizeV2 via the shared resolver.)
-  const binding = actingTokenId ? await loadTokenProjectBinding(actingTokenId) : null;
-  const { actor, principalId } = await resolveActingActor(binding, userId, accountId);
+  const binding = actingTokenId ? await state.loadTokenProjectBinding(actingTokenId) : null;
+  const { actor, principalId } = await resolveActingActor(state, binding, userId, accountId);
   if (!actor) return { mode: 'none' };
 
   // A token bound to a single project narrows the listing to that project — for
@@ -692,24 +836,24 @@ export async function listAccessibleProjectsV2(
       if (actor.kind !== 'service_account') return { mode: 'none' };
     } else if (binding.projectId) {
       // Confirm access to the bound project; reuse authorize (re-derives the SA).
-      const v = await authorizeV2(
+      const v = await authorizeV2WithState(
+        database,
+        state,
         userId,
         accountId,
         action,
         { type: 'project', id: binding.projectId },
         actingTokenId,
       );
-      return v.allowed ? { mode: 'allow_only', allowed: new Set([binding.projectId]) } : { mode: 'none' };
+      return v.allowed
+        ? { mode: 'allow_only', allowed: new Set([binding.projectId]) }
+        : { mode: 'none' };
     }
   }
 
   if (actor.isSuperAdmin) return { mode: 'all' };
 
-  if (
-    actor.accountMfaRequired &&
-    !actingTokenId &&
-    _requestCtx.mfaAal !== 'aal2'
-  ) {
+  if (actor.accountMfaRequired && !actingTokenId && _requestCtx.mfaAal !== 'aal2') {
     return { mode: 'none' };
   }
 
@@ -718,9 +862,7 @@ export async function listAccessibleProjectsV2(
   // Owner/admin: implicit Manager on every project. Allowed unless the
   // action isn't in Manager's set.
   if (implicitProjectRoleForAccount(accountRole)) {
-    return projectRoleAllows('manager', action)
-      ? { mode: 'all' }
-      : { mode: 'none' };
+    return projectRoleAllows('manager', action) ? { mode: 'all' } : { mode: 'none' };
   }
 
   // Plain member: union of direct project_members + group-derived grants.
@@ -735,7 +877,7 @@ export async function listAccessibleProjectsV2(
     gt(projectGroupGrants.expiresAt, sql`now()`),
   );
 
-  const directRows = await db
+  const directRows = await database
     .select({
       projectId: projectMembers.projectId,
       role: projectMembers.projectRole,
@@ -754,7 +896,7 @@ export async function listAccessibleProjectsV2(
 
   let groupRows: Array<{ projectId: string; role: ProjectRole }> = [];
   if (actor.groupIds.length > 0) {
-    const rows = await db
+    const rows = await database
       .select({
         projectId: projectGroupGrants.projectId,
         role: projectGroupGrants.role,
@@ -799,4 +941,103 @@ export async function listAccessibleProjectsV2(
     if (ca.scopeType === 'project' && ca.scopeId) allowed.add(ca.scopeId);
   }
   return { mode: 'allow_only', allowed };
+}
+
+export async function listAccessibleProjectsV2WithDatabase(
+  database: Database,
+  userId: string,
+  accountId: string,
+  action: string,
+  actingTokenId?: string,
+  requestCtx: RequestContext = {},
+): Promise<{ mode: 'all' } | { mode: 'none' } | { mode: 'allow_only'; allowed: Set<string> }> {
+  return listAccessibleProjectsV2WithState(
+    database,
+    injectedIamV2DatabaseState(database),
+    userId,
+    accountId,
+    action,
+    actingTokenId,
+    requestCtx,
+  );
+}
+
+export async function listAccessibleProjectsV2(
+  userId: string,
+  accountId: string,
+  action: string,
+  actingTokenId?: string,
+  requestCtx: RequestContext = {},
+): Promise<{ mode: 'all' } | { mode: 'none' } | { mode: 'allow_only'; allowed: Set<string> }> {
+  const { db } = await import('../shared/db');
+  return listAccessibleProjectsV2WithState(
+    db,
+    defaultIamV2DatabaseState(db),
+    userId,
+    accountId,
+    action,
+    actingTokenId,
+    requestCtx,
+  );
+}
+
+export function createIamV2Facade(database: Database) {
+  const cacheRegistry = createIamCacheRegistry();
+  const state = createIamV2DatabaseState(database, cacheRegistry);
+  return {
+    authorize: (
+      userId: string,
+      accountId: string,
+      action: string,
+      target?: AuthorizeTarget,
+      actingTokenId?: string,
+      requestCtx: RequestContext = {},
+    ) =>
+      authorizeV2WithState(
+        database,
+        state,
+        userId,
+        accountId,
+        action,
+        target,
+        actingTokenId,
+        requestCtx,
+      ),
+    filterAccessibleProjectResources: (
+      userId: string,
+      accountId: string,
+      projectId: string,
+      resourceType: 'agent' | 'skill' | 'secret',
+      resourceIds: string[],
+      actingTokenId?: string,
+    ) =>
+      filterAccessibleProjectResourcesWithState(
+        database,
+        state,
+        userId,
+        accountId,
+        projectId,
+        resourceType,
+        resourceIds,
+        actingTokenId,
+      ),
+    listAccessibleProjects: (
+      userId: string,
+      accountId: string,
+      action: string,
+      actingTokenId?: string,
+      requestCtx: RequestContext = {},
+    ) =>
+      listAccessibleProjectsV2WithState(
+        database,
+        state,
+        userId,
+        accountId,
+        action,
+        actingTokenId,
+        requestCtx,
+      ),
+    invalidatePrincipal: cacheRegistry.invalidatePrincipal.bind(cacheRegistry),
+    invalidatePrincipals: cacheRegistry.invalidatePrincipals.bind(cacheRegistry),
+  };
 }

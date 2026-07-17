@@ -510,8 +510,12 @@ describe('PostgresStudioWorkerRepository', () => {
     expect(queries[0]?.text).toContain('NOT EXISTS');
     expect(queries[0]?.text).not.toContain("SET status = 'failed'");
     expect(queries[0]?.text).not.toContain("'failed',");
+    expect(queries[0]?.text).toContain("a.status = 'polling'");
+    expect(queries[0]?.text).toContain("a.retry_classification = 'unknown_outcome'");
     expect(queries[1]?.text).toContain('public.atomic_expire_studio_unknown_hold');
     expect(queries[1]?.text).toContain("reservation.created_at + interval '30 days'");
+    expect(queries[1]?.text).toContain("attempt.status = 'polling'");
+    expect(queries[1]?.text).toContain("attempt.retry_classification = 'unknown_outcome'");
   });
 
   test('derives orphan prefixes only from retained terminal attempts without manifests and re-fences them', async () => {

@@ -260,6 +260,8 @@ describe('Studio worker runtime assembly', () => {
     };
     const referenceAssets = { resolve: async () => [] };
     const createdWithClients: unknown[] = [];
+    let databaseCreates = 0;
+    let databaseCloses = 0;
     let workerInput: Record<string, unknown> | null = null;
     const build = buildStudioWorkerRuntime as unknown as (
       env: Record<string, string>,
@@ -281,7 +283,16 @@ describe('Studio worker runtime assembly', () => {
         signal: new AbortController().signal,
         factories: {
           createObjectStore: () => store,
-          createDatabase: async () => ({ client, close: async () => {} }),
+          createDatabase: async () => {
+            databaseCreates += 1;
+            return {
+              client,
+              database: {} as never,
+              close: async () => {
+                databaseCloses += 1;
+              },
+            };
+          },
           createWorkerRepository(input: unknown) {
             createdWithClients.push(input);
             return repository;
@@ -291,7 +302,7 @@ describe('Studio worker runtime assembly', () => {
             return {};
           },
           async createAuthorization(input: unknown) {
-            createdWithClients.push(input);
+            createdWithClients.push((input as { client: unknown }).client);
             return { revalidate: async () => ({ authorized: true }) };
           },
           createCredentialResolver(input: unknown) {
@@ -329,6 +340,12 @@ describe('Studio worker runtime assembly', () => {
       stager: expect.anything(),
       assets: expect.anything(),
     });
+    await (runtime.close as () => Promise<void>)();
+    await (runtime.close as () => Promise<void>)();
+    expect({ databaseCreates, databaseCloses }).toEqual({
+      databaseCreates: 1,
+      databaseCloses: 1,
+    });
   });
 
   test('releases an assembled maintenance owner before database and storage on startup failure', async () => {
@@ -338,13 +355,35 @@ describe('Studio worker runtime assembly', () => {
       ready: true,
     }) as InMemoryStudioObjectStore & { destroy(): void };
     const calls: string[] = [];
-    store.destroy = () => {
-      calls.push('storage');
-      throw new Error(`storage close failed output=${signedUrl}`);
-    };
     const databaseUrl = 'postgres://db-user:db-password@db.internal.test/studio';
     const apiKeySecret = 'worker-master-secret';
-    const signedUrl = 'https://storage.internal.test/signed?token=storage-secret';
+    const s3AccessKey = 'worker-access-without-label';
+    const s3SecretKey = 'worker-secret-without-label';
+    const s3SessionToken = 'worker-session-without-label';
+    const s3KmsKey = 'arn:aws:kms:region:account:key/worker-key-without-label';
+    const s3Endpoint = 'https://storage.internal.test';
+    const providerOrigin = 'https://provider.internal.test';
+    const signedUrl = `${s3Endpoint}/signed?X-Amz-Signature=storage-signature`;
+    const authorization = `Authorization: Bearer ${s3SessionToken}`;
+    const sensitiveValues = [
+      databaseUrl,
+      apiKeySecret,
+      s3AccessKey,
+      s3SecretKey,
+      s3SessionToken,
+      s3KmsKey,
+      s3Endpoint,
+      providerOrigin,
+      signedUrl,
+      authorization,
+    ];
+    store.destroy = () => {
+      calls.push('storage');
+      throw new AggregateError(
+        [new Error(`${signedUrl} ${authorization}`)],
+        `${s3Endpoint} ${s3KmsKey}`,
+      );
+    };
     let thrown: unknown;
 
     try {
@@ -357,6 +396,12 @@ describe('Studio worker runtime assembly', () => {
           STUDIO_ALLOW_EPHEMERAL_STORAGE: 'true',
           DATABASE_URL: databaseUrl,
           API_KEY_SECRET: apiKeySecret,
+          STUDIO_S3_ACCESS_KEY_ID: s3AccessKey,
+          STUDIO_S3_SECRET_ACCESS_KEY: s3SecretKey,
+          STUDIO_S3_SESSION_TOKEN: s3SessionToken,
+          STUDIO_S3_KMS_KEY_ID: s3KmsKey,
+          STUDIO_S3_ENDPOINT: s3Endpoint,
+          STUDIO_PROVIDER_PRIVATE_ORIGIN_ALLOWLIST: providerOrigin,
           STUDIO_WORKER_ID: 'production-worker',
         },
         {
@@ -364,9 +409,10 @@ describe('Studio worker runtime assembly', () => {
             createObjectStore: () => store,
             createDatabase: async () => ({
               client: { unsafe: async () => [] },
+              database: {} as never,
               close: async () => {
                 calls.push('database');
-                throw new Error(`database close failed database=${databaseUrl}`);
+                throw new Error(`${databaseUrl} ${s3AccessKey}`);
               },
             }),
             createWorkerRepository: () => repository,
@@ -382,13 +428,11 @@ describe('Studio worker runtime assembly', () => {
               runOnce: async () => ({ acquired: true, tasksRun: 0 }),
               release: async () => {
                 calls.push('maintenance');
-                throw new Error(`maintenance release failed api_key=${apiKeySecret}`);
+                throw new Error(`${apiKeySecret} ${s3SecretKey}`);
               },
             }),
             createWorker: () => {
-              throw new Error(
-                `worker assembly failed database=${databaseUrl} api_key=${apiKeySecret} output=${signedUrl}`,
-              );
+              throw new Error(`${databaseUrl} ${apiKeySecret} ${providerOrigin} ${authorization}`);
             },
           },
         },
@@ -400,8 +444,130 @@ describe('Studio worker runtime assembly', () => {
     expect(calls).toEqual(['maintenance', 'database', 'storage']);
     const errorGraph = errorTreeText(thrown);
     expect(errorGraph).toContain('Studio worker startup and cleanup failed');
-    expect(errorGraph).not.toContain(databaseUrl);
-    expect(errorGraph).not.toContain(apiKeySecret);
-    expect(errorGraph).not.toContain(signedUrl);
+    expect(
+      sensitiveValues.some((sensitiveValue) => errorGraph.includes(sensitiveValue)),
+    ).toBeFalse();
+    expect(/Authorization|X-Amz-Signature/i.test(errorGraph)).toBeFalse();
+  });
+
+  test('redacts exact environment values throughout successful-build close failures', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const store = new InMemoryStudioObjectStore({
+      namespace: 'studio-production',
+      ready: true,
+    }) as InMemoryStudioObjectStore & { destroy(): void };
+    const databaseUrl = 'postgres://close-user:close-password@db.internal.test/studio';
+    const apiKeySecret = 'close-master-without-label';
+    const s3AccessKey = 'close-access-without-label';
+    const s3SecretKey = 'close-secret-without-label';
+    const s3SessionToken = 'close-session-without-label';
+    const s3KmsKey = 'arn:aws:kms:region:account:key/close-key-without-label';
+    const s3Endpoint = 'https://close-storage.internal.test';
+    const providerOrigin = 'https://close-provider.internal.test';
+    const signedUrl = `${s3Endpoint}/result?X-Amz-Signature=close-signature`;
+    const authorization = `Authorization: Bearer ${s3SessionToken}`;
+    const sensitiveValues = [
+      databaseUrl,
+      apiKeySecret,
+      s3AccessKey,
+      s3SecretKey,
+      s3SessionToken,
+      s3KmsKey,
+      s3Endpoint,
+      providerOrigin,
+      signedUrl,
+      authorization,
+    ];
+    store.destroy = () => {
+      throw new Error(`${signedUrl} ${authorization}`);
+    };
+    const runtime = await buildStudioWorkerRuntime(
+      {
+        NODE_ENV: 'test',
+        STUDIO_ENABLED: 'true',
+        STUDIO_FAKE_PROVIDER_ENABLED: 'true',
+        STUDIO_OBJECT_STORE_MODE: 'memory',
+        STUDIO_ALLOW_EPHEMERAL_STORAGE: 'true',
+        DATABASE_URL: databaseUrl,
+        API_KEY_SECRET: apiKeySecret,
+        STUDIO_S3_ACCESS_KEY_ID: s3AccessKey,
+        STUDIO_S3_SECRET_ACCESS_KEY: s3SecretKey,
+        STUDIO_S3_SESSION_TOKEN: s3SessionToken,
+        STUDIO_S3_KMS_KEY_ID: s3KmsKey,
+        STUDIO_S3_ENDPOINT: s3Endpoint,
+        STUDIO_PROVIDER_PRIVATE_ORIGIN_ALLOWLIST: providerOrigin,
+        STUDIO_WORKER_ID: 'production-worker',
+      },
+      {
+        factories: {
+          createObjectStore: () => store,
+          createDatabase: async () => ({
+            client: { unsafe: async () => [] },
+            database: {} as never,
+            close: async () => {
+              throw new AggregateError(
+                [new Error(`${databaseUrl} ${s3AccessKey}`)],
+                `${apiKeySecret} ${s3SecretKey} ${s3KmsKey} ${providerOrigin}`,
+              );
+            },
+          }),
+          createWorkerRepository: () => repository,
+          createMaintenanceRepository: () => ({}) as never,
+          createAuthorization: async () => ({ revalidate: async () => ({ authorized: true }) }),
+          createCredentialResolver: () => ({ resolve: async () => null }),
+          createProviderRegistry: () => ({ resolve: async () => null }),
+          createFakeProvider: () => ({ id: 'fake' }) as never,
+          createReferenceAssetResolver: () => ({ resolve: async () => [] }),
+          createMaintenance: () => ({
+            runOnce: async () => ({ acquired: true, tasksRun: 0 }),
+            release: async () => {
+              throw new Error(`${s3SessionToken} ${authorization}`);
+            },
+          }),
+          createWorker: () => ({ runOnce: async () => ({ kind: 'idle' as const }) }) as never,
+        },
+      },
+    );
+    expect(runtime.enabled).toBeTrue();
+    if (!runtime.enabled) throw new Error('expected enabled Studio worker runtime');
+
+    let thrown: unknown;
+    try {
+      await runtime.close();
+    } catch (error) {
+      thrown = error;
+    }
+    const errorGraph = errorTreeText(thrown);
+    expect(errorGraph).toContain('Studio worker shutdown failed');
+    expect(
+      sensitiveValues.some((sensitiveValue) => errorGraph.includes(sensitiveValue)),
+    ).toBeFalse();
+    expect(/Authorization|X-Amz-Signature/i.test(errorGraph)).toBeFalse();
+  });
+
+  test('builds production authorization from the worker-owned database without API globals', async () => {
+    const module = await import('./runtime');
+    const createAuthorization = (
+      module as typeof module & {
+        createProductionStudioAuthorization?: (input: Record<string, unknown>) => unknown;
+      }
+    ).createProductionStudioAuthorization;
+    expect(createAuthorization).toBeFunction();
+    if (!createAuthorization) return;
+    const globals = globalThis as typeof globalThis & {
+      __kortixApiDb?: unknown;
+      __kortixApiDbUrl?: string;
+    };
+    delete globals.__kortixApiDb;
+    delete globals.__kortixApiDbUrl;
+
+    const authorization = createAuthorization({
+      client: { unsafe: async () => [] },
+      database: { select: () => ({}) },
+    });
+
+    expect(authorization).toMatchObject({ revalidate: expect.any(Function) });
+    expect(globals.__kortixApiDb).toBeUndefined();
+    expect(globals.__kortixApiDbUrl).toBeUndefined();
   });
 });

@@ -1,3 +1,4 @@
+import { type Database, iamResourceGrants } from '@kortix/db';
 /**
  * IAM V2 per-RESOURCE scoping — engine + repository for iam_resource_grants.
  *
@@ -38,17 +39,17 @@
  * — this module stays permissive so it never has to know which caller is
  * enforcing that; it's a write-time policy, not a storage-model change.
  *
- * Import direction: this module imports cache-invalidation (register/bust) but
- * NOT engine-v2; engine-v2 imports this. No cycle.
+ * Import direction: this module imports cache-registry and lazily imports
+ * shared/db for API-owned defaults, but NOT engine-v2. No cycle.
  */
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
-import { iamResourceGrants } from '@kortix/db';
-import { db } from '../shared/db';
 import { ttlMemo } from '../shared/ttl-memo';
 import {
+  type IamCacheRegistry,
+  createIamCacheRegistry,
+  defaultIamCacheRegistry,
   invalidateIamCacheForProjectResources,
-  registerProjectScopedMemo,
-} from './cache-invalidation';
+} from './cache-registry';
 
 /** The resource kinds that support per-resource scoping today. `skill` and
  *  `secret` are READ/REVOKE-only back-compat holdovers — see the module
@@ -144,42 +145,96 @@ export async function isProjectResourceExplicitlyGranted(
  * Memoized; the empty map is cached too (the common unscoped case) and busted on
  * mutation. Registered as a project-scoped memo so a grant change drops it.
  */
-const loadProjectResourceGrants = ttlMemo({
-  ttlMs: TTL_MS,
-  keyFn: (projectId: string, resourceType: string) => `${projectId}|${resourceType}`,
-  loader: async (projectId: string, resourceType: string) => {
-    const rows = await db
-      .select({
-        resourceId: iamResourceGrants.resourceId,
-        principalType: iamResourceGrants.principalType,
-        principalId: iamResourceGrants.principalId,
-      })
-      .from(iamResourceGrants)
-      .where(
-        and(
-          eq(iamResourceGrants.projectId, projectId),
-          eq(iamResourceGrants.resourceType, resourceType),
-          eq(iamResourceGrants.effect, 'allow'),
-          or(isNull(iamResourceGrants.expiresAt), gt(iamResourceGrants.expiresAt, sql`now()`)),
-        ),
-      );
-    const map = new Map<string, ResourceGrantPrincipal[]>();
-    for (const r of rows) {
-      const entry: ResourceGrantPrincipal = {
-        principalType: r.principalType as PrincipalType,
-        principalId: r.principalId,
-      };
-      const list = map.get(r.resourceId);
-      if (list) list.push(entry);
-      else map.set(r.resourceId, [entry]);
-    }
-    return map;
-  },
-  shouldCache: () => true,
-});
-registerProjectScopedMemo(loadProjectResourceGrants);
+export function createResourceGrantReader(
+  database: Database,
+  cacheRegistry: IamCacheRegistry = createIamCacheRegistry(),
+) {
+  const loadProjectResourceGrants = ttlMemo({
+    ttlMs: TTL_MS,
+    keyFn: (projectId: string, resourceType: string) => `${projectId}|${resourceType}`,
+    loader: async (projectId: string, resourceType: string) => {
+      const rows = await database
+        .select({
+          resourceId: iamResourceGrants.resourceId,
+          principalType: iamResourceGrants.principalType,
+          principalId: iamResourceGrants.principalId,
+        })
+        .from(iamResourceGrants)
+        .where(
+          and(
+            eq(iamResourceGrants.projectId, projectId),
+            eq(iamResourceGrants.resourceType, resourceType),
+            eq(iamResourceGrants.effect, 'allow'),
+            or(isNull(iamResourceGrants.expiresAt), gt(iamResourceGrants.expiresAt, sql`now()`)),
+          ),
+        );
+      const map = new Map<string, ResourceGrantPrincipal[]>();
+      for (const row of rows) {
+        const entry: ResourceGrantPrincipal = {
+          principalType: row.principalType as PrincipalType,
+          principalId: row.principalId,
+        };
+        const list = map.get(row.resourceId);
+        if (list) list.push(entry);
+        else map.set(row.resourceId, [entry]);
+      }
+      return map;
+    },
+    shouldCache: () => true,
+  });
+  cacheRegistry.registerProjectScopedMemo(loadProjectResourceGrants);
+  return {
+    loadProjectResourceGrants,
+    async filterAccessibleResourceIds(
+      projectId: string,
+      resourceType: ResourceType,
+      resourceIds: readonly string[],
+      userId: string,
+      groupIds: readonly string[],
+    ): Promise<string[]> {
+      const map = await loadProjectResourceGrants(projectId, resourceType);
+      return resourceIds.filter((id) => isResourceAccessible(map.get(id), userId, groupIds));
+    },
+  };
+}
 
-export { loadProjectResourceGrants };
+const resourceGrantReaders = new WeakMap<Database, ReturnType<typeof createResourceGrantReader>>();
+const defaultResourceGrantReaders = new WeakMap<
+  Database,
+  ReturnType<typeof createResourceGrantReader>
+>();
+
+export function getResourceGrantReader(
+  database: Database,
+): ReturnType<typeof createResourceGrantReader> {
+  const existing = resourceGrantReaders.get(database);
+  if (existing) return existing;
+  const created = createResourceGrantReader(database);
+  resourceGrantReaders.set(database, created);
+  return created;
+}
+
+function getDefaultResourceGrantReader(
+  database: Database,
+): ReturnType<typeof createResourceGrantReader> {
+  const existing = defaultResourceGrantReaders.get(database);
+  if (existing) return existing;
+  const created = createResourceGrantReader(database, defaultIamCacheRegistry);
+  defaultResourceGrantReaders.set(database, created);
+  return created;
+}
+
+async function defaultResourceGrantReader(): Promise<ReturnType<typeof createResourceGrantReader>> {
+  const { db } = await import('../shared/db');
+  return getDefaultResourceGrantReader(db);
+}
+
+export async function loadProjectResourceGrants(
+  projectId: string,
+  resourceType: string,
+): Promise<Map<string, ResourceGrantPrincipal[]>> {
+  return (await defaultResourceGrantReader()).loadProjectResourceGrants(projectId, resourceType);
+}
 
 /**
  * Cheap memoized gate: does this project scope ANY agent or skill? Lets read
@@ -252,6 +307,7 @@ interface ResourceGrantRow {
 
 /** Every grant for a project (for the Members UI). */
 export async function listResourceGrants(projectId: string): Promise<ResourceGrantRow[]> {
+  const { db } = await import('../shared/db');
   return db
     .select({
       grantId: iamResourceGrants.grantId,
@@ -279,6 +335,7 @@ export async function upsertResourceGrant(input: {
   /** undefined = leave as-is on update / NULL on insert; null = clear; Date = set. */
   expiresAt?: Date | null | undefined;
 }): Promise<{ grantId: string }> {
+  const { db } = await import('../shared/db');
   const now = new Date();
   const [row] = await db
     .insert(iamResourceGrants)
@@ -315,6 +372,7 @@ export async function upsertResourceGrant(input: {
 
 /** Delete a grant by id (scoped to the project so a stray id can't cross over). */
 export async function deleteResourceGrant(grantId: string, projectId: string): Promise<boolean> {
+  const { db } = await import('../shared/db');
   const deleted = await db
     .delete(iamResourceGrants)
     .where(and(eq(iamResourceGrants.grantId, grantId), eq(iamResourceGrants.projectId, projectId)))

@@ -22,6 +22,7 @@ const dockerAvailable =
 const container = `kortix-studio-worker-migration-${crypto.randomUUID().slice(0, 8)}`;
 const migrationsDirectory = resolve(import.meta.dir, '..', 'migrations');
 const recoveryHardeningMigration = '20260717020000000_studio_recovery_hardening.sql';
+const pollingUnknownHoldMigration = '20260718010000000_studio_polling_unknown_hold.sql';
 let mappedPostgresPort = '';
 const silentMigrationLogger = {
   debug: (_message: string) => undefined,
@@ -536,18 +537,20 @@ function prepareRecoveryAttempt(input: {
   leaseOwner: string;
   manifestKey: string;
   manifestChecksum: string;
+  status?: 'polling' | 'reconciling';
 }): void {
   prepareProductionAttempt({
     jobId: input.jobId,
     attemptId: input.attemptId,
     leaseOwner: input.leaseOwner,
-    status: 'reconciling',
+    status: input.status ?? 'reconciling',
   });
   dockerPsql(`
     UPDATE kortix.studio_job_attempts
     SET submission_kind = 'async',
         staging_manifest_key = '${input.manifestKey}',
-        staging_manifest_checksum = '${input.manifestChecksum}'
+        staging_manifest_checksum = '${input.manifestChecksum}',
+        retry_classification = ${input.status === 'polling' ? "'unknown_outcome'" : 'retry_classification'}
     WHERE attempt_id = '${input.attemptId}';
   `);
 }
@@ -760,7 +763,8 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     await applyMigration('20260715170000000_studio_credit_reservations.sql');
     await applyMigration('20260715180000000_studio_worker_hardening.sql');
     await applyMigration('20260716120000000_studio_production_provider_storage.sql');
-    await applyMigration('20260717020000000_studio_recovery_hardening.sql');
+    await applyMigration(recoveryHardeningMigration);
+    await applyMigration(pollingUnknownHoldMigration);
     dockerPsql(CORE_FIXTURES);
   }, 150_000);
 
@@ -3027,6 +3031,7 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       leaseOwner,
       manifestKey: `staging/${jobId}/manifest.json`,
       manifestChecksum: '1'.repeat(64),
+      status: 'polling',
     });
     recordProductionAttemptCost({
       jobId,
@@ -3189,14 +3194,17 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     const notCreatedScope = seedProductionScope({ suffix: '25' });
     const keepUnknownScope = seedProductionScope({ suffix: '26' });
     const expiryScope = seedProductionScope({ suffix: '27' });
+    const ordinaryPollingScope = seedProductionScope({ suffix: '28' });
     const successJobId = String(createProductionJob(successScope).job_id);
     const notCreatedJobId = String(createProductionJob(notCreatedScope).job_id);
     const keepUnknownJobId = String(createProductionJob(keepUnknownScope).job_id);
     const expiryJobId = String(createProductionJob(expiryScope).job_id);
+    const ordinaryPollingJobId = String(createProductionJob(ordinaryPollingScope).job_id);
     const successAttemptId = '74000000-0000-4000-a000-000000000024';
     const notCreatedAttemptId = '74000000-0000-4000-a000-000000000025';
     const keepUnknownAttemptId = '74000000-0000-4000-a000-000000000026';
     const expiryAttemptId = '74000000-0000-4000-a000-000000000027';
+    const ordinaryPollingAttemptId = '74000000-0000-4000-a000-000000000028';
     const png = new Uint8Array(
       Buffer.from(
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -3253,6 +3261,13 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       leaseOwner: 'studio-worker:maintenance-expiry',
       manifestKey: `staging/${expiryJobId}/manifest.json`,
       manifestChecksum: '6'.repeat(64),
+      status: 'polling',
+    });
+    prepareProductionAttempt({
+      jobId: ordinaryPollingJobId,
+      attemptId: ordinaryPollingAttemptId,
+      leaseOwner: 'studio-worker:maintenance-ordinary-polling',
+      status: 'polling',
     });
     recordProductionAttemptCost({
       jobId: expiryJobId,
@@ -3267,19 +3282,22 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       SET available_at = clock_timestamp() - interval '16 minutes',
           lease_expires_at = clock_timestamp() - interval '1 minute'
       WHERE job_id IN (
-        '${successJobId}', '${notCreatedJobId}', '${keepUnknownJobId}', '${expiryJobId}'
+        '${successJobId}', '${notCreatedJobId}', '${keepUnknownJobId}',
+        '${expiryJobId}', '${ordinaryPollingJobId}'
       );
       UPDATE kortix.studio_job_attempts
       SET started_at = clock_timestamp() - interval '16 minutes'
       WHERE attempt_id IN (
         '${successAttemptId}', '${notCreatedAttemptId}',
-        '${keepUnknownAttemptId}', '${expiryAttemptId}'
+        '${keepUnknownAttemptId}', '${expiryAttemptId}', '${ordinaryPollingAttemptId}'
       );
       UPDATE kortix.studio_credit_reservations
       SET created_at = clock_timestamp() - interval '31 days',
           expires_at = clock_timestamp() - interval '1 day'
-      WHERE job_id = '${expiryJobId}';
+      WHERE job_id IN ('${expiryJobId}', '${ordinaryPollingJobId}');
     `);
+    clearStudioLease(expiryJobId);
+    clearStudioLease(ordinaryPollingJobId);
 
     expect(await maintenance.runOnce()).toEqual({ acquired: true, tasksRun: 5 });
     expect(
@@ -3298,12 +3316,30 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
           ),
           'operator_review_events', (
             SELECT count(*) FROM kortix.studio_job_events
-            WHERE job_id IN ('${successJobId}', '${notCreatedJobId}', '${keepUnknownJobId}')
+            WHERE job_id IN (
+              '${successJobId}', '${notCreatedJobId}', '${keepUnknownJobId}', '${expiryJobId}'
+            )
+              AND event_type = 'progress' AND payload ->> 'phase' = 'operator-review'
+          ),
+          'polling_unknown_review_events', (
+            SELECT count(*) FROM kortix.studio_job_events
+            WHERE job_id = '${expiryJobId}'
+              AND event_type = 'progress' AND payload ->> 'phase' = 'operator-review'
+          ),
+          'ordinary_polling_review_events', (
+            SELECT count(*) FROM kortix.studio_job_events
+            WHERE job_id = '${ordinaryPollingJobId}'
               AND event_type = 'progress' AND payload ->> 'phase' = 'operator-review'
           )
         );
       `),
-    ).toEqual({ recoverable_jobs: 3, recoverable_attempts: 3, operator_review_events: 3 });
+    ).toEqual({
+      recoverable_jobs: 3,
+      recoverable_attempts: 3,
+      operator_review_events: 4,
+      polling_unknown_review_events: 1,
+      ordinary_polling_review_events: 0,
+    });
 
     expect(
       await recovery.recover({
@@ -3393,6 +3429,33 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
             'incidents', (SELECT count(*) FROM kortix.studio_billing_incidents WHERE job_id = '${expiryJobId}'),
             'final_usage', (SELECT count(*) FROM kortix.studio_usage_events WHERE job_id = '${expiryJobId}' AND attempt_id IS NULL)
           ) FROM kortix.studio_jobs WHERE job_id = '${expiryJobId}'
+        ),
+        'ordinary_polling', (
+          SELECT jsonb_build_object(
+            'job', status,
+            'attempt', (
+              SELECT status FROM kortix.studio_job_attempts
+              WHERE attempt_id = '${ordinaryPollingAttemptId}'
+            ),
+            'retry', (
+              SELECT retry_classification FROM kortix.studio_job_attempts
+              WHERE attempt_id = '${ordinaryPollingAttemptId}'
+            ),
+            'reservation', (
+              SELECT status FROM kortix.studio_credit_reservations
+              WHERE job_id = '${ordinaryPollingJobId}'
+            ),
+            'incidents', (
+              SELECT count(*) FROM kortix.studio_billing_incidents
+              WHERE job_id = '${ordinaryPollingJobId}'
+            ),
+            'operator_review_events', (
+              SELECT count(*) FROM kortix.studio_job_events
+              WHERE job_id = '${ordinaryPollingJobId}'
+                AND event_type = 'progress'
+                AND payload ->> 'phase' = 'operator-review'
+            )
+          ) FROM kortix.studio_jobs WHERE job_id = '${ordinaryPollingJobId}'
         )
       );
     `);
@@ -3408,6 +3471,14 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
         reservation: 'settled',
         incidents: 1,
         final_usage: 1,
+      },
+      ordinary_polling: {
+        job: 'running',
+        attempt: 'polling',
+        retry: null,
+        reservation: 'active',
+        incidents: 0,
+        operator_review_events: 0,
       },
     });
 

@@ -862,7 +862,13 @@ export class PostgresStudioMaintenanceRepository implements StudioMaintenanceRep
         FROM kortix.studio_jobs j
         JOIN kortix.studio_job_attempts a ON a.job_id = j.job_id
         WHERE j.status = 'running'
-          AND a.status = 'reconciling'
+          AND (
+            a.status = 'reconciling'
+            OR (
+              a.status = 'polling'
+              AND a.retry_classification = 'unknown_outcome'
+            )
+          )
           AND j.available_at <= $1::timestamptz
           AND a.started_at <= $1::timestamptz - interval '15 minutes'
           AND (j.lease_expires_at IS NULL OR j.lease_expires_at <= $1::timestamptz)
@@ -917,7 +923,13 @@ export class PostgresStudioMaintenanceRepository implements StudioMaintenanceRep
         FROM kortix.studio_jobs j
         JOIN kortix.studio_job_attempts attempt
           ON attempt.job_id = j.job_id
-         AND attempt.status = 'reconciling'
+         AND (
+           attempt.status = 'reconciling'
+           OR (
+             attempt.status = 'polling'
+             AND attempt.retry_classification = 'unknown_outcome'
+           )
+         )
         JOIN kortix.studio_credit_reservations reservation
           ON reservation.job_id = j.job_id
          AND reservation.status = 'active'

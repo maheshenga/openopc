@@ -1,5 +1,5 @@
 // Main exports
-export { createDb, type Database } from './client';
+export { createDb, createDbFromClient, type Database } from './client';
 export * as schema from './schema';
 
 // Re-export frequently used schemas and types for convenience

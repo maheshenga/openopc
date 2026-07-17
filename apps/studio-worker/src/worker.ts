@@ -199,7 +199,7 @@ export class StudioWorker {
         now,
       });
     } catch {
-      await this.deferUnknown(
+      await this.deferActiveAdapterRecovery(
         job,
         attempt,
         'Provider configuration is unavailable for active attempt recovery',
@@ -216,7 +216,7 @@ export class StudioWorker {
       providerConfig.versionToken === attempt.providerConfigVersion &&
       providerSupportsCapability(providerConfig.capabilityMap, job.capability);
     if (!validProviderConfig || !providerConfig) {
-      await this.deferUnknown(
+      await this.deferActiveAdapterRecovery(
         job,
         attempt,
         'Provider configuration is unavailable for active attempt recovery',
@@ -231,7 +231,7 @@ export class StudioWorker {
     try {
       authorization = await this.deps.authorization.revalidate(job);
     } catch {
-      await this.deferUnknown(
+      await this.deferActiveAdapterRecovery(
         job,
         attempt,
         'Authorization is unavailable for active attempt recovery',
@@ -240,7 +240,7 @@ export class StudioWorker {
       return null;
     }
     if (!authorization.authorized) {
-      await this.deferUnknown(
+      await this.deferActiveAdapterRecovery(
         job,
         attempt,
         'Authorization is unavailable for active attempt recovery',
@@ -257,7 +257,7 @@ export class StudioWorker {
         binding: job.credentialBinding as never,
       });
     } catch {
-      await this.deferUnknown(
+      await this.deferActiveAdapterRecovery(
         job,
         attempt,
         'Provider credential is unavailable for active attempt recovery',
@@ -266,7 +266,7 @@ export class StudioWorker {
       return null;
     }
     if (!credential && providerConfig.credentialBinding.kind !== 'none') {
-      await this.deferUnknown(
+      await this.deferActiveAdapterRecovery(
         job,
         attempt,
         'Provider credential is unavailable for active attempt recovery',
@@ -284,7 +284,7 @@ export class StudioWorker {
         referenceAssets: this.deps.referenceAssets,
       });
     } catch {
-      await this.deferUnknown(
+      await this.deferActiveAdapterRecovery(
         job,
         attempt,
         'Provider adapter is unavailable for active attempt recovery',
@@ -293,7 +293,7 @@ export class StudioWorker {
       return null;
     }
     if (!adapter) {
-      await this.deferUnknown(
+      await this.deferActiveAdapterRecovery(
         job,
         attempt,
         'Provider adapter is unavailable for active attempt recovery',
@@ -302,6 +302,27 @@ export class StudioWorker {
       return null;
     }
     return adapter;
+  }
+
+  private async deferActiveAdapterRecovery(
+    job: StudioWorkerJob,
+    attempt: StudioWorkerAttempt,
+    message: string,
+    now: Date,
+  ): Promise<void> {
+    if (attempt.providerHandle && ['submitted', 'polling'].includes(attempt.status)) {
+      await this.scheduleContinuation(
+        job,
+        attempt,
+        'polling',
+        'unknown_outcome',
+        message,
+        this.config.unknownOutcomeTimeoutMs,
+        now,
+      );
+      return;
+    }
+    await this.deferUnknown(job, attempt, message, now);
   }
 
   private async submit(job: StudioWorkerJob, now: Date): Promise<StudioWorkerTickResult> {

@@ -1748,7 +1748,7 @@ describe('StudioWorker', () => {
     });
     expect(calls).toEqual({ authorize: 1, resolve: 0, provider: 0 });
     expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
-      status: 'reconciling',
+      status: 'polling',
       retryClassification: 'unknown_outcome',
     });
   });
@@ -2063,6 +2063,109 @@ describe('StudioWorker', () => {
         status: 'reconciling',
         retryClassification: 'unknown_outcome',
       });
+    }
+  });
+
+  test('keeps durable handles pollable across transient active-adapter recovery failures', async () => {
+    for (const failure of ['config', 'authorization', 'credential', 'registry'] as const) {
+      const repository = createMemoryStudioWorkerRepository();
+      const handle: StudioProviderHandle = {
+        provider: 'fake',
+        id: `durable-${failure}-handle`,
+        submission_key: `durable-${failure}-submission-key`,
+      };
+      const job = repository.seedJob({
+        status: 'running',
+        attemptCount: 1,
+        providerHandle: handle,
+      });
+      repository.seedAttempt(job.jobId, {
+        status: 'polling',
+        submissionKey: handle.submission_key,
+        providerHandle: handle,
+      });
+      let clock = NOW;
+      let configCalls = 0;
+      let authorizationCalls = 0;
+      let credentialCalls = 0;
+      let registryCalls = 0;
+      const providerCalls = { submit: 0, poll: 0, reconcile: 0 };
+      const loadProviderConfig = repository.loadProviderConfigForSubmission.bind(repository);
+      repository.loadProviderConfigForSubmission = async (input) => {
+        configCalls += 1;
+        if (failure === 'config' && configCalls === 1) {
+          throw new Error('temporary config failure secret=must-not-persist');
+        }
+        return loadProviderConfig(input);
+      };
+      const adapter = provider({
+        submit: async () => {
+          providerCalls.submit += 1;
+          throw new Error('durable handles must never be resubmitted');
+        },
+        poll: async () => {
+          providerCalls.poll += 1;
+          return { status: 'succeeded', progress: 1 };
+        },
+        reconcile: async () => {
+          providerCalls.reconcile += 1;
+          return 'unknown';
+        },
+        fetchResult: async () => ({ assets: [] }),
+      });
+      const worker = makeWorker({
+        workerId: `worker-${failure}`,
+        repository,
+        adapter,
+        now: () => clock,
+        authorization: {
+          revalidate: async () => {
+            authorizationCalls += 1;
+            if (failure === 'authorization' && authorizationCalls === 1) {
+              throw new Error('temporary authorization failure token=must-not-persist');
+            }
+            return { authorized: true };
+          },
+        },
+        credentialResolver: {
+          resolve: async () => {
+            credentialCalls += 1;
+            if (failure === 'credential' && credentialCalls === 1) {
+              throw new Error('temporary credential failure api_key=must-not-persist');
+            }
+            return null;
+          },
+        },
+        providerResolve: async () => {
+          registryCalls += 1;
+          if (failure === 'registry' && registryCalls === 1) {
+            throw new Error(
+              'temporary registry failure https://provider.test/signed?token=private',
+            );
+          }
+          return adapter;
+        },
+      }).worker;
+
+      const first = await worker.runOnce();
+
+      expect(first, failure).toMatchObject({ kind: 'processed', status: 'running' });
+      expect(repository.getAttempts(job.jobId)[0], failure).toMatchObject({
+        status: 'polling',
+        retryClassification: 'unknown_outcome',
+      });
+      expect(repository.getJob(job.jobId)?.availableAt, failure).toEqual(
+        new Date(NOW.getTime() + 15 * 60_000),
+      );
+      expect(repository.getJob(job.jobId)?.errorMessage, failure).not.toContain('must-not-persist');
+      expect(providerCalls, failure).toEqual({ submit: 0, poll: 0, reconcile: 0 });
+
+      clock = new Date(NOW.getTime() + 15 * 60_000 + 1);
+      const second = await worker.runOnce();
+
+      expect(second, failure).toMatchObject({ kind: 'processed', status: 'succeeded' });
+      expect(providerCalls, failure).toEqual({ submit: 0, poll: 1, reconcile: 0 });
+      expect(repository.getAttempts(job.jobId), failure).toHaveLength(1);
     }
   });
 

@@ -23,6 +23,7 @@
     "@daytonaio/sdk": "^0.184.0",
     "@hono/zod-openapi": "^0.19.10",
     "@kortix/api-contract": "workspace:*",
+    "@kortix/intelligence-contracts": "workspace:*",
     "@kortix/db": "workspace:*",
     "@kortix/llm-catalog": "workspace:*",
     "@kortix/llm-gateway": "workspace:*",

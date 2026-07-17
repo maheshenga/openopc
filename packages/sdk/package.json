@@ -13,6 +13,7 @@
   "keywords": ["kortix", "agent", "sdk", "sessions", "streaming", "opencode"],
   "sideEffects": false,
   "dependencies": {
+    "@kortix/intelligence-contracts": "workspace:*",
     "@kortix/llm-catalog": "workspace:*",
     "@opencode-ai/sdk": "1.17.11",
     "zustand": "^5.0.3"

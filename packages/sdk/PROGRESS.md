@@ -841,3 +841,21 @@ pnpm.cmd --filter @kortix/sdk smoke:install
 
 **Shippable to production: YES** for the additive SDK billing fields and Windows
 smoke-install fix. The broader Studio Phase 1 rollout remains in progress.
+
+---
+
+### 2026-07-18 - Intelligence protocol contract dependency
+
+Wired the new side-effect-free `@kortix/intelligence-contracts` workspace package
+as an SDK dependency so the later project intelligence surface can share one
+versioned wire contract. No SDK source files, public exports, or runtime behavior
+changed in this step.
+
+**Verified**
+
+```
+pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
+```
+
+**Shippable to production: YES** for this dependency-only SDK change. The
+intelligence protocol implementation remains in its separate execution chain.

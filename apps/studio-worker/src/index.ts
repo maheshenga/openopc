@@ -113,6 +113,29 @@ export async function runStudioMaintenanceOnce(input: {
   }
 }
 
+export async function runStudioWorkerTick(input: {
+  assertReady: () => Promise<void>;
+  claim: () => Promise<void>;
+}): Promise<boolean> {
+  try {
+    await input.assertReady();
+  } catch {
+    return false;
+  }
+  await input.claim();
+  return true;
+}
+
+export async function shutdownStudioWorker(input: {
+  releaseMaintenance: () => Promise<void>;
+  closeDatabase: () => Promise<void>;
+  closeStorage: () => Promise<void>;
+}): Promise<void> {
+  await input.releaseMaintenance().catch(() => {});
+  await input.closeDatabase();
+  await input.closeStorage();
+}
+
 async function main(): Promise<void> {
   const env = parseStudioWorkerEnvironment();
   if (!env.enabled) {
@@ -174,7 +197,6 @@ async function main(): Promise<void> {
     fakeProviderEnabled: env.fakeProviderEnabled,
     openAiCompatibleEnabled: env.openAiCompatibleEnabled,
   });
-  await runtime.assertReadyBeforeClaim();
   const objectStore = runtime.store;
   const worker = new StudioWorker({
     config: {
@@ -211,7 +233,14 @@ async function main(): Promise<void> {
       signal: controller.signal,
       idleMs: env.idleMs,
       async tick() {
-        const result = await worker.runOnce();
+        let result: Awaited<ReturnType<typeof worker.runOnce>> | null = null;
+        const ready = await runStudioWorkerTick({
+          assertReady: runtime.assertReadyBeforeClaim,
+          async claim() {
+            result = await worker.runOnce();
+          },
+        });
+        if (!ready || !result) return;
         if (result.kind === 'error') {
           console.error('[studio-worker] tick failed', {
             code: result.code,
@@ -232,9 +261,11 @@ async function main(): Promise<void> {
   } finally {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
-    await maintenance.release().catch(() => {});
-    await raw.end({ timeout: 5 });
-    await runtime.close();
+    await shutdownStudioWorker({
+      releaseMaintenance: () => maintenance.release(),
+      closeDatabase: () => raw.end({ timeout: 5 }),
+      closeStorage: () => runtime.close(),
+    });
   }
 }
 

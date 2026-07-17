@@ -61,4 +61,41 @@ describe('Studio worker runtime assembly', () => {
       expect(String(error)).not.toContain(secret);
     }
   });
+
+  test('accepts fake and OpenAI-compatible S3 runtimes', () => {
+    const s3 = {
+      STUDIO_ENABLED: 'true',
+      STUDIO_OBJECT_STORE_MODE: 's3',
+      STUDIO_OBJECT_STORE_BUCKET: 'studio-private',
+      STUDIO_OBJECT_STORE_PREFIX: 'studio',
+      STUDIO_S3_ENDPOINT: 'https://storage.example.test',
+      STUDIO_S3_REGION: 'cn-hangzhou',
+      STUDIO_S3_CREDENTIAL_MODE: 'default-chain',
+      STUDIO_S3_SSE: 'AES256',
+    } as const;
+    expect(buildStudioWorkerRuntime({ ...s3, STUDIO_FAKE_PROVIDER_ENABLED: 'true' })).toMatchObject({
+      enabled: true,
+      storageMode: 's3',
+    });
+    expect(
+      buildStudioWorkerRuntime({ ...s3, STUDIO_OPENAI_COMPATIBLE_ENABLED: 'true' }),
+    ).toMatchObject({ enabled: true, storageMode: 's3', openAiCompatibleEnabled: true });
+  });
+
+  test('fails closed for incomplete static credentials', () => {
+    const base = {
+      STUDIO_ENABLED: 'true',
+      STUDIO_FAKE_PROVIDER_ENABLED: 'true',
+      STUDIO_OBJECT_STORE_MODE: 's3',
+      STUDIO_OBJECT_STORE_BUCKET: 'studio-private',
+      STUDIO_OBJECT_STORE_PREFIX: 'studio',
+      STUDIO_S3_ENDPOINT: 'https://storage.example.test',
+      STUDIO_S3_REGION: 'cn-hangzhou',
+      STUDIO_S3_CREDENTIAL_MODE: 'static',
+      STUDIO_S3_SSE: 'AES256',
+    } as const;
+    expect(() => buildStudioWorkerRuntime({ ...base, STUDIO_S3_ACCESS_KEY_ID: 'only-key' })).toThrow(
+      /STUDIO_S3_SECRET_ACCESS_KEY/,
+    );
+  });
 });

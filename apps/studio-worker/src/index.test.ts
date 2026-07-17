@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   parseStudioWorkerEnvironment,
   runStudioMaintenanceOnce,
+  runStudioWorkerLoop,
   runStudioWorkerTick,
   shutdownStudioWorker,
 } from './index';
@@ -74,5 +75,32 @@ describe('studio worker bootstrap loop', () => {
       closeStorage: async () => calls.push('storage'),
     });
     expect(calls).toEqual(['maintenance', 'database', 'storage']);
+  });
+
+  test('attempts every cleanup step when the database close fails', async () => {
+    const calls: string[] = [];
+    await shutdownStudioWorker({
+      releaseMaintenance: async () => calls.push('maintenance'),
+      closeDatabase: async () => {
+        calls.push('database');
+        throw new Error('database close failed');
+      },
+      closeStorage: async () => calls.push('storage'),
+    });
+    expect(calls).toEqual(['maintenance', 'database', 'storage']);
+  });
+
+  test('does not make a second claim after an abort', async () => {
+    const controller = new AbortController();
+    let claims = 0;
+    await runStudioWorkerLoop({
+      signal: controller.signal,
+      idleMs: 0,
+      tick: async () => {
+        claims += 1;
+        controller.abort();
+      },
+    });
+    expect(claims).toBe(1);
   });
 });

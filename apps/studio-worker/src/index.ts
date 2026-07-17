@@ -131,9 +131,11 @@ export async function shutdownStudioWorker(input: {
   closeDatabase: () => Promise<void>;
   closeStorage: () => Promise<void>;
 }): Promise<void> {
-  await input.releaseMaintenance().catch(() => {});
-  await input.closeDatabase();
-  await input.closeStorage();
+  await Promise.allSettled([
+    input.releaseMaintenance(),
+    input.closeDatabase(),
+    input.closeStorage(),
+  ]);
 }
 
 async function main(): Promise<void> {
@@ -240,8 +242,7 @@ async function main(): Promise<void> {
             result = await worker.runOnce();
           },
         });
-        if (!ready || !result) return;
-        if (result.kind === 'error') {
+        if (ready && result?.kind === 'error') {
           console.error('[studio-worker] tick failed', {
             code: result.code,
             jobId: result.jobId,

@@ -3,6 +3,18 @@ import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runner } from 'node-pg-migrate';
 import pg from 'pg';
+import { createDb } from '../src/client';
+import { InMemoryStudioObjectStore } from '../../studio-runtime/src';
+import { StudioRecoveryService } from '../../../apps/api/src/studio/recovery';
+import { createDrizzleStudioRecoveryRepository } from '../../../apps/api/src/studio/repositories/drizzle';
+import {
+  StudioMaintenanceCoordinator,
+} from '../../../apps/studio-worker/src/maintenance';
+import {
+  PostgresStudioMaintenanceRepository,
+  type StudioSqlClient,
+} from '../../../apps/studio-worker/src/postgres';
+import { StudioResultStager } from '../../../apps/studio-worker/src/result-stager';
 
 const dockerAvailable =
   Bun.spawnSync(['docker', 'version'], { stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
@@ -150,6 +162,13 @@ const PRE_STUDIO_SCHEMA = `
   CREATE TABLE kortix.projects (
     project_id uuid PRIMARY KEY,
     account_id uuid NOT NULL REFERENCES kortix.accounts(account_id)
+  );
+
+  CREATE TABLE kortix.worker_leader_lease (
+    lock_key text PRIMARY KEY,
+    owner_id text NOT NULL,
+    expires_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
   );
 
   CREATE TABLE kortix.project_sessions (
@@ -3133,6 +3152,280 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       `),
     ).toEqual({ reservation_status: 'released', ledger_count: 0, incident_count: 1 });
   }, 30_000);
+
+  test('maintenance preserves 15-minute recovery decisions and expires 30-day holds idempotently', async () => {
+    const database = createDb(postgresUrl('testdb'), { max: 2 });
+    const client = (
+      database as unknown as {
+        $client: {
+          unsafe(text: string, values?: never[]): Promise<Iterable<Record<string, unknown>>>;
+          end(options?: unknown): Promise<void>;
+        };
+      }
+    ).$client;
+    const sqlClient: StudioSqlClient = {
+      async unsafe(text, values = []) {
+        return Array.from(await client.unsafe(text, values as never[]));
+      },
+    };
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-maintenance-recovery', ready: true });
+    const stager = new StudioResultStager(store);
+    const now = new Date(Date.now() - 1_000);
+    const recovery = new StudioRecoveryService({
+      repository: createDrizzleStudioRecoveryRepository(database),
+      store,
+      now: () => now,
+    });
+    const maintenance = new StudioMaintenanceCoordinator({
+      repository: new PostgresStudioMaintenanceRepository(sqlClient),
+      ownerId: 'studio-maintenance:recovery-matrix',
+      lockKey: 'studio-maintenance:recovery-matrix',
+      ttlMs: 60_000,
+      now: () => now,
+    });
+
+    try {
+    const successScope = seedProductionScope({ suffix: '24' });
+    const notCreatedScope = seedProductionScope({ suffix: '25' });
+    const keepUnknownScope = seedProductionScope({ suffix: '26' });
+    const expiryScope = seedProductionScope({ suffix: '27' });
+    const successJobId = String(createProductionJob(successScope).job_id);
+    const notCreatedJobId = String(createProductionJob(notCreatedScope).job_id);
+    const keepUnknownJobId = String(createProductionJob(keepUnknownScope).job_id);
+    const expiryJobId = String(createProductionJob(expiryScope).job_id);
+    const successAttemptId = '74000000-0000-4000-a000-000000000024';
+    const notCreatedAttemptId = '74000000-0000-4000-a000-000000000025';
+    const keepUnknownAttemptId = '74000000-0000-4000-a000-000000000026';
+    const expiryAttemptId = '74000000-0000-4000-a000-000000000027';
+    const png = new Uint8Array(
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
+    const staged = await stager.stage({
+      accountId: successScope.accountId,
+      projectId: successScope.projectId,
+      jobId: successJobId,
+      attemptId: successAttemptId,
+      submissionKey: `submission:${successAttemptId}`,
+      providerConfigId: successScope.providerId,
+      providerConfigVersion: successScope.providerVersion,
+      pricingCatalogId: successScope.pricingId,
+      pricingVersion: 1,
+      assets: [
+        {
+          kind: 'image',
+          filename: 'maintenance-recovered.png',
+          mime_type: 'image/png',
+          size_bytes: png.byteLength,
+          replayable_within_attempt: true,
+          openBody: async () => new Blob([png]).stream(),
+        },
+      ],
+      usage: { output_count: 1 },
+    });
+
+    prepareRecoveryAttempt({
+      jobId: successJobId,
+      attemptId: successAttemptId,
+      leaseOwner: 'studio-worker:maintenance-success',
+      manifestKey: staged.manifestKey,
+      manifestChecksum: staged.manifestChecksum,
+    });
+    prepareRecoveryAttempt({
+      jobId: notCreatedJobId,
+      attemptId: notCreatedAttemptId,
+      leaseOwner: 'studio-worker:maintenance-not-created',
+      manifestKey: `staging/${notCreatedJobId}/manifest.json`,
+      manifestChecksum: '4'.repeat(64),
+    });
+    prepareRecoveryAttempt({
+      jobId: keepUnknownJobId,
+      attemptId: keepUnknownAttemptId,
+      leaseOwner: 'studio-worker:maintenance-keep-unknown',
+      manifestKey: `staging/${keepUnknownJobId}/manifest.json`,
+      manifestChecksum: '5'.repeat(64),
+    });
+    prepareRecoveryAttempt({
+      jobId: expiryJobId,
+      attemptId: expiryAttemptId,
+      leaseOwner: 'studio-worker:maintenance-expiry',
+      manifestKey: `staging/${expiryJobId}/manifest.json`,
+      manifestChecksum: '6'.repeat(64),
+    });
+    recordProductionAttemptCost({
+      jobId: expiryJobId,
+      attemptId: expiryAttemptId,
+      leaseOwner: 'studio-worker:maintenance-expiry',
+      usage: { output_count: 1 },
+      cost: 2,
+      outcome: 'unknown',
+    });
+    dockerPsql(`
+      UPDATE kortix.studio_jobs
+      SET available_at = clock_timestamp() - interval '16 minutes',
+          lease_expires_at = clock_timestamp() - interval '1 minute'
+      WHERE job_id IN (
+        '${successJobId}', '${notCreatedJobId}', '${keepUnknownJobId}', '${expiryJobId}'
+      );
+      UPDATE kortix.studio_job_attempts
+      SET started_at = clock_timestamp() - interval '16 minutes'
+      WHERE attempt_id IN (
+        '${successAttemptId}', '${notCreatedAttemptId}',
+        '${keepUnknownAttemptId}', '${expiryAttemptId}'
+      );
+      UPDATE kortix.studio_credit_reservations
+      SET created_at = clock_timestamp() - interval '31 days',
+          expires_at = clock_timestamp() - interval '1 day'
+      WHERE job_id = '${expiryJobId}';
+    `);
+
+    expect(await maintenance.runOnce()).toEqual({ acquired: true, tasksRun: 5 });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'recoverable_jobs', (
+            SELECT count(*) FROM kortix.studio_jobs
+            WHERE job_id IN ('${successJobId}', '${notCreatedJobId}', '${keepUnknownJobId}')
+              AND status = 'running' AND lease_owner IS NULL AND lease_expires_at IS NULL
+          ),
+          'recoverable_attempts', (
+            SELECT count(*) FROM kortix.studio_job_attempts
+            WHERE attempt_id IN (
+              '${successAttemptId}', '${notCreatedAttemptId}', '${keepUnknownAttemptId}'
+            ) AND status = 'reconciling'
+          ),
+          'operator_review_events', (
+            SELECT count(*) FROM kortix.studio_job_events
+            WHERE job_id IN ('${successJobId}', '${notCreatedJobId}', '${keepUnknownJobId}')
+              AND event_type = 'progress' AND payload ->> 'phase' = 'operator-review'
+          )
+        );
+      `),
+    ).toEqual({ recoverable_jobs: 3, recoverable_attempts: 3, operator_review_events: 3 });
+
+    expect(
+      await recovery.recover({
+        accountId: successScope.accountId,
+        projectId: successScope.projectId,
+        jobId: successJobId,
+        actorUserId: '60000000-0000-4000-a000-000000000001',
+        actorType: 'user',
+        actingTokenId: null,
+        request: {
+          decision: 'confirm_succeeded',
+          idempotency_key: 'maintenance-success-recovery-24',
+          reason: 'Operator verified the staged result after maintenance.',
+          evidence: {
+            staging_manifest_key: staged.manifestKey,
+            staging_manifest_checksum: staged.manifestChecksum,
+          },
+        },
+      }),
+    ).toMatchObject({ decision: 'confirm_succeeded', job_status: 'succeeded' });
+    expect(
+      await recovery.recover({
+        accountId: notCreatedScope.accountId,
+        projectId: notCreatedScope.projectId,
+        jobId: notCreatedJobId,
+        actorUserId: '60000000-0000-4000-a000-000000000001',
+        actorType: 'user',
+        actingTokenId: null,
+        request: {
+          decision: 'confirm_not_created',
+          idempotency_key: 'maintenance-not-created-recovery-25',
+          reason: 'Operator verified that no provider result was created.',
+          evidence: {},
+        },
+      }),
+    ).toMatchObject({ decision: 'confirm_not_created', job_status: 'failed' });
+    expect(
+      await recovery.recover({
+        accountId: keepUnknownScope.accountId,
+        projectId: keepUnknownScope.projectId,
+        jobId: keepUnknownJobId,
+        actorUserId: '60000000-0000-4000-a000-000000000001',
+        actorType: 'user',
+        actingTokenId: null,
+        request: {
+          decision: 'keep_unknown',
+          idempotency_key: 'maintenance-keep-unknown-recovery-26',
+          reason: 'Operator needs additional time to verify the provider outcome.',
+          evidence: {},
+        },
+      }),
+    ).toMatchObject({ decision: 'keep_unknown', job_status: 'running' });
+
+    const firstState = dockerPsqlJson(`
+      SELECT jsonb_build_object(
+        'success', (
+          SELECT jsonb_build_object('job', status, 'attempt', (
+            SELECT status FROM kortix.studio_job_attempts WHERE attempt_id = '${successAttemptId}'
+          ), 'reservation', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${successJobId}'
+          ), 'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${successJobId}'
+          )) FROM kortix.studio_jobs WHERE job_id = '${successJobId}'
+        ),
+        'not_created', (
+          SELECT jsonb_build_object('job', status, 'attempt', (
+            SELECT status FROM kortix.studio_job_attempts WHERE attempt_id = '${notCreatedAttemptId}'
+          ), 'reservation', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${notCreatedJobId}'
+          ), 'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${notCreatedJobId}'
+          )) FROM kortix.studio_jobs WHERE job_id = '${notCreatedJobId}'
+        ),
+        'keep_unknown', (
+          SELECT jsonb_build_object('job', status, 'attempt', (
+            SELECT status FROM kortix.studio_job_attempts WHERE attempt_id = '${keepUnknownAttemptId}'
+          ), 'reservation', (
+            SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${keepUnknownJobId}'
+          ), 'recoveries', (
+            SELECT count(*) FROM kortix.studio_job_recoveries WHERE job_id = '${keepUnknownJobId}'
+          )) FROM kortix.studio_jobs WHERE job_id = '${keepUnknownJobId}'
+        ),
+        'expiry', (
+          SELECT jsonb_build_object('job', status, 'actual', actual_credits, 'code', error_code,
+            'attempt', (SELECT status FROM kortix.studio_job_attempts WHERE attempt_id = '${expiryAttemptId}'),
+            'reservation', (SELECT status FROM kortix.studio_credit_reservations WHERE job_id = '${expiryJobId}'),
+            'incidents', (SELECT count(*) FROM kortix.studio_billing_incidents WHERE job_id = '${expiryJobId}'),
+            'final_usage', (SELECT count(*) FROM kortix.studio_usage_events WHERE job_id = '${expiryJobId}' AND attempt_id IS NULL)
+          ) FROM kortix.studio_jobs WHERE job_id = '${expiryJobId}'
+        )
+      );
+    `);
+    expect(firstState).toEqual({
+      success: { job: 'succeeded', attempt: 'succeeded', reservation: 'settled', recoveries: 1 },
+      not_created: { job: 'failed', attempt: 'failed', reservation: 'released', recoveries: 1 },
+      keep_unknown: { job: 'running', attempt: 'reconciling', reservation: 'active', recoveries: 1 },
+      expiry: {
+        job: 'failed',
+        actual: 2,
+        code: 'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED',
+        attempt: 'failed',
+        reservation: 'settled',
+        incidents: 1,
+        final_usage: 1,
+      },
+    });
+
+    expect(await maintenance.runOnce()).toEqual({ acquired: true, tasksRun: 5 });
+    expect(
+      dockerPsqlJson(`
+        SELECT jsonb_build_object(
+          'incident_count', (SELECT count(*) FROM kortix.studio_billing_incidents WHERE job_id = '${expiryJobId}'),
+          'final_usage_count', (SELECT count(*) FROM kortix.studio_usage_events WHERE job_id = '${expiryJobId}' AND attempt_id IS NULL),
+          'operator_review_count', (SELECT count(*) FROM kortix.studio_job_events WHERE job_id = '${keepUnknownJobId}' AND event_type = 'progress' AND payload ->> 'phase' = 'operator-review' AND NOT (payload ? 'recovery_id'))
+        );
+      `),
+    ).toEqual({ incident_count: 1, final_usage_count: 1, operator_review_count: 1 });
+
+    } finally {
+      await client.end({ timeout: 1 });
+    }
+  }, 120_000);
 
   test('rolls back recovery cost, billing, assets, events, and audit on finalizer event failure', () => {
     const scope = seedProductionScope({ suffix: '15' });

@@ -1269,19 +1269,19 @@ git commit -m "feat: connect studio production api services"
 
 - Produces async `StudioProviderRegistry.resolve(job, config, credential)` and provider config rows containing base URL, region, model map, definition ID, pricing refs, and version.
 
-- [ ] **Step 1: Write RED tests for a side-effect-free Secret envelope module**
+- [x] **Step 1: Write RED tests for a side-effect-free Secret envelope module**
 
 Create a server-only `@kortix/studio-runtime/secret-envelope` subpath that receives the master secret explicitly and imports neither API config nor database state. Tests use fixed legacy `v1` fixtures plus fresh round trips to prove byte-compatible decryption/encryption, project-bound HKDF isolation, malformed envelope rejection, and wrong-key failure. Add assembly tests proving the API wrapper and worker resolver inject the same shared implementation; `apps/api/src/projects/secrets.ts` must no longer contain envelope constants or cipher/HKDF implementation.
 
-- [ ] **Step 2: Extract and wire the shared Secret envelope implementation**
+- [x] **Step 2: Extract and wire the shared Secret envelope implementation**
 
 Move the existing AES-256-GCM/HKDF envelope implementation without changing its version, salt/info, IV/tag encoding, or stored ciphertext contract. Keep the existing API `encryptProjectSecret(projectId, value)` and `decryptProjectSecret(projectId, valueEnc)` signatures as thin wrappers that supply `config.API_KEY_SECRET`. Worker runtime supplies its validated secret directly and injects only the project-bound decrypt function into `createStudioCredentialResolver`; neither shared module nor credential lookup may create a database pool or load API config.
 
-- [ ] **Step 3: Write RED repository tests for the complete provider snapshot**
+- [x] **Step 3: Write RED repository tests for the complete provider snapshot**
 
 Require `loadProviderConfigForSubmission` to return `baseUrl`, `region`, strict capability/model map, definition ID, and version token. Prove the query is fenced by job, account, project, provider, and lease owner. Prove a config/model/pricing version change prevents attempt creation.
 
-- [ ] **Step 4: Implement provider snapshot loading**
+- [x] **Step 4: Implement provider snapshot loading**
 
 Extend `StudioWorkerProviderConfig` with:
 
@@ -1297,11 +1297,11 @@ The provider registry parses `capabilityMap` with the definition-specific schema
 
 In `credential-lookup.ts`, implement `StudioCredentialLookup` with the worker's existing Postgres client. Query shared active Secrets by stable identifier and active default shared Connector credentials by project slug, always joining through account/project ownership. Return only encrypted value, owning project, and a metadata-derived version token. Tests prove this module opens no second pool and never imports the API shared DB singleton.
 
-- [ ] **Step 5: Write RED registry tests**
+- [x] **Step 5: Write RED registry tests**
 
 Cover fake resolution, disabled adapter type, wrong provider/config, unsafe base URL, missing credential, `kind: none` on production, model mismatch, unregistered or user-overridden dialect semantics, and successful invocation-scoped OpenAI adapter construction. Assert the registry object returned to the worker contains no serializable credential getter or diagnostic representation.
 
-- [ ] **Step 6: Implement async provider resolution**
+- [x] **Step 6: Implement async provider resolution**
 
 Use:
 
@@ -1318,11 +1318,11 @@ export interface StudioProviderRegistry {
 
 Fake requires `kind: none`; OpenAI-compatible requires a resolved Secret/Connector and an enabled adapter type.
 
-- [ ] **Step 7: Enforce authorization before plaintext resolution**
+- [x] **Step 7: Enforce authorization before plaintext resolution**
 
 Split authorization into binding validation and IAM/token/grant revalidation. The worker order is: load config → validate binding shape/existence → revalidate token/IAM/grants → resolve plaintext → prepare attempt → provider I/O. Tests assert the resolver is never called after any denied authorization and the provider is never called after resolver failure.
 
-- [ ] **Step 8: Run the Task 7 gate and commit**
+- [x] **Step 8: Run the Task 7 gate and commit**
 
 ```powershell
 pnpm --filter @kortix/studio-worker test src/provider-registry.test.ts src/postgres.test.ts src/authorization.test.ts src/worker.test.ts

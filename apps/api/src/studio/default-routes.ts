@@ -9,6 +9,16 @@ import { InMemoryStudioObjectStore, type StudioObjectStore } from '@kortix/studi
 import { config } from '../config';
 import { deriveRequestContext } from '../iam/cache';
 import { assertAuthorized } from '../iam/dispatcher';
+import { buildProjectAgentCard } from '../intelligence/agent-cards';
+import { createProjectCapabilityRegistry } from '../intelligence/capability-registry';
+import {
+  type AgentTrustSource,
+  type IntelligenceCapabilityRegistry,
+  type IntelligenceProjectRouteDeps,
+  type IntelligenceTaskEventReader,
+  type StudioTaskExecutor,
+  createIntelligenceProjectRoutes,
+} from '../intelligence/project-routes';
 import { assertProjectCapability, loadProjectForUser } from '../projects/lib/access';
 import { db } from '../shared/db';
 import { createStudioCredentialBindingExists } from './credential-existence';
@@ -109,12 +119,32 @@ export type DefaultStudioProjectRoutesInput = {
   ) => Promise<readonly { address: string; family: 4 | 6 }[]>;
 };
 
+export type DefaultIntelligenceProjectRoutesInput = {
+  env?: Record<string, string | undefined>;
+  telemetry?: StudioTelemetry;
+  runtime?: StudioApiRuntime;
+  database?: Database;
+  repository?: StudioRepository;
+  credentialBindingExists?: StudioCredentialBindingExists;
+  loadProjectForUser?: IntelligenceProjectRouteDeps['loadProjectForUser'];
+  assertProjectCapability?: IntelligenceProjectRouteDeps['assertProjectCapability'];
+  capabilityRegistry?: IntelligenceCapabilityRegistry;
+  getAgentCard?: IntelligenceProjectRouteDeps['getAgentCard'];
+  taskExecutor?: StudioTaskExecutor;
+  taskEventReader?: IntelligenceTaskEventReader;
+  agentTrustSource?: AgentTrustSource;
+};
+
+type DefaultStudioFoundationInput = {
+  env?: Record<string, string | undefined>;
+  telemetry?: StudioTelemetry;
+  runtime?: StudioApiRuntime;
+  database?: Database;
+  repository?: StudioRepository;
+};
+
 export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRoutesInput = {}) {
-  const runtime =
-    input.runtime ??
-    (Object.keys(input).length === 0
-      ? getDefaultStudioApiRuntime()
-      : buildStudioApiRuntime(input.env, { telemetry: input.telemetry }));
+  const { runtime, database, defaultRepository, repository } = assembleStudioRouteFoundation(input);
   const telemetry = runtime.enabled ? (runtime.telemetry ?? input.telemetry) : input.telemetry;
   const store =
     runtime.enabled && telemetry && !runtime.telemetry
@@ -122,17 +152,6 @@ export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRout
       : runtime.enabled
         ? runtime.store
         : null;
-  const database = input.database ?? db;
-  const defaultRepository = input.repository
-    ? input.repository
-    : Object.assign(
-        createDrizzleStudioRepository(database),
-        createDrizzleStudioRecoveryRepository(database),
-      );
-  const repository = createProviderEnabledRepository(defaultRepository, {
-    fakeProviderEnabled: runtime.enabled && runtime.fakeProviderEnabled,
-    openAiCompatibleEnabled: runtime.enabled && runtime.openAiCompatibleEnabled,
-  });
   const recoveryRepository = input.recoveryRepository ?? recoveryRepositoryFrom(defaultRepository);
   const providerOriginValidator = createStudioProviderOriginValidator({
     resolve:
@@ -186,6 +205,70 @@ export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRout
     estimateSigningSecret: config.API_KEY_SECRET,
     ...(telemetry ? { telemetry } : {}),
   });
+}
+
+export function createDefaultIntelligenceProjectRoutes(
+  input: DefaultIntelligenceProjectRoutesInput = {},
+) {
+  const { runtime, database, repository } = assembleStudioRouteFoundation(input);
+  const capabilityRegistry =
+    input.capabilityRegistry ??
+    createProjectCapabilityRegistry({
+      repository,
+      isStorageReady: async () => {
+        if (!runtime.enabled) return false;
+        try {
+          await runtime.assertReadyBeforeReservation();
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      credentialBindingExists: runtime.enabled
+        ? (input.credentialBindingExists ?? createStudioCredentialBindingExists(database))
+        : undefined,
+    });
+
+  return createIntelligenceProjectRoutes({
+    capabilityRegistry,
+    getAgentCard:
+      input.getAgentCard ??
+      (async ({ projectId, capabilities }) =>
+        buildProjectAgentCard({
+          projectId,
+          agentId: 'kortix-studio',
+          displayName: 'Kortix Studio',
+          capabilities,
+          protocols: ['mcp', 'a2a'],
+          authKind: 'kortix-project-token',
+          trustTier: 'project',
+        })),
+    loadProjectForUser: input.loadProjectForUser ?? loadProjectForUser,
+    assertProjectCapability: input.assertProjectCapability ?? assertProjectCapability,
+    ...(input.taskExecutor ? { taskExecutor: input.taskExecutor } : {}),
+    ...(input.taskEventReader ? { taskEventReader: input.taskEventReader } : {}),
+    ...(input.agentTrustSource ? { agentTrustSource: input.agentTrustSource } : {}),
+  });
+}
+
+function assembleStudioRouteFoundation(input: DefaultStudioFoundationInput) {
+  const runtime =
+    input.runtime ??
+    (Object.keys(input).length === 0
+      ? getDefaultStudioApiRuntime()
+      : buildStudioApiRuntime(input.env, { telemetry: input.telemetry }));
+  const database = input.database ?? db;
+  const defaultRepository = input.repository
+    ? input.repository
+    : Object.assign(
+        createDrizzleStudioRepository(database),
+        createDrizzleStudioRecoveryRepository(database),
+      );
+  const repository = createProviderEnabledRepository(defaultRepository, {
+    fakeProviderEnabled: runtime.enabled && runtime.fakeProviderEnabled,
+    openAiCompatibleEnabled: runtime.enabled && runtime.openAiCompatibleEnabled,
+  });
+  return { runtime, database, defaultRepository, repository };
 }
 
 function recoveryRepositoryFrom(repository: StudioRepository): StudioRecoveryRepository | null {

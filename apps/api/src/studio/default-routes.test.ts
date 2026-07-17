@@ -24,6 +24,7 @@ mock.module('../iam/dispatcher', () => ({ assertAuthorized: async () => {} }));
 const {
   buildStudioApiRuntime,
   closeDefaultStudioApiRuntime,
+  createDefaultIntelligenceProjectRoutes,
   createDefaultStudioProjectRoutes,
   getDefaultStudioApiRuntime,
 } = await import('./default-routes');
@@ -159,6 +160,15 @@ async function createOpenAiRepository(
 function mountDefaultRoutes(input: Record<string, unknown>) {
   const routes = (
     createDefaultStudioProjectRoutes as unknown as (input: Record<string, unknown>) => Hono
+  )(input);
+  const app = new Hono();
+  app.route('/v1/projects', routes);
+  return app;
+}
+
+function mountDefaultIntelligenceRoutes(input: Record<string, unknown>) {
+  const routes = (
+    createDefaultIntelligenceProjectRoutes as unknown as (input: Record<string, unknown>) => Hono
   )(input);
   const app = new Hono();
   app.route('/v1/projects', routes);
@@ -332,6 +342,7 @@ describe('Studio API runtime assembly', () => {
     ).toBe(runtime);
     createDefaultStudioProjectRoutes();
     createDefaultStudioProjectRoutes();
+    createDefaultIntelligenceProjectRoutes();
     expect(factoryCalls).toBe(1);
 
     let closeSettled = false;
@@ -407,6 +418,152 @@ describe('Studio API runtime assembly', () => {
         })
       ).status,
     ).toBe(503);
+    expect(providerReads).toBe(0);
+  });
+
+  test('keeps disabled intelligence discovery empty without reading providers', async () => {
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    let providerReads = 0;
+    const originalListProviders = repository.listProviders.bind(repository);
+    repository.listProviders = async (...args) => {
+      providerReads += 1;
+      return originalListProviders(...args);
+    };
+    const app = mountDefaultIntelligenceRoutes({
+      runtime: { enabled: false },
+      repository,
+      loadProjectForUser: async (_context: unknown, projectId: string) => ({
+        row: { accountId: ACCOUNT_ID, projectId },
+        userId: USER_ID,
+      }),
+      assertProjectCapability: async () => {},
+    });
+
+    const response = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/capabilities`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      protocol_version: 'intelligence.v1',
+      items: [],
+      next_cursor: null,
+    });
+    expect(providerReads).toBe(0);
+  });
+
+  test('keeps unready intelligence discovery empty without reading providers', async () => {
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    let providerReads = 0;
+    const originalListProviders = repository.listProviders.bind(repository);
+    repository.listProviders = async (...args) => {
+      providerReads += 1;
+      return originalListProviders(...args);
+    };
+    const store = new InMemoryStudioObjectStore({
+      namespace: 'intelligence-unready',
+      ready: false,
+    });
+    const runtime = buildRuntimeWithObjectStore(enabledEnv({ fake: true, openai: false }), store);
+    const app = mountDefaultIntelligenceRoutes({
+      runtime,
+      repository,
+      loadProjectForUser: async (_context: unknown, projectId: string) => ({
+        row: { accountId: ACCOUNT_ID, projectId },
+        userId: USER_ID,
+      }),
+      assertProjectCapability: async () => {},
+    });
+
+    const response = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/capabilities`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      protocol_version: 'intelligence.v1',
+      items: [],
+      next_cursor: null,
+    });
+    expect(providerReads).toBe(0);
+    if (runtime.enabled) await runtime.close();
+  });
+
+  test('assembles a stable Agent Card from ready fake Studio capabilities', async () => {
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const store = new InMemoryStudioObjectStore({ namespace: 'intelligence-ready', ready: true });
+    const runtime = buildRuntimeWithObjectStore(enabledEnv({ fake: true, openai: false }), store);
+    const app = mountDefaultIntelligenceRoutes({
+      runtime,
+      repository,
+      loadProjectForUser: async (_context: unknown, projectId: string) => ({
+        row: { accountId: ACCOUNT_ID, projectId },
+        userId: USER_ID,
+      }),
+      assertProjectCapability: async () => {},
+    });
+
+    const capabilities = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/capabilities`);
+    expect(capabilities.status).toBe(200);
+    expect((await capabilities.json()).items).toMatchObject([
+      { id: 'studio.image.generate', modality: 'image' },
+    ]);
+
+    const card = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/agent-card`);
+    expect(card.status).toBe(200);
+    const cardBody = await card.text();
+    expect(JSON.parse(cardBody)).toMatchObject({
+      id: 'kortix-studio',
+      display_name: 'Kortix Studio',
+      capabilities: ['studio.image.generate'],
+      protocols: ['a2a', 'mcp'],
+      trust_tier: 'project',
+    });
+    expect(cardBody).not.toContain('secret');
+    expect(cardBody).not.toContain('base_url');
+    expect(cardBody).not.toContain('signed_url');
+    if (runtime.enabled) await runtime.close();
+  });
+
+  test('keeps default intelligence task execution unavailable without touching providers', async () => {
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    let providerReads = 0;
+    const originalListProviders = repository.listProviders.bind(repository);
+    repository.listProviders = async (...args) => {
+      providerReads += 1;
+      return originalListProviders(...args);
+    };
+    const app = mountDefaultIntelligenceRoutes({
+      runtime: { enabled: false },
+      repository,
+      loadProjectForUser: async (_context: unknown, projectId: string) => ({
+        row: { accountId: ACCOUNT_ID, projectId },
+        userId: USER_ID,
+      }),
+      assertProjectCapability: async () => {},
+    });
+
+    const task = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        protocol_version: 'intelligence.v1',
+        capability_id: 'studio.image.generate',
+        agent_card_hash: '0'.repeat(64),
+        provider_config_id: FAKE_PROVIDER_ID,
+        model: 'fake/image-v1',
+        input: imageInput,
+        idempotency_key: 'default-intelligence-task-0001',
+        parent_task_id: null,
+        deadline_at: null,
+      }),
+    });
+    expect(task.status).toBe(503);
+    expect(await task.json()).toMatchObject({
+      code: 'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE',
+    });
+
+    const events = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/tasks/${JOB_ID}/events`,
+    );
+    expect(events.status).toBe(503);
+    expect(await events.json()).toMatchObject({
+      code: 'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE',
+    });
     expect(providerReads).toBe(0);
   });
 

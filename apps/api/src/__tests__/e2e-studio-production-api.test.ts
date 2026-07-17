@@ -87,6 +87,7 @@ mock.module('../studio/repositories/drizzle', () => ({
 
 const { projectsApp } = await import('../projects/lib/app');
 await import('../projects/routes/studio');
+await import('../projects/routes/intelligence');
 
 function createApp() {
   const app = new Hono();
@@ -109,6 +110,7 @@ function createApp() {
 
 describe('Studio production API contract', () => {
   test('mounts an executable recovery service in the production projects app', async () => {
+    projectActions.length = 0;
     const app = createApp();
     const res = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs/${JOB_ID}/recovery`, {
       method: 'POST',
@@ -136,6 +138,20 @@ describe('Studio production API contract', () => {
     });
     expect(projectActions).toEqual(['project.studio.jobs.cancel']);
     expect(recoveryCalls).toHaveLength(1);
+  });
+
+  test('mounts intelligence discovery beside the Studio routes', async () => {
+    projectActions.length = 0;
+    const app = createApp();
+    const response = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/capabilities`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      protocol_version: 'intelligence.v1',
+      items: [],
+      next_cursor: null,
+    });
+    expect(projectActions).toEqual(['project.studio.providers.use']);
   });
 });
 

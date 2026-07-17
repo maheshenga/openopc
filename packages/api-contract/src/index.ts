@@ -18,6 +18,7 @@
 import { z } from 'zod';
 
 export * from './studio';
+export * from './intelligence';
 
 /** Loose JSON object — jsonb metadata/config columns surfaced as-is. */
 export const JsonObjectSchema = z.record(z.string(), z.unknown());

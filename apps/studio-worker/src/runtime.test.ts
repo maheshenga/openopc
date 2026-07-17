@@ -26,6 +26,22 @@ describe('Studio worker runtime assembly', () => {
     ).toThrow(/STUDIO_OPENAI_COMPATIBLE_ENABLED/);
   });
 
+  test('preserves the shared provider network policy for registry assembly', () => {
+    expect(
+      buildStudioWorkerRuntime({
+        STUDIO_ENABLED: 'true',
+        STUDIO_FAKE_PROVIDER_ENABLED: 'true',
+        STUDIO_OBJECT_STORE_MODE: 'memory',
+        STUDIO_ALLOW_EPHEMERAL_STORAGE: 'true',
+        STUDIO_PROVIDER_PRIVATE_ORIGIN_ALLOWLIST: 'https://images.internal.test',
+      }),
+    ).toMatchObject({
+      enabled: true,
+      privateProviderOrigins: ['https://images.internal.test'],
+      allowInsecureLocalEndpoints: false,
+    });
+  });
+
   test('uses the shared S3 adapter configuration and redacts static credential failures', () => {
     const secret = 'worker-static-secret';
     expect(() =>

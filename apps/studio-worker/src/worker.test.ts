@@ -78,6 +78,7 @@ function makeWorker(input: {
   now?: () => Date;
   credentialResolver?: { resolve: () => Promise<null> };
   stager?: StudioResultStager;
+  signal?: AbortSignal;
 }) {
   const objectStore = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
   return {
@@ -98,6 +99,7 @@ function makeWorker(input: {
       authorization: input.authorization ?? allow,
       assets: input.assets ?? createObjectStoreAssetWriter(objectStore),
       stager: input.stager,
+      signal: input.signal,
       now: input.now ?? (() => NOW),
       random: () => 0,
     }),
@@ -178,6 +180,34 @@ describe('StudioWorker', () => {
     expect(submissions.sort()).toEqual(['first', 'second']);
     expect(repository.getJob(first.jobId)?.status).toBe('succeeded');
     expect(repository.getJob(second.jobId)?.status).toBe('succeeded');
+  });
+
+  test('abandons a claimed lease when shutdown wins before provider I/O', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob();
+    const controller = new AbortController();
+    const claimNextJob = repository.claimNextJob.bind(repository);
+    repository.claimNextJob = async (input) => {
+      const claimed = await claimNextJob(input);
+      controller.abort();
+      return claimed;
+    };
+    let submits = 0;
+    const { worker } = makeWorker({
+      workerId: 'worker-a',
+      repository,
+      signal: controller.signal,
+      adapter: provider({
+        submit: async () => {
+          submits += 1;
+          throw new Error('provider must not run during shutdown');
+        },
+      }),
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ kind: 'idle' });
+    expect(submits).toBe(0);
+    expect(repository.getJob(job.jobId)?.leaseOwner).toBeNull();
   });
 
   test('uses a fresh per-claim fencing owner even when the configured worker id is reused', async () => {
@@ -623,6 +653,42 @@ describe('StudioWorker', () => {
 
     expect(result).toMatchObject({ kind: 'error', code: 'STUDIO_ATTEMPT_CONFLICT' });
     expect(submitCalls).toBe(0);
+    expect(repository.getJob(job.jobId)?.leaseOwner).toBeNull();
+  });
+
+  test('schedules a clean retry when shutdown wins after prepare but before submit', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob();
+    const controller = new AbortController();
+    const prepareAttempt = repository.prepareAttempt.bind(repository);
+    repository.prepareAttempt = async (input) => {
+      const attempt = await prepareAttempt(input);
+      controller.abort();
+      return attempt;
+    };
+    let submits = 0;
+    const { worker } = makeWorker({
+      workerId: 'worker-a',
+      repository,
+      signal: controller.signal,
+      adapter: provider({
+        submit: async () => {
+          submits += 1;
+          throw new Error('provider must not run during shutdown');
+        },
+      }),
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({
+      kind: 'processed',
+      jobId: job.jobId,
+      status: 'running',
+    });
+    expect(submits).toBe(0);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      status: 'failed',
+      retryClassification: 'retryable',
+    });
     expect(repository.getJob(job.jobId)?.leaseOwner).toBeNull();
   });
 

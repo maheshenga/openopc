@@ -114,14 +114,17 @@ export async function runStudioMaintenanceOnce(input: {
 }
 
 export async function runStudioWorkerTick<T>(input: {
+  signal?: AbortSignal;
   assertReady: () => Promise<void>;
   claim: () => Promise<T>;
 }): Promise<{ ready: false } | { ready: true; result: T }> {
+  if (input.signal?.aborted) return { ready: false };
   try {
     await input.assertReady();
   } catch {
     return { ready: false };
   }
+  if (input.signal?.aborted) return { ready: false };
   return { ready: true, result: await input.claim() };
 }
 
@@ -194,8 +197,11 @@ async function main(): Promise<void> {
   const providerRegistry = createStudioProviderRegistry({
     fakeProviderEnabled: env.fakeProviderEnabled,
     openAiCompatibleEnabled: env.openAiCompatibleEnabled,
+    privateProviderOrigins: runtime.privateProviderOrigins,
+    allowInsecureLocalEndpoints: runtime.allowInsecureLocalEndpoints,
   });
   const objectStore = runtime.store;
+  const controller = new AbortController();
   const worker = new StudioWorker({
     config: {
       workerId: env.workerId,
@@ -212,6 +218,7 @@ async function main(): Promise<void> {
     referenceAssets: { resolve: async () => [] },
     authorization,
     assets: createObjectStoreAssetWriter(objectStore),
+    signal: controller.signal,
   });
   const maintenance = new StudioMaintenanceCoordinator({
     repository: maintenanceRepository,
@@ -219,7 +226,6 @@ async function main(): Promise<void> {
     lockKey: studioMaintenanceLeaseName(),
     ttlMs: Math.max(60_000, env.maintenanceMs * 3),
   });
-  const controller = new AbortController();
   const stop = () => controller.abort();
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
@@ -232,6 +238,7 @@ async function main(): Promise<void> {
       idleMs: env.idleMs,
       async tick() {
         const tick = await runStudioWorkerTick({
+          signal: controller.signal,
           assertReady: runtime.assertReadyBeforeClaim,
           claim: () => worker.runOnce(),
         });

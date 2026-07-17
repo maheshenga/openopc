@@ -24,8 +24,13 @@ export interface StudioProviderRegistry {
 export function createStudioProviderRegistry(input: {
   fakeProviderEnabled: boolean;
   openAiCompatibleEnabled: boolean;
+  privateProviderOrigins?: readonly string[];
+  allowInsecureLocalEndpoints?: boolean;
+  fetch?: typeof safeStudioFetch;
 }): StudioProviderRegistry {
   const fake = input.fakeProviderEnabled ? createFakeStudioProvider() : null;
+  const allowPrivateOrigins = new Set(input.privateProviderOrigins ?? []);
+  const providerFetch = input.fetch ?? safeStudioFetch;
   return {
     async resolve(request) {
       if (!request.config.enabled || request.config.provider !== request.job.provider) return null;
@@ -40,7 +45,10 @@ export function createStudioProviderRegistry(input: {
       ) {
         return null;
       }
-      const baseUrl = parseSafeBaseUrl(request.config.baseUrl);
+      const baseUrl = parseSafeBaseUrl(
+        request.config.baseUrl,
+        input.allowInsecureLocalEndpoints === true,
+      );
       if (!baseUrl) return null;
 
       let map: ReturnType<typeof parseOpenAiCompatibleCapabilityMap>;
@@ -60,18 +68,23 @@ export function createStudioProviderRegistry(input: {
         baseUrl,
         model,
         credential: request.credential,
-        fetch: safeStudioFetch,
+        fetch: (fetchInput) =>
+          providerFetch({
+            ...fetchInput,
+            allowPrivateOrigins,
+            allowInsecureLocalEndpoints: input.allowInsecureLocalEndpoints === true,
+          }),
       });
     },
   };
 }
 
-function parseSafeBaseUrl(value: string | null): URL | null {
+function parseSafeBaseUrl(value: string | null, allowInsecure: boolean): URL | null {
   if (!value) return null;
   try {
     const url = new URL(value);
     if (
-      url.protocol !== 'https:' ||
+      (url.protocol !== 'https:' && !(allowInsecure && url.protocol === 'http:')) ||
       url.username ||
       url.password ||
       url.search ||

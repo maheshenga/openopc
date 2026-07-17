@@ -59,6 +59,7 @@ export type StudioWorkerDependencies = {
   authorization: StudioSubmissionAuthorization;
   assets: StudioAssetWriter;
   stager?: StudioResultStager;
+  signal?: AbortSignal;
   now?: () => Date;
   random?: () => number;
 };
@@ -75,6 +76,7 @@ export class StudioWorker {
   }
 
   async runOnce(): Promise<StudioWorkerTickResult> {
+    if (this.deps.signal?.aborted) return { kind: 'idle' };
     let job: StudioWorkerJob | null = null;
     const now = this.now();
     try {
@@ -85,6 +87,14 @@ export class StudioWorker {
         leaseMs: this.config.leaseMs,
       });
       if (!job) return { kind: 'idle' };
+      if (this.deps.signal?.aborted) {
+        await this.deps.repository.abandonLease({
+          jobId: job.jobId,
+          workerId: this.owner(job),
+          availableAt: now,
+        });
+        return { kind: 'idle' };
+      }
       return await this.process(job, now);
     } catch (error) {
       if (job) {
@@ -255,6 +265,16 @@ export class StudioWorker {
     if (job.status === 'queued') {
       assertStudioTransition('queued', 'running');
       job.status = 'running';
+    }
+    if (this.deps.signal?.aborted) {
+      return this.scheduleRetryOrFail(
+        job,
+        attempt,
+        'retryable',
+        'Studio worker stopped before provider dispatch',
+        undefined,
+        this.now(),
+      );
     }
 
     const ctx = this.providerContext(job, attempt);

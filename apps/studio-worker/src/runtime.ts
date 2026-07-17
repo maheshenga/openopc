@@ -12,6 +12,8 @@ export type StudioWorkerRuntime =
       fakeProviderEnabled: boolean;
       openAiCompatibleEnabled: boolean;
       storageMode: 'memory' | 's3';
+      privateProviderOrigins: readonly string[];
+      allowInsecureLocalEndpoints: boolean;
       store: StudioObjectStore;
       assertReadyBeforeClaim(): Promise<void>;
       close(): Promise<void>;
@@ -28,6 +30,8 @@ export function buildStudioWorkerRuntime(
     fakeProviderEnabled: adapter.fakeProviderEnabled,
     openAiCompatibleEnabled: adapter.openAiCompatibleEnabled,
     storageMode: adapter.storage.mode,
+    privateProviderOrigins: adapter.privateProviderOrigins,
+    allowInsecureLocalEndpoints: adapter.allowInsecureLocalEndpoints,
     store,
     assertReadyBeforeClaim: () => store.assertReady(),
     async close() {

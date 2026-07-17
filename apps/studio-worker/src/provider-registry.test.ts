@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { safeStudioFetch } from '@kortix/studio-adapters';
 import { createStudioProviderRegistry } from './provider-registry';
 import type { StudioWorkerJob, StudioWorkerProviderConfig } from './contracts';
 
@@ -89,5 +90,39 @@ describe('StudioProviderRegistry', () => {
     expect(adapter).toMatchObject({ id: 'openai-compatible' });
     expect(Object.keys(adapter ?? {})).not.toContain('credential');
     expect(JSON.stringify(adapter)).not.toContain(credential.value);
+  });
+
+  test('passes the shared private-origin policy into provider network calls', async () => {
+    const observed: Array<{ allowPrivateOrigins: ReadonlySet<string> }> = [];
+    const registry = createStudioProviderRegistry({
+      fakeProviderEnabled: false,
+      openAiCompatibleEnabled: true,
+      privateProviderOrigins: ['https://images.example.test'],
+      fetch: async (input) => {
+        observed.push({ allowPrivateOrigins: input.allowPrivateOrigins });
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                b64_json:
+                  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ) as unknown as Awaited<ReturnType<typeof safeStudioFetch>>;
+      },
+    });
+    const adapter = await registry.resolve({ job, config, credential, referenceAssets });
+    if (!adapter) throw new Error('expected OpenAI-compatible adapter');
+
+    await adapter.submit(
+      { correlationId: 'job-a', submissionKey: 'submission-a' },
+      job.input,
+    );
+
+    expect([...observed[0]!.allowPrivateOrigins]).toEqual([
+      'https://images.example.test',
+    ]);
   });
 });

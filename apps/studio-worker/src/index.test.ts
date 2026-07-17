@@ -68,6 +68,28 @@ describe('studio worker bootstrap loop', () => {
     expect(claims).toBe(1);
   });
 
+  test('does not claim when shutdown arrives while readiness is pending', async () => {
+    const controller = new AbortController();
+    let finishReadiness!: () => void;
+    const readiness = new Promise<void>((resolve) => {
+      finishReadiness = resolve;
+    });
+    let claims = 0;
+
+    const tick = runStudioWorkerTick({
+      signal: controller.signal,
+      assertReady: async () => readiness,
+      claim: async () => {
+        claims += 1;
+      },
+    });
+    controller.abort();
+    finishReadiness();
+
+    await expect(tick).resolves.toEqual({ ready: false });
+    expect(claims).toBe(0);
+  });
+
   test('shuts down maintenance, database, and storage exactly once', async () => {
     const calls: string[] = [];
     await shutdownStudioWorker({

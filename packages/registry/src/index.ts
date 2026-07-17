@@ -19,3 +19,4 @@ export * from './paths';
 export * from './skills';
 export * from './fetch';
 export * from './build';
+export * from './capabilities';

@@ -82,7 +82,7 @@ export const StudioEstimateResponseSchema = z
     currency: z.literal('credits'),
     provider_cost_credits: z.number().nonnegative(),
     platform_cost_credits: z.number().nonnegative(),
-    max_approved_credits: z.number().positive(),
+    max_approved_credits: z.number().nonnegative(),
     input_hash: z.string().min(16),
     line_items: z.array(
       z.object({

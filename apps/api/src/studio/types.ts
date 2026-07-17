@@ -12,7 +12,7 @@ import type {
   StudioUpdateProviderConfigRequest,
   StudioUpload,
 } from '@kortix/api-contract';
-import type { StudioProviderDefinitionConfig } from '@kortix/studio-runtime';
+import type { StudioPricingSnapshot, StudioProviderDefinitionConfig } from '@kortix/studio-runtime';
 
 export type StudioLoadedProject = {
   row: {
@@ -44,7 +44,7 @@ export type StudioCreateJobResult =
 export class StudioRepositoryError extends Error {
   constructor(
     readonly studioCode: StudioErrorCode,
-    readonly httpStatus: 402,
+    readonly httpStatus: 402 | 409,
     message: string,
   ) {
     super(message);
@@ -58,8 +58,10 @@ export function isStudioRepositoryError(
   if (!error || typeof error !== 'object') return false;
   const candidate = error as Record<string, unknown>;
   return (
-    candidate.studioCode === 'STUDIO_INSUFFICIENT_CREDITS' &&
-    candidate.httpStatus === 402 &&
+    ((candidate.studioCode === 'STUDIO_INSUFFICIENT_CREDITS' && candidate.httpStatus === 402) ||
+      ((candidate.studioCode === 'STUDIO_PROVIDER_CONFIG_STALE' ||
+        candidate.studioCode === 'STUDIO_PRICING_STALE') &&
+        candidate.httpStatus === 409)) &&
     typeof candidate.message === 'string'
   );
 }
@@ -111,6 +113,10 @@ export type StudioCreatePricingInput = {
 
 export interface StudioPricingRepository {
   listPricing(accountId: string): Promise<StudioPricingCatalogEntry[]>;
+  getActivePricing(
+    accountId: string,
+    pricingCatalogId: string,
+  ): Promise<StudioPricingCatalogEntry | null>;
   createPricingVersion(input: StudioCreatePricingInput): Promise<StudioPricingCatalogEntry>;
   deactivatePricing(
     accountId: string,
@@ -132,6 +138,11 @@ export type StudioProviderPricingReference = {
   pricing_catalog_id: string;
   provider: string;
   model: string;
+};
+
+export type StudioProductionJobBinding = {
+  provider_config_version: string;
+  pricing_snapshot: StudioPricingSnapshot;
 };
 
 export type StudioCreateProviderConfigInput = Omit<
@@ -176,7 +187,9 @@ export interface StudioRepository extends StudioPricingRepository, StudioProvide
     input: StudioCreateJobInput,
     provider: StudioProviderConfigWire,
     estimate: StudioEstimateResponse,
+    productionBinding?: StudioProductionJobBinding,
   ): Promise<StudioCreateJobResult>;
+  findJobByIdempotency(accountId: string, idempotencyKey: string): Promise<StudioJob | null>;
   listJobs(
     projectId: string,
     limit: number,

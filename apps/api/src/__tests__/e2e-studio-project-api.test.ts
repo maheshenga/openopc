@@ -169,7 +169,7 @@ describe('Studio project API', () => {
         input: imageInput,
       }),
     });
-    expect(estimate.estimate_token).toStartWith('studio-estimate-v1.');
+    expect(estimate.estimate_token).toStartWith('studio-estimate-v2.');
   });
 
   test('rejects an estimate token reused for a more expensive request', async () => {

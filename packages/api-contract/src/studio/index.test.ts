@@ -83,6 +83,20 @@ describe('studio phase 1 contracts', () => {
     expect(() =>
       StudioEstimateResponseSchema.strict().parse(studioEstimateResponseFixture()),
     ).not.toThrow();
+    expect(
+      StudioEstimateResponseSchema.strict().parse({
+        ...studioEstimateResponseFixture(),
+        provider_cost_credits: 0,
+        platform_cost_credits: 0,
+        max_approved_credits: 0,
+      }).max_approved_credits,
+    ).toBe(0);
+    expect(
+      StudioEstimateResponseSchema.strict().safeParse({
+        ...studioEstimateResponseFixture(),
+        max_approved_credits: -0.0001,
+      }).success,
+    ).toBe(false);
     expect(() =>
       StudioCreateJobRequestSchema.strict().parse(studioCreateJobRequestFixture()),
     ).not.toThrow();

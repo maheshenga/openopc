@@ -105,6 +105,33 @@ function selectChain(rows: unknown[]) {
   };
 }
 
+function collectBoundValues(node: unknown, values: unknown[] = []): unknown[] {
+  if (!node || typeof node !== 'object') return values;
+  const chunks = (node as { queryChunks?: unknown[] }).queryChunks;
+  if (!Array.isArray(chunks)) return values;
+  for (const chunk of chunks) {
+    if (chunk === null || typeof chunk !== 'object') values.push(chunk);
+    else collectBoundValues(chunk, values);
+  }
+  return values;
+}
+
+function productionBindingFixture() {
+  return {
+    provider_config_version: 'canonical-provider-version-7',
+    pricing_snapshot: {
+      pricing_catalog_id: '88888888-8888-4888-8888-888888888888',
+      version: 3,
+      provider: 'openai-compatible',
+      model: 'gpt-image-1',
+      unit: 'image' as const,
+      rate_credits: 2,
+      max_provider_credits: 10,
+      markup_credits: 0.25,
+    },
+  };
+}
+
 describe('Studio Drizzle repository worker integration', () => {
   test('allowlists public credential-binding fields instead of returning stored extras', async () => {
     const db = {
@@ -217,6 +244,68 @@ describe('Studio Drizzle repository worker integration', () => {
 
     expect(executeCalls).toBe(1);
     expect(result).toMatchObject({ created: true, job: { job_id: JOB_ID, status: 'queued' } });
+  });
+
+  test('binds the exact production provider and pricing snapshot to the 21-argument RPC', async () => {
+    let selectCalls = 0;
+    let executedQuery: unknown;
+    const db = {
+      select: () => selectChain(selectCalls++ === 0 ? [] : [jobRow()]),
+      execute: async (query: unknown) => {
+        executedQuery = query;
+        return [{ result: { success: true, idempotent: false, job_id: JOB_ID } }];
+      },
+      insert: () => {
+        throw new Error('createJob must not directly insert studio_jobs');
+      },
+      update: () => {
+        throw new Error('unexpected update');
+      },
+    };
+    const repository = createDrizzleStudioRepository(db as never);
+    const jobInput = {
+      ...createJobInputFixture(),
+      model: 'gpt-image-1',
+      input: {
+        ...jobRow().input,
+        image: { ...jobRow().input.image, output_count: 2 },
+      } as never,
+    };
+    const provider = {
+      ...providerFixture(),
+      provider: 'openai-compatible' as const,
+      credential_binding: { kind: 'secret' as const, identifier: 'studio-image-key' },
+    };
+    const estimate = { ...estimateFixture(), max_approved_credits: 10.5 };
+    const binding = productionBindingFixture();
+
+    await repository.createJob(jobInput, provider, estimate, binding);
+
+    const values = collectBoundValues(executedQuery);
+    expect(values.slice(0, 20)).toEqual([
+      ACCOUNT_ID,
+      PROJECT_ID,
+      jobInput.actor_user_id,
+      jobInput.actor_type,
+      jobInput.acting_token_id,
+      jobInput.agent_name,
+      jobInput.session_id,
+      jobInput.parent_job_id,
+      jobInput.capability,
+      PROVIDER_ID,
+      binding.provider_config_version,
+      'openai-compatible',
+      'gpt-image-1',
+      binding.pricing_snapshot.pricing_catalog_id,
+      binding.pricing_snapshot.version,
+      JSON.stringify(binding.pricing_snapshot),
+      JSON.stringify(jobInput.input),
+      jobInput.idempotency_key,
+      jobInput.request_hash,
+      String(estimate.max_approved_credits),
+    ]);
+    expect(values).toHaveLength(21);
+    expect(values[20]).toBeString();
   });
 
   test('records cancellation requests for running jobs instead of rejecting them', async () => {
@@ -337,6 +426,42 @@ describe('Studio Drizzle repository worker integration', () => {
         httpStatus: 402,
         message: 'Insufficient credits',
       });
+    }
+  });
+
+  test.each([
+    ['provider_config_stale', 'STUDIO_PROVIDER_CONFIG_STALE'],
+    ['pricing_stale', 'STUDIO_PRICING_STALE'],
+  ] as const)('maps %s reservation fencing to a stable 409 error', async (rpcCode, studioCode) => {
+    const db = {
+      select: () => selectChain([]),
+      execute: async () => [
+        { result: { success: false, code: rpcCode, error: 'internal database detail' } },
+      ],
+      insert: () => {
+        throw new Error('unexpected insert');
+      },
+      update: () => {
+        throw new Error('unexpected update');
+      },
+    };
+    const repository = createDrizzleStudioRepository(db as never);
+
+    try {
+      await repository.createJob(
+        { ...createJobInputFixture(), model: 'gpt-image-1' },
+        {
+          ...providerFixture(),
+          provider: 'openai-compatible',
+          credential_binding: { kind: 'secret', identifier: 'studio-image-key' },
+        },
+        estimateFixture(),
+        productionBindingFixture(),
+      );
+      throw new Error('Expected createJob to reject');
+    } catch (error) {
+      expect(error).toMatchObject({ studioCode, httpStatus: 409 });
+      expect((error as Error).message).not.toContain('internal database detail');
     }
   });
 });

@@ -340,6 +340,21 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
       return rows.map(serializePricing);
     },
 
+    async getActivePricing(accountId, pricingCatalogId) {
+      const rows = await db
+        .select()
+        .from(studioPricingCatalog)
+        .where(
+          and(
+            eq(studioPricingCatalog.accountId, accountId),
+            eq(studioPricingCatalog.pricingCatalogId, pricingCatalogId),
+            eq(studioPricingCatalog.active, true),
+          ),
+        )
+        .limit(1);
+      return rows[0] ? serializePricing(rows[0]) : null;
+    },
+
     async createPricingVersion({ account_id, created_by_user_id, request }) {
       return db.transaction(
         async (tx) => {
@@ -679,7 +694,7 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
       return rows[0] ? serializeProvider(rows[0]) : null;
     },
 
-    async createJob(input, provider, estimate): Promise<StudioCreateJobResult> {
+    async createJob(input, provider, estimate, productionBinding): Promise<StudioCreateJobResult> {
       const existing = await db
         .select()
         .from(studioJobs)
@@ -706,27 +721,53 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
       const reservationExpiresAt = new Date(
         Math.max(Date.now() + 24 * 60 * 60_000, Date.parse(estimate.expires_at)),
       ).toISOString();
-      const rpcRows = await db.execute(sql`
-        SELECT public.atomic_create_studio_job(
-          ${input.account_id}::uuid,
-          ${input.project_id}::uuid,
-          ${input.actor_user_id}::uuid,
-          ${input.actor_type},
-          ${input.acting_token_id}::uuid,
-          ${input.agent_name},
-          ${input.session_id},
-          ${input.parent_job_id}::uuid,
-          ${input.capability},
-          ${input.provider_config_id}::uuid,
-          ${provider.provider},
-          ${input.model},
-          ${JSON.stringify(input.input)}::jsonb,
-          ${input.idempotency_key},
-          ${input.request_hash},
-          ${String(estimate.max_approved_credits)}::numeric,
-          ${reservationExpiresAt}::timestamptz
-        ) AS result
-      `);
+      const rpcRows = productionBinding
+        ? await db.execute(sql`
+            SELECT public.atomic_create_studio_job(
+              ${input.account_id}::uuid,
+              ${input.project_id}::uuid,
+              ${input.actor_user_id}::uuid,
+              ${input.actor_type},
+              ${input.acting_token_id}::uuid,
+              ${input.agent_name},
+              ${input.session_id},
+              ${input.parent_job_id}::uuid,
+              ${input.capability},
+              ${input.provider_config_id}::uuid,
+              ${productionBinding.provider_config_version},
+              ${provider.provider},
+              ${input.model},
+              ${productionBinding.pricing_snapshot.pricing_catalog_id}::uuid,
+              ${productionBinding.pricing_snapshot.version}::integer,
+              ${JSON.stringify(productionBinding.pricing_snapshot)}::jsonb,
+              ${JSON.stringify(input.input)}::jsonb,
+              ${input.idempotency_key},
+              ${input.request_hash},
+              ${String(estimate.max_approved_credits)}::numeric,
+              ${reservationExpiresAt}::timestamptz
+            ) AS result
+          `)
+        : await db.execute(sql`
+            SELECT public.atomic_create_studio_job(
+              ${input.account_id}::uuid,
+              ${input.project_id}::uuid,
+              ${input.actor_user_id}::uuid,
+              ${input.actor_type},
+              ${input.acting_token_id}::uuid,
+              ${input.agent_name},
+              ${input.session_id},
+              ${input.parent_job_id}::uuid,
+              ${input.capability},
+              ${input.provider_config_id}::uuid,
+              ${provider.provider},
+              ${input.model},
+              ${JSON.stringify(input.input)}::jsonb,
+              ${input.idempotency_key},
+              ${input.request_hash},
+              ${String(estimate.max_approved_credits)}::numeric,
+              ${reservationExpiresAt}::timestamptz
+            ) AS result
+          `);
       const rpc = rowsFromExecute(rpcRows)[0]?.result as Record<string, unknown> | undefined;
       if (!rpc || rpc.success !== true) {
         if (rpc?.code === 'idempotency_mismatch') {
@@ -739,6 +780,16 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
             'Insufficient credits',
           );
         }
+        if (rpc?.code === 'provider_config_stale') {
+          throw new StudioRepositoryError(
+            'STUDIO_PROVIDER_CONFIG_STALE',
+            409,
+            'Studio provider configuration is stale',
+          );
+        }
+        if (rpc?.code === 'pricing_stale') {
+          throw new StudioRepositoryError('STUDIO_PRICING_STALE', 409, 'Studio pricing is stale');
+        }
         throw new Error(String(rpc?.error ?? 'Studio job reservation failed'));
       }
       const jobId = String(rpc.job_id);
@@ -750,6 +801,17 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
       if (!rows[0]) throw new Error('Studio job was created but could not be reloaded');
       const job = serializeJob(rows[0]);
       return { job, created: rpc.idempotent !== true };
+    },
+
+    async findJobByIdempotency(accountId, idempotencyKey) {
+      const rows = await db
+        .select()
+        .from(studioJobs)
+        .where(
+          and(eq(studioJobs.accountId, accountId), eq(studioJobs.idempotencyKey, idempotencyKey)),
+        )
+        .limit(1);
+      return rows[0] ? serializeJob(rows[0]) : null;
     },
 
     async listJobs(projectId, limit, cursor) {

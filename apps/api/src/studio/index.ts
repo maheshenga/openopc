@@ -23,6 +23,11 @@ import {
   issueStudioEstimateToken,
   verifyStudioEstimateToken,
 } from './estimate-token';
+import {
+  type StudioEstimateResolution,
+  type StudioEstimateResolutionError,
+  resolveStudioEstimate,
+} from './estimates';
 import type { StudioProviderConfigService } from './providers';
 import { createMemoryStudioRepository } from './repositories/memory';
 import { type StudioStorageService, StudioStorageServiceError } from './storage';
@@ -124,39 +129,19 @@ async function loadProjectOr404(
   return loaded;
 }
 
-function estimateFor(
-  input: unknown,
-): Pick<
-  StudioEstimateResponse,
-  'provider_cost_credits' | 'platform_cost_credits' | 'max_approved_credits' | 'line_items'
-> {
-  const parsed = StudioEstimateRequestSchema.parse(input);
-  const outputCount =
-    parsed.input.capability === 'image.generate' ? parsed.input.image.output_count : 1;
-  const qualityMultiplier =
-    parsed.input.capability === 'image.generate' && parsed.input.image.quality === 'high' ? 2 : 1;
-  const providerCost = outputCount * qualityMultiplier;
-  return {
-    provider_cost_credits: providerCost,
-    platform_cost_credits: 0,
-    max_approved_credits: providerCost,
-    line_items: [{ label: 'Fake image generation', credits: providerCost }],
-  };
-}
-
 function createEstimateResponse(input: {
   request: unknown;
   loaded: StudioLoadedProject;
   secret: string;
+  resolution: StudioEstimateResolution;
 }): StudioEstimateResponse {
-  const { request, loaded, secret } = input;
-  const costs = estimateFor(request);
+  const { request, loaded, secret, resolution } = input;
   const unsigned: UnsignedStudioEstimate = {
     estimate_id: crypto.randomUUID(),
     expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
     currency: 'credits',
     input_hash: canonicalStudioRequestHash(request),
-    ...costs,
+    ...resolution.costs,
   };
   return {
     ...unsigned,
@@ -166,8 +151,13 @@ function createEstimateResponse(input: {
       projectId: loaded.row.projectId,
       actorUserId: loaded.userId,
       estimate: unsigned,
+      versionBinding: resolution.versionBinding,
     }),
   };
+}
+
+function estimateResolutionError(c: Context<AppEnv>, resolution: StudioEstimateResolutionError) {
+  return c.json({ error: resolution.message, code: resolution.code }, resolution.status);
 }
 
 function cancellable(job: StudioJob): boolean {
@@ -417,17 +407,19 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
     const body = await c.req.json();
     const parsed = StudioEstimateRequestSchema.safeParse(body);
     if (!parsed.success) return badRequest(c, parsed.error.flatten());
-    const provider = await deps.repository.getProvider(projectId, parsed.data.provider_config_id);
-    if (!provider || !provider.capabilities.includes(parsed.data.capability)) {
-      return c.json(
-        { error: 'Studio provider unavailable', code: 'STUDIO_PROVIDER_UNAVAILABLE' },
-        404,
-      );
-    }
+    const resolution = await resolveStudioEstimate({
+      repository: deps.repository,
+      accountId: loaded.row.accountId,
+      projectId,
+      request: parsed.data,
+      credentialBindingExists: deps.credentialBindingExists,
+    });
+    if (!resolution.ok) return estimateResolutionError(c, resolution);
     const estimate = createEstimateResponse({
       request: parsed.data,
       loaded,
       secret: deps.estimateSigningSecret,
+      resolution: resolution.value,
     });
     return c.json(estimate);
   });
@@ -460,26 +452,66 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
     });
     if (parsed.data.request_hash !== expectedHash) return idempotencyMismatch(c);
 
-    const provider = await deps.repository.getProvider(projectId, parsed.data.provider_config_id);
-    if (!provider || !provider.capabilities.includes(parsed.data.capability)) {
-      return c.json(
-        { error: 'Studio provider unavailable', code: 'STUDIO_PROVIDER_UNAVAILABLE' },
-        404,
-      );
+    const replay = await deps.repository.findJobByIdempotency(
+      loaded.row.accountId,
+      parsed.data.idempotency_key,
+    );
+    if (replay) {
+      if (replay.project_id !== projectId || replay.request_hash !== expectedHash) {
+        return idempotencyMismatch(c);
+      }
+      return c.json(replay, 200);
     }
-    const verifiedEstimate = verifyStudioEstimateToken({
+
+    const initialVerification = verifyStudioEstimateToken({
       token: parsed.data.estimate_token,
       secret: deps.estimateSigningSecret,
     });
     if (
-      !verifiedEstimate.valid ||
-      verifiedEstimate.claims.account_id !== loaded.row.accountId ||
-      verifiedEstimate.claims.project_id !== projectId ||
-      verifiedEstimate.claims.actor_user_id !== loaded.userId ||
-      verifiedEstimate.claims.estimate.estimate_id !== parsed.data.estimate_id ||
-      verifiedEstimate.claims.estimate.input_hash !== expectedHash
+      !initialVerification.valid ||
+      initialVerification.claims.account_id !== loaded.row.accountId ||
+      initialVerification.claims.project_id !== projectId ||
+      initialVerification.claims.actor_user_id !== loaded.userId ||
+      initialVerification.claims.estimate.estimate_id !== parsed.data.estimate_id ||
+      initialVerification.claims.estimate.input_hash !== expectedHash
     ) {
       return c.json({ error: 'Studio estimate expired', code: 'STUDIO_ESTIMATE_EXPIRED' }, 409);
+    }
+    const expectedVersionBinding =
+      initialVerification.claims.version === 2
+        ? {
+            providerConfigVersion: initialVerification.claims.provider_config_version,
+            pricingCatalogId: initialVerification.claims.pricing_catalog_id,
+            pricingVersion: initialVerification.claims.pricing_version,
+          }
+        : undefined;
+    const resolution = await resolveStudioEstimate({
+      repository: deps.repository,
+      accountId: loaded.row.accountId,
+      projectId,
+      request: {
+        capability: parsed.data.capability,
+        provider_config_id: parsed.data.provider_config_id,
+        model: parsed.data.model,
+        input: parsed.data.input,
+      },
+      ...(expectedVersionBinding ? { expectedVersionBinding } : {}),
+      credentialBindingExists: deps.credentialBindingExists,
+    });
+    if (!resolution.ok) return estimateResolutionError(c, resolution);
+    const verifiedEstimate = verifyStudioEstimateToken({
+      token: parsed.data.estimate_token,
+      secret: deps.estimateSigningSecret,
+      expectedVersionBinding: resolution.value.versionBinding,
+    });
+    if (!verifiedEstimate.valid) {
+      const code =
+        verifiedEstimate.reason === 'provider_config_stale'
+          ? 'STUDIO_PROVIDER_CONFIG_STALE'
+          : verifiedEstimate.reason === 'pricing_stale'
+            ? 'STUDIO_PRICING_STALE'
+            : 'STUDIO_ESTIMATE_EXPIRED';
+      return c.json({ error: 'Studio estimate expired', code }, 409);
     }
     const estimate: StudioEstimateResponse = {
       ...verifiedEstimate.claims.estimate,
@@ -497,12 +529,13 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
           ...actorContext,
           parent_job_id: null,
         },
-        provider,
+        resolution.value.provider,
         estimate,
+        resolution.value.productionBinding,
       );
     } catch (error) {
       if (isStudioRepositoryError(error)) {
-        return c.json({ error: error.message, code: error.studioCode }, 402);
+        return c.json({ error: error.message, code: error.studioCode }, error.httpStatus);
       }
       throw error;
     }

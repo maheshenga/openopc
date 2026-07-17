@@ -5,10 +5,12 @@ import type {
   StudioPricingCatalogEntry,
 } from '@kortix/api-contract';
 import { toStudioProviderConfigWire } from '../providers';
+import { StudioRepositoryError } from '../types';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
   StudioPendingUploadRecord,
+  StudioProductionJobBinding,
   StudioProviderConfigRecord,
   StudioProviderConfigWire,
   StudioRepository,
@@ -59,6 +61,11 @@ export function createMemoryStudioRepository(
   return {
     async listPricing(accountId) {
       return [...pricing.values()].filter((entry) => entry.account_id === accountId);
+    },
+
+    async getActivePricing(accountId, pricingCatalogId) {
+      const entry = pricing.get(pricingCatalogId);
+      return entry?.account_id === accountId && entry.active ? entry : null;
     },
 
     async createPricingVersion({ account_id, created_by_user_id, request }) {
@@ -205,7 +212,7 @@ export function createMemoryStudioRepository(
         : null;
     },
 
-    async createJob(input, provider, estimate): Promise<StudioCreateJobResult> {
+    async createJob(input, provider, estimate, productionBinding): Promise<StudioCreateJobResult> {
       const existing = [...jobs.values()].find(
         (job) =>
           job.account_id === input.account_id && job.idempotency_key === input.idempotency_key,
@@ -221,6 +228,10 @@ export function createMemoryStudioRepository(
           job: existing,
           created: false,
         };
+      }
+
+      if (productionBinding) {
+        assertCurrentProductionBinding(input, providerRecords, pricing, productionBinding);
       }
 
       const createdAt = now();
@@ -255,6 +266,14 @@ export function createMemoryStudioRepository(
         model: job.model,
       });
       return { job, created: true };
+    },
+
+    async findJobByIdempotency(accountId, idempotencyKey) {
+      return (
+        [...jobs.values()].find(
+          (job) => job.account_id === accountId && job.idempotency_key === idempotencyKey,
+        ) ?? null
+      );
     },
 
     async listJobs(projectId, limit, cursor) {
@@ -395,4 +414,44 @@ export function createMemoryStudioRepository(
       return asset?.project_id === projectId ? asset : null;
     },
   };
+}
+
+function assertCurrentProductionBinding(
+  input: StudioCreateJobInput,
+  providerRecords: Map<string, StudioProviderConfigRecord>,
+  pricing: Map<string, StudioPricingCatalogEntry>,
+  binding: StudioProductionJobBinding,
+): void {
+  const provider = providerRecords.get(input.provider_config_id);
+  if (
+    !provider ||
+    provider.account_id !== input.account_id ||
+    provider.project_id !== input.project_id ||
+    provider.enabled !== true ||
+    provider.version_token !== binding.provider_config_version
+  ) {
+    throw new StudioRepositoryError(
+      'STUDIO_PROVIDER_CONFIG_STALE',
+      409,
+      'Studio provider configuration is stale',
+    );
+  }
+  const snapshot = binding.pricing_snapshot;
+  const price = pricing.get(snapshot.pricing_catalog_id);
+  const currentSnapshot =
+    price?.active && price.account_id === input.account_id
+      ? {
+          pricing_catalog_id: price.pricing_catalog_id,
+          version: price.version,
+          provider: price.provider,
+          model: price.model,
+          unit: price.unit,
+          rate_credits: price.rate_data.rate_credits,
+          max_provider_credits: price.maximum_cost_rule.max_provider_credits,
+          markup_credits: price.markup_rule.markup_credits,
+        }
+      : null;
+  if (!currentSnapshot || JSON.stringify(currentSnapshot) !== JSON.stringify(snapshot)) {
+    throw new StudioRepositoryError('STUDIO_PRICING_STALE', 409, 'Studio pricing is stale');
+  }
 }

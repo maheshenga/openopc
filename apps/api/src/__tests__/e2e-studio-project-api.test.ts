@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
+import { InMemoryStudioObjectStore } from '@kortix/studio-runtime';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { canonicalStudioRequestHash } from '../../../../packages/studio-runtime/src/idempotency';
 import { PROJECT_ACTIONS } from '../iam/actions';
 import { createMemoryStudioRepository, createStudioProjectRoutes } from '../studio';
+import { StudioStorageService } from '../studio/storage';
 
 const ACCOUNT_ID = '00000000-0000-4000-a000-000000000101';
 const PROJECT_ID = '00000000-0000-4000-a000-000000000201';
@@ -14,6 +16,13 @@ const OTHER_PROVIDER_CONFIG_ID = '00000000-0000-4000-a000-000000000302';
 const ESTIMATE_SIGNING_SECRET = 'studio-test-estimate-signing-secret';
 const ACCOUNT_TOKEN_ID = '00000000-0000-4000-a000-000000000501';
 const SERVICE_ACCOUNT_ID = '00000000-0000-4000-a000-000000000502';
+const PNG = Uint8Array.from(
+  Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  ),
+);
+const PNG_CHECKSUM = new Bun.CryptoHasher('sha256').update(PNG).digest('hex');
 
 const imageInput = {
   capability: 'image.generate' as const,
@@ -62,8 +71,11 @@ function createApp(auth: TestAuthContext = {}) {
     return createJob(...args);
   };
   const assertedActions: string[] = [];
+  const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+  const storageService = new StudioStorageService({ repository, store });
   const routes = createStudioProjectRoutes({
     repository,
+    storageService,
     loadProjectForUser: async (_c, projectId) =>
       projectId === PROJECT_ID || projectId === OTHER_PROJECT_ID
         ? {
@@ -92,7 +104,7 @@ function createApp(auth: TestAuthContext = {}) {
     }
     return c.json({ error: true, message: (err as Error).message }, 500);
   });
-  return { app, assertedActions, getCapturedCreateInput: () => capturedCreateInput };
+  return { app, assertedActions, store, getCapturedCreateInput: () => capturedCreateInput };
 }
 
 async function createEstimate(app: Hono) {
@@ -424,11 +436,11 @@ describe('Studio project API', () => {
   });
 
   test('creates uploads, finalizes assets, lists assets, and hides cross-project assets', async () => {
-    const { app, assertedActions } = createApp();
+    const { app, assertedActions, store } = createApp();
     const uploadRequest = {
       declared_mime_type: 'image/png',
-      expected_size_bytes: 42,
-      expected_checksum_sha256: 'a'.repeat(64),
+      expected_size_bytes: PNG.byteLength,
+      expected_checksum_sha256: PNG_CHECKSUM,
       metadata: { label: 'reference' },
     };
 
@@ -443,11 +455,19 @@ describe('Studio project API', () => {
       project_id: PROJECT_ID,
       asset_id: null,
       declared_mime_type: 'image/png',
-      expected_size_bytes: 42,
-      expected_checksum_sha256: 'a'.repeat(64),
+      expected_size_bytes: PNG.byteLength,
+      expected_checksum_sha256: PNG_CHECKSUM,
       status: 'pending',
     });
-    expect(upload.signed_upload_url).toStartWith('https://studio.local/upload/');
+    expect(upload.signed_upload_url).toStartWith('memory-upload://studio-test/');
+    await store.putObject({
+      key: upload.object_key,
+      body: new Blob([PNG]).stream(),
+      content_type: 'image/png',
+      size_bytes: PNG.byteLength,
+      checksum_sha256: PNG_CHECKSUM,
+      metadata: { label: 'reference' },
+    });
 
     const assetRes = await app.request(
       `/v1/projects/${PROJECT_ID}/studio/uploads/${upload.upload_id}/finalize`,
@@ -461,8 +481,10 @@ describe('Studio project API', () => {
       source_job_id: null,
       kind: 'image',
       mime_type: 'image/png',
-      checksum_sha256: 'a'.repeat(64),
-      size_bytes: 42,
+      checksum_sha256: PNG_CHECKSUM,
+      size_bytes: PNG.byteLength,
+      width: 1,
+      height: 1,
       metadata: { label: 'reference' },
     });
 
@@ -487,10 +509,9 @@ describe('Studio project API', () => {
       },
     );
     expect(download.status).toBe(200);
-    expect(await download.json()).toMatchObject({
-      asset_id: asset.asset_id,
-      signed_download_url: `https://studio.local/download/${asset.asset_id}`,
-    });
+    const downloadBody = await download.json();
+    expect(downloadBody).toMatchObject({ asset_id: asset.asset_id });
+    expect(downloadBody.signed_download_url).toStartWith('memory://studio-test/');
 
     expect(assertedActions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_WRITE);
     expect(assertedActions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_ASSETS_READ);

@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { createDb, studioProviderConfigs } from '@kortix/db';
-import { and, eq } from 'drizzle-orm';
+import { createDb, studioAssetUploads, studioAssets, studioProviderConfigs } from '@kortix/db';
+import { InMemoryStudioObjectStore } from '@kortix/studio-runtime';
+import { and, eq, sql } from 'drizzle-orm';
 import { StudioPricingService } from './pricing';
 import { StudioProviderConfigService, createStudioProviderOriginValidator } from './providers';
 import { createDrizzleStudioRepository } from './repositories/drizzle';
+import { StudioStorageService } from './storage';
 
 const dockerEnvironment = { ...process.env };
 if (dockerEnvironment.DOCKER_HOST?.startsWith('encrypted:')) {
@@ -17,12 +19,22 @@ const dockerAvailable =
     stdout: 'ignore',
     stderr: 'ignore',
   }).exitCode === 0;
+if (integrationEnabled && !dockerAvailable) {
+  throw new Error('STUDIO_POSTGRES_INTEGRATION=1 requires an available Docker daemon');
+}
 const container = `kortix-studio-management-${crypto.randomUUID().slice(0, 8)}`;
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000002';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
 const OTHER_PROJECT_ID = '20000000-0000-4000-a000-000000000002';
 const ACTOR_USER_ID = '30000000-0000-4000-a000-000000000001';
+const PNG = Uint8Array.from(
+  Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  ),
+);
+const PNG_CHECKSUM = new Bun.CryptoHasher('sha256').update(PNG).digest('hex');
 
 let database: ReturnType<typeof createDb> | null = null;
 
@@ -47,6 +59,40 @@ function dockerPsql(sql: string) {
   if (result.exitCode !== 0) {
     throw new Error(`${result.stdout.toString()}${result.stderr.toString()}`);
   }
+}
+
+function dockerPsqlScalar(query: string): string {
+  const result = Bun.spawnSync(
+    [
+      'docker',
+      'exec',
+      container,
+      'psql',
+      '-X',
+      '-A',
+      '-t',
+      '-U',
+      'postgres',
+      '-d',
+      'testdb',
+      '-c',
+      query,
+    ],
+    { env: dockerEnvironment, stdout: 'pipe', stderr: 'pipe' },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(`${result.stdout.toString()}${result.stderr.toString()}`);
+  }
+  return result.stdout.toString().trim();
+}
+
+async function waitForPostgresCount(query: string, minimum: number): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (Number(dockerPsqlScalar(query)) >= minimum) return;
+    await Bun.sleep(25);
+  }
+  throw new Error('Timed out waiting for the expected PostgreSQL lock state');
 }
 
 function removeContainer() {
@@ -177,6 +223,44 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
         credential_binding jsonb NOT NULL DEFAULT '{}'::jsonb,
         capability_map jsonb NOT NULL DEFAULT '{}'::jsonb,
         enabled boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE kortix.studio_assets (
+        asset_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        account_id uuid NOT NULL REFERENCES kortix.accounts(account_id),
+        project_id uuid NOT NULL REFERENCES kortix.projects(project_id),
+        creator_user_id uuid,
+        source_job_id uuid,
+        kind text NOT NULL,
+        mime_type text NOT NULL,
+        bucket text NOT NULL,
+        object_key text NOT NULL,
+        checksum_sha256 text NOT NULL,
+        size_bytes bigint NOT NULL,
+        width integer,
+        height integer,
+        duration_ms integer,
+        frame_rate numeric(8,3),
+        metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+        version_parent_asset_id uuid,
+        visibility text NOT NULL DEFAULT 'project',
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (bucket, object_key)
+      );
+      CREATE TABLE kortix.studio_asset_uploads (
+        upload_id uuid PRIMARY KEY,
+        account_id uuid NOT NULL REFERENCES kortix.accounts(account_id),
+        project_id uuid NOT NULL REFERENCES kortix.projects(project_id),
+        actor_user_id uuid,
+        object_key text NOT NULL,
+        declared_mime_type text NOT NULL,
+        expected_size_bytes bigint NOT NULL,
+        expected_checksum_sha256 text NOT NULL,
+        expires_at timestamptz NOT NULL,
+        status text NOT NULL DEFAULT 'pending',
+        finalized_asset_id uuid REFERENCES kortix.studio_assets(asset_id),
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );
@@ -430,5 +514,242 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
         ),
       );
     expect(fakeProvider).toEqual({ enabled: true });
+  }, 30_000);
+
+  test('keeps failed finalize decisions tenant-scoped and side-effect free', async () => {
+    if (!database) throw new Error('database fixture is unavailable');
+    const repository = createDrizzleStudioRepository(database);
+    const pendingUploadId = '50000000-0000-4000-a000-000000000086';
+    const expiredUploadId = '50000000-0000-4000-a000-000000000087';
+    const crossScopeUploadId = '50000000-0000-4000-a000-000000000085';
+    const objectKey =
+      `accounts/${ACCOUNT_ID}/projects/${PROJECT_ID}` + `/uploads/${pendingUploadId}/source.png`;
+    const expiredObjectKey =
+      `accounts/${ACCOUNT_ID}/projects/${PROJECT_ID}` + `/uploads/${expiredUploadId}/source.png`;
+    let crossScopeError: unknown = null;
+    try {
+      await repository.createPendingUpload({
+        account_id: OTHER_ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        actor_user_id: ACTOR_USER_ID,
+        upload_id: crossScopeUploadId,
+        object_key:
+          `accounts/${OTHER_ACCOUNT_ID}/projects/${PROJECT_ID}` +
+          `/uploads/${crossScopeUploadId}/source.png`,
+        declared_mime_type: 'image/png',
+        expected_size_bytes: PNG.byteLength,
+        expected_checksum_sha256: PNG_CHECKSUM,
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      });
+    } catch (error) {
+      crossScopeError = error;
+    }
+    expect(crossScopeError).toBeInstanceOf(Error);
+    expect(
+      await database
+        .select({ uploadId: studioAssetUploads.uploadId })
+        .from(studioAssetUploads)
+        .where(eq(studioAssetUploads.uploadId, crossScopeUploadId)),
+    ).toEqual([]);
+
+    await repository.createPendingUpload({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      actor_user_id: ACTOR_USER_ID,
+      upload_id: pendingUploadId,
+      object_key: objectKey,
+      declared_mime_type: 'image/png',
+      expected_size_bytes: PNG.byteLength,
+      expected_checksum_sha256: PNG_CHECKSUM,
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    await repository.createPendingUpload({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      actor_user_id: ACTOR_USER_ID,
+      upload_id: expiredUploadId,
+      object_key: expiredObjectKey,
+      declared_mime_type: 'image/png',
+      expected_size_bytes: PNG.byteLength,
+      expected_checksum_sha256: PNG_CHECKSUM,
+      expires_at: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const finalizeInput = {
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      upload_id: pendingUploadId,
+      object_key: objectKey,
+      bucket: 'private-studio',
+      mime_type: 'image/png' as const,
+      checksum_sha256: PNG_CHECKSUM,
+      size_bytes: PNG.byteLength,
+      width: 1,
+      height: 1,
+      metadata: {},
+    };
+
+    const crossAccount = await repository.finalizeUploadRecord({
+      ...finalizeInput,
+      account_id: OTHER_ACCOUNT_ID,
+    });
+    expect(crossAccount).toEqual({ outcome: 'not_found' });
+    const crossProject = await repository.finalizeUploadRecord({
+      ...finalizeInput,
+      project_id: OTHER_PROJECT_ID,
+    });
+    expect(crossProject).toEqual({ outcome: 'not_found' });
+    const mismatch = await repository.finalizeUploadRecord({
+      ...finalizeInput,
+      size_bytes: PNG.byteLength + 1,
+    });
+    expect(mismatch).toEqual({ outcome: 'mismatch' });
+    const expired = await repository.finalizeUploadRecord({
+      ...finalizeInput,
+      upload_id: expiredUploadId,
+      object_key: expiredObjectKey,
+    });
+    expect(expired).toEqual({ outcome: 'expired' });
+
+    const persistedAssets = await database.select().from(studioAssets);
+    const failedUploads = await database
+      .select({ uploadId: studioAssetUploads.uploadId, status: studioAssetUploads.status })
+      .from(studioAssetUploads)
+      .where(
+        sql`${studioAssetUploads.uploadId} IN (${pendingUploadId}::uuid, ${expiredUploadId}::uuid)`,
+      )
+      .orderBy(studioAssetUploads.uploadId);
+    expect(persistedAssets).toEqual([]);
+    expect(failedUploads).toEqual([
+      { uploadId: pendingUploadId, status: 'pending' },
+      { uploadId: expiredUploadId, status: 'pending' },
+    ]);
+  }, 30_000);
+
+  test('finalizes one real upload atomically under concurrent replay', async () => {
+    if (!database) throw new Error('database fixture is unavailable');
+    const db = database;
+    const repository = createDrizzleStudioRepository(db);
+    const store = new InMemoryStudioObjectStore({ namespace: 'private-studio', ready: true });
+    const uploadId = '50000000-0000-4000-a000-000000000088';
+    const service = new StudioStorageService({
+      repository,
+      store,
+      now: () => new Date(),
+      randomUUID: () => uploadId,
+    });
+    const upload = await service.createUpload({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      actor_user_id: ACTOR_USER_ID,
+      declared_mime_type: 'image/png',
+      expected_size_bytes: PNG.byteLength,
+      expected_checksum_sha256: PNG_CHECKSUM,
+      metadata: {},
+    });
+    await store.putObject({
+      key: upload.object_key,
+      body: new Blob([PNG]).stream(),
+      content_type: 'image/png',
+      size_bytes: PNG.byteLength,
+      checksum_sha256: PNG_CHECKSUM,
+      metadata: { project_id: PROJECT_ID },
+    });
+
+    const advisoryLock = 6_106_088;
+    dockerPsql(`
+      CREATE OR REPLACE FUNCTION kortix.test_block_studio_asset_insert()
+      RETURNS trigger
+      LANGUAGE plpgsql
+      AS $$
+      BEGIN
+        PERFORM pg_advisory_xact_lock(${advisoryLock});
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER test_block_studio_asset_insert
+      BEFORE INSERT ON kortix.studio_assets
+      FOR EACH ROW EXECUTE FUNCTION kortix.test_block_studio_asset_insert();
+    `);
+
+    let releaseBlocker = () => {};
+    const blockerRelease = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    let markBlockerReady = () => {};
+    const blockerReady = new Promise<void>((resolve) => {
+      markBlockerReady = resolve;
+    });
+    const blocker = db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${advisoryLock})`);
+      markBlockerReady();
+      await blockerRelease;
+    });
+    await blockerReady;
+
+    const firstFinalize = service.finalizeUpload({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      uploadId,
+    });
+    let replayFinalize: ReturnType<typeof service.finalizeUpload> | null = null;
+    let lockObservationError: unknown = null;
+    try {
+      await waitForPostgresCount(
+        `SELECT count(*)
+         FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND wait_event_type = 'Lock'
+           AND wait_event = 'advisory'
+           AND query LIKE '%INSERT INTO kortix.studio_assets%'`,
+        1,
+      );
+      replayFinalize = service.finalizeUpload({
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        uploadId,
+      });
+      await waitForPostgresCount(
+        `SELECT count(*)
+         FROM pg_stat_activity waiting
+         JOIN pg_stat_activity blocking
+           ON blocking.pid = ANY(pg_blocking_pids(waiting.pid))
+         WHERE waiting.datname = current_database()
+           AND waiting.wait_event_type = 'Lock'
+           AND waiting.query LIKE '%FOR UPDATE OF upload%'
+           AND blocking.wait_event = 'advisory'`,
+        1,
+      );
+    } catch (error) {
+      lockObservationError = error;
+    } finally {
+      releaseBlocker();
+      await blocker;
+    }
+    if (lockObservationError) {
+      await Promise.allSettled([firstFinalize, ...(replayFinalize ? [replayFinalize] : [])]);
+      throw lockObservationError;
+    }
+    if (!replayFinalize) throw new Error('expected the replay finalize call to start');
+
+    const [first, replay] = await Promise.all([firstFinalize, replayFinalize]);
+    if (!first || !replay) throw new Error('expected both finalize calls to return an asset');
+    const persistedAssets = await db.select().from(studioAssets);
+    const [persistedUpload] = await db
+      .select()
+      .from(studioAssetUploads)
+      .where(eq(studioAssetUploads.uploadId, uploadId));
+
+    expect(replay.asset_id).toBe(first.asset_id);
+    expect(persistedAssets).toHaveLength(1);
+    expect(persistedAssets[0]).toMatchObject({
+      assetId: first.asset_id,
+      bucket: 'private-studio',
+      width: 1,
+      height: 1,
+    });
+    expect(persistedUpload).toMatchObject({
+      status: 'finalized',
+      finalizedAssetId: first.asset_id,
+    });
   }, 30_000);
 });

@@ -74,6 +74,35 @@ export type StudioCreateUploadInput = {
   metadata: Record<string, unknown>;
 };
 
+export type StudioPendingUploadRecord = Omit<StudioUpload, 'signed_upload_url'> & {
+  account_id: string;
+  actor_user_id: string | null;
+};
+
+export type StudioCreatePendingUploadInput = Omit<StudioCreateUploadInput, 'metadata'> & {
+  upload_id: string;
+  object_key: string;
+  expires_at: string;
+};
+
+export type StudioFinalizeUploadRecordInput = {
+  account_id: string;
+  project_id: string;
+  upload_id: string;
+  object_key: string;
+  bucket: string;
+  mime_type: 'image/png' | 'image/jpeg' | 'image/webp';
+  checksum_sha256: string;
+  size_bytes: number;
+  width: number;
+  height: number;
+  metadata: Record<string, unknown>;
+};
+
+export type StudioFinalizeUploadRecordResult =
+  | { outcome: 'finalized'; asset: StudioAsset }
+  | { outcome: 'expired' | 'mismatch' | 'not_found' };
+
 export type StudioCreatePricingInput = {
   account_id: string;
   created_by_user_id: string;
@@ -160,8 +189,15 @@ export interface StudioRepository extends StudioPricingRepository, StudioProvide
     jobId: string,
     afterCursor?: string | null,
   ): Promise<{ items: StudioJobEvent[]; next_cursor: string | null }>;
-  createUpload(input: StudioCreateUploadInput): Promise<StudioUpload>;
-  finalizeUpload(projectId: string, uploadId: string): Promise<StudioAsset | null>;
+  createPendingUpload(input: StudioCreatePendingUploadInput): Promise<StudioPendingUploadRecord>;
+  getUploadRecord(
+    accountId: string,
+    projectId: string,
+    uploadId: string,
+  ): Promise<StudioPendingUploadRecord | null>;
+  finalizeUploadRecord(
+    input: StudioFinalizeUploadRecordInput,
+  ): Promise<StudioFinalizeUploadRecordResult>;
   listAssets(
     projectId: string,
     limit: number,

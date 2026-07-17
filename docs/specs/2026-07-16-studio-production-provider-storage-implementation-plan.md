@@ -1199,7 +1199,7 @@ DELETE /v1/projects/:projectId/studio/providers/:providerConfigId
 
 Provider delete is a soft disable. Base URL validation uses `validateStudioOrigin`; it performs no provider call.
 
-- [ ] **Step 5: Write RED storage API tests**
+- [x] **Step 5: Write RED storage API tests**
 
 Use an in-memory/conformance store and prove:
 
@@ -1212,7 +1212,7 @@ Use an in-memory/conformance store and prove:
 - executable capabilities are empty when storage is unready or no enabled provider config has a registered definition, valid model map, and existing credential binding;
 - cross-project IDs return 404 without presigning.
 
-- [ ] **Step 6: Implement `StudioStorageService` and route injection**
+- [x] **Step 6: Implement `StudioStorageService` and route injection**
 
 Move presign/finalize/download logic out of the repository. Repositories store rows only. `StudioStorageService` owns object keys, driver calls, hashing, image validation, and ready cache. Use account/project-prefixed keys and sanitize attachment filenames.
 

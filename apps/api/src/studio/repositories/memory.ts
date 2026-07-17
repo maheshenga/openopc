@@ -3,12 +3,12 @@ import type {
   StudioJob,
   StudioJobEvent,
   StudioPricingCatalogEntry,
-  StudioUpload,
 } from '@kortix/api-contract';
 import { toStudioProviderConfigWire } from '../providers';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
+  StudioPendingUploadRecord,
   StudioProviderConfigRecord,
   StudioProviderConfigWire,
   StudioRepository,
@@ -34,14 +34,7 @@ export function createMemoryStudioRepository(
   const providerRecords = new Map<string, StudioProviderConfigRecord>();
   const jobs = new Map<string, StudioJob>();
   const events = new Map<string, StudioJobEvent[]>();
-  const uploads = new Map<
-    string,
-    StudioUpload & {
-      account_id: string;
-      actor_user_id: string | null;
-      metadata: Record<string, unknown>;
-    }
-  >();
+  const uploads = new Map<string, StudioPendingUploadRecord>();
   const assets = new Map<string, StudioAsset>();
   const now = input.now ?? isoNow;
 
@@ -307,40 +300,58 @@ export function createMemoryStudioRepository(
       return { items: page, next_cursor: null };
     },
 
-    async createUpload(input) {
-      const uploadId = crypto.randomUUID();
-      const upload: StudioUpload & {
-        account_id: string;
-        actor_user_id: string | null;
-        metadata: Record<string, unknown>;
-      } = {
-        upload_id: uploadId,
+    async createPendingUpload(input) {
+      const record: StudioPendingUploadRecord = {
+        upload_id: input.upload_id,
+        account_id: input.account_id,
         project_id: input.project_id,
+        actor_user_id: input.actor_user_id,
         asset_id: null,
-        object_key: `studio/uploads/${input.project_id}/${uploadId}`,
+        object_key: input.object_key,
         declared_mime_type: input.declared_mime_type,
         expected_size_bytes: input.expected_size_bytes,
         expected_checksum_sha256: input.expected_checksum_sha256,
-        signed_upload_url: `https://studio.local/upload/${uploadId}`,
-        expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+        expires_at: input.expires_at,
         status: 'pending',
-        account_id: input.account_id,
-        actor_user_id: input.actor_user_id,
-        metadata: input.metadata,
       };
-      uploads.set(uploadId, upload);
-      const {
-        account_id: _accountId,
-        actor_user_id: _actorUserId,
-        metadata: _metadata,
-        ...wire
-      } = upload;
-      return wire;
+      uploads.set(record.upload_id, record);
+      return record;
     },
 
-    async finalizeUpload(projectId, uploadId) {
+    async getUploadRecord(accountId, projectId, uploadId) {
       const upload = uploads.get(uploadId);
-      if (!upload || upload.project_id !== projectId || upload.status !== 'pending') return null;
+      if (!upload || upload.account_id !== accountId || upload.project_id !== projectId) {
+        return null;
+      }
+      return upload;
+    },
+
+    async finalizeUploadRecord(input) {
+      const upload = uploads.get(input.upload_id);
+      if (
+        !upload ||
+        upload.account_id !== input.account_id ||
+        upload.project_id !== input.project_id ||
+        upload.object_key !== input.object_key
+      ) {
+        return { outcome: 'not_found' as const };
+      }
+      if (upload.status === 'finalized' && upload.asset_id) {
+        const asset = assets.get(upload.asset_id);
+        return asset ? { outcome: 'finalized' as const, asset } : { outcome: 'not_found' as const };
+      }
+      if (upload.status !== 'pending') return { outcome: 'not_found' as const };
+      const expiresAt = Date.parse(upload.expires_at);
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.parse(now())) {
+        return { outcome: 'expired' as const };
+      }
+      if (
+        upload.declared_mime_type !== input.mime_type ||
+        upload.expected_size_bytes !== input.size_bytes ||
+        upload.expected_checksum_sha256 !== input.checksum_sha256
+      ) {
+        return { outcome: 'mismatch' as const };
+      }
       const assetId = crypto.randomUUID();
       const asset: StudioAsset = {
         asset_id: assetId,
@@ -348,19 +359,23 @@ export function createMemoryStudioRepository(
         project_id: upload.project_id,
         source_job_id: null,
         kind: 'image',
-        mime_type: upload.declared_mime_type,
-        bucket: 'studio',
+        mime_type: input.mime_type,
+        bucket: input.bucket,
         object_key: upload.object_key,
-        checksum_sha256: upload.expected_checksum_sha256,
-        size_bytes: upload.expected_size_bytes,
-        width: null,
-        height: null,
-        metadata: upload.metadata,
+        checksum_sha256: input.checksum_sha256,
+        size_bytes: input.size_bytes,
+        width: input.width,
+        height: input.height,
+        metadata: input.metadata,
         created_at: now(),
       };
       assets.set(assetId, asset);
-      uploads.set(uploadId, { ...upload, asset_id: assetId, status: 'finalized' });
-      return asset;
+      uploads.set(input.upload_id, {
+        ...upload,
+        asset_id: assetId,
+        status: 'finalized',
+      });
+      return { outcome: 'finalized' as const, asset };
     },
 
     async listAssets(projectId, limit, cursor) {

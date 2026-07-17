@@ -1,4 +1,4 @@
-import type { StudioAsset, StudioJob, StudioJobEvent, StudioUpload } from '@kortix/api-contract';
+import type { StudioAsset, StudioJob, StudioJobEvent } from '@kortix/api-contract';
 import {
   StudioCredentialBindingSchema,
   type StudioPricingCatalogEntry,
@@ -20,6 +20,7 @@ import { StudioRepositoryError } from '../types';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
+  StudioPendingUploadRecord,
   StudioProviderConfigRecord,
   StudioProviderConfigWire,
   StudioRepository,
@@ -247,18 +248,35 @@ function serializeEvent(row: EventRow): StudioJobEvent {
   };
 }
 
-function serializeUpload(row: UploadRow): StudioUpload {
+function serializePendingUpload(row: UploadRow): StudioPendingUploadRecord {
   return {
     upload_id: row.uploadId,
+    account_id: row.accountId,
     project_id: row.projectId,
+    actor_user_id: row.actorUserId ?? null,
     asset_id: row.finalizedAssetId ?? null,
     object_key: row.objectKey,
     declared_mime_type: row.declaredMimeType,
     expected_size_bytes: Number(row.expectedSizeBytes),
     expected_checksum_sha256: row.expectedChecksumSha256,
-    signed_upload_url: `https://studio.local/upload/${row.uploadId}`,
     expires_at: row.expiresAt,
-    status: row.status as StudioUpload['status'],
+    status: row.status as StudioPendingUploadRecord['status'],
+  };
+}
+
+function serializeRawPendingUpload(row: Record<string, unknown>): StudioPendingUploadRecord {
+  return {
+    upload_id: String(row.upload_id),
+    account_id: String(row.account_id),
+    project_id: String(row.project_id),
+    actor_user_id: row.actor_user_id === null ? null : String(row.actor_user_id),
+    asset_id: row.finalized_asset_id === null ? null : String(row.finalized_asset_id),
+    object_key: String(row.object_key),
+    declared_mime_type: String(row.declared_mime_type),
+    expected_size_bytes: Number(row.expected_size_bytes),
+    expected_checksum_sha256: String(row.expected_checksum_sha256),
+    expires_at: timestampValue(row.expires_at),
+    status: row.status as StudioPendingUploadRecord['status'],
   };
 }
 
@@ -278,6 +296,25 @@ function serializeAsset(row: AssetRow): StudioAsset {
     height: row.height ?? null,
     metadata: row.metadata ?? {},
     created_at: row.createdAt ?? new Date(0).toISOString(),
+  };
+}
+
+function serializeRawAsset(row: Record<string, unknown>): StudioAsset {
+  return {
+    asset_id: String(row.asset_id),
+    account_id: String(row.account_id),
+    project_id: String(row.project_id),
+    source_job_id: row.source_job_id === null ? null : String(row.source_job_id),
+    kind: row.kind as StudioAsset['kind'],
+    mime_type: String(row.mime_type),
+    bucket: String(row.bucket),
+    object_key: String(row.object_key),
+    checksum_sha256: String(row.checksum_sha256),
+    size_bytes: Number(row.size_bytes),
+    width: row.width === null ? null : Number(row.width),
+    height: row.height === null ? null : Number(row.height),
+    metadata: recordValue(row.metadata) ?? {},
+    created_at: timestampValue(row.created_at),
   };
 }
 
@@ -806,68 +843,166 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
       };
     },
 
-    async createUpload(input) {
-      const uploadId = crypto.randomUUID();
-      const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
-      const rows = await db
-        .insert(studioAssetUploads)
-        .values({
-          uploadId,
-          accountId: input.account_id,
-          projectId: input.project_id,
-          actorUserId: input.actor_user_id,
-          objectKey: `studio/uploads/${input.project_id}/${uploadId}`,
-          declaredMimeType: input.declared_mime_type,
-          expectedSizeBytes: input.expected_size_bytes,
-          expectedChecksumSha256: input.expected_checksum_sha256,
-          expiresAt,
-          status: 'pending',
-        })
-        .returning();
-      return serializeUpload(rows[0]);
+    async createPendingUpload(input) {
+      const result = await db.execute(sql`
+        WITH inserted AS (
+          INSERT INTO kortix.studio_asset_uploads (
+            upload_id,
+            account_id,
+            project_id,
+            actor_user_id,
+            object_key,
+            declared_mime_type,
+            expected_size_bytes,
+            expected_checksum_sha256,
+            expires_at,
+            status
+          )
+          SELECT
+            ${input.upload_id}::uuid,
+            project.account_id,
+            project.project_id,
+            ${input.actor_user_id}::uuid,
+            ${input.object_key},
+            ${input.declared_mime_type},
+            ${input.expected_size_bytes},
+            ${input.expected_checksum_sha256},
+            ${input.expires_at}::timestamptz,
+            'pending'
+          FROM kortix.projects project
+          WHERE project.project_id = ${input.project_id}::uuid
+            AND project.account_id = ${input.account_id}::uuid
+          RETURNING *
+        )
+        SELECT pg_catalog.to_jsonb(inserted) AS upload_row
+        FROM inserted
+        LIMIT 1
+      `);
+      const row = recordValue(rowsFromExecute(result)[0]?.upload_row);
+      if (!row) throw new Error('Studio pending upload scope is invalid');
+      return serializeRawPendingUpload(row);
     },
 
-    async finalizeUpload(projectId, uploadId) {
-      const uploads = await db
+    async getUploadRecord(accountId, projectId, uploadId) {
+      const [row] = await db
         .select()
         .from(studioAssetUploads)
         .where(
           and(
+            eq(studioAssetUploads.accountId, accountId),
             eq(studioAssetUploads.projectId, projectId),
             eq(studioAssetUploads.uploadId, uploadId),
-            eq(studioAssetUploads.status, 'pending'),
           ),
         )
         .limit(1);
-      const upload = uploads[0];
-      if (!upload) return null;
+      return row ? serializePendingUpload(row) : null;
+    },
 
-      const inserted = await db
-        .insert(studioAssets)
-        .values({
-          accountId: upload.accountId,
-          projectId: upload.projectId,
-          creatorUserId: upload.actorUserId,
-          sourceJobId: null,
-          kind: 'image',
-          mimeType: upload.declaredMimeType,
-          bucket: 'studio',
-          objectKey: upload.objectKey,
-          checksumSha256: upload.expectedChecksumSha256,
-          sizeBytes: upload.expectedSizeBytes,
-          metadata: {},
-        })
-        .returning();
-      const asset = serializeAsset(inserted[0]);
-      await db
-        .update(studioAssetUploads)
-        .set({
-          status: 'finalized',
-          finalizedAssetId: asset.asset_id,
-          updatedAt: new Date().toISOString(),
-        })
-        .where(eq(studioAssetUploads.uploadId, uploadId));
-      return asset;
+    async finalizeUploadRecord(input) {
+      return db.transaction(
+        async (tx) => {
+          const locked = await tx.execute(sql`
+            SELECT pg_catalog.to_jsonb(upload) AS upload_row,
+                   upload.expires_at <= clock_timestamp() AS expired
+            FROM kortix.studio_asset_uploads upload
+            WHERE upload.account_id = ${input.account_id}::uuid
+              AND upload.project_id = ${input.project_id}::uuid
+              AND upload.upload_id = ${input.upload_id}::uuid
+              AND upload.object_key = ${input.object_key}
+            FOR UPDATE OF upload
+          `);
+          const lockedRow = rowsFromExecute(locked)[0];
+          const upload = recordValue(lockedRow?.upload_row);
+          if (!upload) return { outcome: 'not_found' as const };
+          if (upload.status === 'finalized') {
+            if (typeof upload.finalized_asset_id !== 'string') {
+              return { outcome: 'not_found' as const };
+            }
+            const [asset] = await tx
+              .select()
+              .from(studioAssets)
+              .where(
+                and(
+                  eq(studioAssets.assetId, upload.finalized_asset_id),
+                  eq(studioAssets.accountId, input.account_id),
+                  eq(studioAssets.projectId, input.project_id),
+                  eq(studioAssets.objectKey, input.object_key),
+                ),
+              )
+              .limit(1);
+            return asset
+              ? { outcome: 'finalized' as const, asset: serializeAsset(asset) }
+              : { outcome: 'not_found' as const };
+          }
+          if (upload.status !== 'pending') return { outcome: 'not_found' as const };
+          if (lockedRow?.expired === true) return { outcome: 'expired' as const };
+          if (
+            upload.declared_mime_type !== input.mime_type ||
+            Number(upload.expected_size_bytes) !== input.size_bytes ||
+            upload.expected_checksum_sha256 !== input.checksum_sha256
+          ) {
+            return { outcome: 'mismatch' as const };
+          }
+
+          const result = await tx.execute(sql`
+            WITH inserted AS (
+              INSERT INTO kortix.studio_assets (
+                account_id,
+                project_id,
+                creator_user_id,
+                source_job_id,
+                kind,
+                mime_type,
+                bucket,
+                object_key,
+                checksum_sha256,
+                size_bytes,
+                width,
+                height,
+                metadata
+              )
+              SELECT
+                upload.account_id,
+                upload.project_id,
+                upload.actor_user_id,
+                NULL,
+                'image',
+                ${input.mime_type},
+                ${input.bucket},
+                upload.object_key,
+                ${input.checksum_sha256},
+                ${input.size_bytes},
+                ${input.width},
+                ${input.height},
+                ${JSON.stringify(input.metadata)}::jsonb
+              FROM kortix.studio_asset_uploads upload
+              WHERE upload.account_id = ${input.account_id}::uuid
+                AND upload.project_id = ${input.project_id}::uuid
+                AND upload.upload_id = ${input.upload_id}::uuid
+                AND upload.object_key = ${input.object_key}
+                AND upload.status = 'pending'
+              RETURNING *
+            ), updated AS (
+              UPDATE kortix.studio_asset_uploads upload
+              SET status = 'finalized',
+                  finalized_asset_id = inserted.asset_id,
+                  updated_at = clock_timestamp()
+              FROM inserted
+              WHERE upload.upload_id = ${input.upload_id}::uuid
+                AND upload.status = 'pending'
+              RETURNING upload.upload_id
+            )
+            SELECT pg_catalog.to_jsonb(inserted) AS asset_row
+            FROM inserted
+            JOIN updated ON true
+            LIMIT 1
+          `);
+          const row = recordValue(rowsFromExecute(result)[0]?.asset_row);
+          if (!row) throw new Error('Studio upload finalization lost its locked pending row');
+          return { outcome: 'finalized' as const, asset: serializeRawAsset(row) };
+        },
+        { isolationLevel: 'read committed' },
+      );
     },
 
     async listAssets(projectId, limit, cursor) {

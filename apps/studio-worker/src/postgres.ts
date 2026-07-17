@@ -100,11 +100,11 @@ WITH locked AS (
   FOR UPDATE
 ), inserted AS (
   INSERT INTO kortix.studio_job_attempts(
-    job_id, submission_key, adapter_version, status, started_at
+    job_id, submission_key, adapter_version, provider_config_version, status, started_at
   )
-  SELECT job_id, $3, $4, 'submitting', $6::timestamptz
+  SELECT job_id, $3, $4, $5, 'submitting', $6::timestamptz
   FROM locked
-  RETURNING attempt_id, job_id, submission_key, status, started_at
+  RETURNING attempt_id, job_id, submission_key, provider_config_version, status, started_at
 ), updated AS (
   UPDATE kortix.studio_jobs j
   SET status = 'running',
@@ -475,6 +475,111 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
     return result.outcome;
   }
 
+  async recordStagedManifest(input: {
+    jobId: string;
+    attemptId: string;
+    workerId: string;
+    submissionKind: 'async' | 'completed';
+    manifestKey: string;
+    manifestChecksum: string;
+    now: Date;
+  }): Promise<void> {
+    await this.requireOwnedMutation(
+      `
+      WITH owned AS (
+        SELECT job_id
+        FROM kortix.studio_jobs
+        WHERE job_id = $1::uuid
+          AND lease_owner = $3
+          AND status IN ('queued', 'running')
+        FOR UPDATE
+      )
+      UPDATE kortix.studio_job_attempts attempt
+      SET status = CASE WHEN attempt.status = 'submitting' THEN 'reconciling' ELSE attempt.status END,
+          submission_kind = $4,
+          staging_manifest_key = $5,
+          staging_manifest_checksum = $6
+      FROM owned
+      WHERE attempt.attempt_id = $2::uuid
+        AND attempt.job_id = owned.job_id
+        AND attempt.status IN ('submitting', 'submitted', 'polling', 'reconciling')
+        AND (attempt.submission_kind IS NULL OR attempt.submission_kind = $4)
+        AND (attempt.staging_manifest_key IS NULL OR attempt.staging_manifest_key = $5)
+        AND (attempt.staging_manifest_checksum IS NULL OR attempt.staging_manifest_checksum = $6)
+      RETURNING attempt.attempt_id
+    `,
+      [
+        input.jobId,
+        input.attemptId,
+        input.workerId,
+        input.submissionKind,
+        input.manifestKey,
+        input.manifestChecksum,
+      ],
+    );
+  }
+
+  async recordAttemptCost(input: {
+    jobId: string;
+    attemptId: string;
+    workerId: string;
+    usage: Record<string, number>;
+    upstreamCostCredits: number;
+    outcome: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
+    now: Date;
+  }): Promise<void> {
+    const rows = await this.client.unsafe(
+      `
+      SELECT public.atomic_record_studio_attempt_cost(
+        $1::uuid, $2::uuid, $3, $4::jsonb, $5::numeric, $6, $7::timestamptz
+      ) AS result
+    `,
+      [
+        input.jobId,
+        input.attemptId,
+        input.workerId,
+        JSON.stringify(input.usage),
+        input.upstreamCostCredits,
+        input.outcome,
+        input.now.toISOString(),
+      ],
+    );
+    const result = rows[0]?.result as Record<string, unknown> | undefined;
+    if (!result || result.success !== true) {
+      throw new Error(String(result?.error ?? 'Studio attempt cost RPC failed'));
+    }
+  }
+
+  async getRecordedAttemptCostTotal(input: {
+    jobId: string;
+    workerId: string;
+  }): Promise<number> {
+    const rows = await this.client.unsafe(
+      `
+      WITH owned AS (
+        SELECT job_id
+        FROM kortix.studio_jobs
+        WHERE job_id = $1::uuid
+          AND lease_owner = $2
+          AND status IN ('queued', 'running')
+      )
+      SELECT COALESCE(SUM(attempt.upstream_cost_credits), 0) AS total
+      FROM owned
+      LEFT JOIN kortix.studio_job_attempts attempt
+        ON attempt.job_id = owned.job_id
+       AND attempt.cost_recorded_at IS NOT NULL
+      GROUP BY owned.job_id
+    `,
+      [input.jobId, input.workerId],
+    );
+    if (!rows[0]) throw new Error('Studio job lease is not owned by this worker');
+    const total = Number(rows[0].total ?? 0);
+    if (!Number.isFinite(total) || total < 0) {
+      throw new Error('Studio recorded attempt cost total is invalid');
+    }
+    return total;
+  }
+
   async markFailed(input: {
     jobId: string;
     attemptId?: string;
@@ -688,8 +793,8 @@ export class PostgresStudioMaintenanceRepository implements StudioMaintenanceRep
   async failStuckUnknownOutcomes(now: Date): Promise<void> {
     await this.client.unsafe(
       `
-      WITH stuck AS (
-        SELECT j.job_id
+      WITH candidates AS (
+        SELECT j.job_id, a.attempt_id
         FROM kortix.studio_jobs j
         JOIN kortix.studio_job_attempts a ON a.job_id = j.job_id
         WHERE j.status = 'running'
@@ -699,36 +804,65 @@ export class PostgresStudioMaintenanceRepository implements StudioMaintenanceRep
           AND (j.lease_expires_at IS NULL OR j.lease_expires_at <= $1::timestamptz)
         FOR UPDATE OF j SKIP LOCKED
         LIMIT 100
-      ), attempt_failed AS (
-        UPDATE kortix.studio_job_attempts attempt
-        SET status = 'failed',
-            retry_classification = 'unknown_outcome',
-            ended_at = $1::timestamptz
-        FROM stuck
-        WHERE attempt.job_id = stuck.job_id AND attempt.status = 'reconciling'
-        RETURNING attempt.job_id
-      ), updated AS (
+      ), released AS (
         UPDATE kortix.studio_jobs j
-        SET status = 'failed',
-            error_code = 'STUDIO_SUBMISSION_OUTCOME_UNKNOWN',
+        SET error_code = 'STUDIO_SUBMISSION_OUTCOME_UNKNOWN',
             error_message = 'Provider submission outcome requires operator recovery',
-            completed_at = $1::timestamptz,
             lease_owner = NULL,
             lease_expires_at = NULL,
             updated_at = $1::timestamptz
-        FROM stuck WHERE j.job_id = stuck.job_id
-        RETURNING j.job_id
+        FROM candidates
+        WHERE j.job_id = candidates.job_id
+          AND j.status = 'running'
+        RETURNING j.job_id, candidates.attempt_id
       ), next_cursor AS (
-        SELECT updated.job_id, COALESCE(MAX(event.cursor), 0) + 1 AS cursor
-        FROM updated
-        LEFT JOIN kortix.studio_job_events event ON event.job_id = updated.job_id
-        GROUP BY updated.job_id
+        SELECT released.job_id, released.attempt_id,
+               COALESCE(MAX(event.cursor), 0) + 1 AS cursor
+        FROM released
+        LEFT JOIN kortix.studio_job_events event ON event.job_id = released.job_id
+        GROUP BY released.job_id, released.attempt_id
       )
       INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
-      SELECT updated.job_id, next_cursor.cursor, 'failed',
-             '{"code":"STUDIO_SUBMISSION_OUTCOME_UNKNOWN"}'::jsonb,
+      SELECT next_cursor.job_id, next_cursor.cursor, 'progress',
+             jsonb_build_object(
+               'phase', 'operator-review',
+               'attempt_id', next_cursor.attempt_id,
+               'code', 'STUDIO_SUBMISSION_OUTCOME_UNKNOWN'
+             ),
              $1::timestamptz
-      FROM updated JOIN next_cursor USING (job_id)
+      FROM next_cursor
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM kortix.studio_job_events existing
+        WHERE existing.job_id = next_cursor.job_id
+          AND existing.event_type = 'progress'
+          AND existing.payload ->> 'phase' = 'operator-review'
+      )
+    `,
+      [now.toISOString()],
+    );
+    await this.client.unsafe(
+      `
+      SELECT public.atomic_expire_studio_unknown_hold(
+        candidate.job_id,
+        candidate.attempt_id,
+        $1::timestamptz
+      ) AS result
+      FROM (
+        SELECT j.job_id, attempt.attempt_id
+        FROM kortix.studio_jobs j
+        JOIN kortix.studio_job_attempts attempt
+          ON attempt.job_id = j.job_id
+         AND attempt.status = 'reconciling'
+        JOIN kortix.studio_credit_reservations reservation
+          ON reservation.job_id = j.job_id
+         AND reservation.status = 'active'
+        WHERE j.status = 'running'
+          AND reservation.created_at + interval '30 days' <= $1::timestamptz
+          AND (j.lease_expires_at IS NULL OR j.lease_expires_at <= $1::timestamptz)
+        ORDER BY reservation.created_at ASC
+        LIMIT 100
+      ) candidate
     `,
       [now.toISOString()],
     );
@@ -911,6 +1045,7 @@ function mapJob(row: Record<string, unknown>): StudioWorkerJob {
     sessionId: nullableString(row.session_id),
     capability: 'image.generate',
     providerConfigId: String(row.provider_config_id),
+    providerConfigVersion: nullableString(row.provider_config_version),
     providerEnabled: row.provider_enabled === true,
     provider: String(row.provider),
     model: String(row.model),
@@ -928,6 +1063,7 @@ function mapJob(row: Record<string, unknown>): StudioWorkerJob {
     leaseOwner: nullableString(row.lease_owner),
     leaseExpiresAt: nullableDate(row.lease_expires_at),
     credentialBinding: (row.credential_binding ?? {}) as Record<string, unknown>,
+    pricingSnapshot: (row.pricing_snapshot ?? null) as StudioWorkerJob['pricingSnapshot'],
   };
 }
 
@@ -942,6 +1078,15 @@ function mapAttempt(row: Record<string, unknown>): StudioWorkerAttempt {
     retryClassification: (row.retry_classification ?? null) as StudioRetryClassification | null,
     startedAt: nullableDate(row.started_at) ?? new Date(),
     endedAt: nullableDate(row.ended_at),
+    providerConfigVersion: nullableString(row.provider_config_version),
+    submissionKind: nullableString(row.submission_kind) as StudioWorkerAttempt['submissionKind'],
+    stagingManifestKey: nullableString(row.staging_manifest_key),
+    stagingManifestChecksum: nullableString(row.staging_manifest_checksum),
+    costOutcome: nullableString(row.cost_outcome) as StudioWorkerAttempt['costOutcome'],
+    costRecordedAt: nullableDate(row.cost_recorded_at),
+    upstreamUsage: (row.upstream_usage ?? null) as StudioWorkerAttempt['upstreamUsage'],
+    upstreamCostCredits:
+      row.upstream_cost_credits == null ? null : Number(row.upstream_cost_credits),
   };
 }
 

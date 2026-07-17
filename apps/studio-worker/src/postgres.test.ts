@@ -107,6 +107,63 @@ describe('PostgresStudioWorkerRepository', () => {
     expect(String(queries[0]?.values.at(4))).toContain('result.png');
   });
 
+  test('records the durable staging manifest and attempt cost through existing owner-fenced RPCs', async () => {
+    const queries: Array<{ text: string; values: unknown[] }> = [];
+    const repository = new PostgresStudioWorkerRepository({
+      unsafe: async (text, values = []) => {
+        queries.push({ text, values });
+        return [{ result: { success: true, outcome: 'succeeded' } }];
+      },
+    });
+    const now = new Date('2026-07-15T10:00:00.000Z');
+
+    await repository.recordStagedManifest({
+      jobId: '11111111-1111-4111-8111-111111111111',
+      attemptId: '22222222-2222-4222-8222-222222222222',
+      workerId: 'worker-a:claim-1',
+      submissionKind: 'completed',
+      manifestKey: 'accounts/a/projects/p/jobs/j/attempts/a/submissions/hash/manifest.json',
+      manifestChecksum: 'a'.repeat(64),
+      now,
+    });
+    await repository.recordAttemptCost({
+      jobId: '11111111-1111-4111-8111-111111111111',
+      attemptId: '22222222-2222-4222-8222-222222222222',
+      workerId: 'worker-a:claim-1',
+      usage: { output_count: 1 },
+      upstreamCostCredits: 1,
+      outcome: 'succeeded',
+      now,
+    });
+
+    expect(queries).toHaveLength(2);
+    expect(queries[0]?.text).toContain('staging_manifest_key');
+    expect(queries[0]?.text).toContain('submission_kind');
+    expect(queries[0]?.text).toContain("status = CASE WHEN attempt.status = 'submitting' THEN 'reconciling'");
+    expect(queries[0]?.text).toContain('attempt.submission_kind IS NULL OR attempt.submission_kind = $4');
+    expect(queries[1]?.text).toContain('public.atomic_record_studio_attempt_cost');
+    expect(queries[1]?.values).toContain('worker-a:claim-1');
+  });
+
+  test('cost aggregation returns no row when the worker owner fence is lost', async () => {
+    const queries: string[] = [];
+    const repository = new PostgresStudioWorkerRepository({
+      unsafe: async (text) => {
+        queries.push(text);
+        return [];
+      },
+    });
+
+    await expect(
+      repository.getRecordedAttemptCostTotal({
+        jobId: '11111111-1111-4111-8111-111111111111',
+        workerId: 'lost-owner',
+      }),
+    ).rejects.toThrow(/lease/i);
+    expect(queries[0]).toContain('WITH owned AS');
+    expect(queries[0]).toContain('GROUP BY owned.job_id');
+  });
+
   test('rechecks cancellation against the currently owned row before local finalization work', async () => {
     const queries: Array<{ text: string; values: unknown[] }> = [];
     const repository = new PostgresStudioWorkerRepository({
@@ -395,7 +452,7 @@ describe('PostgresStudioWorkerRepository', () => {
     expect(queries[0]?.text).toContain('newer.cursor > event.cursor');
   });
 
-  test('unknown outcome maintenance waits for the attempt recovery deadline', async () => {
+  test('unknown outcome maintenance preserves recovery state and expires only 30-day holds', async () => {
     const queries: Array<{ text: string; values: unknown[] }> = [];
     const maintenance = new PostgresStudioMaintenanceRepository({
       unsafe: async (text, values = []) => {
@@ -406,7 +463,13 @@ describe('PostgresStudioWorkerRepository', () => {
 
     await maintenance.failStuckUnknownOutcomes(new Date('2026-07-15T10:00:00.000Z'));
 
-    expect(queries).toHaveLength(1);
+    expect(queries).toHaveLength(2);
     expect(queries[0]?.text).toContain("a.started_at <= $1::timestamptz - interval '15 minutes'");
+    expect(queries[0]?.text).toContain("'operator-review'");
+    expect(queries[0]?.text).toContain('NOT EXISTS');
+    expect(queries[0]?.text).not.toContain("SET status = 'failed'");
+    expect(queries[0]?.text).not.toContain("'failed',");
+    expect(queries[1]?.text).toContain('public.atomic_expire_studio_unknown_hold');
+    expect(queries[1]?.text).toContain("reservation.created_at + interval '30 days'");
   });
 });

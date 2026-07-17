@@ -270,6 +270,10 @@ describe.skipIf(!dockerAvailable)('PostgresStudioWorkerRepository - real Postgre
       await applyMigration(firstConnection, '20260715170000000_studio_credit_reservations.sql');
       await applyMigration(firstConnection, '20260715180000000_studio_worker_hardening.sql');
       await firstConnection.unsafe(`
+        ALTER TABLE kortix.studio_job_attempts
+          ADD COLUMN IF NOT EXISTS provider_config_version text;
+      `);
+      await firstConnection.unsafe(`
         INSERT INTO kortix.accounts(account_id) VALUES ('${accountId}');
         INSERT INTO kortix.projects(project_id, account_id)
         VALUES ('${projectId}', '${accountId}');

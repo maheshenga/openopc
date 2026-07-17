@@ -3,6 +3,7 @@ import type {
   StudioProviderAsset,
   StudioProviderDefinitionConfig,
   StudioProviderHandle,
+  StudioPricingSnapshot,
   StudioRetryClassification,
 } from '@kortix/studio-runtime';
 import { z } from 'zod';
@@ -41,6 +42,7 @@ export type StudioWorkerJob = {
   sessionId: string | null;
   capability: 'image.generate';
   providerConfigId: string;
+  providerConfigVersion?: string | null;
   providerEnabled: boolean;
   provider: string;
   model: string;
@@ -58,6 +60,7 @@ export type StudioWorkerJob = {
   leaseOwner: string | null;
   leaseExpiresAt: Date | null;
   credentialBinding: Record<string, unknown>;
+  pricingSnapshot?: StudioPricingSnapshot | null;
 };
 
 export type StudioWorkerAttemptStatus =
@@ -80,6 +83,14 @@ export type StudioWorkerAttempt = {
   retryClassification: StudioRetryClassification | null;
   startedAt: Date;
   endedAt: Date | null;
+  providerConfigVersion?: string | null;
+  submissionKind?: 'async' | 'completed';
+  stagingManifestKey?: string | null;
+  stagingManifestChecksum?: string | null;
+  costOutcome?: 'succeeded' | 'failed' | 'cancelled' | 'unknown' | null;
+  costRecordedAt?: Date | null;
+  upstreamUsage?: Record<string, number> | null;
+  upstreamCostCredits?: number | null;
 };
 
 export type StudioWorkerProviderConfig = {
@@ -191,6 +202,28 @@ export interface StudioWorkerRepository {
     assets: StoredStudioAsset[];
     now: Date;
   }): Promise<'succeeded' | 'cancelled'>;
+  recordStagedManifest(input: {
+    jobId: string;
+    attemptId: string;
+    workerId: string;
+    submissionKind: 'async' | 'completed';
+    manifestKey: string;
+    manifestChecksum: string;
+    now: Date;
+  }): Promise<void>;
+  recordAttemptCost(input: {
+    jobId: string;
+    attemptId: string;
+    workerId: string;
+    usage: Record<string, number>;
+    upstreamCostCredits: number;
+    outcome: 'succeeded' | 'failed' | 'cancelled' | 'unknown';
+    now: Date;
+  }): Promise<void>;
+  getRecordedAttemptCostTotal(input: {
+    jobId: string;
+    workerId: string;
+  }): Promise<number>;
   markFailed(input: {
     jobId: string;
     attemptId?: string;

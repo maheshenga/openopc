@@ -12,6 +12,8 @@ import {
   STUDIO_MAX_PROVIDER_ATTEMPTS,
   StudioObjectStoreError,
   StudioProviderCallError,
+  addStudioCreditAmounts,
+  calculateStudioImageUsageCredits,
 } from '@kortix/studio-runtime';
 import { assertStudioTransition } from '@kortix/studio-runtime';
 import {
@@ -25,6 +27,7 @@ import {
   type StudioWorkerTickResult,
   type StudioWorkerProviderConfig,
 } from './contracts';
+import { type StudioStagedResult, StudioResultStager } from './result-stager';
 
 const RETRY_JITTER_BOUNDS_MS = [5_000, 30_000, 120_000] as const;
 const MAX_RETRY_AFTER_MS = 15 * 60_000;
@@ -55,6 +58,7 @@ export type StudioWorkerDependencies = {
   referenceAssets: StudioReferenceAssetResolver;
   authorization: StudioSubmissionAuthorization;
   assets: StudioAssetWriter;
+  stager?: StudioResultStager;
   now?: () => Date;
   random?: () => number;
 };
@@ -114,8 +118,23 @@ export class StudioWorker {
       ['submitting', 'reconciling'].includes(attempt.status) &&
       !attempt.providerHandle
     ) {
+      const staged = await this.loadDurableStagedResult(job, attempt);
+      if (staged.kind === 'failed') {
+        return { kind: 'processed', jobId: job.jobId, status: 'failed' };
+      }
+      if (staged.kind === 'staged') {
+        return this.finalizeStagedResult(job, attempt, staged.result, now);
+      }
       const adapter = this.deps.providers.get(job);
-      if (!adapter) return this.failUnavailableProvider(job, attempt, now);
+      if (!adapter) {
+        await this.deferUnknown(
+          job,
+          attempt,
+          'Provider reconciliation is unavailable; operator review is required',
+          now,
+        );
+        return { kind: 'processed', jobId: job.jobId, status: 'running' };
+      }
       return this.reconcile(job, attempt, adapter, now);
     }
 
@@ -242,11 +261,38 @@ export class StudioWorker {
     let handle: StudioProviderHandle;
     try {
       const submission = await this.withLeaseHeartbeat(job, () => adapter.submit(ctx, job.input));
-      if (submission.kind !== 'async') {
-        throw new StudioProviderCallError(
-          'terminal',
-          'Completed provider submissions are not enabled in this worker version',
-        );
+      if (submission.kind === 'completed') {
+        if (submission.provider !== job.provider || submission.submission_key !== submissionKey) {
+          throw new StudioProviderCallError(
+            'unknown_outcome',
+            'Provider returned a mismatched completed submission identity',
+          );
+        }
+        if (!this.deps.stager || !job.pricingSnapshot) {
+          throw new StudioProviderCallError(
+            'terminal',
+            'Completed provider submissions are not enabled in this worker version',
+          );
+        }
+        let staged: StudioStagedResult;
+        try {
+          staged = await this.withLeaseHeartbeat(job, () =>
+            this.deps.stager!.stage({
+              ...this.stagingIdentity(job, attempt),
+              assets: submission.result.assets,
+              usage: this.pricedUsage(job, submission.result).usage,
+            }),
+          );
+        } catch (error) {
+          return this.handleStagingFailure(
+            job,
+            attempt,
+            submission.result,
+            error,
+            this.now(),
+          );
+        }
+        return this.finalizeStagedResult(job, attempt, staged, this.now());
       }
       handle = submission.handle;
       if (handle.submission_key !== submissionKey) {
@@ -445,6 +491,21 @@ export class StudioWorker {
     ) {
       return this.cancel(job, attempt, adapter, this.now());
     }
+    if (this.deps.stager && job.pricingSnapshot) {
+      let staged: StudioStagedResult;
+      try {
+        staged = await this.withLeaseHeartbeat(job, () =>
+          this.deps.stager!.stage({
+            ...this.stagingIdentity(job, attempt),
+            assets: result.assets,
+            usage: this.pricedUsage(job, result).usage,
+          }),
+        );
+      } catch (error) {
+        return this.handleStagingFailure(job, attempt, result, error, this.now());
+      }
+      return this.finalizeStagedResult(job, attempt, staged, this.now(), adapter, handle);
+    }
     let stored: StoredStudioAsset[];
     try {
       stored = await this.withLeaseHeartbeat(job, () =>
@@ -483,6 +544,183 @@ export class StudioWorker {
     }
     assertStudioTransition(job.status, 'succeeded');
     return { kind: 'processed', jobId: job.jobId, status: 'succeeded' };
+  }
+
+  private async loadDurableStagedResult(
+    job: StudioWorkerJob,
+    attempt: StudioWorkerAttempt,
+  ): Promise<
+    | { kind: 'none' }
+    | { kind: 'staged'; result: StudioStagedResult }
+    | { kind: 'failed' }
+  > {
+    if (!this.deps.stager || !job.pricingSnapshot) return { kind: 'none' };
+    try {
+      const result = await this.deps.stager.loadManifest(this.stagingIdentity(job, attempt));
+      return result ? { kind: 'staged', result } : { kind: 'none' };
+    } catch (error) {
+      if (error instanceof StudioProviderCallError && error.classification === 'terminal') {
+        await this.fail(
+          job,
+          attempt,
+          'STUDIO_ASSET_INVALID',
+          error.message,
+          error.classification,
+          this.now(),
+        );
+        return { kind: 'failed' };
+      }
+      throw error;
+    }
+  }
+
+  private async finalizeStagedResult(
+    job: StudioWorkerJob,
+    attempt: StudioWorkerAttempt,
+    staged: StudioStagedResult,
+    now: Date,
+    adapter?: StudioProviderAdapter,
+    handle?: StudioProviderHandle,
+  ): Promise<StudioWorkerTickResult> {
+    const priced = this.pricedUsage(job, {
+      assets: staged.manifest.assets.map(() => ({}) as never),
+      usage: staged.manifest.usage,
+    });
+    await this.deps.repository.recordStagedManifest({
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      workerId: this.owner(job),
+      submissionKind: attempt.providerHandle ? 'async' : 'completed',
+      manifestKey: staged.manifestKey,
+      manifestChecksum: staged.manifestChecksum,
+      now,
+    });
+    const costOutcome = attempt.costRecordedAt ? attempt.costOutcome : 'succeeded';
+    if (costOutcome !== 'succeeded' && costOutcome !== 'unknown') {
+      throw new StudioProviderCallError(
+        'terminal',
+        'Studio attempt cost outcome cannot be finalized as success',
+      );
+    }
+    await this.deps.repository.recordAttemptCost({
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      workerId: this.owner(job),
+      usage: priced.usage,
+      upstreamCostCredits: priced.upstreamCostCredits,
+      outcome: costOutcome,
+      now,
+    });
+    const recordedAttemptCost = await this.deps.repository.getRecordedAttemptCostTotal({
+      jobId: job.jobId,
+      workerId: this.owner(job),
+    });
+    const outcome = await this.deps.repository.finalizeSuccess({
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      workerId: this.owner(job),
+      actualCredits: addStudioCreditAmounts([
+        recordedAttemptCost,
+        priced.outputMarkupCredits,
+      ]),
+      assets: staged.assets,
+      now: this.now(),
+    });
+    if (outcome === 'cancelled') {
+      if (adapter && handle) {
+        try {
+          await adapter.cancel(this.providerContext(job, attempt), handle);
+        } catch {
+          // Kortix already committed cancellation; upstream cancellation is best effort.
+        }
+      }
+      return { kind: 'processed', jobId: job.jobId, status: 'cancelled' };
+    }
+    assertStudioTransition(job.status, 'succeeded');
+    return { kind: 'processed', jobId: job.jobId, status: 'succeeded' };
+  }
+
+  private stagingIdentity(job: StudioWorkerJob, attempt: StudioWorkerAttempt) {
+    const pricing = job.pricingSnapshot;
+    const providerConfigVersion = attempt.providerConfigVersion ?? job.providerConfigVersion;
+    if (!pricing || !providerConfigVersion) {
+      throw new StudioProviderCallError('terminal', 'Studio staging snapshot identity is missing');
+    }
+    return {
+      accountId: job.accountId,
+      projectId: job.projectId,
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      submissionKey: attempt.submissionKey,
+      providerConfigId: job.providerConfigId,
+      providerConfigVersion,
+      pricingCatalogId: pricing.pricing_catalog_id,
+      pricingVersion: pricing.version,
+    };
+  }
+
+  private pricedUsage(job: StudioWorkerJob, result: Pick<StudioProviderResult, 'assets' | 'usage'>) {
+    const pricing = job.pricingSnapshot;
+    if (!pricing) {
+      const actualCredits = actualCreditsFrom(result as StudioProviderResult, job.reservedCredits);
+      return {
+        usage: { output_count: result.assets.length },
+        upstreamCostCredits: actualCredits,
+        actualCredits,
+        outputMarkupCredits: 0,
+      };
+    }
+    const priced = calculateStudioImageUsageCredits({
+      pricing,
+      outputCount: result.assets.length,
+    });
+    return {
+      usage: priced.usage,
+      upstreamCostCredits: priced.upstream_cost_credits,
+      actualCredits: addStudioCreditAmounts([
+        priced.upstream_cost_credits,
+        priced.output_markup_credits,
+      ]),
+      outputMarkupCredits: priced.output_markup_credits,
+    };
+  }
+
+  private async handleStagingFailure(
+    job: StudioWorkerJob,
+    attempt: StudioWorkerAttempt,
+    result: Pick<StudioProviderResult, 'assets' | 'usage'>,
+    error: unknown,
+    now: Date,
+  ): Promise<StudioWorkerTickResult> {
+    const priced = this.pricedUsage(job, result);
+    const terminal = error instanceof StudioProviderCallError && error.classification === 'terminal';
+    await this.deps.repository.recordAttemptCost({
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      workerId: this.owner(job),
+      usage: priced.usage,
+      upstreamCostCredits: priced.upstreamCostCredits,
+      outcome: terminal ? 'failed' : 'succeeded',
+      now,
+    });
+    if (terminal) {
+      await this.fail(
+        job,
+        attempt,
+        'STUDIO_ASSET_INVALID',
+        error instanceof Error ? error.message : 'Studio result asset is invalid',
+        'terminal',
+        now,
+      );
+      return { kind: 'processed', jobId: job.jobId, status: 'failed' };
+    }
+    await this.deferUnknown(
+      job,
+      attempt,
+      error instanceof Error ? error.message : 'Studio result staging is ambiguous',
+      now,
+    );
+    return { kind: 'processed', jobId: job.jobId, status: 'running' };
   }
 
   private async handleProviderFailure(

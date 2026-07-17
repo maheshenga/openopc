@@ -77,6 +77,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
         leaseOwner: null,
         leaseExpiresAt: null,
         credentialBinding: { kind: 'none' },
+        pricingSnapshot: null,
         ...input,
       };
       jobs.set(jobId, job);
@@ -101,6 +102,14 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
         retryClassification: null,
         startedAt: DEFAULT_NOW,
         endedAt: null,
+        providerConfigVersion: job.createdAt.toISOString(),
+        submissionKind: 'async',
+        stagingManifestKey: null,
+        stagingManifestChecksum: null,
+        costOutcome: null,
+        costRecordedAt: null,
+        upstreamUsage: null,
+        upstreamCostCredits: null,
         ...input,
       };
       list.push(attempt);
@@ -210,6 +219,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
         retryClassification: null,
         startedAt: input.now,
         endedAt: null,
+        providerConfigVersion: input.providerConfigVersion,
       };
       list.push(attempt);
       attempts.set(input.jobId, list);
@@ -330,6 +340,54 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
       release(job, input.now);
       append(input.jobId, 'succeeded', {}, input.now);
       return 'succeeded';
+    },
+
+    async recordStagedManifest(input) {
+      const job = ownedJob(input.jobId, input.workerId);
+      const attempt = findAttempt(attempts, input.jobId, input.attemptId);
+      if (!['submitting', 'submitted', 'polling', 'reconciling'].includes(attempt.status)) {
+        throw new Error('Studio attempt is not active');
+      }
+      if (
+        (attempt.submissionKind && attempt.submissionKind !== input.submissionKind) ||
+        (attempt.stagingManifestKey && attempt.stagingManifestKey !== input.manifestKey) ||
+        (attempt.stagingManifestChecksum && attempt.stagingManifestChecksum !== input.manifestChecksum)
+      ) {
+        throw new Error('Studio staging manifest identity conflict');
+      }
+      attempt.submissionKind = input.submissionKind;
+      attempt.stagingManifestKey = input.manifestKey;
+      attempt.stagingManifestChecksum = input.manifestChecksum;
+      if (attempt.status === 'submitting') attempt.status = 'reconciling';
+      void job;
+    },
+
+    async recordAttemptCost(input) {
+      const job = ownedJob(input.jobId, input.workerId);
+      const attempt = findAttempt(attempts, input.jobId, input.attemptId);
+      if (attempt.costRecordedAt) {
+        if (
+          JSON.stringify(attempt.upstreamUsage ?? {}) !== JSON.stringify(input.usage) ||
+          attempt.upstreamCostCredits !== input.upstreamCostCredits ||
+          attempt.costOutcome !== input.outcome
+        ) {
+          throw new Error('Studio attempt cost was already recorded differently');
+        }
+        return;
+      }
+      attempt.upstreamUsage = { ...input.usage };
+      attempt.upstreamCostCredits = input.upstreamCostCredits;
+      attempt.costOutcome = input.outcome;
+      attempt.costRecordedAt = input.now;
+      void job;
+    },
+
+    async getRecordedAttemptCostTotal(input) {
+      ownedJob(input.jobId, input.workerId);
+      return (attempts.get(input.jobId) ?? []).reduce(
+        (total, attempt) => total + (attempt.costRecordedAt ? attempt.upstreamCostCredits ?? 0 : 0),
+        0,
+      );
     },
 
     async markFailed(input) {

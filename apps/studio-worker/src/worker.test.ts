@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import type { StudioProviderAdapter, StudioProviderHandle } from '@kortix/studio-runtime';
-import { InMemoryStudioObjectStore, StudioProviderCallError } from '@kortix/studio-runtime';
+import {
+  InMemoryStudioObjectStore,
+  StudioProviderCallError,
+  studioStagingManifestKey,
+  studioSubmissionKeyHash,
+} from '@kortix/studio-runtime';
 import { createMemoryStudioWorkerRepository } from './memory-repository';
+import { StudioResultStager } from './result-stager';
 import {
   type StudioAssetWriter,
   type StudioSubmissionAuthorization,
@@ -65,12 +71,13 @@ const allow: StudioSubmissionAuthorization = {
 function makeWorker(input: {
   workerId: string;
   repository: ReturnType<typeof createMemoryStudioWorkerRepository>;
-  adapter?: StudioProviderAdapter;
+  adapter?: StudioProviderAdapter | null;
   authorization?: StudioSubmissionAuthorization;
   leaseMs?: number;
   assets?: StudioAssetWriter;
   now?: () => Date;
   credentialResolver?: { resolve: () => Promise<null> };
+  stager?: StudioResultStager;
 }) {
   const objectStore = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
   return {
@@ -83,13 +90,14 @@ function makeWorker(input: {
       },
       repository: input.repository,
       providers: {
-        get: () => input.adapter ?? provider(),
-        resolve: async () => input.adapter ?? provider(),
+        get: () => (input.adapter === null ? null : (input.adapter ?? provider())),
+        resolve: async () => (input.adapter === null ? null : (input.adapter ?? provider())),
       },
       credentialResolver: input.credentialResolver ?? { resolve: async () => null },
       referenceAssets: { resolve: async () => [] },
       authorization: input.authorization ?? allow,
       assets: input.assets ?? createObjectStoreAssetWriter(objectStore),
+      stager: input.stager,
       now: input.now ?? (() => NOW),
       random: () => 0,
     }),
@@ -282,6 +290,317 @@ describe('StudioWorker', () => {
     expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'failed' });
     expect(reconcileCalls).toBe(0);
     expect(repository.getJob(job.jobId)?.errorCode).toBe('STUDIO_PROVIDER_REJECTED');
+  });
+
+  test('stages a completed submission, records verified cost, and finalizes without polling', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      pricingSnapshot: {
+        pricing_catalog_id: '77777777-7777-4777-8777-777777777777',
+        version: 1,
+        provider: 'fake',
+        model: 'fake-image-v1',
+        unit: 'image',
+        rate_credits: 1,
+        max_provider_credits: 2,
+        markup_credits: 0.25,
+      },
+      reservedCredits: 2.25,
+    });
+    const png = new Uint8Array(
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
+    let polls = 0;
+    const adapter = provider({
+      submit: async (ctx) => ({
+        kind: 'completed',
+        provider: 'fake',
+        submission_key: ctx.submissionKey,
+        result: {
+          assets: [
+            {
+              kind: 'image',
+              filename: 'completed.png',
+              mime_type: 'image/png',
+              size_bytes: png.byteLength,
+              replayable_within_attempt: true,
+              openBody: async () => new Blob([png]).stream(),
+            },
+          ],
+          usage: { ignored_provider_cost: 99 },
+        },
+      }),
+      poll: async () => {
+        polls += 1;
+        return { status: 'succeeded' };
+      },
+    });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const { worker } = makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter,
+      stager: new StudioResultStager(store),
+    });
+
+    expect(await worker.runOnce()).toEqual({
+      kind: 'processed',
+      jobId: job.jobId,
+      status: 'succeeded',
+    });
+    expect(polls).toBe(0);
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      submissionKind: 'completed',
+      upstreamUsage: { output_count: 1 },
+      upstreamCostCredits: 1,
+      costOutcome: 'succeeded',
+      status: 'succeeded',
+    });
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(1.25);
+  });
+
+  test('final charge includes verified cost from an earlier failed attempt plus current output markup', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      attemptCount: 1,
+      pricingSnapshot: {
+        pricing_catalog_id: '77777777-7777-4777-8777-777777777777',
+        version: 1,
+        provider: 'fake',
+        model: 'fake-image-v1',
+        unit: 'image',
+        rate_credits: 1,
+        max_provider_credits: 4,
+        markup_credits: 0.25,
+      },
+      reservedCredits: 4.25,
+    });
+    repository.seedAttempt(job.jobId, {
+      attemptNumber: 1,
+      status: 'failed',
+      endedAt: NOW,
+      costOutcome: 'failed',
+      costRecordedAt: NOW,
+      upstreamUsage: { output_count: 1 },
+      upstreamCostCredits: 0.75,
+    });
+    const png = new Uint8Array(
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
+    const adapter = provider({
+      submit: async (ctx) => ({
+        kind: 'completed',
+        provider: 'fake',
+        submission_key: ctx.submissionKey,
+        result: {
+          assets: [
+            {
+              kind: 'image',
+              filename: 'retry.png',
+              mime_type: 'image/png',
+              size_bytes: png.byteLength,
+              replayable_within_attempt: true,
+              openBody: async () => new Blob([png]).stream(),
+            },
+          ],
+        },
+      }),
+    });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const { worker } = makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter,
+      stager: new StudioResultStager(store),
+    });
+
+    expect(await worker.runOnce()).toMatchObject({ status: 'succeeded' });
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(2);
+  });
+
+  test('a terminal durable manifest failure stops before provider reconciliation', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      pricingSnapshot: {
+        pricing_catalog_id: '77777777-7777-4777-8777-777777777777',
+        version: 1,
+        provider: 'fake',
+        model: 'fake-image-v1',
+        unit: 'image',
+        rate_credits: 1,
+        max_provider_credits: 2,
+        markup_credits: 0.25,
+      },
+    });
+    const attempt = repository.seedAttempt(job.jobId, { status: 'reconciling' });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const manifestKey = studioStagingManifestKey({
+      accountId: job.accountId,
+      projectId: job.projectId,
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      submissionKeyHash: studioSubmissionKeyHash(attempt.submissionKey),
+    });
+    const invalid = new TextEncoder().encode('{}');
+    await store.putObject({
+      key: manifestKey,
+      body: new Blob([invalid]).stream(),
+      content_type: 'application/json',
+      size_bytes: invalid.byteLength,
+      checksum_sha256: new Bun.CryptoHasher('sha256').update(invalid).digest('hex'),
+      metadata: { kind: 'studio-staging-manifest' },
+    });
+    let reconciliations = 0;
+    const adapter = provider({
+      reconcile: async () => {
+        reconciliations += 1;
+        return 'unknown';
+      },
+    });
+    const { worker } = makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter,
+      stager: new StudioResultStager(store),
+    });
+
+    expect(await worker.runOnce()).toMatchObject({ status: 'failed' });
+    expect(reconciliations).toBe(0);
+  });
+
+  test('an unresolved completed attempt without a reconciliation adapter remains operator-recoverable', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({ status: 'running', attemptCount: 1 });
+    repository.seedAttempt(job.jobId, { status: 'reconciling' });
+    const { worker } = makeWorker({ workerId: 'worker-a', repository, adapter: null });
+
+    expect(await worker.runOnce()).toMatchObject({ status: 'running' });
+    expect(repository.getAttempts(job.jobId).at(-1)?.status).toBe('reconciling');
+    expect(repository.getEvents(job.jobId).some((event) => event.type === 'failed')).toBe(false);
+  });
+
+  test('records trusted completed usage before terminal staging failure', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      pricingSnapshot: {
+        pricing_catalog_id: '77777777-7777-4777-8777-777777777777',
+        version: 1,
+        provider: 'fake',
+        model: 'fake-image-v1',
+        unit: 'image',
+        rate_credits: 1,
+        max_provider_credits: 2,
+        markup_credits: 0.25,
+      },
+    });
+    const invalid = new TextEncoder().encode('not-an-image');
+    const adapter = provider({
+      submit: async (ctx) => ({
+        kind: 'completed',
+        provider: 'fake',
+        submission_key: ctx.submissionKey,
+        result: {
+          assets: [
+            {
+              kind: 'image',
+              filename: 'invalid.png',
+              mime_type: 'image/png',
+              size_bytes: invalid.byteLength,
+              replayable_within_attempt: true,
+              openBody: async () => new Blob([invalid]).stream(),
+            },
+          ],
+        },
+      }),
+    });
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const { worker } = makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter,
+      stager: new StudioResultStager(store),
+    });
+
+    expect(await worker.runOnce()).toMatchObject({ status: 'failed' });
+    expect(repository.getAttempts(job.jobId)[0]).toMatchObject({
+      upstreamCostCredits: 1,
+      costOutcome: 'failed',
+      status: 'failed',
+    });
+  });
+
+  test('reuses an immutable unknown attempt cost when a durable manifest proves success', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      status: 'running',
+      attemptCount: 1,
+      pricingSnapshot: {
+        pricing_catalog_id: '77777777-7777-4777-8777-777777777777',
+        version: 1,
+        provider: 'fake',
+        model: 'fake-image-v1',
+        unit: 'image',
+        rate_credits: 1,
+        max_provider_credits: 2,
+        markup_credits: 0.25,
+      },
+    });
+    const attempt = repository.seedAttempt(job.jobId, {
+      status: 'reconciling',
+      submissionKind: 'completed',
+      costOutcome: 'unknown',
+      costRecordedAt: NOW,
+      upstreamUsage: { output_count: 1 },
+      upstreamCostCredits: 1,
+    });
+    const png = new Uint8Array(
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
+    const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+    const stager = new StudioResultStager(store);
+    await stager.stage({
+      accountId: job.accountId,
+      projectId: job.projectId,
+      jobId: job.jobId,
+      attemptId: attempt.attemptId,
+      submissionKey: attempt.submissionKey,
+      providerConfigId: job.providerConfigId,
+      providerConfigVersion: attempt.providerConfigVersion!,
+      pricingCatalogId: job.pricingSnapshot!.pricing_catalog_id,
+      pricingVersion: job.pricingSnapshot!.version,
+      assets: [
+        {
+          kind: 'image',
+          filename: 'recovered.png',
+          mime_type: 'image/png',
+          size_bytes: png.byteLength,
+          replayable_within_attempt: true,
+          openBody: async () => new Blob([png]).stream(),
+        },
+      ],
+      usage: { output_count: 1 },
+    });
+    const { worker } = makeWorker({
+      workerId: 'worker-a',
+      repository,
+      adapter: null,
+      stager,
+    });
+
+    expect(await worker.runOnce()).toMatchObject({ status: 'succeeded' });
+    expect(repository.getAttempts(job.jobId)[0]?.costOutcome).toBe('unknown');
+    expect(repository.getJob(job.jobId)?.actualCredits).toBe(1.25);
   });
 
   test('releases the claim when the provider-config prepare fence loses a race', async () => {

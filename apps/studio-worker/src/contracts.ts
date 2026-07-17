@@ -1,6 +1,7 @@
 import type { StudioJobEvent, StudioJobInput, StudioJobState } from '@kortix/api-contract';
 import type {
   StudioProviderAsset,
+  StudioProviderDefinitionConfig,
   StudioProviderHandle,
   StudioRetryClassification,
 } from '@kortix/studio-runtime';
@@ -87,8 +88,11 @@ export type StudioWorkerProviderConfig = {
   projectId: string;
   provider: string;
   enabled: boolean;
+  baseUrl: string | null;
+  region: string | null;
+  definitionId: string;
   credentialBinding: Record<string, unknown>;
-  capabilityMap: Record<string, unknown>;
+  capabilityMap: StudioProviderDefinitionConfig['capability_map'];
   versionToken: string;
 };
 

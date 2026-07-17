@@ -674,6 +674,9 @@ importers:
       '@kortix/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@kortix/studio-adapters':
+        specifier: workspace:*
+        version: link:../../packages/studio-adapters
       '@kortix/studio-runtime':
         specifier: workspace:*
         version: link:../../packages/studio-runtime

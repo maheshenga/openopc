@@ -2,11 +2,14 @@ import os from 'node:os';
 import {
   InMemoryStudioObjectStore,
   createFakeStudioProvider,
+  decryptProjectSecretEnvelope,
   studioMaintenanceLeaseName,
 } from '@kortix/studio-runtime';
 import postgres from 'postgres';
 import { z } from 'zod';
 import { createStudioSubmissionAuthorization } from './authorization';
+import { createStudioCredentialResolver } from '../../api/src/studio/credentials';
+import { PostgresStudioCredentialLookup } from './credential-lookup';
 import { StudioMaintenanceCoordinator } from './maintenance';
 import {
   PostgresStudioMaintenanceRepository,
@@ -16,13 +19,16 @@ import {
   createPostgresStudioServiceAccountLoader,
   createPostgresStudioTokenLoader,
 } from './postgres';
+import { createStudioProviderRegistry } from './provider-registry';
 import { StudioWorker, createObjectStoreAssetWriter } from './worker';
 
 const EnabledEnvironmentSchema = z
   .object({
     DATABASE_URL: z.string().min(1),
+    API_KEY_SECRET: z.string().min(1),
     STUDIO_WORKER_ID: z.string().min(1).optional(),
     STUDIO_FAKE_PROVIDER_ENABLED: z.enum(['true', 'false']).default('false'),
+    STUDIO_OPENAI_COMPATIBLE_ENABLED: z.enum(['true', 'false']).default('false'),
     STUDIO_WORKER_IDLE_MS: z.coerce.number().int().nonnegative().max(60_000).default(1_000),
     STUDIO_WORKER_LEASE_MS: z.coerce
       .number()
@@ -50,8 +56,10 @@ export type StudioWorkerEnvironment =
   | {
       enabled: true;
       databaseUrl: string;
+      apiKeySecret: string;
       workerId: string;
       fakeProviderEnabled: boolean;
+      openAiCompatibleEnabled: boolean;
       idleMs: number;
       leaseMs: number;
       pollMs: number;
@@ -66,10 +74,12 @@ export function parseStudioWorkerEnvironment(
   return {
     enabled: true,
     databaseUrl: parsed.DATABASE_URL,
+    apiKeySecret: parsed.API_KEY_SECRET,
     workerId:
       parsed.STUDIO_WORKER_ID ??
       `${os.hostname()}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`,
     fakeProviderEnabled: parsed.STUDIO_FAKE_PROVIDER_ENABLED === 'true',
+    openAiCompatibleEnabled: parsed.STUDIO_OPENAI_COMPATIBLE_ENABLED === 'true',
     idleMs: parsed.STUDIO_WORKER_IDLE_MS,
     leaseMs: parsed.STUDIO_WORKER_LEASE_MS,
     pollMs: parsed.STUDIO_WORKER_POLL_MS,
@@ -109,9 +119,9 @@ async function main(): Promise<void> {
     console.info('[studio-worker] STUDIO_ENABLED is not true; worker remains disabled');
     return;
   }
-  if (!env.fakeProviderEnabled) {
+  if (!env.fakeProviderEnabled && !env.openAiCompatibleEnabled) {
     throw new Error(
-      'Studio worker has no storage/provider driver. Set STUDIO_FAKE_PROVIDER_ENABLED=true for the Task 8 development path; Task 9 wires production storage and OpenAI-compatible providers.',
+      'Studio worker has no provider driver. Set STUDIO_FAKE_PROVIDER_ENABLED=true or STUDIO_OPENAI_COMPATIBLE_ENABLED=true.',
     );
   }
 
@@ -129,6 +139,11 @@ async function main(): Promise<void> {
     },
   };
   const repository = new PostgresStudioWorkerRepository(client);
+  const credentialResolver = createStudioCredentialResolver({
+    lookup: new PostgresStudioCredentialLookup(client),
+    decrypt: (projectId, valueEnc) =>
+      decryptProjectSecretEnvelope(env.apiKeySecret, projectId, valueEnc),
+  });
   const maintenanceRepository = new PostgresStudioMaintenanceRepository(client);
   const [{ authorize }, { invalidateIamCacheForUsers }] = await Promise.all([
     import('../../api/src/iam/dispatcher'),
@@ -153,6 +168,10 @@ async function main(): Promise<void> {
     },
   });
   const fakeProvider = createFakeStudioProvider();
+  const providerRegistry = createStudioProviderRegistry({
+    fakeProviderEnabled: env.fakeProviderEnabled,
+    openAiCompatibleEnabled: env.openAiCompatibleEnabled,
+  });
   const objectStore = new InMemoryStudioObjectStore({
     namespace: 'studio-fake-ephemeral',
     ready: true,
@@ -165,7 +184,12 @@ async function main(): Promise<void> {
       unknownOutcomeTimeoutMs: 15 * 60_000,
     },
     repository,
-    providers: { get: (job) => (job.provider === 'fake' ? fakeProvider : null) },
+    providers: {
+      get: (job) => (job.provider === 'fake' ? fakeProvider : null),
+      resolve: providerRegistry.resolve,
+    },
+    credentialResolver,
+    referenceAssets: { resolve: async () => [] },
     authorization,
     assets: createObjectStoreAssetWriter(objectStore),
   });

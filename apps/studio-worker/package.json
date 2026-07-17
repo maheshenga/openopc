@@ -12,6 +12,7 @@
   "dependencies": {
     "@kortix/api-contract": "workspace:*",
     "@kortix/db": "workspace:*",
+    "@kortix/studio-adapters": "workspace:*",
     "@kortix/studio-runtime": "workspace:*",
     "postgres": "^3.4.8",
     "zod": "^3.23.0"

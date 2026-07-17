@@ -70,6 +70,7 @@ function makeWorker(input: {
   leaseMs?: number;
   assets?: StudioAssetWriter;
   now?: () => Date;
+  credentialResolver?: { resolve: () => Promise<null> };
 }) {
   const objectStore = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
   return {
@@ -81,7 +82,12 @@ function makeWorker(input: {
         unknownOutcomeTimeoutMs: 15 * 60_000,
       },
       repository: input.repository,
-      providers: { get: () => input.adapter ?? provider() },
+      providers: {
+        get: () => input.adapter ?? provider(),
+        resolve: async () => input.adapter ?? provider(),
+      },
+      credentialResolver: input.credentialResolver ?? { resolve: async () => null },
+      referenceAssets: { resolve: async () => [] },
       authorization: input.authorization ?? allow,
       assets: input.assets ?? createObjectStoreAssetWriter(objectStore),
       now: input.now ?? (() => NOW),
@@ -952,5 +958,41 @@ describe('StudioWorker', () => {
       status: 'cancelled',
       errorCode: 'STUDIO_PERMISSION_DENIED',
     });
+  });
+
+  test('does not invoke the provider when credential resolution fails after authorization', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({ credentialBinding: { kind: 'secret', identifier: 'IMAGE_PROVIDER' } });
+    let providerCalls = 0;
+    const worker = new StudioWorker({
+      config: {
+        workerId: 'worker-a',
+        leaseMs: 30_000,
+        pollIntervalMs: 0,
+        unknownOutcomeTimeoutMs: 15 * 60_000,
+      },
+      repository,
+      providers: {
+        get: () => {
+          providerCalls += 1;
+          return provider();
+        },
+      },
+      credentialResolver: {
+        resolve: async () => {
+          throw new Error('cannot decrypt credential');
+        },
+      },
+      referenceAssets: { resolve: async () => [] },
+      authorization: allow,
+      assets: createObjectStoreAssetWriter(new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true })),
+      now: () => NOW,
+    } as never);
+
+    const result = await worker.runOnce();
+
+    expect(providerCalls).toBe(0);
+    expect(result).toMatchObject({ kind: 'processed', jobId: job.jobId, status: 'cancelled' });
+    expect(repository.getJob(job.jobId)?.errorCode).toBe('STUDIO_PROVIDER_CREDENTIAL_UNAVAILABLE');
   });
 });

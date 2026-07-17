@@ -6,3 +6,4 @@ export * from './fake-provider';
 export * from './object-store';
 export * from './leases';
 export * from './staging';
+export * from './secret-envelope';

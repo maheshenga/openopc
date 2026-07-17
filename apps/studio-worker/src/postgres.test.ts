@@ -139,8 +139,10 @@ describe('PostgresStudioWorkerRepository', () => {
             project_id: '55555555-5555-4555-8555-555555555555',
             provider: 'fake',
             enabled: true,
+            base_url: 'https://images.example.test',
+            region: 'cn-hangzhou',
             credential_binding: { kind: 'none' },
-            capability_map: { capabilities: ['image.generate'] },
+            capability_map: { definition_id: 'fake', capabilities: ['image.generate'] },
             version_token: '2026-07-15 10:00:00+00',
           },
         ];
@@ -152,10 +154,18 @@ describe('PostgresStudioWorkerRepository', () => {
       workerId: 'worker-a:claim-1',
     });
 
-    expect(config).toMatchObject({ provider: 'fake', enabled: true });
+    expect(config).toMatchObject({
+      provider: 'fake',
+      enabled: true,
+      baseUrl: 'https://images.example.test',
+      region: 'cn-hangzhou',
+      definitionId: 'fake',
+    });
     expect(queries).toHaveLength(1);
     expect(queries[0]?.text).toContain('config.account_id = job.account_id');
     expect(queries[0]?.text).toContain('config.project_id = job.project_id');
+    expect(queries[0]?.text).toContain('config.base_url');
+    expect(queries[0]?.text).toContain('config.region');
     expect(queries[0]?.values).toContain('worker-a:claim-1');
   });
 

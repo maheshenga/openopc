@@ -207,6 +207,8 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
         config.project_id,
         config.provider,
         config.enabled,
+        config.base_url,
+        config.region,
         config.credential_binding,
         config.capability_map,
         md5(jsonb_build_object(
@@ -242,6 +244,9 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
       projectId: String(rows[0].project_id),
       provider: String(rows[0].provider),
       enabled: rows[0].enabled === true,
+      baseUrl: nullableString(rows[0].base_url),
+      region: nullableString(rows[0].region),
+      definitionId: providerDefinitionId(rows[0].capability_map, rows[0].provider),
       credentialBinding: (rows[0].credential_binding ?? {}) as Record<string, unknown>,
       capabilityMap: (rows[0].capability_map ?? {}) as Record<string, unknown>,
       versionToken,
@@ -623,6 +628,16 @@ export class PostgresStudioWorkerRepository implements StudioWorkerRepository {
     const rows = await this.client.unsafe(text, values);
     if (!rows[0]) throw new Error('Studio job lease is not owned by this worker');
   }
+}
+
+function providerDefinitionId(capabilityMap: unknown, provider: unknown): string {
+  if (capabilityMap && typeof capabilityMap === 'object') {
+    const definitionId = (capabilityMap as Record<string, unknown>).definition_id;
+    if (typeof definitionId === 'string' && definitionId.trim()) {
+      return definitionId;
+    }
+  }
+  return String(provider);
 }
 
 export class PostgresStudioMaintenanceRepository implements StudioMaintenanceRepository {

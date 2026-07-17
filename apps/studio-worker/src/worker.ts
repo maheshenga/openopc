@@ -4,7 +4,9 @@ import type {
   StudioProviderContext,
   StudioProviderHandle,
   StudioProviderResult,
+  StudioReferenceAssetResolver,
   StudioRetryClassification,
+  StudioCredentialResolver,
 } from '@kortix/studio-runtime';
 import {
   STUDIO_MAX_PROVIDER_ATTEMPTS,
@@ -21,6 +23,7 @@ import {
   type StudioWorkerJob,
   type StudioWorkerRepository,
   type StudioWorkerTickResult,
+  type StudioWorkerProviderConfig,
 } from './contracts';
 
 const RETRY_JITTER_BOUNDS_MS = [5_000, 30_000, 120_000] as const;
@@ -28,6 +31,12 @@ const MAX_RETRY_AFTER_MS = 15 * 60_000;
 
 export interface StudioProviderRegistry {
   get(job: StudioWorkerJob): StudioProviderAdapter | null;
+  resolve(input: {
+    job: StudioWorkerJob;
+    config: StudioWorkerProviderConfig;
+    credential: Awaited<ReturnType<StudioCredentialResolver['resolve']>>;
+    referenceAssets: StudioReferenceAssetResolver;
+  }): Promise<StudioProviderAdapter | null>;
 }
 
 export type StudioAuthorizationResult =
@@ -42,6 +51,8 @@ export type StudioWorkerDependencies = {
   config: StudioWorkerConfig;
   repository: StudioWorkerRepository;
   providers: StudioProviderRegistry;
+  credentialResolver: StudioCredentialResolver;
+  referenceAssets: StudioReferenceAssetResolver;
   authorization: StudioSubmissionAuthorization;
   assets: StudioAssetWriter;
   now?: () => Date;
@@ -173,7 +184,31 @@ export class StudioWorker {
       return { kind: 'processed', jobId: job.jobId, status: 'cancelled' };
     }
 
-    const adapter = this.deps.providers.get(job);
+    let credential: Awaited<ReturnType<StudioCredentialResolver['resolve']>>;
+    try {
+      credential = await this.deps.credentialResolver.resolve({
+        accountId: job.accountId,
+        projectId: job.projectId,
+        binding: job.credentialBinding as never,
+      });
+    } catch {
+      await this.deps.repository.markCancelled({
+        jobId: job.jobId,
+        workerId: this.owner(job),
+        reason: 'credential_unavailable',
+        code: 'STUDIO_PROVIDER_CREDENTIAL_UNAVAILABLE',
+        message: 'The Studio provider credential is unavailable',
+        now: this.now(),
+      });
+      return { kind: 'processed', jobId: job.jobId, status: 'cancelled' };
+    }
+
+    const adapter = await this.deps.providers.resolve({
+      job,
+      config: providerConfig,
+      credential,
+      referenceAssets: this.deps.referenceAssets,
+    });
     if (!adapter) return this.failUnavailableProvider(job, undefined, now);
 
     const submissionKey = `${job.jobId}:${job.attemptCount + 1}:${crypto.randomUUID()}`;

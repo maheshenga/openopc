@@ -93,6 +93,7 @@ export {
   studioJobStatusEnum,
   studioAttemptStatusEnum,
   studioProviderConfigs,
+  studioPricingCatalog,
   studioJobs,
   studioJobAttempts,
   studioJobEvents,

@@ -1127,12 +1127,16 @@ git commit -m "feat: add studio pricing and recovery schema"
 - Create: `apps/api/src/studio/recovery.ts`
 - Create: `apps/api/src/studio/recovery.test.ts`
 - Create: `apps/api/src/studio/account-routes.ts`
+- Create: `apps/api/src/studio/default-account-routes.test.ts`
+- Create: `apps/api/src/studio/default-account-routes.ts`
+- Create: `apps/api/src/studio/management.postgres.test.ts`
+- Modify: `apps/api/src/accounts/index.ts`
 - Modify: `apps/api/src/studio/index.ts`
 - Modify: `apps/api/src/studio/types.ts`
 - Modify: `apps/api/src/studio/repositories/drizzle.ts`
 - Modify: `apps/api/src/studio/repositories/memory.ts`
 - Modify: `apps/api/src/studio/default-routes.ts`
-- Modify: `apps/api/src/index.ts`
+- Modify: `packages/db/src/index.ts`
 - Modify: `apps/api/src/__tests__/e2e-studio-project-api.test.ts`
 - Create: `apps/api/src/__tests__/e2e-studio-production-api.test.ts`
 
@@ -1176,11 +1180,11 @@ export function createStudioCredentialResolver(input: {
 
 The factory receives decryption as an injected dependency and does not import `apps/api/src/projects/secrets.ts`, because that route module initializes API database/config state at module load. Task 7 extracts the existing Secret envelope cryptography into a side-effect-free shared server module used by both the API route and worker assembly; it must not copy or fork the cryptography. Task 7 also supplies the production lookup through the worker's existing SQL client. Those queries reproduce current shared active Secret and active default shared Connector-profile rules, fence both account and project, and derive `version_token` from row identity/update metadata rather than plaintext. Never return binding identifiers in thrown messages.
 
-- [ ] **Step 3: Write RED pricing and provider-management tests**
+- [x] **Step 3: Write RED pricing and provider-management tests**
 
 Prove `billing.write` is required to create/deactivate immutable pricing entries; `project.studio.providers.manage` can create/update operational provider fields but cannot submit rate/markup or idempotency/replay/reconciliation/cancellation declarations; models reference active same-account/provider pricing entries; OpenAI-compatible configs reject `kind: none`, unsafe base URLs, unregistered dialect-profile IDs, and models without prices. The only Phase 1 production profile is the code-owned conservative `openai-images-v1-generic` profile.
 
-- [ ] **Step 4: Implement pricing/provider repositories and routes**
+- [x] **Step 4: Implement pricing/provider repositories and routes**
 
 Mount:
 
@@ -1228,10 +1232,11 @@ For `confirm_succeeded`, derive the expected manifest prefix from locked account
 
 ```powershell
 pnpm --filter kortix-api exec bun test src/studio src/__tests__/e2e-studio-project-api.test.ts src/__tests__/e2e-studio-production-api.test.ts
+$env:STUDIO_POSTGRES_INTEGRATION='1'; bun test apps/api/src/studio/management.postgres.test.ts
 pnpm --filter kortix-api typecheck
 pnpm --filter @kortix/studio-adapters test
 git diff --check
-git add apps/api/package.json apps/api/src/studio apps/api/src/index.ts apps/api/src/__tests__/e2e-studio-project-api.test.ts apps/api/src/__tests__/e2e-studio-production-api.test.ts pnpm-lock.yaml docs/specs/2026-07-16-studio-production-provider-storage-implementation-plan.md
+git add apps/api/package.json apps/api/src/accounts/index.ts apps/api/src/studio apps/api/src/__tests__/e2e-studio-project-api.test.ts apps/api/src/__tests__/e2e-studio-production-api.test.ts packages/db/src/index.ts pnpm-lock.yaml docs/specs/2026-07-16-studio-production-provider-storage-implementation-plan.md
 git commit -m "feat: connect studio production api services"
 ```
 

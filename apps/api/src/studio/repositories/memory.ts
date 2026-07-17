@@ -1,13 +1,22 @@
-import type { StudioAsset, StudioJob, StudioJobEvent, StudioUpload } from '@kortix/api-contract';
+import type {
+  StudioAsset,
+  StudioJob,
+  StudioJobEvent,
+  StudioPricingCatalogEntry,
+  StudioUpload,
+} from '@kortix/api-contract';
+import { toStudioProviderConfigWire } from '../providers';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
+  StudioProviderConfigRecord,
   StudioProviderConfigWire,
   StudioRepository,
 } from '../types';
 
 type MemoryStudioRepositoryInput = {
   providers?: StudioProviderConfigWire[];
+  pricing?: StudioPricingCatalogEntry[];
   now?: () => string;
 };
 
@@ -21,6 +30,8 @@ export function createMemoryStudioRepository(
   const providers = new Map(
     input.providers?.map((provider) => [provider.provider_config_id, provider]) ?? [],
   );
+  const pricing = new Map(input.pricing?.map((entry) => [entry.pricing_catalog_id, entry]) ?? []);
+  const providerRecords = new Map<string, StudioProviderConfigRecord>();
   const jobs = new Map<string, StudioJob>();
   const events = new Map<string, StudioJobEvent[]>();
   const uploads = new Map<
@@ -53,15 +64,152 @@ export function createMemoryStudioRepository(
   };
 
   return {
+    async listPricing(accountId) {
+      return [...pricing.values()].filter((entry) => entry.account_id === accountId);
+    },
+
+    async createPricingVersion({ account_id, created_by_user_id, request }) {
+      const version =
+        Math.max(
+          0,
+          ...[...pricing.values()]
+            .filter(
+              (entry) =>
+                entry.account_id === account_id &&
+                entry.provider === request.provider &&
+                entry.model === request.model,
+            )
+            .map((entry) => entry.version),
+        ) + 1;
+      const entry: StudioPricingCatalogEntry = {
+        pricing_catalog_id: crypto.randomUUID(),
+        account_id,
+        ...request,
+        version,
+        active: true,
+        created_by_user_id,
+        created_at: now(),
+      };
+      pricing.set(entry.pricing_catalog_id, entry);
+      return entry;
+    },
+
+    async deactivatePricing(accountId, pricingCatalogId) {
+      const entry = pricing.get(pricingCatalogId);
+      if (!entry || entry.account_id !== accountId) return null;
+      if (!entry.active) return entry;
+      const deactivated = { ...entry, active: false };
+      pricing.set(pricingCatalogId, deactivated);
+      return deactivated;
+    },
+
+    async createProviderConfig(provider, pricingReferences) {
+      const pricesValid = pricingReferences.every((reference) => {
+        const entry = pricing.get(reference.pricing_catalog_id);
+        return (
+          entry?.active === true &&
+          entry.account_id === provider.account_id &&
+          entry.provider === reference.provider &&
+          entry.model === reference.model
+        );
+      });
+      if (!pricesValid) return { ok: false as const, code: 'pricing_invalid' as const };
+      const createdAt = now();
+      const record: StudioProviderConfigRecord = {
+        ...provider,
+        provider_config_id: crypto.randomUUID(),
+        version_token: `memory:${crypto.randomUUID()}`,
+        created_at: createdAt,
+        updated_at: createdAt,
+      };
+      providerRecords.set(record.provider_config_id, record);
+      return { ok: true as const, value: record };
+    },
+
+    async getProviderConfigRecord(accountId, projectId, providerConfigId) {
+      const record = providerRecords.get(providerConfigId);
+      return record?.account_id === accountId && record.project_id === projectId ? record : null;
+    },
+
+    async updateProviderConfig(candidate, expectedVersionToken, pricingReferences, patch) {
+      const current = providerRecords.get(candidate.provider_config_id);
+      if (
+        !current ||
+        current.account_id !== candidate.account_id ||
+        current.project_id !== candidate.project_id
+      ) {
+        return { ok: false as const, code: 'not_found' as const };
+      }
+      if (current.version_token !== expectedVersionToken) {
+        return { ok: false as const, code: 'stale' as const };
+      }
+      const pricesValid = pricingReferences.every((reference) => {
+        const entry = pricing.get(reference.pricing_catalog_id);
+        return (
+          entry?.active === true &&
+          entry.account_id === candidate.account_id &&
+          entry.provider === reference.provider &&
+          entry.model === reference.model
+        );
+      });
+      if (!pricesValid) return { ok: false as const, code: 'pricing_invalid' as const };
+      const operationalChange =
+        patch.base_url !== undefined ||
+        patch.region !== undefined ||
+        patch.credential_binding !== undefined ||
+        patch.capability_map !== undefined ||
+        patch.enabled !== undefined;
+      const updated: StudioProviderConfigRecord = {
+        ...current,
+        ...(patch.display_name !== undefined ? { display_name: candidate.display_name } : {}),
+        ...(patch.base_url !== undefined ? { base_url: candidate.base_url } : {}),
+        ...(patch.region !== undefined ? { region: candidate.region } : {}),
+        ...(patch.credential_binding !== undefined
+          ? { credential_binding: candidate.credential_binding }
+          : {}),
+        ...(patch.capability_map !== undefined ? { capability_map: candidate.capability_map } : {}),
+        ...(patch.enabled !== undefined ? { enabled: candidate.enabled } : {}),
+        version_token: operationalChange ? `memory:${crypto.randomUUID()}` : current.version_token,
+        updated_at: now(),
+      };
+      providerRecords.set(updated.provider_config_id, updated);
+      return { ok: true as const, value: updated };
+    },
+
+    async disableProviderConfig(accountId, projectId, providerConfigId) {
+      const current = providerRecords.get(providerConfigId);
+      if (!current || current.account_id !== accountId || current.project_id !== projectId) {
+        return { ok: false as const, code: 'not_found' as const };
+      }
+      if (!current.enabled) return { ok: true as const, value: current };
+      const updated: StudioProviderConfigRecord = {
+        ...current,
+        enabled: false,
+        version_token: `memory:${crypto.randomUUID()}`,
+        updated_at: now(),
+      };
+      providerRecords.set(providerConfigId, updated);
+      return { ok: true as const, value: updated };
+    },
+
     async listProviders(projectId) {
-      return [...providers.values()].filter(
-        (provider) => provider.project_id === projectId && provider.enabled,
-      );
+      return [
+        ...[...providers.values()].filter(
+          (provider) => provider.project_id === projectId && provider.enabled,
+        ),
+        ...[...providerRecords.values()]
+          .filter((provider) => provider.project_id === projectId && provider.enabled)
+          .map(toStudioProviderConfigWire),
+      ];
     },
 
     async getProvider(projectId, providerConfigId) {
       const provider = providers.get(providerConfigId);
-      return provider?.project_id === projectId && provider.enabled ? provider : null;
+      if (provider?.project_id === projectId && provider.enabled) return provider;
+      const record = providerRecords.get(providerConfigId);
+      return record?.project_id === projectId && record.enabled
+        ? toStudioProviderConfigWire(record)
+        : null;
     },
 
     async createJob(input, provider, estimate): Promise<StudioCreateJobResult> {

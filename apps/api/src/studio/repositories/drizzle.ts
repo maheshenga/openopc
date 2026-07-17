@@ -1,9 +1,9 @@
-import type {
-  StudioAsset,
-  StudioJob,
-  StudioJobEvent,
-  StudioProviderConfig,
-  StudioUpload,
+import type { StudioAsset, StudioJob, StudioJobEvent, StudioUpload } from '@kortix/api-contract';
+import {
+  StudioCredentialBindingSchema,
+  type StudioPricingCatalogEntry,
+  StudioPricingCatalogEntrySchema,
+  type StudioProviderConfig,
 } from '@kortix/api-contract';
 import {
   type Database,
@@ -11,18 +11,22 @@ import {
   studioAssets,
   studioJobEvents,
   studioJobs,
+  studioPricingCatalog,
   studioProviderConfigs,
 } from '@kortix/db';
-import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { openAiCompatibleImageDefinition } from '@kortix/studio-adapters';
+import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
 import { StudioRepositoryError } from '../types';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
+  StudioProviderConfigRecord,
   StudioProviderConfigWire,
   StudioRepository,
 } from '../types';
 
 type ProviderRow = typeof studioProviderConfigs.$inferSelect;
+type PricingRow = typeof studioPricingCatalog.$inferSelect;
 type JobRow = typeof studioJobs.$inferSelect;
 type EventRow = typeof studioJobEvents.$inferSelect;
 type UploadRow = typeof studioAssetUploads.$inferSelect;
@@ -38,7 +42,25 @@ function nullableNumberValue(value: unknown): number | null {
   return Number(value);
 }
 
-function providerCapabilities(raw: unknown): StudioProviderConfig['capabilities'] {
+function providerCapabilities(row: ProviderRow): StudioProviderConfig['capabilities'] {
+  const raw = row.capabilityMap;
+  if (row.provider === 'openai-compatible') {
+    try {
+      return openAiCompatibleImageDefinition
+        .capabilities({
+          provider_config_id: row.providerConfigId,
+          provider: row.provider,
+          base_url: row.baseUrl ?? null,
+          region: row.region ?? null,
+          capability_map: raw,
+          version_token: 'serialization-only',
+        })
+        .map((descriptor) => descriptor.capability)
+        .filter((capability): capability is 'image.generate' => capability === 'image.generate');
+    } catch {
+      return [];
+    }
+  }
   if (Array.isArray(raw)) {
     return raw.filter((item): item is 'image.generate' => item === 'image.generate');
   }
@@ -78,10 +100,112 @@ function serializeProvider(row: ProviderRow): StudioProviderConfigWire | null {
     base_url: row.baseUrl ?? null,
     region: row.region ?? null,
     credential_binding: credential,
-    capabilities: providerCapabilities(row.capabilityMap),
+    capabilities: providerCapabilities(row),
     enabled: row.enabled === true,
     created_at: row.createdAt ?? new Date(0).toISOString(),
     updated_at: row.updatedAt ?? new Date(0).toISOString(),
+  };
+}
+
+function timestampValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value instanceof Date) return value.toISOString();
+  return new Date(String(value)).toISOString();
+}
+
+function serializePricing(row: PricingRow): StudioPricingCatalogEntry {
+  return StudioPricingCatalogEntrySchema.parse({
+    pricing_catalog_id: row.pricingCatalogId,
+    account_id: row.accountId,
+    provider: row.provider,
+    model: row.model,
+    unit: row.unit,
+    rate_data: row.rateData,
+    maximum_cost_rule: row.maximumCostRule,
+    markup_rule: row.markupRule,
+    version: row.version,
+    active: row.active,
+    created_by_user_id: row.createdByUserId ?? null,
+    created_at: timestampValue(row.createdAt),
+  });
+}
+
+function serializeRawPricing(row: Record<string, unknown>): StudioPricingCatalogEntry {
+  return StudioPricingCatalogEntrySchema.parse({
+    pricing_catalog_id: row.pricing_catalog_id,
+    account_id: row.account_id,
+    provider: row.provider,
+    model: row.model,
+    unit: row.unit,
+    rate_data: row.rate_data,
+    maximum_cost_rule: row.maximum_cost_rule,
+    markup_rule: row.markup_rule,
+    version: Number(row.version),
+    active: row.active,
+    created_by_user_id: row.created_by_user_id ?? null,
+    created_at: timestampValue(row.created_at),
+  });
+}
+
+function canonicalProviderVersionSql(alias: 'chosen' | 'inserted' | 'target' | 'updated') {
+  return sql.raw(`pg_catalog.md5(pg_catalog.jsonb_build_object(
+    'provider_config_id', ${alias}.provider_config_id,
+    'account_id', ${alias}.account_id,
+    'project_id', ${alias}.project_id,
+    'provider', ${alias}.provider,
+    'base_url', ${alias}.base_url,
+    'region', ${alias}.region,
+    'credential_binding', ${alias}.credential_binding,
+    'capability_map', ${alias}.capability_map,
+    'enabled', ${alias}.enabled
+  )::text)`);
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function serializeRawProvider(
+  row: Record<string, unknown>,
+  versionToken: unknown,
+): StudioProviderConfigRecord {
+  const credential = StudioCredentialBindingSchema.safeParse(row.credential_binding);
+  if (
+    !credential.success ||
+    row.provider !== 'openai-compatible' ||
+    !row.capability_map ||
+    typeof row.capability_map !== 'object' ||
+    Array.isArray(row.capability_map) ||
+    typeof versionToken !== 'string' ||
+    versionToken.length === 0
+  ) {
+    throw new Error('Invalid Studio provider configuration row');
+  }
+  return {
+    provider_config_id: String(row.provider_config_id),
+    account_id: String(row.account_id),
+    project_id: String(row.project_id),
+    provider: row.provider,
+    display_name: String(row.display_name),
+    base_url: row.base_url === null ? null : String(row.base_url),
+    region: row.region === null ? null : String(row.region),
+    credential_binding: credential.data,
+    capability_map: row.capability_map as Record<string, unknown>,
+    version_token: versionToken,
+    enabled: row.enabled === true,
+    created_at: timestampValue(row.created_at),
+    updated_at: timestampValue(row.updated_at),
   };
 }
 
@@ -166,6 +290,325 @@ function rowsFromExecute(value: unknown): Record<string, unknown>[] {
 
 export function createDrizzleStudioRepository(db: Database): StudioRepository {
   return {
+    async listPricing(accountId) {
+      const rows = await db
+        .select()
+        .from(studioPricingCatalog)
+        .where(eq(studioPricingCatalog.accountId, accountId))
+        .orderBy(
+          asc(studioPricingCatalog.provider),
+          asc(studioPricingCatalog.model),
+          desc(studioPricingCatalog.version),
+        );
+      return rows.map(serializePricing);
+    },
+
+    async createPricingVersion({ account_id, created_by_user_id, request }) {
+      return db.transaction(
+        async (tx) => {
+          await tx.execute(sql`
+          SELECT pg_catalog.pg_advisory_xact_lock(
+            pg_catalog.hashtextextended(
+              ${account_id}::uuid::text || chr(31) || ${request.provider} || chr(31) || ${request.model},
+              0
+            )
+          )
+        `);
+
+          const [current] = await tx
+            .select({
+              version: sql<number>`COALESCE(MAX(${studioPricingCatalog.version}), 0)`,
+            })
+            .from(studioPricingCatalog)
+            .where(
+              and(
+                eq(studioPricingCatalog.accountId, account_id),
+                eq(studioPricingCatalog.provider, request.provider),
+                eq(studioPricingCatalog.model, request.model),
+              ),
+            );
+          const version = Number(current?.version ?? 0) + 1;
+          const [row] = await tx
+            .insert(studioPricingCatalog)
+            .values({
+              accountId: account_id,
+              provider: request.provider,
+              model: request.model,
+              unit: request.unit,
+              rateData: request.rate_data,
+              maximumCostRule: request.maximum_cost_rule,
+              markupRule: request.markup_rule,
+              version,
+              active: true,
+              createdByUserId: created_by_user_id,
+            })
+            .returning();
+          if (!row) throw new Error('Studio pricing version was not created');
+          return serializePricing(row);
+        },
+        { isolationLevel: 'read committed' },
+      );
+    },
+
+    async deactivatePricing(accountId, pricingCatalogId) {
+      const result = await db.execute(sql`
+        WITH target AS MATERIALIZED (
+          SELECT *
+          FROM kortix.studio_pricing_catalog
+          WHERE account_id = ${accountId}::uuid
+            AND pricing_catalog_id = ${pricingCatalogId}::uuid
+          FOR UPDATE
+        ), updated AS (
+          UPDATE kortix.studio_pricing_catalog price
+          SET active = false
+          FROM target
+          WHERE price.pricing_catalog_id = target.pricing_catalog_id
+            AND target.active IS TRUE
+          RETURNING price.*
+        )
+        SELECT * FROM updated
+        UNION ALL
+        SELECT * FROM target
+        WHERE target.active IS FALSE
+          AND NOT EXISTS (SELECT 1 FROM updated)
+        LIMIT 1
+      `);
+      const row = rowsFromExecute(result)[0];
+      return row ? serializeRawPricing(row) : null;
+    },
+
+    async createProviderConfig(provider, pricingReferences) {
+      const result = await db.execute(sql`
+        WITH project_scope AS MATERIALIZED (
+          SELECT 1
+          FROM kortix.projects project
+          WHERE project.project_id = ${provider.project_id}::uuid
+            AND project.account_id = ${provider.account_id}::uuid
+        ), requested_prices AS MATERIALIZED (
+          SELECT *
+          FROM pg_catalog.jsonb_to_recordset(${JSON.stringify(pricingReferences)}::jsonb)
+            AS reference(pricing_catalog_id uuid, provider text, model text)
+        ), locked_prices AS MATERIALIZED (
+          SELECT price.pricing_catalog_id
+          FROM kortix.studio_pricing_catalog price
+          JOIN requested_prices reference
+            ON reference.pricing_catalog_id = price.pricing_catalog_id
+           AND reference.provider = price.provider
+           AND reference.model = price.model
+          WHERE price.account_id = ${provider.account_id}::uuid
+            AND price.active IS TRUE
+          FOR UPDATE OF price
+        ), validation AS MATERIALIZED (
+          SELECT
+            EXISTS (SELECT 1 FROM project_scope) AS project_valid,
+            (SELECT COUNT(*) FROM requested_prices) > 0
+            AND (SELECT COUNT(*) FROM requested_prices) =
+                (SELECT COUNT(*) FROM locked_prices) AS prices_valid
+        ), inserted AS (
+          INSERT INTO kortix.studio_provider_configs (
+            account_id,
+            project_id,
+            provider,
+            display_name,
+            base_url,
+            region,
+            credential_binding,
+            capability_map,
+            enabled
+          )
+          SELECT
+            ${provider.account_id}::uuid,
+            ${provider.project_id}::uuid,
+            ${provider.provider},
+            ${provider.display_name},
+            ${provider.base_url},
+            ${provider.region},
+            ${JSON.stringify(provider.credential_binding)}::jsonb,
+            ${JSON.stringify(provider.capability_map)}::jsonb,
+            ${provider.enabled}
+          FROM validation
+          WHERE validation.project_valid
+            AND validation.prices_valid
+          RETURNING *
+        )
+        SELECT
+          CASE
+            WHEN NOT validation.project_valid THEN 'not_found'
+            WHEN NOT validation.prices_valid THEN 'pricing_invalid'
+            ELSE 'ok'
+          END AS mutation_code,
+          CASE WHEN inserted.provider_config_id IS NULL THEN NULL ELSE pg_catalog.to_jsonb(inserted) END
+            AS provider_row,
+          CASE WHEN inserted.provider_config_id IS NULL THEN NULL ELSE ${canonicalProviderVersionSql('inserted')} END
+            AS version_token
+        FROM validation
+        LEFT JOIN inserted ON true
+      `);
+      const envelope = rowsFromExecute(result)[0];
+      const code = envelope?.mutation_code;
+      if (code === 'not_found' || code === 'pricing_invalid') {
+        return { ok: false, code };
+      }
+      if (code !== 'ok') throw new Error('Studio provider configuration create failed');
+      const row = recordValue(envelope.provider_row);
+      if (!row) throw new Error('Studio provider configuration was not created');
+      return { ok: true, value: serializeRawProvider(row, envelope.version_token) };
+    },
+
+    async getProviderConfigRecord(accountId, projectId, providerConfigId) {
+      const result = await db.execute(sql`
+        SELECT
+          pg_catalog.to_jsonb(target) AS provider_row,
+          ${canonicalProviderVersionSql('target')} AS version_token
+        FROM kortix.studio_provider_configs target
+        WHERE target.account_id = ${accountId}::uuid
+          AND target.project_id = ${projectId}::uuid
+          AND target.provider_config_id = ${providerConfigId}::uuid
+          AND target.provider = 'openai-compatible'
+        LIMIT 1
+      `);
+      const envelope = rowsFromExecute(result)[0];
+      if (!envelope) return null;
+      const row = recordValue(envelope.provider_row);
+      if (!row) throw new Error('Invalid Studio provider configuration row');
+      return serializeRawProvider(row, envelope.version_token);
+    },
+
+    async updateProviderConfig(candidate, expectedVersionToken, pricingReferences, patch) {
+      const result = await db.execute(sql`
+        WITH target AS MATERIALIZED (
+          SELECT
+            target.*,
+            ${canonicalProviderVersionSql('target')} AS version_token
+          FROM kortix.studio_provider_configs target
+          WHERE target.account_id = ${candidate.account_id}::uuid
+            AND target.project_id = ${candidate.project_id}::uuid
+            AND target.provider_config_id = ${candidate.provider_config_id}::uuid
+            AND target.provider = 'openai-compatible'
+          FOR UPDATE OF target
+        ), requested_prices AS MATERIALIZED (
+          SELECT *
+          FROM pg_catalog.jsonb_to_recordset(${JSON.stringify(pricingReferences)}::jsonb)
+            AS reference(pricing_catalog_id uuid, provider text, model text)
+        ), locked_prices AS MATERIALIZED (
+          SELECT price.pricing_catalog_id
+          FROM target
+          JOIN requested_prices reference ON true
+          JOIN kortix.studio_pricing_catalog price
+            ON reference.pricing_catalog_id = price.pricing_catalog_id
+           AND reference.provider = price.provider
+           AND reference.model = price.model
+          WHERE price.account_id = target.account_id
+            AND price.active IS TRUE
+          FOR UPDATE OF price
+        ), validation AS MATERIALIZED (
+          SELECT
+            EXISTS (SELECT 1 FROM target) AS target_exists,
+            COALESCE((SELECT target.version_token = ${expectedVersionToken} FROM target), false)
+              AS version_matches,
+            (SELECT COUNT(*) FROM requested_prices) > 0
+              AND (SELECT COUNT(*) FROM requested_prices) =
+                  (SELECT COUNT(*) FROM locked_prices) AS prices_valid
+        ), updated AS (
+          UPDATE kortix.studio_provider_configs config
+          SET display_name = CASE
+                WHEN ${patch.display_name !== undefined} THEN ${candidate.display_name}
+                ELSE config.display_name
+              END,
+              base_url = CASE
+                WHEN ${patch.base_url !== undefined} THEN ${candidate.base_url}
+                ELSE config.base_url
+              END,
+              region = CASE
+                WHEN ${patch.region !== undefined} THEN ${candidate.region}
+                ELSE config.region
+              END,
+              credential_binding = CASE
+                WHEN ${patch.credential_binding !== undefined}
+                  THEN ${JSON.stringify(candidate.credential_binding)}::jsonb
+                ELSE config.credential_binding
+              END,
+              capability_map = CASE
+                WHEN ${patch.capability_map !== undefined}
+                  THEN ${JSON.stringify(candidate.capability_map)}::jsonb
+                ELSE config.capability_map
+              END,
+              enabled = CASE
+                WHEN ${patch.enabled !== undefined} THEN ${candidate.enabled}
+                ELSE config.enabled
+              END,
+              updated_at = clock_timestamp()
+          FROM target, validation
+          WHERE config.provider_config_id = target.provider_config_id
+            AND config.provider = 'openai-compatible'
+            AND target.provider = ${candidate.provider}
+            AND validation.version_matches
+            AND validation.prices_valid
+          RETURNING config.*
+        )
+        SELECT
+          CASE
+            WHEN NOT validation.target_exists THEN 'not_found'
+            WHEN NOT validation.version_matches THEN 'stale'
+            WHEN NOT validation.prices_valid THEN 'pricing_invalid'
+            ELSE 'ok'
+          END AS mutation_code,
+          (SELECT pg_catalog.to_jsonb(updated) FROM updated LIMIT 1) AS provider_row,
+          (SELECT ${canonicalProviderVersionSql('updated')} FROM updated LIMIT 1) AS version_token
+        FROM validation
+      `);
+      const envelope = rowsFromExecute(result)[0];
+      const code = envelope?.mutation_code;
+      if (code === 'not_found' || code === 'stale' || code === 'pricing_invalid') {
+        return { ok: false, code };
+      }
+      if (code !== 'ok') throw new Error('Studio provider configuration update failed');
+      const row = recordValue(envelope.provider_row);
+      if (!row) throw new Error('Studio provider configuration update returned no row');
+      return { ok: true, value: serializeRawProvider(row, envelope.version_token) };
+    },
+
+    async disableProviderConfig(accountId, projectId, providerConfigId) {
+      const result = await db.execute(sql`
+        WITH target AS MATERIALIZED (
+          SELECT config.*
+          FROM kortix.studio_provider_configs config
+          WHERE config.account_id = ${accountId}::uuid
+            AND config.project_id = ${projectId}::uuid
+            AND config.provider_config_id = ${providerConfigId}::uuid
+            AND config.provider = 'openai-compatible'
+          FOR UPDATE OF config
+        ), updated AS (
+          UPDATE kortix.studio_provider_configs config
+          SET enabled = false,
+              updated_at = clock_timestamp()
+          FROM target
+          WHERE config.provider_config_id = target.provider_config_id
+            AND config.provider = 'openai-compatible'
+            AND target.enabled IS TRUE
+          RETURNING config.*
+        ), chosen AS MATERIALIZED (
+          SELECT * FROM updated
+          UNION ALL
+          SELECT * FROM target
+          WHERE target.enabled IS FALSE
+            AND NOT EXISTS (SELECT 1 FROM updated)
+        )
+        SELECT
+          CASE WHEN EXISTS (SELECT 1 FROM chosen) THEN 'ok' ELSE 'not_found' END AS mutation_code,
+          (SELECT pg_catalog.to_jsonb(chosen) FROM chosen LIMIT 1) AS provider_row,
+          (SELECT ${canonicalProviderVersionSql('chosen')} FROM chosen LIMIT 1) AS version_token
+      `);
+      const envelope = rowsFromExecute(result)[0];
+      if (envelope?.mutation_code === 'not_found') return { ok: false, code: 'not_found' };
+      if (envelope?.mutation_code !== 'ok') {
+        throw new Error('Studio provider configuration disable failed');
+      }
+      const row = recordValue(envelope.provider_row);
+      if (!row) throw new Error('Studio provider configuration disable returned no row');
+      return { ok: true, value: serializeRawProvider(row, envelope.version_token) };
+    },
+
     async listProviders(projectId) {
       const rows = await db
         .select()

@@ -1,6 +1,8 @@
 import {
   StudioCreateJobRequestSchema,
+  StudioCreateProviderConfigRequestSchema,
   StudioEstimateRequestSchema,
+  StudioUpdateProviderConfigRequestSchema,
   studioPhase1Capabilities,
 } from '@kortix/api-contract';
 import type { StudioEstimateResponse, StudioJob } from '@kortix/api-contract';
@@ -15,6 +17,7 @@ import {
   issueStudioEstimateToken,
   verifyStudioEstimateToken,
 } from './estimate-token';
+import type { StudioProviderConfigService } from './providers';
 import { createMemoryStudioRepository } from './repositories/memory';
 import { isStudioRepositoryError } from './types';
 import type { StudioLoadedProject, StudioRepository } from './types';
@@ -40,6 +43,7 @@ export type StudioProjectRouteDeps = {
   repository?: StudioRepository;
   loadProjectForUser?: LoadProjectForUser;
   assertProjectCapability?: AssertProjectCapability;
+  providerConfigService?: StudioProviderConfigService;
   estimateSigningSecret?: string;
 };
 
@@ -81,7 +85,7 @@ function idempotencyMismatch(c: Context<AppEnv>) {
 
 async function loadProjectOr404(
   c: Context<AppEnv>,
-  deps: Required<StudioProjectRouteDeps>,
+  deps: { loadProjectForUser: LoadProjectForUser },
   projectId: string,
 ): Promise<StudioLoadedProject | Response> {
   const loaded = await deps.loadProjectForUser(c, projectId, 'read');
@@ -180,10 +184,11 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
   ) {
     throw new Error('createStudioProjectRoutes requires explicit Studio route dependencies');
   }
-  const deps: Required<StudioProjectRouteDeps> = {
+  const deps = {
     repository: inputDeps.repository,
     loadProjectForUser: inputDeps.loadProjectForUser,
     assertProjectCapability: inputDeps.assertProjectCapability,
+    providerConfigService: inputDeps.providerConfigService,
     estimateSigningSecret: inputDeps.estimateSigningSecret,
   };
   const app = new Hono<AppEnv>();
@@ -218,6 +223,108 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
       items: providers.map(({ account_id: _accountId, ...provider }) => provider),
       next_cursor: null,
     });
+  });
+
+  app.post('/:projectId/studio/providers', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_MANAGE,
+    );
+    if (!deps.providerConfigService) {
+      return c.json({ error: 'Studio provider management unavailable' }, 503);
+    }
+    const parsed = StudioCreateProviderConfigRequestSchema.safeParse(await c.req.json());
+    if (!parsed.success) return badRequest(c, parsed.error.flatten());
+    const result = await deps.providerConfigService.create({
+      accountId: loaded.row.accountId,
+      projectId,
+      request: parsed.data,
+    });
+    if (!result.ok) {
+      return result.code === 'not_found'
+        ? c.json({ error: 'Not found' }, 404)
+        : c.json(
+            {
+              error: 'Invalid Studio provider configuration',
+              code:
+                result.code === 'stale'
+                  ? 'STUDIO_PROVIDER_CONFIG_STALE'
+                  : 'STUDIO_PROVIDER_CONFIG_INVALID',
+            },
+            result.code === 'stale' ? 409 : 400,
+          );
+    }
+    const { account_id: _accountId, ...provider } = result.value;
+    return c.json(provider, 201);
+  });
+
+  app.patch('/:projectId/studio/providers/:providerConfigId', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_MANAGE,
+    );
+    if (!deps.providerConfigService) {
+      return c.json({ error: 'Studio provider management unavailable' }, 503);
+    }
+    const parsed = StudioUpdateProviderConfigRequestSchema.safeParse(await c.req.json());
+    if (!parsed.success) return badRequest(c, parsed.error.flatten());
+    const result = await deps.providerConfigService.update({
+      accountId: loaded.row.accountId,
+      projectId,
+      providerConfigId: c.req.param('providerConfigId'),
+      request: parsed.data,
+    });
+    if (!result.ok) {
+      if (result.code === 'not_found') return c.json({ error: 'Not found' }, 404);
+      return c.json(
+        {
+          error: 'Invalid Studio provider configuration',
+          code:
+            result.code === 'stale'
+              ? 'STUDIO_PROVIDER_CONFIG_STALE'
+              : 'STUDIO_PROVIDER_CONFIG_INVALID',
+        },
+        result.code === 'stale' ? 409 : 400,
+      );
+    }
+    const { account_id: _accountId, ...provider } = result.value;
+    return c.json(provider);
+  });
+
+  app.delete('/:projectId/studio/providers/:providerConfigId', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_MANAGE,
+    );
+    if (!deps.providerConfigService) {
+      return c.json({ error: 'Studio provider management unavailable' }, 503);
+    }
+    const result = await deps.providerConfigService.disable({
+      accountId: loaded.row.accountId,
+      projectId,
+      providerConfigId: c.req.param('providerConfigId'),
+    });
+    if (!result.ok) return c.json({ error: 'Not found' }, 404);
+    const { account_id: _accountId, ...provider } = result.value;
+    return c.json(provider);
   });
 
   app.post('/:projectId/studio/estimates', async (c) => {

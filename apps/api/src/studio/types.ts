@@ -1,13 +1,18 @@
 import type {
   StudioAsset,
   StudioCreateJobRequest,
+  StudioCreatePricingCatalogRequest,
+  StudioCredentialBinding,
   StudioErrorCode,
   StudioEstimateResponse,
   StudioJob,
   StudioJobEvent,
+  StudioPricingCatalogEntry,
   StudioProviderConfig,
+  StudioUpdateProviderConfigRequest,
   StudioUpload,
 } from '@kortix/api-contract';
+import type { StudioProviderDefinitionConfig } from '@kortix/studio-runtime';
 
 export type StudioLoadedProject = {
   row: {
@@ -69,7 +74,70 @@ export type StudioCreateUploadInput = {
   metadata: Record<string, unknown>;
 };
 
-export interface StudioRepository {
+export type StudioCreatePricingInput = {
+  account_id: string;
+  created_by_user_id: string;
+  request: StudioCreatePricingCatalogRequest;
+};
+
+export interface StudioPricingRepository {
+  listPricing(accountId: string): Promise<StudioPricingCatalogEntry[]>;
+  createPricingVersion(input: StudioCreatePricingInput): Promise<StudioPricingCatalogEntry>;
+  deactivatePricing(
+    accountId: string,
+    pricingCatalogId: string,
+  ): Promise<StudioPricingCatalogEntry | null>;
+}
+
+export type StudioProviderConfigRecord = StudioProviderDefinitionConfig & {
+  account_id: string;
+  project_id: string;
+  display_name: string;
+  credential_binding: StudioCredentialBinding;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type StudioProviderPricingReference = {
+  pricing_catalog_id: string;
+  provider: string;
+  model: string;
+};
+
+export type StudioCreateProviderConfigInput = Omit<
+  StudioProviderConfigRecord,
+  'provider_config_id' | 'version_token' | 'created_at' | 'updated_at'
+>;
+
+export type StudioProviderMutationResult =
+  | { ok: true; value: StudioProviderConfigRecord }
+  | { ok: false; code: 'not_found' | 'stale' | 'pricing_invalid' };
+
+export interface StudioProviderConfigRepository {
+  getProviderConfigRecord(
+    accountId: string,
+    projectId: string,
+    providerConfigId: string,
+  ): Promise<StudioProviderConfigRecord | null>;
+  createProviderConfig(
+    input: StudioCreateProviderConfigInput,
+    pricingReferences: readonly StudioProviderPricingReference[],
+  ): Promise<StudioProviderMutationResult>;
+  updateProviderConfig(
+    candidate: Omit<StudioProviderConfigRecord, 'version_token' | 'updated_at'>,
+    expectedVersionToken: string,
+    pricingReferences: readonly StudioProviderPricingReference[],
+    patch: StudioUpdateProviderConfigRequest,
+  ): Promise<StudioProviderMutationResult>;
+  disableProviderConfig(
+    accountId: string,
+    projectId: string,
+    providerConfigId: string,
+  ): Promise<StudioProviderMutationResult>;
+}
+
+export interface StudioRepository extends StudioPricingRepository, StudioProviderConfigRepository {
   listProviders(projectId: string): Promise<StudioProviderConfigWire[]>;
   getProvider(
     projectId: string,

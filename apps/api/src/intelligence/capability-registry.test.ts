@@ -35,7 +35,13 @@ describe('project capability registry', () => {
       isStorageReady: async () => true,
     });
 
-    const items = await registry.list(PROJECT_ID, { accountId: ACCOUNT_ID, userId: 'user-1' });
+    const actor = {
+      accountId: ACCOUNT_ID,
+      userId: 'user-1',
+    };
+    const discovery = await registry.discover(PROJECT_ID, actor);
+    const items = discovery.capabilities;
+    const executionTargets = discovery.executionTargets;
 
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
@@ -47,7 +53,16 @@ describe('project capability registry', () => {
       risk: 'write',
       provenance_required: true,
     });
-    expect(JSON.stringify(items)).not.toContain('fake/image-v1');
+    expect(executionTargets).toEqual([
+      {
+        capability_id: 'studio.image.generate',
+        provider_config_id: PROVIDER_ID,
+        model: 'fake/image-v1',
+      },
+    ]);
+    expect(JSON.stringify({ items, executionTargets })).not.toMatch(
+      /base_url|credential_binding|secret/i,
+    );
   });
 
   test('fails closed when storage is unavailable or credentials are not usable', async () => {
@@ -79,5 +94,54 @@ describe('project capability registry', () => {
     expect(
       await credentialRegistry.list(PROJECT_ID, { accountId: ACCOUNT_ID, userId: 'user-1' }),
     ).toEqual([]);
+  });
+
+  test('does not advertise a capability when every provider model is unsafe', async () => {
+    const providerWithUnsafeModel = {
+      ...provider,
+      provider: 'openai-compatible' as const,
+      credential_binding: { kind: 'connector' as const, slug: 'images' },
+    };
+    const registry = createProjectCapabilityRegistry({
+      repository: {
+        listProviders: async () => [providerWithUnsafeModel],
+        getProviderConfigRecord: async () => ({
+          ...providerWithUnsafeModel,
+          capability_map: {
+            definition_id: 'openai-compatible',
+            capabilities: {
+              'image.generate': {
+                models: [
+                  {
+                    model: 'https://secret.example.test/v1',
+                    pricing_catalog_id: 'pricing-1',
+                    dialect_profile_id: 'openai-images-v1-generic',
+                    supports_reference_images: false,
+                    allowed_advanced_fields: [],
+                    size_map: {
+                      '1:1': '1024x1024',
+                      '4:3': '1024x768',
+                      '3:4': '768x1024',
+                      '16:9': '1536x864',
+                      '9:16': '864x1536',
+                    },
+                  },
+                ],
+              },
+            },
+          },
+          version_token: 'v1',
+        }),
+      },
+      isStorageReady: async () => true,
+      credentialBindingExists: async () => true,
+    });
+
+    const discovery = await registry.discover(PROJECT_ID, {
+      accountId: ACCOUNT_ID,
+      userId: 'user-1',
+    });
+    expect(discovery.capabilities).toEqual([]);
+    expect(discovery.executionTargets).toEqual([]);
   });
 });

@@ -1,8 +1,10 @@
 import {
   IntelligenceAgentCardResponseSchema,
   IntelligenceCapabilitiesResponseSchema,
+  IntelligenceCapabilityDiscoveryResponseSchema,
   type IntelligenceCreateTaskRequest,
   IntelligenceCreateTaskRequestSchema,
+  type IntelligenceExecutionTarget,
   IntelligenceTaskEventsResponseSchema,
   IntelligenceTaskResponseSchema,
 } from '@kortix/api-contract';
@@ -37,6 +39,18 @@ export interface IntelligenceCapabilityRegistry {
       actingTokenId: string | null;
     },
   ): Promise<CapabilityDescriptor[]>;
+  discover?(
+    projectId: string,
+    actor: {
+      accountId: string;
+      userId: string;
+      actorType: 'user' | 'agent' | 'system';
+      actingTokenId: string | null;
+    },
+  ): Promise<{
+    capabilities: CapabilityDescriptor[];
+    executionTargets: IntelligenceExecutionTarget[];
+  }>;
 }
 
 export interface IntelligenceAgentCardSource {
@@ -106,14 +120,38 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
     );
 
     const actor = actorContext(c, loaded);
+    const include = c.req.query('include');
+    if (include !== undefined && include !== 'execution_targets') return badRequest(c);
+    if (include === 'execution_targets') {
+      const discovery = await discoverCapabilities(deps, projectId, actor);
+      if (discovery.executionTargets.length > 1024) {
+        return unavailable(c, 'INTELLIGENCE_DISCOVERY_TOO_LARGE');
+      }
+      try {
+        return c.json(
+          IntelligenceCapabilityDiscoveryResponseSchema.parse({
+            protocol_version: 'intelligence.v1',
+            items: discovery.capabilities,
+            execution_targets: discovery.executionTargets,
+            next_cursor: null,
+          }),
+        );
+      } catch {
+        return unavailable(c, 'INTELLIGENCE_DISCOVERY_INVALID');
+      }
+    }
     const capabilities = await listCapabilities(deps, projectId, actor);
-    return c.json(
-      IntelligenceCapabilitiesResponseSchema.parse({
-        protocol_version: 'intelligence.v1',
-        items: capabilities,
-        next_cursor: null,
-      }),
-    );
+    try {
+      return c.json(
+        IntelligenceCapabilitiesResponseSchema.parse({
+          protocol_version: 'intelligence.v1',
+          items: capabilities,
+          next_cursor: null,
+        }),
+      );
+    } catch {
+      return unavailable(c, 'INTELLIGENCE_DISCOVERY_INVALID');
+    }
   });
 
   app.get('/:projectId/intelligence/agent-card', async (c) => {
@@ -165,12 +203,29 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
     if (!deps.taskExecutor) return unavailable(c, 'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE');
 
     const actor = actorContext(c, loaded);
-    const capabilities = await listCapabilities(deps, projectId, actor);
+    const discovery = await discoverCapabilities(deps, projectId, actor);
+    const capabilities = discovery.capabilities;
     if (!capabilities.some((capability) => capability.id === parsed.data.capability_id)) {
       return c.json(
         {
           error: 'Requested intelligence capability is unavailable',
           code: 'INTELLIGENCE_CAPABILITY_UNAVAILABLE',
+        },
+        409,
+      );
+    }
+    if (
+      !discovery.executionTargets.some(
+        (target) =>
+          target.capability_id === parsed.data.capability_id &&
+          target.provider_config_id === parsed.data.provider_config_id &&
+          target.model === parsed.data.model,
+      )
+    ) {
+      return c.json(
+        {
+          error: 'Requested intelligence execution target is unavailable',
+          code: 'INTELLIGENCE_EXECUTION_TARGET_UNAVAILABLE',
         },
         409,
       );
@@ -227,13 +282,17 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
     } catch {
       return unavailable(c, 'INTELLIGENCE_TASK_EXECUTION_FAILED');
     }
-    const response = IntelligenceTaskResponseSchema.parse({
-      protocol_version: 'intelligence.v1',
-      task_id: result.taskId,
-      job_id: result.jobId,
-      created: result.created,
-    });
-    return c.json(response, result.created ? 201 : 200);
+    try {
+      const response = IntelligenceTaskResponseSchema.parse({
+        protocol_version: 'intelligence.v1',
+        task_id: result.taskId,
+        job_id: result.jobId,
+        created: result.created,
+      });
+      return c.json(response, result.created ? 201 : 200);
+    } catch {
+      return unavailable(c, 'INTELLIGENCE_TASK_EXECUTION_FAILED');
+    }
   });
 
   app.get('/:projectId/intelligence/tasks/:taskId/events', async (c) => {
@@ -307,6 +366,39 @@ async function listCapabilities(
     });
   } catch {
     return [];
+  }
+}
+
+async function discoverCapabilities(
+  deps: Pick<IntelligenceProjectRouteDeps, 'capabilityRegistry'>,
+  projectId: string,
+  actor: ReturnType<typeof actorContext>,
+): Promise<{
+  capabilities: CapabilityDescriptor[];
+  executionTargets: IntelligenceExecutionTarget[];
+}> {
+  try {
+    if (!deps.capabilityRegistry.discover) {
+      return {
+        capabilities: await listCapabilities(deps, projectId, actor),
+        executionTargets: [],
+      };
+    }
+    const discovery = await deps.capabilityRegistry.discover(projectId, {
+      accountId: actor.accountId,
+      userId: actor.actorUserId ?? '',
+      actorType: actor.actorType,
+      actingTokenId: actor.actingTokenId,
+    });
+    const available = new Set(discovery.capabilities.map((capability) => capability.id));
+    return {
+      capabilities: discovery.capabilities,
+      executionTargets: discovery.executionTargets.filter((target) =>
+        available.has(target.capability_id),
+      ),
+    };
+  } catch {
+    return { capabilities: [], executionTargets: [] };
   }
 }
 

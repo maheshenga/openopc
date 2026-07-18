@@ -279,7 +279,7 @@ describe('MCP face', () => {
 
       // tools/list is the fixed meta-tool surface — NOT one tool per action.
       const listed = await requestMcp(proc, reader, 2, 'tools/list');
-      expect(listed.tools.map((t: { name: string }) => t.name)).toEqual([
+      expect(listed.tools.slice(0, 8).map((t: { name: string }) => t.name)).toEqual([
         'connectors',
         'discover',
         'describe',
@@ -288,6 +288,10 @@ describe('MCP face', () => {
         'request_secret',
         'add_connector',
         'remove_connector',
+      ]);
+      expect(listed.tools.slice(8).map((t: { name: string }) => t.name)).toEqual([
+        'studio_capabilities',
+        'studio_create_task',
       ]);
 
       // connectors → catalog with per-connector tool counts.

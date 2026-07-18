@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   type IntelligenceCreateTaskRequest,
   IntelligenceCreateTaskRequestSchema,
+  type IntelligenceExecutionTarget,
 } from '@kortix/api-contract';
 import type { CapabilityDescriptor, TaskEvent } from '@kortix/intelligence-contracts';
 import { Hono } from 'hono';
@@ -71,6 +72,8 @@ const taskRequest = (
 
 type TestOptions = {
   capabilities?: CapabilityDescriptor[];
+  executionTargets?: IntelligenceExecutionTarget[];
+  listOnlyRegistry?: boolean;
   denyAction?: boolean;
   executor?: StudioTaskExecutor | null;
   eventReader?: IntelligenceTaskEventReader | null;
@@ -109,6 +112,21 @@ function createApp(options: TestOptions = {}) {
         : null;
     },
   };
+  const capabilityRegistry = options.listOnlyRegistry
+    ? { list: async () => options.capabilities ?? [imageCapability] }
+    : {
+        list: async () => options.capabilities ?? [imageCapability],
+        discover: async () => ({
+          capabilities: options.capabilities ?? [imageCapability],
+          executionTargets: options.executionTargets ?? [
+            {
+              capability_id: 'studio.image.generate' as const,
+              provider_config_id: PROVIDER_CONFIG_ID,
+              model: 'fake/image-v1',
+            },
+          ],
+        }),
+      };
   const routes = createIntelligenceProjectRoutes({
     loadProjectForUser: async (_context, projectId) =>
       options.projectMissing || (projectId !== PROJECT_ID && projectId !== OTHER_PROJECT_ID)
@@ -118,9 +136,7 @@ function createApp(options: TestOptions = {}) {
       actions.push(action);
       if (options.denyAction) throw new HTTPException(403, { message: 'Forbidden' });
     },
-    capabilityRegistry: {
-      list: async () => options.capabilities ?? [imageCapability],
-    },
+    capabilityRegistry,
     getAgentCard: async () => localCard,
     taskExecutor: options.executor === null ? undefined : (options.executor ?? defaultExecutor),
     taskEventReader:
@@ -210,6 +226,51 @@ describe('Intelligence project routes', () => {
     });
   });
 
+  test('returns only governed execution choices needed to create a task', async () => {
+    const { app } = createApp();
+    const response = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/capabilities?include=execution_targets`,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toEqual({
+      protocol_version: 'intelligence.v1',
+      items: [imageCapability],
+      execution_targets: [
+        {
+          capability_id: 'studio.image.generate',
+          provider_config_id: PROVIDER_CONFIG_ID,
+          model: 'fake/image-v1',
+        },
+      ],
+      next_cursor: null,
+    });
+    expect(JSON.stringify(body)).not.toMatch(/base_url|credential_binding|provider_url|secret/i);
+
+    const invalid = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/capabilities?include=credentials`,
+    );
+    expect(invalid.status).toBe(400);
+  });
+
+  test('returns a typed error instead of overflowing the discovery response', async () => {
+    const executionTargets = Array.from({ length: 1025 }, (_, index) => ({
+      capability_id: 'studio.image.generate' as const,
+      provider_config_id: `14000000-0000-4000-a000-${index.toString(16).padStart(12, '0')}`,
+      model: `fake/image-${index}`,
+    }));
+    const { app } = createApp({ executionTargets });
+    const response = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/capabilities?include=execution_targets`,
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: 'INTELLIGENCE_DISCOVERY_TOO_LARGE',
+    });
+  });
+
   test('uses the provider-use action when returning the project Agent Card', async () => {
     const { app, actions } = createApp();
     const response = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/agent-card`);
@@ -250,6 +311,28 @@ describe('Intelligence project routes', () => {
     );
   });
 
+  test('rejects a task selection that is not in the governed execution targets', async () => {
+    const { app, createCalls } = createApp();
+    const response = await createTask(app, taskRequest({ model: 'unlisted/image-model' }));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: 'INTELLIGENCE_EXECUTION_TARGET_UNAVAILABLE',
+    });
+    expect(createCalls).toHaveLength(0);
+  });
+
+  test('fails closed for a list-only registry instead of bypassing target binding', async () => {
+    const { app, createCalls } = createApp({ listOnlyRegistry: true });
+    const response = await createTask(app, taskRequest({ model: 'unlisted/image-model' }));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: 'INTELLIGENCE_EXECUTION_TARGET_UNAVAILABLE',
+    });
+    expect(createCalls).toHaveLength(0);
+  });
+
   test('denies an external card without trust and fails closed when no executor is installed', async () => {
     const untrusted = createApp();
     const denied = await createTask(
@@ -279,6 +362,24 @@ describe('Intelligence project routes', () => {
     const body = await response.text();
     expect(body).not.toContain('https://secret.example.test');
     expect(JSON.parse(body)).toMatchObject({ code: 'INTELLIGENCE_TASK_EXECUTION_FAILED' });
+  });
+
+  test('maps a malformed task executor result to a typed unavailable response', async () => {
+    const executor: StudioTaskExecutor = {
+      async create() {
+        return {
+          taskId: 'not-a-uuid',
+          jobId: JOB_ID,
+          created: true,
+        };
+      },
+    };
+    const { app } = createApp({ executor });
+    const response = await createTask(app);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: 'INTELLIGENCE_TASK_EXECUTION_FAILED',
+    });
   });
 
   test('returns executor-unavailable before capability discovery when no executor is installed', async () => {

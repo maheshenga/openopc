@@ -19,6 +19,10 @@
  * STDOUT IS THE JSON-RPC CHANNEL — nothing else may be written there. index.ts
  * skips the host/update notices for `executor`, so this stays clean.
  */
+import {
+  IntelligenceAgentCardResponseSchema,
+  IntelligenceCapabilityDiscoveryResponseSchema,
+} from '@kortix/api-contract';
 import type { ExecutorClient } from '@kortix/executor-sdk';
 import {
   addConnector,
@@ -28,8 +32,22 @@ import {
   mintSecretLink,
   removeConnector,
 } from './gateway.ts';
+import {
+  type IntelligenceAgentCardResponse,
+  type IntelligenceCapabilityDiscoveryResponse,
+  type IntelligenceCapabilityDiscoveryStatus,
+  IntelligenceClientError,
+  type IntelligenceCreateTaskRequest,
+  createIntelligenceTask,
+  discoverIntelligenceCapabilities,
+  discoverIntelligenceCapabilitiesWithStatus,
+  getIntelligenceAgentCard,
+  intelligenceProjectContext,
+  isSafeIntelligenceCode,
+  parseIntelligenceCreateTaskRequest,
+} from './intelligence.ts';
 
-interface JsonRpcRequest {
+export interface JsonRpcRequest {
   jsonrpc?: string;
   id?: string | number | null;
   method?: string;
@@ -39,6 +57,182 @@ interface JsonRpcRequest {
 // The MCP server identity is kept as `kortix-executor` (unchanged from the old
 // standalone shim) so the agent's tool names and registration key don't move.
 const SERVER_INFO = { name: 'kortix-executor', version: '0.3.0' };
+
+export interface IntelligenceMcpDependencies {
+  discoverCapabilities(projectOverride?: string): Promise<IntelligenceCapabilityDiscoveryResponse>;
+  discoverCapabilitiesWithStatus?: (
+    projectOverride?: string,
+  ) => Promise<IntelligenceCapabilityDiscoveryStatus>;
+  getAgentCard(projectOverride?: string): Promise<IntelligenceAgentCardResponse>;
+  createTask(request: IntelligenceCreateTaskRequest, projectOverride?: string): Promise<string>;
+  /** Optional test/host gate for callers that own the discovery session. */
+  canCreateTask?: () => boolean | Promise<boolean>;
+  /** Optional project resolver used to invalidate cached discovery after a switch. */
+  getProjectId?: () => string | null | undefined | Promise<string | null | undefined>;
+}
+
+const defaultIntelligenceDependencies: IntelligenceMcpDependencies = {
+  discoverCapabilities: discoverIntelligenceCapabilities,
+  discoverCapabilitiesWithStatus: discoverIntelligenceCapabilitiesWithStatus,
+  getAgentCard: getIntelligenceAgentCard,
+  createTask: createIntelligenceTask,
+  getProjectId: () => intelligenceProjectContext().projectId,
+};
+
+interface IntelligenceMcpSessionState {
+  enhancedDiscovery: boolean;
+  projectId: string | null;
+}
+
+const intelligenceSessionStates = new WeakMap<
+  IntelligenceMcpDependencies,
+  IntelligenceMcpSessionState
+>();
+
+function intelligenceSessionState(
+  dependencies: IntelligenceMcpDependencies,
+): IntelligenceMcpSessionState {
+  const existing = intelligenceSessionStates.get(dependencies);
+  if (existing) return existing;
+  const created: IntelligenceMcpSessionState = { enhancedDiscovery: false, projectId: null };
+  intelligenceSessionStates.set(dependencies, created);
+  return created;
+}
+
+function clearIntelligenceSession(state: IntelligenceMcpSessionState) {
+  state.enhancedDiscovery = false;
+  state.projectId = null;
+}
+
+async function currentIntelligenceProjectId(
+  dependencies: IntelligenceMcpDependencies,
+): Promise<string | null> {
+  try {
+    const value = dependencies.getProjectId
+      ? await dependencies.getProjectId()
+      : intelligenceProjectContext().projectId;
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function discoverForIntelligenceSession(
+  dependencies: IntelligenceMcpDependencies,
+  state: IntelligenceMcpSessionState,
+  projectOverride: string | null,
+): Promise<IntelligenceCapabilityDiscoveryResponse> {
+  const status = dependencies.discoverCapabilitiesWithStatus
+    ? await dependencies.discoverCapabilitiesWithStatus(projectOverride ?? undefined)
+    : {
+        response: await dependencies.discoverCapabilities(projectOverride ?? undefined),
+        legacy: false,
+      };
+
+  if (!status || typeof status !== 'object' || typeof status.legacy !== 'boolean') {
+    throw new IntelligenceClientError('INTELLIGENCE_PROTOCOL_ERROR', 0);
+  }
+  const parsedResponse = IntelligenceCapabilityDiscoveryResponseSchema.safeParse(status.response);
+  if (!parsedResponse.success) {
+    throw new IntelligenceClientError('INTELLIGENCE_PROTOCOL_ERROR', 0);
+  }
+
+  state.enhancedDiscovery = !status.legacy;
+  state.projectId = projectOverride;
+  if (status.legacy) state.projectId = null;
+  return parsedResponse.data;
+}
+
+type IntelligenceTaskGate = { allowed: false } | { allowed: true; projectOverride?: string };
+
+async function canCreateFromIntelligenceSession(
+  dependencies: IntelligenceMcpDependencies,
+  state: IntelligenceMcpSessionState,
+): Promise<IntelligenceTaskGate> {
+  if (dependencies.canCreateTask) {
+    try {
+      if (!(await dependencies.canCreateTask())) return { allowed: false };
+    } catch {
+      return { allowed: false };
+    }
+  }
+
+  // Injected legacy dependencies predate the status-aware discovery API. They
+  // remain source-compatible, but must opt into writes with an explicit gate;
+  // an omitted gate is fail-closed rather than an implicit authorization.
+  if (!dependencies.discoverCapabilitiesWithStatus) {
+    return dependencies.canCreateTask
+      ? { allowed: true, projectOverride: state.projectId ?? undefined }
+      : { allowed: false };
+  }
+  if (!state.enhancedDiscovery || state.projectId === null) return { allowed: false };
+
+  const currentProjectId = await currentIntelligenceProjectId(dependencies);
+  if (currentProjectId === null || currentProjectId !== state.projectId) {
+    clearIntelligenceSession(state);
+    return { allowed: false };
+  }
+  return { allowed: true, projectOverride: state.projectId };
+}
+
+const STUDIO_CREATE_TASK_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    capability_id: { type: 'string', enum: ['studio.image.generate'] },
+    agent_card_hash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+    provider_config_id: { type: 'string', format: 'uuid' },
+    model: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 255,
+      pattern:
+        '^(?![A-Za-z][A-Za-z0-9+.-]*:)(?!//)(?!.*[?&#])(?!.*(api[_-]?key|secret|password|credential|authorization|bearer|access[_-]?token)).+$',
+    },
+    input: {
+      type: 'object',
+      properties: {
+        capability: { type: 'string', enum: ['image.generate'] },
+        image: {
+          type: 'object',
+          properties: {
+            prompt: { type: 'string', minLength: 1, maxLength: 8000 },
+            negative_prompt: { type: 'string', maxLength: 4000 },
+            reference_asset_ids: {
+              type: 'array',
+              items: { type: 'string', format: 'uuid' },
+              maxItems: 8,
+            },
+            aspect_ratio: { type: 'string', enum: ['1:1', '4:3', '3:4', '16:9', '9:16'] },
+            quality: { type: 'string', enum: ['standard', 'high'] },
+            output_count: { type: 'integer', minimum: 1, maximum: 8 },
+            seed: { type: 'integer', minimum: 0 },
+            advanced: { type: 'object', additionalProperties: true },
+          },
+          required: ['prompt', 'aspect_ratio', 'quality', 'output_count'],
+          additionalProperties: false,
+        },
+      },
+      required: ['capability', 'image'],
+      additionalProperties: false,
+    },
+    idempotency_key: { type: 'string', minLength: 16, maxLength: 255 },
+    parent_task_id: {
+      anyOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }],
+    },
+    deadline_at: {
+      anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
+    },
+  },
+  required: [
+    'capability_id',
+    'agent_card_hash',
+    'provider_config_id',
+    'model',
+    'input',
+    'idempotency_key',
+  ],
+  additionalProperties: false,
+} as const;
 
 /**
  * The fixed meta-tool surface. Stable regardless of how many connectors or
@@ -213,6 +407,20 @@ const META_TOOLS = [
     },
     readOnly: false,
   },
+  {
+    name: 'studio_capabilities',
+    description:
+      'List governed Studio capabilities and the public local Agent Card needed to create a task.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    readOnly: true,
+  },
+  {
+    name: 'studio_create_task',
+    description:
+      'Create one governed asynchronous Studio task. The Kortix API enforces IAM, trust, approval, billing, and provider credential isolation.',
+    inputSchema: STUDIO_CREATE_TASK_INPUT_SCHEMA,
+    readOnly: false,
+  },
 ] as const;
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -230,7 +438,14 @@ function content(data: unknown) {
   return [{ type: 'text', text: typeof data === 'string' ? data : JSON.stringify(data, null, 2) }];
 }
 
-async function runMetaTool(executor: ExecutorClient, name: string, args: Record<string, unknown>) {
+async function runMetaTool(
+  executor: ExecutorClient,
+  name: string,
+  args: Record<string, unknown>,
+  intelligence: IntelligenceMcpDependencies,
+) {
+  const intelligenceSession = intelligenceSessionState(intelligence);
+
   switch (name) {
     case 'connectors': {
       const connectors = await executor.connectors();
@@ -428,14 +643,76 @@ async function runMetaTool(executor: ExecutorClient, name: string, args: Record<
       }
     }
 
+    case 'studio_capabilities': {
+      if (Object.keys(args).length > 0) return intelligenceValidationError();
+      try {
+        const projectSnapshot = await currentIntelligenceProjectId(intelligence);
+        const capabilityResponse = await discoverForIntelligenceSession(
+          intelligence,
+          intelligenceSession,
+          projectSnapshot,
+        );
+        let agentCard: IntelligenceAgentCardResponse | null = null;
+        if (capabilityResponse.items.length > 0) {
+          const parsedCard = IntelligenceAgentCardResponseSchema.safeParse(
+            await intelligence.getAgentCard(projectSnapshot ?? undefined),
+          );
+          if (!parsedCard.success) {
+            throw new IntelligenceClientError('INTELLIGENCE_PROTOCOL_ERROR', 0);
+          }
+          agentCard = parsedCard.data;
+        }
+        if (projectSnapshot !== null) {
+          const currentProject = await currentIntelligenceProjectId(intelligence);
+          if (currentProject === null || currentProject !== projectSnapshot) {
+            clearIntelligenceSession(intelligenceSession);
+            throw new IntelligenceClientError('INTELLIGENCE_DISCOVERY_UNAVAILABLE', 409);
+          }
+        }
+        return {
+          content: content({ ...capabilityResponse, agent_card: agentCard }),
+          isError: false,
+        };
+      } catch (error) {
+        clearIntelligenceSession(intelligenceSession);
+        return intelligenceErrorResult(error);
+      }
+    }
+
+    case 'studio_create_task': {
+      if (Object.hasOwn(args, 'protocol_version')) {
+        return intelligenceValidationError();
+      }
+      const parsed = parseIntelligenceCreateTaskRequest({
+        protocol_version: 'intelligence.v1',
+        ...args,
+      });
+      if (!parsed) return intelligenceValidationError();
+      const taskGate = await canCreateFromIntelligenceSession(intelligence, intelligenceSession);
+      if (!taskGate.allowed) {
+        return intelligenceDiscoveryUnavailable();
+      }
+      try {
+        const taskId = await intelligence.createTask(parsed, taskGate.projectOverride);
+        return { content: content({ ok: true, task_id: taskId }), isError: false };
+      } catch (error) {
+        return intelligenceErrorResult(error);
+      }
+    }
+
     default:
       return { content: content({ ok: false, error: `unknown tool ${name}` }), isError: true };
   }
 }
 
-async function handle(req: JsonRpcRequest, executor: ExecutorClient) {
+export async function handleExecutorMcpRequest(
+  req: JsonRpcRequest,
+  executor: ExecutorClient,
+  intelligence: IntelligenceMcpDependencies = defaultIntelligenceDependencies,
+) {
   switch (req.method) {
     case 'initialize':
+      clearIntelligenceSession(intelligenceSessionState(intelligence));
       return {
         protocolVersion: asRecord(req.params).protocolVersion ?? '2025-06-18',
         serverInfo: SERVER_INFO,
@@ -454,7 +731,12 @@ async function handle(req: JsonRpcRequest, executor: ExecutorClient) {
 
     case 'tools/call': {
       const params = asRecord(req.params);
-      return runMetaTool(executor, stringField(params, 'name'), asRecord(params.arguments));
+      return runMetaTool(
+        executor,
+        stringField(params, 'name'),
+        asRecord(params.arguments),
+        intelligence,
+      );
     }
 
     case 'notifications/initialized':
@@ -463,6 +745,39 @@ async function handle(req: JsonRpcRequest, executor: ExecutorClient) {
     default:
       throw new Error(`unsupported MCP method: ${req.method}`);
   }
+}
+
+function intelligenceValidationError() {
+  return {
+    content: content({
+      ok: false,
+      error: 'Invalid Intelligence request',
+      code: 'INTELLIGENCE_VALIDATION_ERROR',
+    }),
+    isError: true,
+  };
+}
+
+function intelligenceDiscoveryUnavailable() {
+  return {
+    content: content({
+      ok: false,
+      error: 'Intelligence discovery is unavailable for this MCP session',
+      code: 'INTELLIGENCE_DISCOVERY_UNAVAILABLE',
+    }),
+    isError: true,
+  };
+}
+
+function intelligenceErrorResult(error: unknown) {
+  const code =
+    error instanceof IntelligenceClientError && isSafeIntelligenceCode(error.code)
+      ? error.code
+      : 'INTELLIGENCE_REQUEST_FAILED';
+  return {
+    content: content({ ok: false, error: 'Intelligence request failed', code }),
+    isError: true,
+  };
 }
 
 function writeResponse(
@@ -496,7 +811,7 @@ export async function runExecutorMcpServer(): Promise<number> {
         continue;
       }
       try {
-        const result = await handle(req, executor);
+        const result = await handleExecutorMcpRequest(req, executor);
         writeResponse(req.id, result);
       } catch (err) {
         writeResponse(req.id, null, {

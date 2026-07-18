@@ -1,4 +1,6 @@
 import {
+  type IntelligenceExecutionTarget,
+  IntelligenceExecutionTargetSchema,
   type StudioCapabilityDescriptor,
   StudioCredentialBindingSchema,
   studioPhase1Capabilities,
@@ -45,49 +47,83 @@ export function createProjectCapabilityRegistry(deps: ProjectCapabilityRegistryD
   const resolveDefinition = deps.resolveProviderDefinition ?? resolveStudioProviderDefinition;
   const checkStorage = deps.isStorageReady ?? deps.storageReady ?? (async () => false);
 
-  return {
-    async list(projectId: string, actor: CapabilityRegistryActor): Promise<CapabilityDescriptor[]> {
-      try {
-        if (!(await checkStorage())) return [];
-        const providers = [...(await deps.repository.listProviders(projectId))].sort(
-          (left, right) =>
-            compareStrings(
-              `${left.provider_config_id}\u0000${left.provider}`,
-              `${right.provider_config_id}\u0000${right.provider}`,
-            ),
-        );
-        const descriptors = new Map<string, CapabilityDescriptor>();
+  const discover = async (projectId: string, actor: CapabilityRegistryActor) => {
+    try {
+      if (!(await checkStorage())) return emptyDiscovery();
+      const providers = [...(await deps.repository.listProviders(projectId))].sort((left, right) =>
+        compareStrings(
+          `${left.provider_config_id}\u0000${left.provider}`,
+          `${right.provider_config_id}\u0000${right.provider}`,
+        ),
+      );
+      const descriptors = new Map<string, CapabilityDescriptor>();
+      const executionTargets = new Map<string, IntelligenceExecutionTarget>();
 
-        for (const provider of providers) {
-          try {
-            if (!isUsableProvider(provider, projectId, actor.accountId)) continue;
-            const prepared = await prepareProvider(provider, projectId, actor, deps);
-            if (!prepared) continue;
-            const registration = resolveDefinition(provider.provider);
-            if (!registration) continue;
+      for (const provider of providers) {
+        try {
+          if (!isUsableProvider(provider, projectId, actor.accountId)) continue;
+          const prepared = await prepareProvider(provider, projectId, actor, deps);
+          if (!prepared) continue;
+          const registration = resolveDefinition(provider.provider);
+          if (!registration) continue;
 
-            const providerCapabilities = registration.definition.capabilities(prepared);
-            for (const descriptor of providerCapabilities) {
-              if (descriptor.supported_models.length === 0) continue;
-              const phaseDescriptor = phaseCapabilityById.get(descriptor.capability);
-              if (!phaseDescriptor) continue;
-              const mapped = toIntelligenceCapability(phaseDescriptor);
-              if (!mapped) continue;
-              descriptors.set(`${mapped.id}\u0000${mapped.version}`, mapped);
+          const providerCapabilities = registration.definition.capabilities(prepared);
+          for (const descriptor of providerCapabilities) {
+            if (descriptor.supported_models.length === 0) continue;
+            const phaseDescriptor = phaseCapabilityById.get(descriptor.capability);
+            if (!phaseDescriptor) continue;
+            const mapped = toIntelligenceCapability(phaseDescriptor);
+            if (!mapped) continue;
+            let hasValidTarget = false;
+            for (const model of descriptor.supported_models) {
+              const target = IntelligenceExecutionTargetSchema.safeParse({
+                capability_id: mapped.id,
+                provider_config_id: provider.provider_config_id,
+                model,
+              });
+              if (!target.success) continue;
+              hasValidTarget = true;
+              executionTargets.set(
+                `${target.data.capability_id}\u0000${target.data.provider_config_id}\u0000${target.data.model}`,
+                target.data,
+              );
             }
-          } catch {
-            // A malformed provider must not hide healthy providers from discovery.
+            if (hasValidTarget) descriptors.set(`${mapped.id}\u0000${mapped.version}`, mapped);
           }
+        } catch {
+          // A malformed provider must not hide healthy providers from discovery.
         }
-
-        return [...descriptors.values()].sort((left, right) =>
-          compareStrings(`${left.id}\u0000${left.version}`, `${right.id}\u0000${right.version}`),
-        );
-      } catch {
-        return [];
       }
+
+      return {
+        capabilities: [...descriptors.values()].sort((left, right) =>
+          compareStrings(`${left.id}\u0000${left.version}`, `${right.id}\u0000${right.version}`),
+        ),
+        executionTargets: [...executionTargets.values()].sort((left, right) =>
+          compareStrings(
+            `${left.capability_id}\u0000${left.provider_config_id}\u0000${left.model}`,
+            `${right.capability_id}\u0000${right.provider_config_id}\u0000${right.model}`,
+          ),
+        ),
+      };
+    } catch {
+      return emptyDiscovery();
+    }
+  };
+
+  return {
+    discover,
+    async list(projectId: string, actor: CapabilityRegistryActor): Promise<CapabilityDescriptor[]> {
+      return (await discover(projectId, actor)).capabilities;
     },
   };
+}
+
+function emptyDiscovery(): {
+  capabilities: CapabilityDescriptor[];
+  executionTargets: IntelligenceExecutionTarget[];
+} {
+  return { capabilities: [], executionTargets: [] };
 }
 
 function isUsableProvider(

@@ -534,6 +534,22 @@ describe('Studio API runtime assembly', () => {
       { id: 'studio.image.generate', modality: 'image' },
     ]);
 
+    const discovery = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/capabilities?include=execution_targets`,
+    );
+    expect(discovery.status).toBe(200);
+    const discoveryBody = await discovery.json();
+    expect(discoveryBody.execution_targets).toEqual([
+      {
+        capability_id: 'studio.image.generate',
+        provider_config_id: FAKE_PROVIDER_ID,
+        model: 'fake/image-v1',
+      },
+    ]);
+    expect(JSON.stringify(discoveryBody)).not.toMatch(
+      /base_url|credential_binding|capability_map|signed_url|secret/i,
+    );
+
     const card = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/agent-card`);
     expect(card.status).toBe(200);
     const cardBody = await card.text();

@@ -45,6 +45,21 @@ describe('package index re-exports', () => {
     }
   });
 
+  test('re-exports the durable Intelligence workflow tables', () => {
+    const expected = [
+      'intelligenceWorkflowRuns',
+      'intelligenceWorkflowNodes',
+      'intelligenceWorkflowDependencies',
+      'intelligenceWorkflowApprovals',
+      'intelligenceWorkflowEvents',
+      'intelligenceWorkflowPayloads',
+    ] as const;
+
+    for (const name of expected) {
+      expect(db[name]).toBeDefined();
+    }
+  });
+
   test('re-exports the kortix enums', () => {
     const expected = [
       'sandboxStatusEnum',

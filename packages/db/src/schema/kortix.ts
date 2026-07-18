@@ -268,6 +268,7 @@ export const projects = kortixSchema.table(
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
+    uniqueIndex('idx_projects_project_account_identity').on(table.projectId, table.accountId),
     index('idx_projects_account').on(table.accountId),
     index('idx_projects_status').on(table.status),
     index('idx_projects_updated').on(table.updatedAt),
@@ -2613,6 +2614,506 @@ export const intelligenceTaskEvents = kortixSchema.table(
     check(
       'intelligence_task_events_payload_object_check',
       sql`jsonb_typeof(${table.payload}) = 'object'`,
+    ),
+  ],
+);
+
+export const intelligenceWorkflowRuns = kortixSchema.table(
+  'intelligence_workflow_runs',
+  {
+    runId: uuid('run_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    protocolVersion: text('protocol_version').default('intelligence.workflow.v1').notNull(),
+    actorType: text('actor_type').notNull(),
+    actorId: uuid('actor_id'),
+    actingTokenId: uuid('acting_token_id').references(() => accountTokens.tokenId, {
+      onDelete: 'set null',
+    }),
+    agentName: text('agent_name'),
+    sessionId: text('session_id').references(() => projectSessions.sessionId, {
+      onDelete: 'set null',
+    }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    status: text('status').default('draft').notNull(),
+    graphVersion: integer('graph_version').default(0).notNull(),
+    policySnapshotHash: text('policy_snapshot_hash'),
+    evaluationVersion: text('evaluation_version'),
+    maxNodes: integer('max_nodes').default(128).notNull(),
+    maxDependencies: integer('max_dependencies').default(256).notNull(),
+    maxApprovedCredits: numeric('max_approved_credits', { precision: 18, scale: 6 })
+      .default('0')
+      .notNull(),
+    deadlineAt: timestamp('deadline_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    terminalAt: timestamp('terminal_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'intelligence_workflow_runs_project_account_fk',
+    }).onDelete('cascade'),
+    index('idx_intelligence_workflow_runs_account_created').on(table.accountId, table.createdAt),
+    index('idx_intelligence_workflow_runs_project_created').on(table.projectId, table.createdAt),
+    index('idx_intelligence_workflow_runs_project_status_updated').on(
+      table.projectId,
+      table.status,
+      table.updatedAt,
+    ),
+    unique('intelligence_workflow_runs_project_idempotency_unique').on(
+      table.projectId,
+      table.idempotencyKey,
+    ),
+    check(
+      'intelligence_workflow_runs_protocol_version_check',
+      sql`${table.protocolVersion} = 'intelligence.workflow.v1'`,
+    ),
+    check(
+      'intelligence_workflow_runs_actor_type_check',
+      sql`${table.actorType} IN ('user', 'agent', 'system')`,
+    ),
+    check(
+      'intelligence_workflow_runs_actor_attribution_check',
+      sql`(${table.actorType} <> 'user' OR ${table.actorId} IS NOT NULL)
+        AND (${table.actorType} <> 'agent' OR NULLIF(BTRIM(${table.agentName}), '') IS NOT NULL)`,
+    ),
+    check(
+      'intelligence_workflow_runs_request_hash_check',
+      sql`${table.requestHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_workflow_runs_status_check',
+      sql`${table.status} IN ('draft', 'running', 'waiting_approval', 'succeeded', 'failed', 'cancelled')`,
+    ),
+    check('intelligence_workflow_runs_graph_version_check', sql`${table.graphVersion} >= 0`),
+    check(
+      'intelligence_workflow_runs_policy_snapshot_hash_check',
+      sql`${table.policySnapshotHash} IS NULL OR ${table.policySnapshotHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_workflow_runs_limits_check',
+      sql`${table.maxNodes} BETWEEN 1 AND 128
+        AND ${table.maxDependencies} BETWEEN 0 AND 256
+        AND ${table.maxApprovedCredits} BETWEEN 0 AND 1000000`,
+    ),
+    check(
+      'intelligence_workflow_runs_terminal_at_check',
+      sql`(${table.status} IN ('succeeded', 'failed', 'cancelled')) = (${table.terminalAt} IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const intelligenceWorkflowNodes = kortixSchema.table(
+  'intelligence_workflow_nodes',
+  {
+    nodeId: uuid('node_id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => intelligenceWorkflowRuns.runId, {
+      onDelete: 'cascade',
+    }),
+    nodeKey: text('node_key').notNull(),
+    role: text('role').notNull(),
+    kind: text('kind').notNull(),
+    agentName: text('agent_name'),
+    agentCardHash: text('agent_card_hash'),
+    capabilityId: text('capability_id'),
+    capabilityVersion: text('capability_version'),
+    inputRef: text('input_ref'),
+    inputHash: text('input_hash').notNull(),
+    actionSummary: text('action_summary'),
+    policySnapshotHash: text('policy_snapshot_hash'),
+    evaluationVersion: text('evaluation_version'),
+    taskId: uuid('task_id').references(() => intelligenceTasks.taskId, { onDelete: 'restrict' }),
+    status: text('status').default('pending').notNull(),
+    leaseOwner: text('lease_owner'),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true, mode: 'string' }),
+    attemptCount: integer('attempt_count').default(0).notNull(),
+    deadlineAt: timestamp('deadline_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    terminalAt: timestamp('terminal_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    index('idx_intelligence_workflow_nodes_run_status').on(
+      table.runId,
+      table.status,
+      table.nodeKey,
+    ),
+    index('idx_intelligence_workflow_nodes_ready_claim')
+      .on(table.status, table.leaseExpiresAt, table.deadlineAt, table.nodeKey)
+      .where(sql`${table.status} IN ('ready', 'running')`),
+    uniqueIndex('idx_intelligence_workflow_nodes_task')
+      .on(table.taskId)
+      .where(sql`${table.taskId} IS NOT NULL`),
+    unique('intelligence_workflow_nodes_run_identity_unique').on(table.runId, table.nodeId),
+    unique('intelligence_workflow_nodes_run_node_key_unique').on(table.runId, table.nodeKey),
+    check(
+      'intelligence_workflow_nodes_node_key_check',
+      sql`${table.nodeKey} ~ '^[A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*$'
+        AND length(${table.nodeKey}) <= 128`,
+    ),
+    check(
+      'intelligence_workflow_nodes_role_check',
+      sql`${table.role} IN ('planner', 'executor', 'reviewer', 'system')`,
+    ),
+    check(
+      'intelligence_workflow_nodes_kind_check',
+      sql`${table.kind} IN ('agent', 'capability', 'approval')`,
+    ),
+    check(
+      'intelligence_workflow_nodes_agent_card_hash_check',
+      sql`${table.agentCardHash} IS NULL OR ${table.agentCardHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_workflow_nodes_capability_check',
+      sql`(
+        ${table.kind} = 'capability'
+        AND ${table.capabilityId} IS NOT NULL
+        AND ${table.capabilityId} = 'studio.image.generate'
+        AND ${table.capabilityVersion} IS NOT NULL
+        AND ${table.capabilityVersion} = '1.0.0'
+      ) OR (
+        ${table.kind} <> 'capability'
+        AND ${table.capabilityId} IS NULL
+        AND ${table.capabilityVersion} IS NULL
+      )`,
+    ),
+    check(
+      'intelligence_workflow_nodes_input_ref_check',
+      sql`${table.inputRef} IS NULL OR (
+        ${table.inputRef} ~ '^sealed:[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        AND length(${table.inputRef}) <= 263
+      )`,
+    ),
+    check(
+      'intelligence_workflow_nodes_input_hash_check',
+      sql`${table.inputHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_workflow_nodes_action_summary_check',
+      sql`${table.actionSummary} IS NULL OR octet_length(${table.actionSummary}) <= 2048`,
+    ),
+    check(
+      'intelligence_workflow_nodes_policy_snapshot_hash_check',
+      sql`${table.policySnapshotHash} IS NULL OR ${table.policySnapshotHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_workflow_nodes_status_check',
+      sql`${table.status} IN ('pending', 'ready', 'running', 'waiting_approval', 'succeeded', 'failed', 'skipped', 'cancelled')`,
+    ),
+    check(
+      'intelligence_workflow_nodes_task_kind_check',
+      sql`${table.taskId} IS NULL OR ${table.kind} = 'capability'`,
+    ),
+    check(
+      'intelligence_workflow_nodes_lease_check',
+      sql`(
+        ${table.leaseOwner} IS NULL
+        AND ${table.leaseExpiresAt} IS NULL
+      ) OR (
+        NULLIF(BTRIM(${table.leaseOwner}), '') IS NOT NULL
+        AND ${table.leaseExpiresAt} IS NOT NULL
+        AND ${table.status} = 'running'
+      )`,
+    ),
+    check(
+      'intelligence_workflow_nodes_attempt_count_check',
+      sql`${table.attemptCount} BETWEEN 0 AND 1000`,
+    ),
+    check(
+      'intelligence_workflow_nodes_terminal_at_check',
+      sql`(${table.status} IN ('succeeded', 'failed', 'skipped', 'cancelled')) = (${table.terminalAt} IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const intelligenceWorkflowDependencies = kortixSchema.table(
+  'intelligence_workflow_dependencies',
+  {
+    dependencyId: uuid('dependency_id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => intelligenceWorkflowRuns.runId, {
+      onDelete: 'cascade',
+    }),
+    nodeId: uuid('node_id').notNull(),
+    dependsOnNodeId: uuid('depends_on_node_id').notNull(),
+    condition: text('condition').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId, table.nodeId],
+      foreignColumns: [intelligenceWorkflowNodes.runId, intelligenceWorkflowNodes.nodeId],
+      name: 'intelligence_workflow_dependencies_child_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.runId, table.dependsOnNodeId],
+      foreignColumns: [intelligenceWorkflowNodes.runId, intelligenceWorkflowNodes.nodeId],
+      name: 'intelligence_workflow_dependencies_parent_fk',
+    }).onDelete('cascade'),
+    index('idx_intelligence_workflow_dependencies_child').on(table.runId, table.nodeId),
+    index('idx_intelligence_workflow_dependencies_parent').on(
+      table.runId,
+      table.dependsOnNodeId,
+    ),
+    unique('intelligence_workflow_dependencies_edge_unique').on(
+      table.runId,
+      table.nodeId,
+      table.dependsOnNodeId,
+    ),
+    check(
+      'intelligence_workflow_dependencies_no_self_edge_check',
+      sql`${table.nodeId} <> ${table.dependsOnNodeId}`,
+    ),
+    check(
+      'intelligence_workflow_dependencies_condition_check',
+      sql`${table.condition} IN ('on_success', 'on_completion')`,
+    ),
+  ],
+);
+
+export const intelligenceWorkflowApprovals = kortixSchema.table(
+  'intelligence_workflow_approvals',
+  {
+    approvalId: uuid('approval_id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => intelligenceWorkflowRuns.runId, {
+      onDelete: 'cascade',
+    }),
+    nodeId: uuid('node_id').notNull(),
+    risk: text('risk').notNull(),
+    reasonCode: text('reason_code').notNull(),
+    actionSummary: text('action_summary').notNull(),
+    status: text('status').default('pending').notNull(),
+    reviewItemId: uuid('review_item_id').references(() => reviewItems.reviewItemId, {
+      onDelete: 'set null',
+    }),
+    actingUserId: uuid('acting_user_id'),
+    decision: text('decision'),
+    feedbackHash: text('feedback_hash'),
+    requestedAt: timestamp('requested_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId, table.nodeId],
+      foreignColumns: [intelligenceWorkflowNodes.runId, intelligenceWorkflowNodes.nodeId],
+      name: 'intelligence_workflow_approvals_node_fk',
+    }).onDelete('cascade'),
+    index('idx_intelligence_workflow_approvals_run_status').on(
+      table.runId,
+      table.status,
+      table.requestedAt,
+    ),
+    uniqueIndex('idx_intelligence_workflow_approvals_pending_node')
+      .on(table.runId, table.nodeId)
+      .where(sql`${table.status} = 'pending'`),
+    uniqueIndex('idx_intelligence_workflow_approvals_review_item')
+      .on(table.reviewItemId)
+      .where(sql`${table.reviewItemId} IS NOT NULL`),
+    check(
+      'intelligence_workflow_approvals_risk_check',
+      sql`${table.risk} IN ('none', 'low', 'medium', 'high')`,
+    ),
+    check(
+      'intelligence_workflow_approvals_reason_code_check',
+      sql`${table.reasonCode} ~ '^[A-Z][A-Z0-9_.-]{0,127}$'`,
+    ),
+    check(
+      'intelligence_workflow_approvals_action_summary_check',
+      sql`octet_length(${table.actionSummary}) BETWEEN 1 AND 2048`,
+    ),
+    check(
+      'intelligence_workflow_approvals_status_check',
+      sql`${table.status} IN ('pending', 'approved', 'rejected', 'expired', 'cancelled')`,
+    ),
+    check(
+      'intelligence_workflow_approvals_decision_check',
+      sql`${table.decision} IS NULL OR ${table.decision} IN ('approve', 'reject', 'changes_requested')`,
+    ),
+    check(
+      'intelligence_workflow_approvals_feedback_hash_check',
+      sql`${table.feedbackHash} IS NULL OR ${table.feedbackHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_workflow_approvals_resolution_check',
+      sql`(
+        ${table.status} = 'pending'
+        AND ${table.actingUserId} IS NULL
+        AND ${table.decision} IS NULL
+        AND ${table.feedbackHash} IS NULL
+        AND ${table.resolvedAt} IS NULL
+      ) OR (
+        ${table.status} = 'approved'
+        AND ${table.actingUserId} IS NOT NULL
+        AND ${table.decision} IS NOT NULL
+        AND ${table.decision} = 'approve'
+        AND ${table.resolvedAt} IS NOT NULL
+      ) OR (
+        ${table.status} = 'rejected'
+        AND ${table.actingUserId} IS NOT NULL
+        AND ${table.decision} IS NOT NULL
+        AND ${table.decision} IN ('reject', 'changes_requested')
+        AND ${table.resolvedAt} IS NOT NULL
+      ) OR (
+        ${table.status} IN ('expired', 'cancelled')
+        AND ${table.decision} IS NULL
+        AND ${table.feedbackHash} IS NULL
+        AND ${table.resolvedAt} IS NOT NULL
+      )`,
+    ),
+  ],
+);
+
+export const intelligenceWorkflowEvents = kortixSchema.table(
+  'intelligence_workflow_events',
+  {
+    eventId: uuid('event_id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => intelligenceWorkflowRuns.runId, {
+      onDelete: 'cascade',
+    }),
+    sequence: bigint('sequence', { mode: 'number' }).notNull(),
+    eventType: text('event_type').notNull(),
+    status: text('status').notNull(),
+    graphVersion: integer('graph_version').notNull(),
+    nodeId: uuid('node_id'),
+    taskId: uuid('task_id').references(() => intelligenceTasks.taskId, { onDelete: 'restrict' }),
+    progress: numeric('progress', { precision: 5, scale: 4 }),
+    reasonCode: text('reason_code'),
+    assetIds: jsonb('asset_ids').default([]).notNull().$type<string[]>(),
+    routeReasonCodes: jsonb('route_reason_codes').default([]).notNull().$type<string[]>(),
+    evaluationVersion: text('evaluation_version'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId, table.nodeId],
+      foreignColumns: [intelligenceWorkflowNodes.runId, intelligenceWorkflowNodes.nodeId],
+      name: 'intelligence_workflow_events_node_fk',
+    }).onDelete('cascade'),
+    unique('intelligence_workflow_events_run_sequence_unique').on(table.runId, table.sequence),
+    index('idx_intelligence_workflow_events_run_created').on(table.runId, table.createdAt),
+    index('idx_intelligence_workflow_events_node').on(table.runId, table.nodeId, table.sequence),
+    check('intelligence_workflow_events_sequence_check', sql`${table.sequence} > 0`),
+    check('intelligence_workflow_events_graph_version_check', sql`${table.graphVersion} >= 0`),
+    check(
+      'intelligence_workflow_events_type_check',
+      sql`${table.eventType} IN (
+        'run_created', 'node_appended', 'dependency_added', 'graph_sealed', 'run_started',
+        'node_ready', 'node_started', 'node_waiting_approval', 'approval_resolved',
+        'route_selected', 'task_attached', 'node_succeeded', 'node_failed', 'node_skipped',
+        'run_succeeded', 'run_failed', 'run_cancelled'
+      )`,
+    ),
+    check(
+      'intelligence_workflow_events_status_check',
+      sql`${table.status} IN ('draft', 'running', 'waiting_approval', 'succeeded', 'failed', 'cancelled')`,
+    ),
+    check(
+      'intelligence_workflow_events_progress_check',
+      sql`${table.progress} IS NULL OR ${table.progress} BETWEEN 0 AND 1`,
+    ),
+    check(
+      'intelligence_workflow_events_reason_code_check',
+      sql`${table.reasonCode} IS NULL OR ${table.reasonCode} ~ '^[A-Z][A-Z0-9_.-]{0,127}$'`,
+    ),
+    check(
+      'intelligence_workflow_events_asset_ids_check',
+      sql`jsonb_typeof(${table.assetIds}) = 'array' AND jsonb_array_length(${table.assetIds}) <= 64`,
+    ),
+    check(
+      'intelligence_workflow_events_route_reason_codes_check',
+      sql`jsonb_typeof(${table.routeReasonCodes}) = 'array'
+        AND jsonb_array_length(${table.routeReasonCodes}) <= 16`,
+    ),
+  ],
+);
+
+export const intelligenceWorkflowPayloads = kortixSchema.table(
+  'intelligence_workflow_payloads',
+  {
+    payloadId: uuid('payload_id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull().references(() => intelligenceWorkflowRuns.runId, {
+      onDelete: 'cascade',
+    }),
+    nodeId: uuid('node_id'),
+    purpose: text('purpose').notNull(),
+    payloadRef: text('payload_ref').notNull(),
+    contentHash: text('content_hash').notNull(),
+    byteLength: bigint('byte_length', { mode: 'number' }).notNull(),
+    contentType: text('content_type').default('application/json').notNull(),
+    retentionStatus: text('retention_status').default('active').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId, table.nodeId],
+      foreignColumns: [intelligenceWorkflowNodes.runId, intelligenceWorkflowNodes.nodeId],
+      name: 'intelligence_workflow_payloads_node_fk',
+    }).onDelete('cascade'),
+    unique('intelligence_workflow_payloads_ref_unique').on(table.payloadRef),
+    index('idx_intelligence_workflow_payloads_run_node').on(table.runId, table.nodeId),
+    index('idx_intelligence_workflow_payloads_retention').on(
+      table.retentionStatus,
+      table.createdAt,
+    ),
+    check(
+      'intelligence_workflow_payloads_purpose_check',
+      sql`${table.purpose} IN ('node_input', 'planner_proposal', 'reviewer_feedback')`,
+    ),
+    check(
+      'intelligence_workflow_payloads_ref_check',
+      sql`${table.payloadRef} ~ '^sealed:[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        AND length(${table.payloadRef}) <= 263`,
+    ),
+    check(
+      'intelligence_workflow_payloads_content_hash_check',
+      sql`${table.contentHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_workflow_payloads_byte_length_check',
+      sql`${table.byteLength} BETWEEN 1 AND 1048576`,
+    ),
+    check(
+      'intelligence_workflow_payloads_content_type_check',
+      sql`${table.contentType} = 'application/json'`,
+    ),
+    check(
+      'intelligence_workflow_payloads_retention_check',
+      sql`(
+        ${table.retentionStatus} = 'active'
+        AND ${table.deletedAt} IS NULL
+      ) OR (
+        ${table.retentionStatus} = 'deleted'
+        AND ${table.deletedAt} IS NOT NULL
+      )`,
     ),
   ],
 );

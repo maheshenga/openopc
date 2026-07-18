@@ -29,6 +29,12 @@ import {
   studioUsageEvents,
   intelligenceTasks,
   intelligenceTaskEvents,
+  intelligenceWorkflowRuns,
+  intelligenceWorkflowNodes,
+  intelligenceWorkflowDependencies,
+  intelligenceWorkflowApprovals,
+  intelligenceWorkflowEvents,
+  intelligenceWorkflowPayloads,
   accounts,
   accountMembers,
   projects,
@@ -493,6 +499,237 @@ describe('intelligence durable task schema', () => {
     );
     expect(uniqueConstraintNames(intelligenceTaskEvents)).toContain(
       'intelligence_task_events_task_sequence_unique',
+    );
+  });
+});
+
+describe('intelligence durable workflow schema', () => {
+  test('persists project-scoped workflow run identity and graph state', () => {
+    expect(getTableConfig(intelligenceWorkflowRuns).schema).toBe('kortix');
+    expect(getTableConfig(intelligenceWorkflowRuns).name).toBe('intelligence_workflow_runs');
+    expect(columnNames(intelligenceWorkflowRuns)).toEqual(
+      expect.arrayContaining([
+        'run_id',
+        'account_id',
+        'project_id',
+        'protocol_version',
+        'actor_type',
+        'actor_id',
+        'acting_token_id',
+        'agent_name',
+        'session_id',
+        'idempotency_key',
+        'request_hash',
+        'status',
+        'graph_version',
+        'policy_snapshot_hash',
+        'evaluation_version',
+        'max_nodes',
+        'max_dependencies',
+        'max_approved_credits',
+        'deadline_at',
+        'terminal_at',
+      ]),
+    );
+    expect(indexNames(intelligenceWorkflowRuns)).toEqual(
+      expect.arrayContaining([
+        'idx_intelligence_workflow_runs_project_created',
+        'idx_intelligence_workflow_runs_project_status_updated',
+      ]),
+    );
+    expect(uniqueConstraintNames(intelligenceWorkflowRuns)).toContain(
+      'intelligence_workflow_runs_project_idempotency_unique',
+    );
+  });
+
+  test('persists workflow node identity, immutable task attachment, and leases', () => {
+    expect(getTableConfig(intelligenceWorkflowNodes).schema).toBe('kortix');
+    expect(getTableConfig(intelligenceWorkflowNodes).name).toBe('intelligence_workflow_nodes');
+    expect(columnNames(intelligenceWorkflowNodes)).toEqual(
+      expect.arrayContaining([
+        'node_id',
+        'run_id',
+        'node_key',
+        'role',
+        'kind',
+        'agent_name',
+        'agent_card_hash',
+        'capability_id',
+        'capability_version',
+        'input_ref',
+        'input_hash',
+        'action_summary',
+        'policy_snapshot_hash',
+        'evaluation_version',
+        'task_id',
+        'status',
+        'lease_owner',
+        'lease_expires_at',
+        'attempt_count',
+        'deadline_at',
+        'terminal_at',
+      ]),
+    );
+    expect(indexNames(intelligenceWorkflowNodes)).toEqual(
+      expect.arrayContaining([
+        'idx_intelligence_workflow_nodes_run_status',
+        'idx_intelligence_workflow_nodes_ready_claim',
+        'idx_intelligence_workflow_nodes_task',
+      ]),
+    );
+    expect(uniqueConstraintNames(intelligenceWorkflowNodes)).toEqual(
+      expect.arrayContaining([
+        'intelligence_workflow_nodes_run_identity_unique',
+        'intelligence_workflow_nodes_run_node_key_unique',
+      ]),
+    );
+  });
+
+  test('enforces same-run workflow dependency identity', () => {
+    expect(getTableConfig(intelligenceWorkflowDependencies).schema).toBe('kortix');
+    expect(getTableConfig(intelligenceWorkflowDependencies).name).toBe(
+      'intelligence_workflow_dependencies',
+    );
+    expect(columnNames(intelligenceWorkflowDependencies)).toEqual([
+      'dependency_id',
+      'run_id',
+      'node_id',
+      'depends_on_node_id',
+      'condition',
+      'created_at',
+    ]);
+    const foreignKeys = getTableConfig(intelligenceWorkflowDependencies).foreignKeys.map((key) => {
+      const reference = key.reference();
+      return {
+        columns: reference.columns.map((column) => column.name),
+        foreignColumns: reference.foreignColumns.map((column) => column.name),
+      };
+    });
+    expect(foreignKeys).toEqual(
+      expect.arrayContaining([
+        {
+          columns: ['run_id', 'node_id'],
+          foreignColumns: ['run_id', 'node_id'],
+        },
+        {
+          columns: ['run_id', 'depends_on_node_id'],
+          foreignColumns: ['run_id', 'node_id'],
+        },
+      ]),
+    );
+    expect(uniqueConstraintNames(intelligenceWorkflowDependencies)).toContain(
+      'intelligence_workflow_dependencies_edge_unique',
+    );
+    expect(indexNames(intelligenceWorkflowDependencies)).toEqual(
+      expect.arrayContaining([
+        'idx_intelligence_workflow_dependencies_child',
+        'idx_intelligence_workflow_dependencies_parent',
+      ]),
+    );
+  });
+
+  test('persists authoritative workflow approvals and projection references', () => {
+    expect(getTableConfig(intelligenceWorkflowApprovals).schema).toBe('kortix');
+    expect(getTableConfig(intelligenceWorkflowApprovals).name).toBe(
+      'intelligence_workflow_approvals',
+    );
+    expect(columnNames(intelligenceWorkflowApprovals)).toEqual(
+      expect.arrayContaining([
+        'approval_id',
+        'run_id',
+        'node_id',
+        'risk',
+        'reason_code',
+        'action_summary',
+        'status',
+        'review_item_id',
+        'acting_user_id',
+        'decision',
+        'feedback_hash',
+        'requested_at',
+        'resolved_at',
+      ]),
+    );
+    expect(indexNames(intelligenceWorkflowApprovals)).toEqual(
+      expect.arrayContaining([
+        'idx_intelligence_workflow_approvals_run_status',
+        'idx_intelligence_workflow_approvals_pending_node',
+        'idx_intelligence_workflow_approvals_review_item',
+      ]),
+    );
+    const sameRunNodeKey = getTableConfig(intelligenceWorkflowApprovals).foreignKeys.find((key) => {
+      const reference = key.reference();
+      return (
+        reference.columns.map((column) => column.name).join(',') === 'run_id,node_id' &&
+        reference.foreignColumns.map((column) => column.name).join(',') === 'run_id,node_id'
+      );
+    });
+    expect(sameRunNodeKey).toBeDefined();
+    const referencedTables = getTableConfig(intelligenceWorkflowApprovals).foreignKeys.map((key) =>
+      getTableConfig(key.reference().foreignTable).name,
+    );
+    expect(referencedTables).toContain('review_items');
+  });
+
+  test('persists bounded public workflow events with a run-scoped cursor', () => {
+    expect(getTableConfig(intelligenceWorkflowEvents).schema).toBe('kortix');
+    expect(getTableConfig(intelligenceWorkflowEvents).name).toBe('intelligence_workflow_events');
+    expect(columnNames(intelligenceWorkflowEvents)).toEqual(
+      expect.arrayContaining([
+        'event_id',
+        'run_id',
+        'sequence',
+        'event_type',
+        'status',
+        'graph_version',
+        'node_id',
+        'task_id',
+        'progress',
+        'reason_code',
+        'asset_ids',
+        'route_reason_codes',
+        'evaluation_version',
+        'created_at',
+      ]),
+    );
+    expect(columnNames(intelligenceWorkflowEvents)).not.toContain('payload');
+    expect(uniqueConstraintNames(intelligenceWorkflowEvents)).toContain(
+      'intelligence_workflow_events_run_sequence_unique',
+    );
+    expect(indexNames(intelligenceWorkflowEvents)).toEqual(
+      expect.arrayContaining([
+        'idx_intelligence_workflow_events_run_created',
+        'idx_intelligence_workflow_events_node',
+      ]),
+    );
+  });
+
+  test('persists only sealed private workflow payload metadata', () => {
+    expect(getTableConfig(intelligenceWorkflowPayloads).schema).toBe('kortix');
+    expect(getTableConfig(intelligenceWorkflowPayloads).name).toBe(
+      'intelligence_workflow_payloads',
+    );
+    expect(columnNames(intelligenceWorkflowPayloads)).toEqual([
+      'payload_id',
+      'run_id',
+      'node_id',
+      'purpose',
+      'payload_ref',
+      'content_hash',
+      'byte_length',
+      'content_type',
+      'retention_status',
+      'created_at',
+      'deleted_at',
+    ]);
+    expect(uniqueConstraintNames(intelligenceWorkflowPayloads)).toContain(
+      'intelligence_workflow_payloads_ref_unique',
+    );
+    expect(indexNames(intelligenceWorkflowPayloads)).toEqual(
+      expect.arrayContaining([
+        'idx_intelligence_workflow_payloads_run_node',
+        'idx_intelligence_workflow_payloads_retention',
+      ]),
     );
   });
 });

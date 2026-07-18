@@ -1462,6 +1462,16 @@ importers:
         specifier: ^5.0.0
         version: 5.9.3
 
+  packages/intelligence-orchestration:
+    dependencies:
+      '@kortix/intelligence-contracts':
+        specifier: workspace:*
+        version: link:../intelligence-contracts
+    devDependencies:
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+
   packages/llm-catalog:
     devDependencies:
       '@types/bun':

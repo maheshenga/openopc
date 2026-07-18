@@ -1,0 +1,27 @@
+{
+  "name": "@kortix/intelligence-orchestration",
+  "version": "1.0.0",
+  "description": "Pure workflow state, graph, routing, and adapter contracts for Kortix Intelligence.",
+  "license": "Elastic-2.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./conformance": "./src/conformance.ts",
+    "./fixtures": "./src/fixtures.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@kortix/intelligence-contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

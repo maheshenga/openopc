@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import {
   INTELLIGENCE_PROTOCOL_VERSION,
   UnsupportedIntelligenceProtocolError,
+  WORKFLOW_PROTOCOL_VERSION,
   assertSupportedProtocolVersion,
+  assertSupportedWorkflowProtocolVersion,
 } from './compatibility';
 
 describe('intelligence protocol compatibility', () => {
@@ -23,5 +25,11 @@ describe('intelligence protocol compatibility', () => {
     expect(thrown).toBeInstanceOf(UnsupportedIntelligenceProtocolError);
     expect(String(thrown)).toContain('unsupported');
     expect(String(thrown)).not.toContain('secret-token');
+  });
+
+  test('accepts the first workflow protocol revision', () => {
+    expect(assertSupportedWorkflowProtocolVersion(WORKFLOW_PROTOCOL_VERSION)).toBe(
+      'intelligence.workflow.v1',
+    );
   });
 });

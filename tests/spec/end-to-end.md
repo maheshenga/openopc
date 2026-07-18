@@ -1,5 +1,19 @@
 # Kortix End-to-End Flows
 
+## Intelligence Protocol Gates
+
+`INTEL-1` `GET /projects/:id/intelligence/capabilities?include=execution_targets` and `GET /projects/:id/intelligence/agent-card` return the governed `intelligence.v1` image capability, one redaction-safe execution target, and a deterministic project Agent Card. No credential, provider connection detail, private object key, or raw provider response is public.
+
+`INTEL-2` `POST /projects/:id/intelligence/tasks` with the discovered target creates one durable Intelligence task and one Studio job. Repeating the same idempotency key returns the original task/job without another Studio job or provider submission. `Content-Type: application/a2a+json` accepts the strict A2A `message/send` envelope through the same project route and task service.
+
+`INTEL-3` `GET /projects/:id/intelligence/tasks/:taskId/events` returns monotonically sequenced public events. A public cursor replays only later events, `asset_created` contains asset IDs rather than storage locations, and the terminal state remains `succeeded` after the internal billing-settlement marker. `Accept: application/a2a+json` maps the same event stream to A2A `completed`.
+
+`INTEL-4` A different project receives an opaque 404. A revoked project Agent is denied before task persistence, Studio job creation, or provider I/O. Every success and error response is scanned for the test-only private prompt, provider body, storage location, credential value, and settlement identifier.
+
+`INTEL-5` The real `kortix executor mcp` stdio process negotiates MCP revision `2025-11-25`, exposes only `studio_capabilities` and `studio_create_task` for this slice, uses the project-scoped HTTP contract, replays idempotently, and surfaces a stable redacted denial after Agent revocation.
+
+`INTEL-6` Production enablement remains outside this gate. The executable slice is limited to `studio.image.generate`; video, voice, 3D, avatar/digital-human, and batch-remix capabilities require their separate implementation plans and acceptance evidence.
+
 ## Studio Provider and Storage Gates
 
 `STUDIO-10` Required CI runs runtime, adapter, and worker test/typecheck gates plus a pinned MinIO S3 conformance run. The MinIO target must pass `/minio/health/live`; its integration suite creates and removes `studio-test`, proves anonymous object GET is denied, and runs with cleanup even after a failure. Local CI may report Docker unavailable as a skip, but GitHub CI must fail instead of silently skipping it.

@@ -73,6 +73,11 @@ run_studio_gates() {
     pnpm --filter @kortix/studio-worker typecheck
 }
 
+run_intelligence_protocol_gates() {
+  pnpm --filter kortix-api exec bun test src/__tests__/e2e-intelligence-protocol.test.ts &&
+    pnpm --filter @kortix/cli exec bun test src/__tests__/e2e-intelligence-mcp.test.ts
+}
+
 run_studio_minio_conformance() {
   local container="kortix-studio-minio-local"
   docker rm -f "$container" >/dev/null 2>&1 || true
@@ -126,6 +131,7 @@ pass "focused-test guard (package-tests.yml)" check_focused
 pass "unit: packages (package-tests.yml)" run_pkg_tests
 pass "unit: apps (package-tests.yml)" run_app_tests
 pass "Studio runtime, adapters, and worker gates (ci.yml)" run_studio_gates
+pass "Intelligence API, MCP, A2A, and IAM acceptance" run_intelligence_protocol_gates
 pass "typecheck workspaces (ci.yml)" run_typechecks
 pass "lint: biome" pnpm lint:biome
 

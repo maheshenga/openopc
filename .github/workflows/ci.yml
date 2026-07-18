@@ -64,6 +64,7 @@ jobs:
               - 'packages/agent-tunnel/**'
               - 'packages/api-contract/**'
               - 'packages/db/**'
+              - 'packages/intelligence-contracts/**'
               - 'packages/manifest-schema/**'
               - 'packages/shared/**'
               - 'packages/starter/**'
@@ -81,10 +82,13 @@ jobs:
             frontend:
               - *pnpm
               - 'apps/web/**'
+              - 'packages/intelligence-contracts/**'
               - 'packages/shared/**'
             cli:
               - *pnpm
               - 'apps/cli/**'
+              - 'packages/api-contract/**'
+              - 'packages/intelligence-contracts/**'
               - 'packages/manifest-schema/**'
               - 'packages/starter/**'
             sandbox_agent:

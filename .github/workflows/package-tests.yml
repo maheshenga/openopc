@@ -151,6 +151,11 @@ jobs:
                --filter "kortix" \
                --if-present test
 
+      - name: Intelligence API, MCP, A2A, and IAM acceptance (no decrypted secrets required)
+        run: |
+          pnpm --filter kortix-api exec bun test src/__tests__/e2e-intelligence-protocol.test.ts
+          pnpm --filter @kortix/cli exec bun test src/__tests__/e2e-intelligence-mcp.test.ts
+
       - name: Typecheck Studio runtime, adapters, and worker
         run: |
           set -euo pipefail

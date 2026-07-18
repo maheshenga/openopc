@@ -70,6 +70,13 @@ const taskRequest = (
   ...overrides,
 });
 
+const a2aTaskEnvelope = (request: IntelligenceCreateTaskRequest = taskRequest()) => ({
+  jsonrpc: '2.0',
+  id: 'message-1',
+  method: 'message/send',
+  params: { sender_card_hash: request.agent_card_hash, task: request },
+});
+
 type TestOptions = {
   capabilities?: CapabilityDescriptor[];
   executionTargets?: IntelligenceExecutionTarget[];
@@ -78,12 +85,15 @@ type TestOptions = {
   executor?: StudioTaskExecutor | null;
   eventReader?: IntelligenceTaskEventReader | null;
   trustExternal?: boolean;
+  omitTrustSource?: boolean;
+  agentGrant?: string | null;
   projectMissing?: boolean;
   authType?: string;
 };
 
 function createApp(options: TestOptions = {}) {
   const actions: string[] = [];
+  const trustCalls: Array<{ projectId: string; accountId: string; cardHash: string }> = [];
   const createCalls: Parameters<StudioTaskExecutor['create']>[0][] = [];
   const rows = new Map<string, { taskId: string; jobId: string }>();
   const defaultExecutor: StudioTaskExecutor = {
@@ -141,9 +151,16 @@ function createApp(options: TestOptions = {}) {
     taskExecutor: options.executor === null ? undefined : (options.executor ?? defaultExecutor),
     taskEventReader:
       options.eventReader === null ? undefined : (options.eventReader ?? defaultEventReader),
-    agentTrustSource: {
-      isTrusted: async () => options.trustExternal ?? false,
-    },
+    ...(options.omitTrustSource
+      ? {}
+      : {
+          agentTrustSource: {
+            isTrusted: async (input) => {
+              trustCalls.push(input);
+              return options.trustExternal ?? false;
+            },
+          },
+        }),
   });
   const app = new Hono();
   app.use('*', async (context, next) => {
@@ -151,7 +168,10 @@ function createApp(options: TestOptions = {}) {
     writable.set('authType', options.authType ?? 'pat');
     writable.set('iamTokenId', IAM_TOKEN_ID);
     writable.set('sessionId', 'session-1');
-    writable.set('agentGrant', { agent: 'content-planner' });
+    writable.set(
+      'agentGrant',
+      options.agentGrant === null ? null : { agent: options.agentGrant ?? 'content-planner' },
+    );
     await next();
   });
   app.route('/v1/projects', routes);
@@ -161,7 +181,7 @@ function createApp(options: TestOptions = {}) {
     }
     return context.json({ error: 'Internal error' }, 500);
   });
-  return { app, actions, createCalls };
+  return { app, actions, createCalls, trustCalls };
 }
 
 async function createTask(app: Hono, request: unknown = taskRequest()) {
@@ -169,6 +189,14 @@ async function createTask(app: Hono, request: unknown = taskRequest()) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
+  });
+}
+
+async function createA2ATask(app: Hono, request: IntelligenceCreateTaskRequest = taskRequest()) {
+  return app.request(`/v1/projects/${PROJECT_ID}/intelligence/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/a2a+json' },
+    body: JSON.stringify(a2aTaskEnvelope(request)),
   });
 }
 
@@ -278,6 +306,25 @@ describe('Intelligence project routes', () => {
     expect(actions).toEqual([PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_USE]);
   });
 
+  test('negotiates an A2A Agent Card without changing the default JSON response', async () => {
+    const { app } = createApp();
+    const defaultResponse = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/agent-card`);
+    const a2aResponse = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/agent-card`, {
+      headers: { Accept: 'application/a2a+json' },
+    });
+
+    expect(defaultResponse.headers.get('content-type')).toMatch(/^application\/json/);
+    expect(await defaultResponse.json()).toEqual(localCard);
+    expect(a2aResponse.headers.get('content-type')).toMatch(/^application\/a2a\+json/);
+    const body = await a2aResponse.json();
+    expect(body).toMatchObject({
+      protocolVersion: '1.0.1',
+      skills: [{ id: 'studio.image.generate' }],
+      metadata: { card_hash: localCard.card_hash },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/secret|token|credential|provider_url/i);
+  });
+
   test('allows the local project card, derives agent attribution, and replays idempotently', async () => {
     const { app, createCalls } = createApp();
     const first = await createTask(app);
@@ -309,6 +356,124 @@ describe('Intelligence project routes', () => {
     expect(JSON.stringify(await createTask(app).then((response) => response.json()))).not.toContain(
       'private prompt',
     );
+  });
+
+  test('runs an A2A message/send task through the governed project executor', async () => {
+    const { app, createCalls } = createApp();
+    const response = await createA2ATask(app);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/^application\/a2a\+json/);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      id: TASK_ID,
+      contextId: PROJECT_ID,
+      status: { state: 'submitted' },
+      metadata: { job_id: JOB_ID },
+    });
+    expect(createCalls).toHaveLength(1);
+    expect(createCalls[0]).toMatchObject({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      actorUserId: USER_ID,
+      actorType: 'agent',
+      actingTokenId: IAM_TOKEN_ID,
+      request: taskRequest(),
+    });
+    expect(JSON.stringify(body)).not.toMatch(/private prompt|provider_url|credential|signed_url/i);
+  });
+
+  test('requires a local Agent grant or explicit trust for every external A2A card', async () => {
+    const withoutGrant = createApp({ agentGrant: null });
+    const localDenied = await createA2ATask(withoutGrant.app);
+    expect(localDenied.status).toBe(403);
+    expect(localDenied.headers.get('content-type')).toMatch(/^application\/a2a\+json/);
+    expect(await localDenied.json()).toMatchObject({ code: 'A2A_AGENT_UNTRUSTED' });
+    expect(withoutGrant.createCalls).toHaveLength(0);
+
+    const externalRequest = taskRequest({ agent_card_hash: 'b'.repeat(64) });
+    const withoutTrustSource = createApp({ omitTrustSource: true });
+    const externalDenied = await createA2ATask(withoutTrustSource.app, externalRequest);
+    expect(externalDenied.status).toBe(403);
+    expect(withoutTrustSource.createCalls).toHaveLength(0);
+
+    const trusted = createApp({ trustExternal: true });
+    expect((await createA2ATask(trusted.app, externalRequest)).status).toBe(200);
+    expect(trusted.trustCalls).toEqual([
+      { projectId: PROJECT_ID, accountId: ACCOUNT_ID, cardHash: 'b'.repeat(64) },
+    ]);
+  });
+
+  test('accepts the local service card from any authorized project Agent grant', async () => {
+    const { app } = createApp({ agentGrant: 'research-agent' });
+    const response = await createA2ATask(app);
+
+    expect(response.status).toBe(200);
+  });
+
+  test('rejects malformed, unsupported, and expired A2A tasks before execution', async () => {
+    const { app, createCalls } = createApp();
+    const malformed = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/a2a+json; charset=utf-8' },
+      body: JSON.stringify({ ...a2aTaskEnvelope(), credential: 'must-not-be-accepted' }),
+    });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toMatchObject({ code: 'A2A_INVALID_REQUEST' });
+
+    const unsupportedRequest = {
+      ...taskRequest(),
+      capability_id: 'studio.video.generate',
+    };
+    const unsupported = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/a2a+json' },
+      body: JSON.stringify({
+        ...a2aTaskEnvelope(),
+        params: {
+          sender_card_hash: unsupportedRequest.agent_card_hash,
+          task: unsupportedRequest,
+        },
+      }),
+    });
+    expect(unsupported.status).toBe(400);
+    expect(await unsupported.json()).toMatchObject({ code: 'A2A_UNSUPPORTED_CAPABILITY' });
+
+    const expired = await createA2ATask(
+      app,
+      taskRequest({ deadline_at: '2020-01-01T00:00:00.000Z' }),
+    );
+    expect(expired.status).toBe(409);
+    expect(expired.headers.get('content-type')).toMatch(/^application\/a2a\+json/);
+    expect(await expired.json()).toMatchObject({ code: 'A2A_DEADLINE_EXPIRED' });
+    expect(createCalls).toHaveLength(0);
+  });
+
+  test('keeps the A2A media type for governed preflight failures', async () => {
+    const cases = [
+      {
+        app: createApp({ executor: null }).app,
+        status: 503,
+        code: 'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE',
+      },
+      {
+        app: createApp({ capabilities: [] }).app,
+        status: 409,
+        code: 'INTELLIGENCE_CAPABILITY_UNAVAILABLE',
+      },
+      {
+        app: createApp({ executionTargets: [] }).app,
+        status: 409,
+        code: 'INTELLIGENCE_EXECUTION_TARGET_UNAVAILABLE',
+      },
+    ];
+
+    for (const item of cases) {
+      const response = await createA2ATask(item.app);
+      expect(response.status).toBe(item.status);
+      expect(response.headers.get('content-type')).toMatch(/^application\/a2a\+json/);
+      expect(await response.json()).toMatchObject({ code: item.code });
+    }
   });
 
   test('replays a bound task after provider discovery becomes unavailable', async () => {
@@ -401,6 +566,22 @@ describe('Intelligence project routes', () => {
     expect(response.status).toBe(503);
     const body = await response.text();
     expect(body).not.toContain('https://secret.example.test');
+    expect(JSON.parse(body)).toMatchObject({ code: 'INTELLIGENCE_TASK_EXECUTION_FAILED' });
+  });
+
+  test('returns a redacted A2A error when the governed executor fails', async () => {
+    const executor: StudioTaskExecutor = {
+      async create() {
+        throw new Error('provider=https://secret.example.test/v1 raw response=credential');
+      },
+    };
+    const { app } = createApp({ executor });
+    const response = await createA2ATask(app);
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('content-type')).toMatch(/^application\/a2a\+json/);
+    const body = await response.text();
+    expect(body).not.toMatch(/secret\.example|raw response|credential/i);
     expect(JSON.parse(body)).toMatchObject({ code: 'INTELLIGENCE_TASK_EXECUTION_FAILED' });
   });
 
@@ -579,5 +760,35 @@ describe('Intelligence project routes', () => {
       `/v1/projects/${OTHER_PROJECT_ID}/intelligence/tasks/${TASK_ID}/events`,
     );
     expect(crossProject.status).toBe(404);
+  });
+
+  test('negotiates public task events as an A2A task state', async () => {
+    const { app, actions } = createApp();
+    const response = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/tasks/${TASK_ID}/events`,
+      { headers: { Accept: 'application/json;q=0.5, application/a2a+json; q=1' } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/^application\/a2a\+json/);
+    expect(await response.json()).toEqual({
+      id: TASK_ID,
+      contextId: PROJECT_ID,
+      status: { state: 'submitted', timestamp: '2026-07-18T12:00:00.000Z' },
+      metadata: {
+        events: [
+          {
+            protocol_version: 'intelligence.v1',
+            event_id: EVENT_ID,
+            task_id: TASK_ID,
+            sequence: 1,
+            type: 'created',
+            status: 'queued',
+            created_at: '2026-07-18T12:00:00.000Z',
+          },
+        ],
+      },
+    });
+    expect(actions).toEqual([PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_READ]);
   });
 });

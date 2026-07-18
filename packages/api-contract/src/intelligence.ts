@@ -126,6 +126,39 @@ export const IntelligenceCreateTaskRequestSchema = z
   .strict();
 export type IntelligenceCreateTaskRequest = z.infer<typeof IntelligenceCreateTaskRequestSchema>;
 
+const IntelligenceA2ARequestIdSchema = z.union([
+  z.string().trim().min(1).max(256),
+  z.number().int().finite(),
+]);
+const IntelligenceA2AMessageSendEnvelopeParamsSchema = z
+  .object({
+    sender_card_hash: HashSchema,
+    task: z.unknown(),
+  })
+  .strict();
+
+export const IntelligenceA2AMessageSendEnvelopeSchema = z
+  .object({
+    jsonrpc: z.literal('2.0'),
+    id: IntelligenceA2ARequestIdSchema,
+    method: z.literal('message/send'),
+    params: IntelligenceA2AMessageSendEnvelopeParamsSchema,
+  })
+  .strict();
+export type IntelligenceA2AMessageSendEnvelope = z.infer<
+  typeof IntelligenceA2AMessageSendEnvelopeSchema
+>;
+
+export const IntelligenceA2AMessageSendRequestSchema =
+  IntelligenceA2AMessageSendEnvelopeSchema.extend({
+    params: IntelligenceA2AMessageSendEnvelopeParamsSchema.extend({
+      task: IntelligenceCreateTaskRequestSchema,
+    }).strict(),
+  }).strict();
+export type IntelligenceA2AMessageSendRequest = z.infer<
+  typeof IntelligenceA2AMessageSendRequestSchema
+>;
+
 export const IntelligenceTaskResponseSchema = z
   .object({
     protocol_version: ProtocolVersionSchema,
@@ -145,6 +178,37 @@ export const IntelligenceTaskEventsResponseSchema = z
   })
   .strict();
 export type IntelligenceTaskEventsResponse = z.infer<typeof IntelligenceTaskEventsResponseSchema>;
+
+export const IntelligenceA2ATaskStateSchema = z.enum([
+  'submitted',
+  'working',
+  'input-required',
+  'completed',
+  'failed',
+  'canceled',
+]);
+export type IntelligenceA2ATaskState = z.infer<typeof IntelligenceA2ATaskStateSchema>;
+
+export const IntelligenceA2ATaskResponseSchema = z
+  .object({
+    id: z.string().uuid(),
+    contextId: z.string().uuid(),
+    status: z
+      .object({
+        state: IntelligenceA2ATaskStateSchema,
+        timestamp: z.string().datetime({ offset: true }),
+      })
+      .strict(),
+    metadata: z
+      .object({
+        job_id: z.string().uuid().optional(),
+        events: z.array(TaskEventSchema).max(1024).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type IntelligenceA2ATaskResponse = z.infer<typeof IntelligenceA2ATaskResponseSchema>;
 
 function hasUnsafePublicPayload(value: unknown): boolean {
   if (typeof value === 'string') {

@@ -242,6 +242,8 @@ Web、移动端和 Electron 只消费同一个 SDK/事件游标协议。它们�
 
 ### Phase 2：编排和评测
 
+- 详细设计：`docs/specs/2026-07-18-intelligence-workflow-evaluation-design.md`。
+- 实施计划：`docs/plans/2026-07-18-intelligence-workflow-evaluation-plan.md`。
 - 实现 WorkflowPort 的数据库适配器。
 - 增加 planner/executor/reviewer 三类 Agent 角色。
 - 加入模型策略路由和 golden set 评测。

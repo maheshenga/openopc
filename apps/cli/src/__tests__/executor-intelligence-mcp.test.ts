@@ -353,6 +353,34 @@ describe('Executor Intelligence MCP tools', () => {
     });
   });
 
+  test('fails closed when the project resolver throws during discovery', async () => {
+    let createCalls = 0;
+    const deps = createDeps({
+      getProjectId: () => {
+        throw new Error('project resolver unavailable');
+      },
+      discoverCapabilitiesWithStatus: async () => ({ response: discovery, legacy: false }),
+      createTask: async () => {
+        createCalls += 1;
+        return TASK_ID;
+      },
+    });
+
+    const discoveryResult = await callTool('studio_capabilities', {}, deps);
+    expect(discoveryResult.isError).toBe(true);
+    expect(JSON.parse(discoveryResult.content[0]?.text ?? '{}')).toMatchObject({
+      ok: false,
+      code: 'INTELLIGENCE_DISCOVERY_UNAVAILABLE',
+    });
+    const taskResult = await callTool('studio_create_task', validToolArgs(), deps);
+    expect(taskResult.isError).toBe(true);
+    expect(JSON.parse(taskResult.content[0]?.text ?? '{}')).toMatchObject({
+      ok: false,
+      code: 'INTELLIGENCE_DISCOVERY_UNAVAILABLE',
+    });
+    expect(createCalls).toBe(0);
+  });
+
   test('invalidates an enhanced discovery view when the project changes', async () => {
     let projectId = 'project-a';
     let createCalls = 0;

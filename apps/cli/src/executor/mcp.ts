@@ -107,10 +107,20 @@ function clearIntelligenceSession(state: IntelligenceMcpSessionState) {
 async function currentIntelligenceProjectId(
   dependencies: IntelligenceMcpDependencies,
 ): Promise<string | null> {
+  if (dependencies.getProjectId) {
+    let value: string | null | undefined;
+    try {
+      value = await dependencies.getProjectId();
+    } catch {
+      throw new IntelligenceClientError('INTELLIGENCE_DISCOVERY_UNAVAILABLE', 0);
+    }
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new IntelligenceClientError('INTELLIGENCE_DISCOVERY_UNAVAILABLE', 0);
+    }
+    return value;
+  }
   try {
-    const value = dependencies.getProjectId
-      ? await dependencies.getProjectId()
-      : intelligenceProjectContext().projectId;
+    const value = intelligenceProjectContext().projectId;
     return typeof value === 'string' && value.length > 0 ? value : null;
   } catch {
     return null;
@@ -161,13 +171,31 @@ async function canCreateFromIntelligenceSession(
   // remain source-compatible, but must opt into writes with an explicit gate;
   // an omitted gate is fail-closed rather than an implicit authorization.
   if (!dependencies.discoverCapabilitiesWithStatus) {
-    return dependencies.canCreateTask
-      ? { allowed: true, projectOverride: state.projectId ?? undefined }
-      : { allowed: false };
+    if (!dependencies.canCreateTask) return { allowed: false };
+    if (dependencies.getProjectId && state.projectId === null) return { allowed: false };
+    if (state.projectId !== null) {
+      try {
+        const currentProjectId = await currentIntelligenceProjectId(dependencies);
+        if (currentProjectId !== state.projectId) {
+          clearIntelligenceSession(state);
+          return { allowed: false };
+        }
+      } catch {
+        clearIntelligenceSession(state);
+        return { allowed: false };
+      }
+    }
+    return { allowed: true, projectOverride: state.projectId ?? undefined };
   }
   if (!state.enhancedDiscovery || state.projectId === null) return { allowed: false };
 
-  const currentProjectId = await currentIntelligenceProjectId(dependencies);
+  let currentProjectId: string | null;
+  try {
+    currentProjectId = await currentIntelligenceProjectId(dependencies);
+  } catch {
+    clearIntelligenceSession(state);
+    return { allowed: false };
+  }
   if (currentProjectId === null || currentProjectId !== state.projectId) {
     clearIntelligenceSession(state);
     return { allowed: false };

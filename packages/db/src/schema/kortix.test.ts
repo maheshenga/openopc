@@ -27,6 +27,8 @@ import {
   studioAssetUploads,
   studioCreditReservations,
   studioUsageEvents,
+  intelligenceTasks,
+  intelligenceTaskEvents,
   accounts,
   accountMembers,
   projects,
@@ -50,6 +52,10 @@ function indexNames(table: any): (string | undefined)[] {
 
 function primaryColumn(table: any): string | undefined {
   return getTableConfig(table).columns.find((c) => c.primary)?.name;
+}
+
+function uniqueConstraintNames(table: any): string[] {
+  return getTableConfig(table).uniqueConstraints.map((constraint: any) => constraint.name);
 }
 
 describe('kortix pgSchema', () => {
@@ -451,6 +457,42 @@ describe('studio durable schema', () => {
     expect(indexNames(studioAssetUploads)).toContain('idx_studio_asset_uploads_expiry');
     expect(indexNames(studioCreditReservations)).toContain(
       'idx_studio_credit_reservations_active_account',
+    );
+  });
+});
+
+describe('intelligence durable task schema', () => {
+  test('keeps task ownership, parent, source cursor, and public event tables in kortix', () => {
+    expect(getTableConfig(intelligenceTasks).schema).toBe('kortix');
+    expect(getTableConfig(intelligenceTaskEvents).schema).toBe('kortix');
+    expect(columnNames(intelligenceTasks)).toEqual(
+      expect.arrayContaining([
+        'task_id',
+        'account_id',
+        'project_id',
+        'job_id',
+        'parent_task_id',
+        'request_hash',
+        'idempotency_key',
+        'studio_source_cursor',
+      ]),
+    );
+    expect(indexNames(intelligenceTasks)).toEqual(
+      expect.arrayContaining([
+        'idx_intelligence_tasks_project_created',
+        'idx_intelligence_tasks_parent',
+      ]),
+    );
+    expect(uniqueConstraintNames(intelligenceTasks)).toContain(
+      'intelligence_tasks_project_idempotency_unique',
+    );
+    expect(indexNames(intelligenceTaskEvents)).toEqual(
+      expect.arrayContaining([
+        'idx_intelligence_task_events_studio_cursor',
+      ]),
+    );
+    expect(uniqueConstraintNames(intelligenceTaskEvents)).toContain(
+      'intelligence_task_events_task_sequence_unique',
     );
   });
 });

@@ -311,6 +311,46 @@ describe('Intelligence project routes', () => {
     );
   });
 
+  test('replays a bound task after provider discovery becomes unavailable', async () => {
+    const capabilities = [imageCapability];
+    const executionTargets: IntelligenceExecutionTarget[] = [
+      {
+        capability_id: 'studio.image.generate',
+        provider_config_id: PROVIDER_CONFIG_ID,
+        model: 'fake/image-v1',
+      },
+    ];
+    let existing = false;
+    let replayCalls = 0;
+    const executor = {
+      async replay() {
+        replayCalls += 1;
+        return existing ? { taskId: TASK_ID, jobId: JOB_ID, created: false } : null;
+      },
+      async create() {
+        existing = true;
+        return { taskId: TASK_ID, jobId: JOB_ID, created: true };
+      },
+    } as StudioTaskExecutor & {
+      replay(): Promise<{ taskId: string; jobId: string; created: boolean } | null>;
+    };
+    const { app } = createApp({ capabilities, executionTargets, executor });
+
+    expect((await createTask(app)).status).toBe(201);
+    capabilities.length = 0;
+    executionTargets.length = 0;
+
+    const replay = await createTask(app);
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toEqual({
+      protocol_version: 'intelligence.v1',
+      task_id: TASK_ID,
+      job_id: JOB_ID,
+      created: false,
+    });
+    expect(replayCalls).toBe(2);
+  });
+
   test('rejects a task selection that is not in the governed execution targets', async () => {
     const { app, createCalls } = createApp();
     const response = await createTask(app, taskRequest({ model: 'unlisted/image-model' }));
@@ -362,6 +402,26 @@ describe('Intelligence project routes', () => {
     const body = await response.text();
     expect(body).not.toContain('https://secret.example.test');
     expect(JSON.parse(body)).toMatchObject({ code: 'INTELLIGENCE_TASK_EXECUTION_FAILED' });
+  });
+
+  test('returns the stable conflict response for an idempotency mismatch', async () => {
+    const executor: StudioTaskExecutor = {
+      async create() {
+        throw Object.assign(new Error('private request body must not be returned'), {
+          code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH',
+          status: 409,
+        });
+      },
+    };
+    const { app } = createApp({ executor });
+    const response = await createTask(app);
+    expect(response.status).toBe(409);
+    const body = await response.text();
+    expect(body).not.toContain('private request body');
+    expect(JSON.parse(body)).toEqual({
+      error: 'Intelligence task idempotency conflict',
+      code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH',
+    });
   });
 
   test('maps a malformed task executor result to a typed unavailable response', async () => {
@@ -470,6 +530,24 @@ describe('Intelligence project routes', () => {
       `/v1/projects/${PROJECT_ID}/intelligence/tasks/not-a-uuid/events?cursor=%20`,
     );
     expect(response.status).toBe(400);
+    expect(reads).toBe(0);
+  });
+
+  test('rejects non-numeric and unsafe event cursors before the reader is called', async () => {
+    let reads = 0;
+    const eventReader: IntelligenceTaskEventReader = {
+      async read() {
+        reads += 1;
+        return { items: [], nextCursor: null };
+      },
+    };
+    const { app } = createApp({ eventReader });
+    for (const cursor of ['NaN', '1.5', '9007199254740992']) {
+      const response = await app.request(
+        `/v1/projects/${PROJECT_ID}/intelligence/tasks/${TASK_ID}/events?cursor=${cursor}`,
+      );
+      expect(response.status).toBe(400);
+    }
     expect(reads).toBe(0);
   });
 

@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import * as db from './index';
 
 describe('package index re-exports', () => {
@@ -36,6 +36,8 @@ describe('package index re-exports', () => {
       'studioAssetUploads',
       'studioCreditReservations',
       'studioUsageEvents',
+      'intelligenceTasks',
+      'intelligenceTaskEvents',
     ] as const;
 
     for (const name of expected) {

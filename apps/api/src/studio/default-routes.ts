@@ -19,8 +19,13 @@ import {
   type StudioTaskExecutor,
   createIntelligenceProjectRoutes,
 } from '../intelligence/project-routes';
+import {
+  IntelligenceTaskService,
+  createDrizzleIntelligenceTaskStore,
+  createStudioJobBridge,
+} from '../intelligence/task-service';
 import { assertProjectCapability, loadProjectForUser } from '../projects/lib/access';
-import { db } from '../shared/db';
+import { db, hasDatabase } from '../shared/db';
 import { createStudioCredentialBindingExists } from './credential-existence';
 import {
   type StudioCredentialBindingExists,
@@ -132,6 +137,7 @@ export type DefaultIntelligenceProjectRoutesInput = {
   getAgentCard?: IntelligenceProjectRouteDeps['getAgentCard'];
   taskExecutor?: StudioTaskExecutor;
   taskEventReader?: IntelligenceTaskEventReader;
+  taskService?: IntelligenceTaskService;
   agentTrustSource?: AgentTrustSource;
 };
 
@@ -213,6 +219,9 @@ export function createDefaultIntelligenceProjectRoutes(
   const { runtime, database, repository } = assembleStudioRouteFoundation(input, {
     preferDefaultRuntime: true,
   });
+  const credentialBindingExists = runtime.enabled
+    ? (input.credentialBindingExists ?? createStudioCredentialBindingExists(database))
+    : undefined;
   const capabilityRegistry =
     input.capabilityRegistry ??
     createProjectCapabilityRegistry({
@@ -226,10 +235,40 @@ export function createDefaultIntelligenceProjectRoutes(
           return false;
         }
       },
-      credentialBindingExists: runtime.enabled
-        ? (input.credentialBindingExists ?? createStudioCredentialBindingExists(database))
-        : undefined,
+      credentialBindingExists,
     });
+
+  let taskExecutor = input.taskExecutor;
+  let taskEventReader = input.taskEventReader;
+  if (!taskExecutor && !taskEventReader && input.taskService) {
+    taskExecutor = {
+      replay: input.taskService.replay.bind(input.taskService),
+      create: input.taskService.create.bind(input.taskService),
+    };
+    taskEventReader = { read: input.taskService.events.bind(input.taskService) };
+  } else if (
+    !taskExecutor &&
+    !taskEventReader &&
+    runtime.enabled &&
+    (input.database !== undefined || hasDatabase) &&
+    isDatabaseLike(database)
+  ) {
+    const service = new IntelligenceTaskService({
+      store: createDrizzleIntelligenceTaskStore(database),
+      createStudioJob: createStudioJobBridge({
+        repository,
+        assertReadyBeforeReservation: runtime.assertReadyBeforeReservation,
+        credentialBindingExists,
+      }),
+      readStudioEvents: async ({ projectId, jobId, cursor }) =>
+        repository.listEvents(projectId, jobId, cursor),
+    });
+    taskExecutor = {
+      replay: service.replay.bind(service),
+      create: service.create.bind(service),
+    };
+    taskEventReader = { read: service.events.bind(service) };
+  }
 
   return createIntelligenceProjectRoutes({
     capabilityRegistry,
@@ -247,10 +286,24 @@ export function createDefaultIntelligenceProjectRoutes(
         })),
     loadProjectForUser: input.loadProjectForUser ?? loadProjectForUser,
     assertProjectCapability: input.assertProjectCapability ?? assertProjectCapability,
-    ...(input.taskExecutor ? { taskExecutor: input.taskExecutor } : {}),
-    ...(input.taskEventReader ? { taskEventReader: input.taskEventReader } : {}),
+    ...(taskExecutor ? { taskExecutor } : {}),
+    ...(taskEventReader ? { taskEventReader } : {}),
     ...(input.agentTrustSource ? { agentTrustSource: input.agentTrustSource } : {}),
   });
+}
+
+function isDatabaseLike(value: unknown): value is Database {
+  if (!value || typeof value !== 'object') return false;
+  try {
+    const candidate = value as Record<string, unknown>;
+    return (
+      typeof candidate.insert === 'function' &&
+      typeof candidate.select === 'function' &&
+      typeof candidate.transaction === 'function'
+    );
+  } catch {
+    return false;
+  }
 }
 
 function assembleStudioRouteFoundation(

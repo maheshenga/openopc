@@ -98,6 +98,8 @@ export {
   studioJobAttempts,
   studioJobRecoveries,
   studioJobEvents,
+  intelligenceTasks,
+  intelligenceTaskEvents,
   studioAssets,
   studioJobAssets,
   studioAssetUploads,

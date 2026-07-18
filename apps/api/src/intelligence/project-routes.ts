@@ -14,6 +14,7 @@ import type { Context } from 'hono';
 import { z } from 'zod';
 import { PROJECT_ACTIONS } from '../iam/actions';
 import type { AppEnv } from '../types';
+import { isIntelligenceTaskServiceError } from './task-service';
 
 type LoadProjectForUser = (
   c: Context<AppEnv>,
@@ -71,6 +72,12 @@ export interface AgentTrustSource {
 }
 
 export interface StudioTaskExecutor {
+  /** Read-only lookup for already-bound work; unbound recovery must return null. */
+  replay?(input: {
+    accountId: string;
+    projectId: string;
+    request: IntelligenceCreateTaskRequest;
+  }): Promise<{ taskId: string; jobId: string; created: boolean } | null>;
   create(input: {
     accountId: string;
     projectId: string;
@@ -202,6 +209,21 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
     if (!parsed.success) return badRequest(c);
     if (!deps.taskExecutor) return unavailable(c, 'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE');
 
+    if (deps.taskExecutor.replay) {
+      try {
+        const replay = await deps.taskExecutor.replay({
+          accountId: loaded.row.accountId,
+          projectId,
+          request: parsed.data,
+        });
+        if (replay) return intelligenceTaskResponse(c, replay);
+      } catch (error) {
+        const typed = intelligenceTaskErrorResponse(c, error);
+        if (typed) return typed;
+        return unavailable(c, 'INTELLIGENCE_TASK_EXECUTION_FAILED');
+      }
+    }
+
     const actor = actorContext(c, loaded);
     const discovery = await discoverCapabilities(deps, projectId, actor);
     const capabilities = discovery.capabilities;
@@ -279,20 +301,12 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
         sessionId: actor.sessionId,
         request: parsed.data,
       });
-    } catch {
+    } catch (error) {
+      const typed = intelligenceTaskErrorResponse(c, error);
+      if (typed) return typed;
       return unavailable(c, 'INTELLIGENCE_TASK_EXECUTION_FAILED');
     }
-    try {
-      const response = IntelligenceTaskResponseSchema.parse({
-        protocol_version: 'intelligence.v1',
-        task_id: result.taskId,
-        job_id: result.jobId,
-        created: result.created,
-      });
-      return c.json(response, result.created ? 201 : 200);
-    } catch {
-      return unavailable(c, 'INTELLIGENCE_TASK_EXECUTION_FAILED');
-    }
+    return intelligenceTaskResponse(c, result);
   });
 
   app.get('/:projectId/intelligence/tasks/:taskId/events', async (c) => {
@@ -320,7 +334,9 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
         taskId,
         cursor,
       });
-    } catch {
+    } catch (error) {
+      const typed = intelligenceTaskErrorResponse(c, error);
+      if (typed) return typed;
       return unavailable(c, 'INTELLIGENCE_TASK_EVENTS_UNAVAILABLE');
     }
     if (!result) return c.json({ error: 'Not found' }, 404);
@@ -446,6 +462,39 @@ function unavailable(c: Context<AppEnv>, code: string) {
   return c.json({ error: 'Intelligence capability unavailable', code }, 503);
 }
 
+function intelligenceTaskResponse(
+  c: Context<AppEnv>,
+  result: { taskId: string; jobId: string; created: boolean },
+) {
+  try {
+    const response = IntelligenceTaskResponseSchema.parse({
+      protocol_version: 'intelligence.v1',
+      task_id: result.taskId,
+      job_id: result.jobId,
+      created: result.created,
+    });
+    return c.json(response, result.created ? 201 : 200);
+  } catch {
+    return unavailable(c, 'INTELLIGENCE_TASK_EXECUTION_FAILED');
+  }
+}
+
+function intelligenceTaskErrorResponse(c: Context<AppEnv>, error: unknown): Response | null {
+  if (!isIntelligenceTaskServiceError(error)) return null;
+  if (error.code === 'INTELLIGENCE_IDEMPOTENCY_MISMATCH') {
+    return c.json(
+      { error: 'Intelligence task idempotency conflict', code: error.code },
+      error.status,
+    );
+  }
+  if (error.code === 'INTELLIGENCE_VALIDATION_ERROR') {
+    return c.json({ error: 'Invalid Intelligence request', code: error.code }, error.status);
+  }
+  return unavailable(c, error.code);
+}
+
 function isValidCursor(cursor: string): boolean {
-  return cursor === cursor.trim() && cursor.length > 0 && cursor.length <= 256;
+  if (cursor !== cursor.trim() || !/^\d+$/.test(cursor) || cursor.length > 16) return false;
+  const value = Number(cursor);
+  return Number.isSafeInteger(value) && value >= 0;
 }

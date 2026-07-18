@@ -3,12 +3,22 @@ import {
   IntelligenceCapabilitiesResponseSchema,
   IntelligenceCapabilityDiscoveryResponseSchema,
   IntelligenceCreateTaskRequestSchema,
+  IntelligenceErrorCodeSchema,
   IntelligenceExecutionTargetSchema,
 } from './intelligence';
 
 const PROVIDER_CONFIG_ID = '14000000-0000-4000-a000-000000000001';
 
 describe('Intelligence API contract', () => {
+  test('exposes only stable Intelligence error codes', () => {
+    expect(IntelligenceErrorCodeSchema.parse('INTELLIGENCE_IDEMPOTENCY_MISMATCH')).toBe(
+      'INTELLIGENCE_IDEMPOTENCY_MISMATCH',
+    );
+    expect(
+      IntelligenceErrorCodeSchema.safeParse('provider=https://secret.example.test').success,
+    ).toBe(false);
+  });
+
   test('accepts only redaction-safe execution options', () => {
     const option = {
       capability_id: 'studio.image.generate' as const,

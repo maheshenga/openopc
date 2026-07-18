@@ -2492,6 +2492,131 @@ export const studioJobEvents = kortixSchema.table(
   ],
 );
 
+export const intelligenceTasks = kortixSchema.table(
+  'intelligence_tasks',
+  {
+    taskId: uuid('task_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    jobId: uuid('job_id').references(() => studioJobs.jobId, { onDelete: 'restrict' }),
+    actorUserId: uuid('actor_user_id'),
+    actorType: text('actor_type').notNull(),
+    actingTokenId: uuid('acting_token_id').references(() => accountTokens.tokenId, {
+      onDelete: 'set null',
+    }),
+    agentName: text('agent_name'),
+    sessionId: text('session_id').references(() => projectSessions.sessionId, {
+      onDelete: 'set null',
+    }),
+    parentTaskId: uuid('parent_task_id'),
+    capabilityId: text('capability_id').notNull(),
+    capabilityVersion: text('capability_version').notNull(),
+    providerConfigId: uuid('provider_config_id')
+      .notNull()
+      .references(() => studioProviderConfigs.providerConfigId, { onDelete: 'restrict' }),
+    model: text('model').notNull(),
+    requestHash: text('request_hash').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    status: text('status').default('queued').notNull(),
+    agentCardHash: text('agent_card_hash').notNull(),
+    studioSourceCursor: bigint('studio_source_cursor', { mode: 'number' }),
+    deadlineAt: timestamp('deadline_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.parentTaskId],
+      foreignColumns: [table.taskId],
+      name: 'intelligence_tasks_parent_task_fk',
+    }).onDelete('set null'),
+    index('idx_intelligence_tasks_account_created').on(table.accountId, table.createdAt),
+    index('idx_intelligence_tasks_project_created').on(table.projectId, table.createdAt),
+    index('idx_intelligence_tasks_parent').on(table.projectId, table.parentTaskId),
+    uniqueIndex('idx_intelligence_tasks_job')
+      .on(table.jobId)
+      .where(sql`${table.jobId} IS NOT NULL`),
+    unique('intelligence_tasks_project_idempotency_unique').on(
+      table.projectId,
+      table.idempotencyKey,
+    ),
+    check(
+      'intelligence_tasks_actor_type_check',
+      sql`${table.actorType} IN ('user', 'agent', 'system')`,
+    ),
+    check(
+      'intelligence_tasks_status_check',
+      sql`${table.status} IN ('queued', 'running', 'waiting_approval', 'succeeded', 'failed', 'cancelled')`,
+    ),
+    check(
+      'intelligence_tasks_capability_check',
+      sql`${table.capabilityId} = 'studio.image.generate' AND ${table.capabilityVersion} = '1.0.0'`,
+    ),
+    check(
+      'intelligence_tasks_request_hash_check',
+      sql`${table.requestHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_tasks_agent_card_hash_check',
+      sql`${table.agentCardHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_tasks_studio_source_cursor_check',
+      sql`${table.studioSourceCursor} IS NULL OR ${table.studioSourceCursor} > 0`,
+    ),
+  ],
+);
+
+export const intelligenceTaskEvents = kortixSchema.table(
+  'intelligence_task_events',
+  {
+    eventId: uuid('event_id').defaultRandom().primaryKey(),
+    taskId: uuid('task_id').notNull().references(() => intelligenceTasks.taskId, {
+      onDelete: 'cascade',
+    }),
+    sequence: bigint('sequence', { mode: 'number' }).notNull(),
+    studioCursor: bigint('studio_cursor', { mode: 'number' }),
+    eventType: text('event_type').notNull(),
+    status: text('status').notNull(),
+    payload: jsonb('payload').default({}).notNull().$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('intelligence_task_events_task_sequence_unique').on(table.taskId, table.sequence),
+    uniqueIndex('idx_intelligence_task_events_studio_cursor')
+      .on(table.taskId, table.studioCursor)
+      .where(sql`${table.studioCursor} IS NOT NULL`),
+    index('idx_intelligence_task_events_created').on(table.createdAt),
+    check('intelligence_task_events_sequence_check', sql`${table.sequence} > 0`),
+    check(
+      'intelligence_task_events_studio_cursor_check',
+      sql`${table.studioCursor} IS NULL OR ${table.studioCursor} > 0`,
+    ),
+    check(
+      'intelligence_task_events_type_check',
+      sql`${table.eventType} IN ('created', 'queued', 'running', 'progress', 'asset_created', 'approval_required', 'succeeded', 'failed', 'cancelled')`,
+    ),
+    check(
+      'intelligence_task_events_status_check',
+      sql`${table.status} IN ('queued', 'running', 'waiting_approval', 'succeeded', 'failed', 'cancelled')`,
+    ),
+    check(
+      'intelligence_task_events_payload_object_check',
+      sql`jsonb_typeof(${table.payload}) = 'object'`,
+    ),
+  ],
+);
+
 export const studioAssets = kortixSchema.table(
   'studio_assets',
   {

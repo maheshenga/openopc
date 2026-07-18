@@ -369,10 +369,12 @@ throwaway project → `import` it is exactly what it does.
 ## Workspace dependencies get pinned at publish
 
 `stage-npm-publish.mjs` rewrites every `workspace:*` dependency to the concrete
-lockstep version. `@kortix/llm-catalog` is `workspace:*` here, so it **must** be
-published at the same version or `npm install @kortix/sdk` fails to resolve.
+lockstep version. `@kortix/llm-catalog` and `@kortix/intelligence-contracts` are
+`workspace:*` here, so **both** must be published at the same version or
+`npm install @kortix/sdk` fails to resolve.
 Adding a new `workspace:*` dependency to this package therefore also means making
-that package publishable. Prefer not to.
+that package publishable and extending the release/smoke gates in the same change;
+never leave an installed SDK dependent on an unpublished workspace package.
 
 `react` and `@tanstack/react-query` are **optional peer dependencies**. Never
 promote them to `dependencies`.
@@ -515,7 +517,8 @@ a skipped file is not a passing file.
 
 CI (`.github/workflows/package-tests.yml`) additionally runs
 `stage-npm-publish.test.mjs` and a build + stage + **dry-pack** of
-`@kortix/llm-catalog`, `@kortix/sdk`, and `@kortix/executor-sdk` on every PR.
+`@kortix/intelligence-contracts`, `@kortix/llm-catalog`, `@kortix/sdk`, and
+`@kortix/executor-sdk` on every PR.
 That is the release gate. It catches a broken `publishConfig`; it does not catch
 a broken *install*.
 

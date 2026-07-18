@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ProtocolVersionSchema } from './compatibility';
+import { ProtocolVersionSchema } from './compatibility.js';
 
 const SemverSchema = z
   .string()

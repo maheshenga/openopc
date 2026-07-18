@@ -1,10 +1,10 @@
 // Unit tests for scripts/stage-npm-publish.mjs.
 // Run: node scripts/stage-npm-publish.test.mjs
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('./stage-npm-publish.mjs', import.meta.url));
 let passed = 0;
@@ -16,7 +16,11 @@ const assert = (cond, msg) => {
   passed++;
 };
 const run = (dir, version) =>
-  execFileSync('node', [script], { cwd: dir, env: { ...process.env, VERSION: version }, encoding: 'utf8' });
+  execFileSync('node', [script], {
+    cwd: dir,
+    env: { ...process.env, VERSION: version },
+    encoding: 'utf8',
+  });
 
 // 1) Happy path: promote publishConfig onto top-level, pin the workspace dep to
 //    the release version, lock the version, leave registry ranges alone.
@@ -56,8 +60,14 @@ const run = (dir, version) =>
   assert(out.main === './dist/index.js', 'main promoted to dist');
   assert(out.types === './dist/index.d.ts', 'types promoted to dist');
   assert(out.exports['.'].import === './dist/index.js', 'exports promoted to dist');
-  assert(JSON.stringify(out.files) === JSON.stringify(['dist', 'README.md']), 'files promoted from publishConfig');
-  assert(out.dependencies['@kortix/shared'] === '2.3.4', 'workspace dep pinned to the release version');
+  assert(
+    JSON.stringify(out.files) === JSON.stringify(['dist', 'README.md']),
+    'files promoted from publishConfig',
+  );
+  assert(
+    out.dependencies['@kortix/shared'] === '2.3.4',
+    'workspace dep pinned to the release version',
+  );
   assert(out.dependencies.zustand === '^5.0.3', 'registry dep range left untouched');
   assert(out.publishConfig.main === undefined, 'promoted publishConfig overrides stripped');
   assert(out.publishConfig.exports === undefined, 'promoted publishConfig.exports stripped');
@@ -163,7 +173,11 @@ const run = (dir, version) =>
       {
         name: '@kortix/y',
         version: '1.0.0',
-        publishConfig: { access: 'public', main: './dist/index.js', exports: { '.': { import: './dist/index.js' } } },
+        publishConfig: {
+          access: 'public',
+          main: './dist/index.js',
+          exports: { '.': { import: './dist/index.js' } },
+        },
       },
       null,
       2,
@@ -182,10 +196,17 @@ const run = (dir, version) =>
 // 5) Missing VERSION must fail.
 {
   const dir = mkdtempSync(join(tmpdir(), 'stage-nov-'));
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@kortix/z', version: '1.0.0' }, null, 2));
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: '@kortix/z', version: '1.0.0' }, null, 2),
+  );
   let threw = false;
   try {
-    execFileSync('node', [script], { cwd: dir, env: { ...process.env, VERSION: '' }, encoding: 'utf8' });
+    execFileSync('node', [script], {
+      cwd: dir,
+      env: { ...process.env, VERSION: '' },
+      encoding: 'utf8',
+    });
   } catch {
     threw = true;
   }
@@ -194,3 +215,47 @@ const run = (dir, version) =>
 }
 
 console.log(`stage-npm-publish.test: ${passed} assertions passed`);
+
+// 6) Release-script invariants: an explicit bootstrap token is opt-in, normal
+// packages keep the OIDC environment, and staging always restores source files
+// when the publish command exits. Shell scripts are checked out with LF so a
+// local Windows/WSL invocation has the same syntax as the Ubuntu release job.
+{
+  const publishScript = readFileSync(
+    fileURLToPath(new URL('./publish-npm-package.sh', import.meta.url)),
+    'utf8',
+  );
+  const workflow = readFileSync(
+    fileURLToPath(new URL('../.github/workflows/deploy-prod.yml', import.meta.url)),
+    'utf8',
+  );
+  const attributes = readFileSync(
+    fileURLToPath(new URL('../.gitattributes', import.meta.url)),
+    'utf8',
+  );
+
+  assert(
+    publishScript.includes('NPM_TOKEN_BOOTSTRAP') &&
+      !publishScript.includes(
+        'if [ -n "${NODE_AUTH_TOKEN:-}" ]; then\n    env -u ACTIONS_ID_TOKEN_REQUEST_URL',
+      ),
+    'OIDC is only overridden by an explicit bootstrap-token mode',
+  );
+  assert(
+    publishScript.includes('manifest_backup=') &&
+      publishScript.includes('trap restore_manifest EXIT'),
+    'publish staging restores the source manifest on every exit path',
+  );
+  assert(
+    workflow.includes('NPM_OIDC_BOOTSTRAP_CHECK: "1"') &&
+      !workflow.includes('NPM_TOKEN_BOOTSTRAP: "1"') &&
+      publishScript.includes('export NPM_TOKEN_BOOTSTRAP=1'),
+    'the contract bootstrap is selected dynamically only while the package is absent',
+  );
+  assert(
+    attributes.split(/\r?\n/).some((line) => /^\*\.sh\s+text\s+eol=lf$/.test(line.trim())),
+    'shell scripts are normalized to LF for local and CI execution',
+  );
+}
+
+console.log(`publish topology assertions included: ${passed}`);

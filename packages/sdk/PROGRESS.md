@@ -859,3 +859,40 @@ pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
 
 **Shippable to production: YES** for this dependency-only SDK change. The
 intelligence protocol implementation remains in its separate execution chain.
+
+---
+
+### 2026-07-18 - Intelligence Fabric Task 5 (completion)
+
+Completed the additive shared Intelligence SDK surface. Project handles now
+expose capability listing/discovery, Agent Cards, task creation, and cursor-
+scoped task events; the existing React export adds project-scoped query and
+mutation bindings. Public runtime/type snapshots contain additions only.
+
+The client now parses every Intelligence 2xx envelope against a strict
+allowlisted shape before returning it, rejects unknown protocol revisions,
+credential-like keys (including camelCase raw provider fields), credential text,
+URLs/schemes, and sanitizes transport/serialization/cursor errors. The publish
+topology now includes the side-effect-free contracts package, stages smoke
+copies without mutating source manifests, and selects an npm token only for a
+new-package bootstrap before returning to OIDC.
+
+**Final verification evidence**
+
+```
+pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
+pnpm.cmd --filter @kortix/sdk test -> 1111 pass, 0 fail, 5062 expect() calls
+pnpm.cmd --filter @kortix/sdk build -> exit 0
+pnpm.cmd --filter @kortix/sdk run smoke:install -> Install smoke test passed
+pnpm.cmd --filter @kortix/intelligence-contracts test -> 9 pass, 0 fail
+pnpm.cmd --filter @kortix/intelligence-contracts typecheck -> exit 0
+node scripts/stage-npm-publish.test.mjs -> 28 assertions passed
+bash -n scripts/publish-npm-package.sh -> exit 0
+```
+
+The registry still returns 404 for `@kortix/intelligence-contracts`; no real
+npm publication or OIDC run was attempted. The first release therefore remains
+gated on a restricted `NPM_TOKEN`, followed by npm Trusted Publisher setup.
+
+**Shippable to production: YES** for the source/package contract; external npm
+publication and the durable Task 6 bridge remain separate release gates.

@@ -12,6 +12,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Typed GitHub repository branch discovery through
   `kortix.github.listRepositoryBranches(accountId, installationId, repoFullName)`,
   including GitHub's default branch and branch protection metadata.
+- Project-scoped Intelligence Fabric discovery, Agent Card, task creation, and
+  durable event polling through `kortix.project(projectId).intelligence` and
+  the `@kortix/sdk/react` bindings.
 - The root entry `@kortix/sdk` is now canonical: it exports the whole
   framework-free surface (client, session, turns, files, event stream, errors).
 - CDN builds: a minified ESM bundle (`dist/kortix.esm.min.js`) and an IIFE
@@ -47,9 +50,9 @@ follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CI now packs, installs, and imports the tarball, and asserts the two export
   maps agree.
 - The install smoke test (`pnpm run smoke:install`) packs `@kortix/llm-catalog`
-  alongside the SDK at a synthetic version and installs both tarballs
-  hermetically, since the `workspace:*` dependency between them gets pinned to
-  the release version at publish time.
+  and `@kortix/intelligence-contracts` alongside the SDK at a synthetic version
+  and installs all three tarballs hermetically, since the `workspace:*`
+  dependencies get pinned to the release version at publish time.
 
 ## 0.2.0
 

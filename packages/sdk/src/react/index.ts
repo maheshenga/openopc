@@ -93,3 +93,22 @@ export { useProjectSecrets, projectSecretsKey } from './use-project-secrets';
 export { useProjectTriggers, projectTriggersKey } from './use-project-triggers';
 export { useChangeRequests, changeRequestsKey } from './use-change-requests';
 export { useGatewayRoutingPolicy, gatewayRoutingPolicyKey } from './use-gateway-routing-policy';
+
+// Intelligence Fabric project discovery, Agent Cards, durable task events, and
+// the governed task mutation. This remains part of the existing React export;
+// no new SDK subpath is required.
+export {
+  intelligenceAgentCardKey,
+  intelligenceCapabilityDiscoveryKey,
+  intelligenceCapabilitiesKey,
+  intelligenceTaskEventsKey,
+  intelligenceTaskEventsPrefix,
+  intelligenceTasksKey,
+  useCreateIntelligenceTask,
+  useIntelligence,
+  useIntelligenceAgentCard,
+  useIntelligenceCapabilityDiscovery,
+  useIntelligenceCapabilities,
+  useIntelligenceTaskEvents,
+  type IntelligenceQueryOptions,
+} from './use-intelligence';

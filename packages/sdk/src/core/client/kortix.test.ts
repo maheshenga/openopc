@@ -42,6 +42,99 @@ test('project(id) handle binds the id and hits the right endpoint', async () => 
   expect(last().method).toBe('GET');
 });
 
+test('project(id).intelligence binds capability, card, task, and event endpoints', async () => {
+  globalThis.fetch = mock(async (url: unknown, opts: { method?: string; body?: unknown } = {}) => {
+    const requestUrl = String(url);
+    calls.push({
+      url: requestUrl,
+      method: opts.method ?? 'GET',
+      body: typeof opts.body === 'string' ? JSON.parse(opts.body) : opts.body,
+    });
+    const capability = {
+      id: 'studio.image.generate',
+      version: '1.0.0',
+      modality: 'image',
+      operation: 'generate',
+      input_schema: { type: 'object' },
+      output_schema: { type: 'array' },
+      execution: 'async',
+      risk: 'write',
+      provenance_required: true,
+    };
+    let responseBody: unknown;
+    if (requestUrl.includes('/intelligence/capabilities?include=execution_targets')) {
+      responseBody = {
+        protocol_version: 'intelligence.v1',
+        items: [capability],
+        execution_targets: [
+          {
+            capability_id: 'studio.image.generate',
+            provider_config_id: '14000000-0000-4000-a000-000000000001',
+            model: 'fake/image-v1',
+          },
+        ],
+        next_cursor: null,
+      };
+    } else if (requestUrl.endsWith('/intelligence/capabilities')) {
+      responseBody = {
+        protocol_version: 'intelligence.v1',
+        items: [capability],
+        next_cursor: null,
+      };
+    } else if (requestUrl.endsWith('/intelligence/agent-card')) {
+      responseBody = {
+        id: 'content-planner',
+        version: '1.0.0',
+        display_name: 'Content Planner',
+        capabilities: ['studio.image.generate'],
+        protocols: ['mcp', 'a2a'],
+        auth: { kind: 'kortix-project-token' },
+        trust_tier: 'project',
+        limits: { concurrency: 1, max_task_seconds: 900 },
+        card_hash: 'a'.repeat(64),
+      };
+    } else if (requestUrl.endsWith('/intelligence/tasks')) {
+      responseBody = {
+        protocol_version: 'intelligence.v1',
+        task_id: '13000000-0000-4000-a000-000000000001',
+        job_id: '15000000-0000-4000-a000-000000000001',
+        created: true,
+      };
+    } else {
+      responseBody = {
+        protocol_version: 'intelligence.v1',
+        task_id: '13000000-0000-4000-a000-000000000001',
+        items: [],
+        next_cursor: null,
+      };
+    }
+    return new Response(JSON.stringify(responseBody), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+
+  const project = kortix.project('PID123');
+  expect(typeof project.intelligence.capabilities.list).toBe('function');
+  expect(typeof project.intelligence.capabilities.discover).toBe('function');
+  expect(typeof project.intelligence.agentCard.get).toBe('function');
+  expect(typeof project.intelligence.tasks.create).toBe('function');
+  expect(typeof project.intelligence.tasks.events).toBe('function');
+
+  await project.intelligence.capabilities.list();
+  expect(last().url).toContain('/projects/PID123/intelligence/capabilities');
+  await project.intelligence.capabilities.discover();
+  expect(last().url).toContain(
+    '/projects/PID123/intelligence/capabilities?include=execution_targets',
+  );
+  await project.intelligence.agentCard.get();
+  expect(last().url).toContain('/projects/PID123/intelligence/agent-card');
+  await project.intelligence.tasks.create({} as never);
+  expect(last().url).toContain('/projects/PID123/intelligence/tasks');
+  await project.intelligence.tasks.events('TASK1', 'cursor-1');
+  expect(last().url).toContain('/projects/PID123/intelligence/tasks/TASK1/events?cursor=cursor-1');
+});
+
 test('session(projectId, sessionId) binds both ids', async () => {
   await kortix.session('PID123', 'SID456').previews();
   expect(last().url).toContain('/projects/PID123/sessions/SID456/previews');

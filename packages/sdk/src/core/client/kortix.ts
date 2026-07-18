@@ -589,6 +589,23 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
           P.clearModelDefault(projectId, params),
       },
 
+      /** Project-scoped Intelligence Fabric discovery, Agent Card, and tasks. */
+      intelligence: {
+        capabilities: {
+          list: () => P.listIntelligenceCapabilities(projectId),
+          discover: () => P.discoverIntelligenceCapabilities(projectId),
+        },
+        agentCard: {
+          get: () => P.getIntelligenceAgentCard(projectId),
+        },
+        tasks: {
+          create: (input: Parameters<typeof P.createIntelligenceTask>[1]) =>
+            P.createIntelligenceTask(projectId, input),
+          events: (taskId: string, cursor?: string | null) =>
+            P.getIntelligenceTaskEvents(projectId, taskId, cursor),
+        },
+      },
+
       /** Set the agent used when a new project session does not name one explicitly. */
       setDefaultAgent: (agentName: string) => P.updateProjectDefaultAgent(projectId, agentName),
 

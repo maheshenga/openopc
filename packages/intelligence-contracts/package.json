@@ -2,7 +2,7 @@
   "name": "@kortix/intelligence-contracts",
   "version": "1.0.0",
   "description": "Versioned, side-effect-free Kortix Intelligence Fabric wire contracts.",
-  "private": true,
+  "license": "Elastic-2.0",
   "type": "module",
   "sideEffects": false,
   "main": "./src/index.ts",
@@ -12,8 +12,24 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "tsc -p tsconfig.build.json"
   },
+  "publishConfig": {
+    "access": "public",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    },
+    "files": ["dist", "README.md"]
+  },
+  "files": ["dist", "README.md"],
   "dependencies": {
     "zod": "^3.23.0"
   },

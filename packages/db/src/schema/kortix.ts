@@ -2721,6 +2721,8 @@ export const intelligenceWorkflowNodes = kortixSchema.table(
     runId: uuid('run_id').notNull().references(() => intelligenceWorkflowRuns.runId, {
       onDelete: 'cascade',
     }),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
     nodeKey: text('node_key').notNull(),
     role: text('role').notNull(),
     kind: text('kind').notNull(),
@@ -2760,7 +2762,15 @@ export const intelligenceWorkflowNodes = kortixSchema.table(
       .on(table.taskId)
       .where(sql`${table.taskId} IS NOT NULL`),
     unique('intelligence_workflow_nodes_run_identity_unique').on(table.runId, table.nodeId),
+    unique('intelligence_workflow_nodes_run_idempotency_unique').on(
+      table.runId,
+      table.idempotencyKey,
+    ),
     unique('intelligence_workflow_nodes_run_node_key_unique').on(table.runId, table.nodeKey),
+    check(
+      'intelligence_workflow_nodes_request_hash_check',
+      sql`${table.requestHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
     check(
       'intelligence_workflow_nodes_node_key_check',
       sql`${table.nodeKey} ~ '^[A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*$'

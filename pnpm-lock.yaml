@@ -102,6 +102,9 @@ importers:
       '@kortix/intelligence-contracts':
         specifier: workspace:*
         version: link:../../packages/intelligence-contracts
+      '@kortix/intelligence-orchestration':
+        specifier: workspace:*
+        version: link:../../packages/intelligence-orchestration
       '@kortix/llm-catalog':
         specifier: workspace:*
         version: link:../../packages/llm-catalog

@@ -549,6 +549,8 @@ describe('intelligence durable workflow schema', () => {
       expect.arrayContaining([
         'node_id',
         'run_id',
+        'idempotency_key',
+        'request_hash',
         'node_key',
         'role',
         'kind',
@@ -580,6 +582,7 @@ describe('intelligence durable workflow schema', () => {
     expect(uniqueConstraintNames(intelligenceWorkflowNodes)).toEqual(
       expect.arrayContaining([
         'intelligence_workflow_nodes_run_identity_unique',
+        'intelligence_workflow_nodes_run_idempotency_unique',
         'intelligence_workflow_nodes_run_node_key_unique',
       ]),
     );

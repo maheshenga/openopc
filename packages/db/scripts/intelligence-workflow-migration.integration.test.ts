@@ -7,6 +7,12 @@ const migrationPath = resolve(
   'migrations',
   '20260718150000000_intelligence_workflows.sql',
 );
+const nodeIdempotencyMigrationPath = resolve(
+  import.meta.dir,
+  '..',
+  'migrations',
+  '20260718151000000_intelligence_workflow_node_idempotency.sql',
+);
 
 const dockerAvailable =
   Bun.spawnSync(['docker', 'version'], { stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
@@ -107,7 +113,10 @@ describe.skipIf(!dockerAvailable)('Intelligence workflow migration - real Postgr
       );
       if (initComplete && probe.exitCode === 0) {
         const migration = await Bun.file(migrationPath).text();
-        dockerPsql(`BEGIN;\n${PRE_SCHEMA}\n${migration}\nCOMMIT;`);
+        const nodeIdempotencyMigration = await Bun.file(nodeIdempotencyMigrationPath).text();
+        dockerPsql(
+          `BEGIN;\n${PRE_SCHEMA}\n${migration}\n${nodeIdempotencyMigration}\nCOMMIT;`,
+        );
         return;
       }
       await Bun.sleep(250);
@@ -181,16 +190,24 @@ describe.skipIf(!dockerAvailable)('Intelligence workflow migration - real Postgr
         ('${runB}', '${ACCOUNT_B_ID}', '${PROJECT_B_ID}', 'system', 'workflow-run-b-0001', '${hash}', 'running');
 
       INSERT INTO kortix.intelligence_workflow_nodes(
-        node_id, run_id, node_key, role, kind, input_hash, status, terminal_at
+        node_id, run_id, idempotency_key, request_hash, node_key, role, kind,
+        input_hash, status, terminal_at
       ) VALUES
-        ('${parentA}', '${runA}', 'planner-root', 'planner', 'agent', '${hash}', 'succeeded', now()),
-        ('${nodeB}', '${runB}', 'foreign-root', 'planner', 'agent', '${hash}', 'pending', NULL);
+        (
+          '${parentA}', '${runA}', 'workflow-node-planner-root-0001', '${hash}',
+          'planner-root', 'planner', 'agent', '${hash}', 'succeeded', now()
+        ),
+        (
+          '${nodeB}', '${runB}', 'workflow-node-foreign-root-0001', '${hash}',
+          'foreign-root', 'planner', 'agent', '${hash}', 'pending', NULL
+        );
 
       INSERT INTO kortix.intelligence_workflow_nodes(
-        node_id, run_id, node_key, role, kind, capability_id, capability_version,
-        input_ref, input_hash, status, task_id
+        node_id, run_id, idempotency_key, request_hash, node_key, role, kind,
+        capability_id, capability_version, input_ref, input_hash, status, task_id
       ) VALUES (
-        '${childA}', '${runA}', 'render-primary', 'executor', 'capability',
+        '${childA}', '${runA}', 'workflow-node-render-primary-0001', '${hash}',
+        'render-primary', 'executor', 'capability',
         'studio.image.generate', '1.0.0', 'sealed:render-primary', '${hash}', 'ready', '${TASK_ID}'
       );
 
@@ -230,16 +247,37 @@ describe.skipIf(!dockerAvailable)('Intelligence workflow migration - real Postgr
     `);
     expectRejected(`
       INSERT INTO kortix.intelligence_workflow_nodes(
-        run_id, node_key, role, kind, capability_id, capability_version, input_hash
+        run_id, idempotency_key, request_hash, node_key, role, kind,
+        capability_id, capability_version, input_hash
       ) VALUES (
-        '${runA}', 'future-video', 'executor', 'capability',
+        '${runA}', 'workflow-node-future-video-0001', '${hash}',
+        'future-video', 'executor', 'capability',
         'studio.video.generate', '1.0.0', '${hash}'
       );
     `);
     expectRejected(`
       INSERT INTO kortix.intelligence_workflow_nodes(
-        run_id, node_key, role, kind, input_hash
-      ) VALUES ('${runA}', 'render-primary', 'system', 'agent', '${hash}');
+        run_id, idempotency_key, request_hash, node_key, role, kind, input_hash
+      ) VALUES (
+        '${runA}', 'workflow-node-duplicate-key-0001', '${hash}',
+        'render-primary', 'system', 'agent', '${hash}'
+      );
+    `);
+    expectRejected(`
+      INSERT INTO kortix.intelligence_workflow_nodes(
+        run_id, idempotency_key, request_hash, node_key, role, kind, input_hash
+      ) VALUES (
+        '${runA}', 'workflow-node-render-primary-0001', '${hash}',
+        'render-replay', 'system', 'agent', '${hash}'
+      );
+    `);
+    expectRejected(`
+      INSERT INTO kortix.intelligence_workflow_nodes(
+        run_id, idempotency_key, request_hash, node_key, role, kind, input_hash
+      ) VALUES (
+        '${runA}', 'workflow-node-invalid-hash-0001', 'not-a-sha256',
+        'invalid-hash', 'system', 'agent', '${hash}'
+      );
     `);
     expectRejected(`
       INSERT INTO kortix.intelligence_workflow_dependencies(
@@ -253,10 +291,11 @@ describe.skipIf(!dockerAvailable)('Intelligence workflow migration - real Postgr
     `);
     expectRejected(`
       INSERT INTO kortix.intelligence_workflow_nodes(
-        run_id, node_key, role, kind, capability_id, capability_version,
-        input_hash, task_id
+        run_id, idempotency_key, request_hash, node_key, role, kind,
+        capability_id, capability_version, input_hash, task_id
       ) VALUES (
-        '${runA}', 'render-duplicate-task', 'executor', 'capability',
+        '${runA}', 'workflow-node-duplicate-task-0001', '${hash}',
+        'render-duplicate-task', 'executor', 'capability',
         'studio.image.generate', '1.0.0', '${hash}', '${TASK_ID}'
       );
     `);

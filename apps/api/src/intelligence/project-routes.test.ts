@@ -20,6 +20,7 @@ const OTHER_PROJECT_ID = '12000000-0000-4000-a000-000000000002';
 const USER_ID = '13000000-0000-4000-a000-000000000001';
 const PROVIDER_CONFIG_ID = '14000000-0000-4000-a000-000000000001';
 const TASK_ID = '15000000-0000-4000-a000-000000000001';
+const OTHER_TASK_ID = '15000000-0000-4000-a000-000000000002';
 const JOB_ID = '16000000-0000-4000-a000-000000000001';
 const EVENT_ID = '17000000-0000-4000-a000-000000000001';
 const IAM_TOKEN_ID = '18000000-0000-4000-a000-000000000001';
@@ -160,6 +161,12 @@ describe('Intelligence project routes', () => {
     expect(IntelligenceCreateTaskRequestSchema.safeParse(taskRequest()).success).toBe(true);
     expect(
       IntelligenceCreateTaskRequestSchema.safeParse({ ...taskRequest(), secret: 'value' }).success,
+    ).toBe(false);
+    expect(
+      IntelligenceCreateTaskRequestSchema.safeParse({
+        ...taskRequest(),
+        input: { ...taskRequest().input, provider_url: 'https://secret.example.test' },
+      }).success,
     ).toBe(false);
 
     const { app, createCalls } = createApp();
@@ -318,6 +325,35 @@ describe('Intelligence project routes', () => {
     const body = await response.text();
     expect(body).not.toContain('https://secret.example.test');
     expect(JSON.parse(body)).toMatchObject({ code: 'INTELLIGENCE_TASK_EVENTS_UNAVAILABLE' });
+  });
+
+  test('rejects events that belong to a different task', async () => {
+    const eventReader: IntelligenceTaskEventReader = {
+      async read() {
+        return {
+          items: [
+            {
+              protocol_version: 'intelligence.v1',
+              event_id: EVENT_ID,
+              task_id: OTHER_TASK_ID,
+              sequence: 1,
+              type: 'created',
+              status: 'queued',
+              created_at: '2026-07-18T12:00:00.000Z',
+            },
+          ],
+          nextCursor: null,
+        };
+      },
+    };
+    const { app } = createApp({ eventReader });
+    const response = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/tasks/${TASK_ID}/events`,
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: 'INTELLIGENCE_TASK_EVENTS_UNAVAILABLE',
+    });
   });
 
   test('rejects malformed event route parameters before the reader is called', async () => {

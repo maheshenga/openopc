@@ -266,14 +266,16 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
     }
     if (!result) return c.json({ error: 'Not found' }, 404);
     try {
-      return c.json(
-        IntelligenceTaskEventsResponseSchema.parse({
-          protocol_version: 'intelligence.v1',
-          task_id: taskId,
-          items: result.items,
-          next_cursor: result.nextCursor,
-        }),
-      );
+      const response = IntelligenceTaskEventsResponseSchema.parse({
+        protocol_version: 'intelligence.v1',
+        task_id: taskId,
+        items: result.items,
+        next_cursor: result.nextCursor,
+      });
+      if (response.items.some((event) => event.task_id !== taskId)) {
+        return unavailable(c, 'INTELLIGENCE_TASK_EVENTS_UNAVAILABLE');
+      }
+      return c.json(response);
     } catch {
       return unavailable(c, 'INTELLIGENCE_TASK_EVENTS_UNAVAILABLE');
     }

@@ -345,6 +345,37 @@ describe('Studio API runtime assembly', () => {
     createDefaultIntelligenceProjectRoutes();
     expect(factoryCalls).toBe(1);
 
+    const runtimeEnvKeys = [
+      'STUDIO_ENABLED',
+      'STUDIO_OBJECT_STORE_MODE',
+      'STUDIO_ALLOW_EPHEMERAL_STORAGE',
+    ] as const;
+    const previousRuntimeEnv = Object.fromEntries(
+      runtimeEnvKeys.map((key) => [key, process.env[key]]),
+    );
+    Object.assign(process.env, {
+      STUDIO_ENABLED: 'true',
+      STUDIO_OBJECT_STORE_MODE: 'broken',
+      STUDIO_ALLOW_EPHEMERAL_STORAGE: 'false',
+    });
+    try {
+      expect(() =>
+        createDefaultIntelligenceProjectRoutes({
+          capabilityRegistry: { list: async () => [] },
+          taskExecutor: {
+            create: async () => ({ taskId: JOB_ID, jobId: JOB_ID, created: true }),
+          },
+        }),
+      ).not.toThrow();
+    } finally {
+      for (const key of runtimeEnvKeys) {
+        const value = previousRuntimeEnv[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    expect(factoryCalls).toBe(1);
+
     let closeSettled = false;
     const close = closeDefaultStudioApiRuntime().then(() => {
       closeSettled = true;

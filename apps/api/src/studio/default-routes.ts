@@ -210,7 +210,9 @@ export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRout
 export function createDefaultIntelligenceProjectRoutes(
   input: DefaultIntelligenceProjectRoutesInput = {},
 ) {
-  const { runtime, database, repository } = assembleStudioRouteFoundation(input);
+  const { runtime, database, repository } = assembleStudioRouteFoundation(input, {
+    preferDefaultRuntime: true,
+  });
   const capabilityRegistry =
     input.capabilityRegistry ??
     createProjectCapabilityRegistry({
@@ -251,10 +253,16 @@ export function createDefaultIntelligenceProjectRoutes(
   });
 }
 
-function assembleStudioRouteFoundation(input: DefaultStudioFoundationInput) {
+function assembleStudioRouteFoundation(
+  input: DefaultStudioFoundationInput,
+  options: { preferDefaultRuntime?: boolean } = {},
+) {
+  const useDefaultRuntime = options.preferDefaultRuntime
+    ? input.runtime === undefined && input.env === undefined && input.telemetry === undefined
+    : Object.keys(input).length === 0;
   const runtime =
     input.runtime ??
-    (Object.keys(input).length === 0
+    (useDefaultRuntime
       ? getDefaultStudioApiRuntime()
       : buildStudioApiRuntime(input.env, { telemetry: input.telemetry }));
   const database = input.database ?? db;

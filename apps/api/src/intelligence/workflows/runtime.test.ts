@@ -5,12 +5,14 @@ import {
   startDefaultIntelligenceWorkflowRuntime,
   stopDefaultIntelligenceWorkflowRuntime,
 } from './runtime';
+import type { WorkflowAgentRoles } from './runtime';
 import type { WorkflowService } from './service';
 
 describe('intelligence workflow runtime', () => {
   test('does not construct workflow dependencies when the default-disabled flag is absent', () => {
     let serviceConstructions = 0;
     let schedulerConstructions = 0;
+    let agentRoleConstructions = 0;
     const runtime = buildIntelligenceWorkflowRuntime({
       env: {},
       createService() {
@@ -21,12 +23,17 @@ describe('intelligence workflow runtime', () => {
         schedulerConstructions += 1;
         throw new Error('must not construct');
       },
+      createAgentRoles() {
+        agentRoleConstructions += 1;
+        throw new Error('must not construct');
+      },
     });
 
     expect(runtime).toEqual({ enabled: false });
-    expect({ serviceConstructions, schedulerConstructions }).toEqual({
+    expect({ serviceConstructions, schedulerConstructions, agentRoleConstructions }).toEqual({
       serviceConstructions: 0,
       schedulerConstructions: 0,
+      agentRoleConstructions: 0,
     });
   });
 
@@ -80,6 +87,29 @@ describe('intelligence workflow runtime', () => {
     runtime.start();
     await runtime.stop();
     expect(calls).toEqual(['construct', 'start', 'stop']);
+  });
+
+  test('constructs governed Agent role ports only inside the enabled runtime', () => {
+    const service = {} as WorkflowService;
+    const agentRoles = {
+      planner: {} as WorkflowAgentRoles['planner'],
+      executor: {} as WorkflowAgentRoles['executor'],
+      reviewer: {} as WorkflowAgentRoles['reviewer'],
+    };
+    const calls: string[] = [];
+    const runtime = buildIntelligenceWorkflowRuntime({
+      enabled: true,
+      createService: () => service,
+      createAgentRoles(receivedService) {
+        expect(receivedService).toBe(service);
+        calls.push('roles');
+        return agentRoles;
+      },
+    });
+
+    if (!runtime.enabled) throw new Error('runtime must be enabled');
+    expect(runtime.agentRoles).toBe(agentRoles);
+    expect(calls).toEqual(['roles']);
   });
 
   test('delegates the process-level lifecycle to the registered enabled runtime', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { collectInboxItems, type InboxSources } from './review-items';
+import { type InboxSources, collectInboxItems } from './review-items';
 
 // review_items row factory (only the fields serializeReviewItem touches).
 function nativeRow(over: Partial<Record<string, unknown>> = {}) {
@@ -92,5 +92,35 @@ describe('collectInboxItems fault isolation', () => {
 
     const outputs = await collectInboxItems(sources, { segment: 'needs_you', kind: 'output' });
     expect(outputs.map((i) => i.review_item_id)).toEqual(['ri_needs']);
+  });
+
+  test('keeps a redaction-safe native workflow decision when adapted sources fail', async () => {
+    const metadata = {
+      namespace: 'kortix.intelligence.workflow.approval.v1',
+      approval_id: '67000000-0000-4000-a000-000000000001',
+      run_id: '61000000-0000-4000-a000-000000000001',
+      node_id: '62000000-0000-4000-a000-000000000001',
+    };
+    const sources: InboxSources = {
+      native: async () => [
+        nativeRow({
+          reviewItemId: '69000000-0000-8000-a000-000000000001',
+          kind: 'decision',
+          risk: 'high',
+          title: 'Workflow approval required',
+          summary: 'Publish the approved campaign image',
+          detail: { reason_code: 'WORKFLOW_POLICY_APPROVAL_REQUIRED' },
+          metadata,
+        }),
+      ],
+      changeRequests: throwing('change_requests'),
+      executorApprovals: throwing('executor_executions'),
+    };
+
+    const items = await collectInboxItems(sources, { segment: 'needs_you', kind: 'decision' });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.metadata).toEqual(metadata);
+    expect(JSON.stringify(items[0])).not.toMatch(/prompt|payload|input_ref|credential|provider/i);
   });
 });

@@ -2,12 +2,19 @@ import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test';
 import { resolve } from 'node:path';
 import { type Database, createDb } from '@kortix/db';
 import {
+  workflowApprovalFixture,
   workflowNodeFixture,
   workflowRunFixture,
 } from '@kortix/intelligence-orchestration/fixtures';
 import { sql } from 'drizzle-orm';
 import postgres, { type Sql } from 'postgres';
+import { applyVerdict, bulkApplyVerdict } from '../../projects/review-items';
+import { createWorkflowReviewProjectionStore } from '../../projects/workflow-review-projection';
 import { createPostgresWorkflowStore } from './postgres-store';
+import {
+  createPostgresWorkflowApprovalLookup,
+  createWorkflowReviewAdapter,
+} from './review-adapter';
 import { createWorkflowScheduler } from './scheduler';
 import { runWorkflowStoreConformance } from './store-conformance.test';
 import type { WorkflowImageTaskBridge } from './task-bridge';
@@ -136,7 +143,27 @@ async function startPostgres(): Promise<void> {
       project_id uuid NOT NULL,
       job_id uuid REFERENCES kortix.studio_jobs(job_id)
     );
-    CREATE TABLE kortix.review_items(review_item_id uuid PRIMARY KEY);
+    CREATE TABLE kortix.review_items(
+      review_item_id uuid PRIMARY KEY,
+      account_id uuid NOT NULL,
+      project_id uuid NOT NULL,
+      origin_session_id text,
+      kind text NOT NULL,
+      status text NOT NULL,
+      risk text NOT NULL,
+      source text NOT NULL,
+      title text NOT NULL,
+      summary text NOT NULL DEFAULT '',
+      detail jsonb NOT NULL DEFAULT '{}'::jsonb,
+      agent text NOT NULL DEFAULT '',
+      created_by uuid NOT NULL,
+      acted_by uuid,
+      acted_at timestamptz,
+      feedback text,
+      metadata jsonb,
+      created_at timestamptz NOT NULL,
+      updated_at timestamptz NOT NULL
+    );
     INSERT INTO kortix.accounts(account_id) VALUES ('${ACCOUNT_ID}');
     INSERT INTO kortix.projects(project_id, account_id) VALUES ('${PROJECT_ID}', '${ACCOUNT_ID}');
     INSERT INTO kortix.intelligence_tasks(task_id, account_id, project_id)
@@ -166,7 +193,8 @@ async function resetWorkflowTables(): Promise<void> {
       kortix.intelligence_workflow_dependencies,
       kortix.intelligence_workflow_payloads,
       kortix.intelligence_workflow_nodes,
-      kortix.intelligence_workflow_runs
+      kortix.intelligence_workflow_runs,
+      kortix.review_items
   `);
 }
 
@@ -537,4 +565,144 @@ if (enabled) {
       ]);
     }
   });
+
+  test('projects and resolves one native Review Center item across replay', async () => {
+    if (!database || !client) throw new Error('PostgreSQL workflow fixture is not ready');
+    await resetWorkflowTables();
+    const store = createPostgresWorkflowStore(database);
+    const run = workflowRunFixture({
+      actor_id: '65000000-0000-4000-a000-000000000002',
+      deadline_at: '2026-07-18T11:00:00.000Z',
+    });
+    const node = workflowNodeFixture({
+      run_id: run.run_id,
+      deadline_at: '2026-07-18T11:00:00.000Z',
+    });
+    const approval = workflowApprovalFixture({
+      run_id: run.run_id,
+      node_id: node.node_id,
+      risk: 'high',
+      action_summary: 'Publish the approved campaign image',
+      requested_at: '2026-07-18T10:02:30.000Z',
+      review_item_id: null,
+    });
+    await store.startRun({ run });
+    await store.appendNode({
+      accountId: run.account_id,
+      projectId: run.project_id,
+      runId: run.run_id,
+      expectedGraphVersion: 0,
+      idempotencyKey: 'workflow-node-review-primary-0001',
+      requestHash: node.input_hash,
+      node,
+    });
+    await store.sealGraph({
+      accountId: run.account_id,
+      projectId: run.project_id,
+      runId: run.run_id,
+      expectedGraphVersion: 1,
+      updatedAt: '2026-07-18T10:01:00.000Z',
+    });
+    await store.claimReadyNode({
+      accountId: run.account_id,
+      projectId: run.project_id,
+      workerId: 'workflow-worker-review',
+      now: '2026-07-18T10:02:00.000Z',
+      leaseMs: 60_000,
+    });
+    const actions: string[] = [];
+    const adapter = createWorkflowReviewAdapter({
+      workflow: store,
+      projection: createWorkflowReviewProjectionStore(database),
+      loadApproval: createPostgresWorkflowApprovalLookup(database),
+      authorize: async ({ action }) => {
+        actions.push(action);
+      },
+      now: () => '2026-07-18T10:03:00.000Z',
+    });
+    const projectCommand = {
+      accountId: run.account_id,
+      projectId: run.project_id,
+      actorUserId: run.actor_id ?? '65000000-0000-4000-a000-000000000002',
+      actorType: 'agent' as const,
+      actingTokenId: '68000000-0000-4000-a000-000000000001',
+      workerId: 'workflow-worker-review',
+      run: { ...run, status: 'running' as const },
+      node: { ...node, status: 'running' as const },
+      approval,
+    };
+
+    const first = await adapter.project(projectCommand);
+    const replay = await adapter.project(projectCommand);
+    expect(first?.projection?.reviewItemId).toBe(replay?.projection?.reviewItemId);
+    const [{ count }] = await client<{ count: number }[]>`
+      SELECT count(*)::int AS count FROM kortix.review_items
+    `;
+    expect(count).toBe(1);
+    await expect(
+      applyVerdict(
+        first?.projection?.reviewItemId ?? '',
+        run.project_id,
+        {
+          verdict: 'approve',
+          actingUserId: '65000000-0000-4000-a000-000000000001',
+        },
+        database,
+      ),
+    ).resolves.toBeNull();
+    await expect(
+      bulkApplyVerdict(
+        [first?.projection?.reviewItemId ?? ''],
+        run.project_id,
+        {
+          verdict: 'approve',
+          actingUserId: '65000000-0000-4000-a000-000000000001',
+        },
+        database,
+      ),
+    ).resolves.toEqual([]);
+
+    const resolved = await adapter.resolve({
+      reviewItemId: first?.projection?.reviewItemId ?? '',
+      accountId: run.account_id,
+      projectId: run.project_id,
+      actorUserId: '65000000-0000-4000-a000-000000000001',
+      actorType: 'user',
+      actingTokenId: null,
+      verdict: 'approve',
+      feedback: 'Approved from Review Center',
+    });
+
+    expect(resolved?.projection.status).toBe('approved');
+    const [state] = await client<
+      Array<{
+        run_status: string;
+        approval_status: string;
+        acting_user_id: string | null;
+        decision: string | null;
+      }>
+    >`
+      SELECT
+        run.status AS run_status,
+        approval.status AS approval_status,
+        approval.acting_user_id::text,
+        approval.decision
+      FROM kortix.intelligence_workflow_runs AS run
+      JOIN kortix.intelligence_workflow_approvals AS approval
+        ON approval.run_id = run.run_id
+      WHERE run.run_id = ${run.run_id}::uuid
+        AND approval.approval_id = ${approval.approval_id}::uuid
+    `;
+    expect(state).toMatchObject({
+      run_status: 'running',
+      approval_status: 'approved',
+      acting_user_id: '65000000-0000-4000-a000-000000000001',
+      decision: 'approve',
+    });
+    expect(actions).toEqual([
+      'project.review.submit',
+      'project.review.submit',
+      'project.review.act',
+    ]);
+  }, 60_000);
 }

@@ -1,5 +1,11 @@
 import { config } from '../../config';
+import { assertAuthorized } from '../../iam/dispatcher';
 import { createIntelligenceWorkflowProjectRoutes } from '../../intelligence/workflows/project-routes';
+import {
+  createPostgresWorkflowApprovalLookup,
+  createWorkflowReviewAdapter,
+  setDefaultWorkflowReviewAdapter,
+} from '../../intelligence/workflows/review-adapter';
 import {
   type IntelligenceWorkflowRuntime,
   buildIntelligenceWorkflowRuntime,
@@ -11,10 +17,12 @@ import {
 } from '../../studio/default-routes';
 import { assertProjectCapability, loadProjectForUser } from '../lib/access';
 import { projectsApp } from '../lib/app';
+import { createWorkflowReviewProjectionStore } from '../workflow-review-projection';
 
 projectsApp.route('/', createDefaultIntelligenceProjectRoutes());
 
 let workflowRuntime: IntelligenceWorkflowRuntime = { enabled: false };
+setDefaultWorkflowReviewAdapter(null);
 if (config.INTELLIGENCE_WORKFLOWS_ENABLED) {
   const [databaseModule, payloadModule, storeModule, serviceModule] = await Promise.all([
     import('../../shared/db'),
@@ -41,6 +49,22 @@ if (config.INTELLIGENCE_WORKFLOWS_ENABLED) {
   if (!workflowRuntime.enabled) {
     throw new Error('Intelligence workflow runtime failed to enable');
   }
+
+  setDefaultWorkflowReviewAdapter(
+    createWorkflowReviewAdapter({
+      workflow: workflowRuntime.service,
+      projection: createWorkflowReviewProjectionStore(databaseModule.db),
+      loadApproval: createPostgresWorkflowApprovalLookup(databaseModule.db),
+      authorize: ({ action, accountId, projectId, actorUserId, actingTokenId }) =>
+        assertAuthorized(
+          actorUserId,
+          accountId,
+          action,
+          { type: 'project', id: projectId },
+          actingTokenId ?? undefined,
+        ),
+    }),
+  );
 
   projectsApp.route(
     '/',

@@ -8,13 +8,14 @@
  * core module (./change-requests.ts). See docs/REVIEW_CENTER_DESIGN.md.
  */
 
-import { changeRequests, executorExecutions, reviewItems } from '@kortix/db';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { type Database, changeRequests, executorExecutions, reviewItems } from '@kortix/db';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { WORKFLOW_REVIEW_METADATA_NAMESPACE } from '../intelligence/workflows/review-adapter';
 import { captureException } from '../lib/sentry';
-import { db } from '../shared/db';
 import { changeRequestToReviewItem, executorExecutionToReviewItem } from './review-adapters';
+export { createWorkflowReviewProjectionStore } from './workflow-review-projection';
 
-type ReviewItemRow = typeof reviewItems.$inferSelect;
+export type ReviewItemRow = typeof reviewItems.$inferSelect;
 type ChangeRequestRow = typeof changeRequests.$inferSelect;
 type ExecutorExecutionRow = typeof executorExecutions.$inferSelect;
 
@@ -79,7 +80,8 @@ export function serializeReviewItem(row: ReviewItemRow) {
 }
 
 export async function getReviewItemById(reviewItemId: string, projectId: string) {
-  const [row] = await db
+  const database = await defaultDatabase();
+  const [row] = await database
     .select()
     .from(reviewItems)
     .where(and(eq(reviewItems.reviewItemId, reviewItemId), eq(reviewItems.projectId, projectId)))
@@ -91,10 +93,11 @@ export async function listReviewItems(
   projectId: string,
   opts: { segment?: ReviewSegment; kind?: ReviewItemRow['kind'] } = {},
 ) {
+  const database = await defaultDatabase();
   const where = [eq(reviewItems.projectId, projectId)];
   if (opts.segment) where.push(inArray(reviewItems.status, statusesForSegment(opts.segment)));
   if (opts.kind) where.push(eq(reviewItems.kind, opts.kind));
-  return db
+  return database
     .select()
     .from(reviewItems)
     .where(and(...where))
@@ -183,14 +186,14 @@ export async function listInboxItems(
   projectId: string,
   opts: { segment?: ReviewSegment; kind?: ReviewItemRow['kind'] } = {},
 ) {
+  const database = await defaultDatabase();
   return collectInboxItems(
     {
-      native: () =>
-        db.select().from(reviewItems).where(eq(reviewItems.projectId, projectId)),
+      native: () => database.select().from(reviewItems).where(eq(reviewItems.projectId, projectId)),
       changeRequests: () =>
-        db.select().from(changeRequests).where(eq(changeRequests.projectId, projectId)),
+        database.select().from(changeRequests).where(eq(changeRequests.projectId, projectId)),
       executorApprovals: () =>
-        db
+        database
           .select()
           .from(executorExecutions)
           .where(
@@ -219,7 +222,8 @@ export interface InsertReviewItemInput {
 }
 
 export async function insertReviewItem(input: InsertReviewItemInput) {
-  const [row] = await db
+  const database = await defaultDatabase();
+  const [row] = await database
     .insert(reviewItems)
     .values({
       accountId: input.accountId,
@@ -244,8 +248,10 @@ export async function applyVerdict(
   reviewItemId: string,
   projectId: string,
   opts: { verdict: ReviewVerdict; feedback?: string | null; actingUserId: string },
+  databaseOverride?: Database,
 ) {
-  const [row] = await db
+  const database = databaseOverride ?? (await defaultDatabase());
+  const [row] = await database
     .update(reviewItems)
     .set({
       status: VERDICT_STATUS[opts.verdict],
@@ -254,7 +260,13 @@ export async function applyVerdict(
       feedback: opts.feedback ?? null,
       updatedAt: new Date(),
     })
-    .where(and(eq(reviewItems.reviewItemId, reviewItemId), eq(reviewItems.projectId, projectId)))
+    .where(
+      and(
+        eq(reviewItems.reviewItemId, reviewItemId),
+        eq(reviewItems.projectId, projectId),
+        nonWorkflowProjection(),
+      ),
+    )
     .returning();
   return row ?? null;
 }
@@ -264,9 +276,11 @@ export async function bulkApplyVerdict(
   reviewItemIds: string[],
   projectId: string,
   opts: { verdict: ReviewVerdict; actingUserId: string },
+  databaseOverride?: Database,
 ) {
   if (reviewItemIds.length === 0) return [];
-  return db
+  const database = databaseOverride ?? (await defaultDatabase());
+  return database
     .update(reviewItems)
     .set({
       status: VERDICT_STATUS[opts.verdict],
@@ -275,7 +289,19 @@ export async function bulkApplyVerdict(
       updatedAt: new Date(),
     })
     .where(
-      and(eq(reviewItems.projectId, projectId), inArray(reviewItems.reviewItemId, reviewItemIds)),
+      and(
+        eq(reviewItems.projectId, projectId),
+        inArray(reviewItems.reviewItemId, reviewItemIds),
+        nonWorkflowProjection(),
+      ),
     )
     .returning();
+}
+
+async function defaultDatabase() {
+  return (await import('../shared/db')).db;
+}
+
+function nonWorkflowProjection() {
+  return sql`coalesce(${reviewItems.metadata}->>'namespace', '') <> ${WORKFLOW_REVIEW_METADATA_NAMESPACE}`;
 }

@@ -10,6 +10,10 @@ import { and, eq } from 'drizzle-orm';
 import { relayReviewCard } from '../../channels/turn-relay';
 import { PROJECT_ACTIONS } from '../../iam';
 import { assertAgentScope } from '../../iam/agent-scope';
+import {
+  WorkflowReviewAdapterError,
+  getDefaultWorkflowReviewAdapter,
+} from '../../intelligence/workflows/review-adapter';
 import { auth, errors, json } from '../../openapi';
 import { db } from '../../shared/db';
 import { assertProjectCapability, loadProjectForUser } from '../lib/access';
@@ -27,6 +31,7 @@ import {
   listInboxItems,
   serializeReviewItem,
 } from '../review-items';
+import { dispatchReviewVerdict } from '../review-verdict-dispatch';
 
 const KINDS = ['change', 'approval', 'output', 'decision', 'batch'] as const;
 const RISKS = ['none', 'low', 'medium', 'high'] as const;
@@ -53,7 +58,13 @@ projectsApp.openapi(
     const projectId = c.req.param('projectId');
     const loaded = await loadProjectForUser(c, projectId, 'read');
     if (!loaded) return c.json({ error: 'Not found' }, 404);
-    await assertProjectCapability(c, loaded.userId, loaded.row.accountId, projectId, PROJECT_ACTIONS.PROJECT_REVIEW_READ);
+    await assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_REVIEW_READ,
+    );
 
     const segment = normalizeString(c.req.query('segment'))?.toLowerCase();
     if (segment && !SEGMENTS.includes(segment as (typeof SEGMENTS)[number])) {
@@ -92,7 +103,13 @@ projectsApp.openapi(
     const projectId = c.req.param('projectId');
     const loaded = await loadProjectForUser(c, projectId, 'read');
     if (!loaded) return c.json({ error: 'Not found' }, 404);
-    await assertProjectCapability(c, loaded.userId, loaded.row.accountId, projectId, PROJECT_ACTIONS.PROJECT_REVIEW_READ);
+    await assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_REVIEW_READ,
+    );
 
     const item = await getReviewItemById(c.req.param('reviewItemId'), projectId);
     if (!item) return c.json({ error: 'Review item not found' }, 404);
@@ -124,7 +141,13 @@ projectsApp.openapi(
     if (!loaded) return c.json({ error: 'Not found' }, 404);
     // Human gate: submitting a reviewable needs project.review.submit. Every
     // built-in role holds it; a custom role that unchecks it is denied here.
-    await assertProjectCapability(c, loaded.userId, loaded.row.accountId, projectId, PROJECT_ACTIONS.PROJECT_REVIEW_SUBMIT);
+    await assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_REVIEW_SUBMIT,
+    );
     // Agent-side gate: submitting a reviewable is the agent's intended path.
     assertAgentScope(c, 'project.review.submit');
 
@@ -234,15 +257,45 @@ projectsApp.openapi(
     const existing = await getReviewItemById(reviewItemId, projectId);
     if (!existing) return c.json({ error: 'Review item not found' }, 404);
 
-    const row = await applyVerdict(reviewItemId, projectId, {
-      verdict,
-      feedback: normalizeString(body.feedback),
-      actingUserId: loaded.userId,
-    });
-    if (!row) return c.json({ error: 'Review item not found' }, 404);
-    return c.json(serializeReviewItem(row));
+    try {
+      const dispatched = await dispatchReviewVerdict(
+        {
+          reviewItem: existing,
+          reviewItemId,
+          accountId: loaded.row.accountId,
+          projectId,
+          actorUserId: loaded.userId,
+          actorType: reviewActorType(c),
+          actingTokenId: c.get('iamTokenId') ?? null,
+          verdict,
+          feedback: normalizeString(body.feedback) ?? null,
+        },
+        { getWorkflowReviewAdapter: getDefaultWorkflowReviewAdapter, applyVerdict },
+      );
+      if (dispatched.kind === 'workflow_unavailable') {
+        return c.json({ error: 'Workflow review is unavailable' }, 409);
+      }
+      if (!dispatched.row) return c.json({ error: 'Review item not found' }, 404);
+      return c.json(serializeReviewItem(dispatched.row));
+    } catch (error) {
+      if (error instanceof WorkflowReviewAdapterError) {
+        const status =
+          error.code === 'WORKFLOW_REVIEW_HUMAN_REQUIRED' ||
+          error.code === 'WORKFLOW_REVIEW_SELF_APPROVAL_DENIED'
+            ? 403
+            : 409;
+        return c.json({ error: error.code }, status);
+      }
+      throw error;
+    }
   },
 );
+
+function reviewActorType(c: { get(key: string): unknown }): 'user' | 'agent' | 'system' {
+  if (c.get('authType') === 'service_account') return 'system';
+  const grant = c.get('agentGrant') as { agent?: string } | null | undefined;
+  return c.get('authType') === 'pat' && grant?.agent ? 'agent' : 'user';
+}
 
 // POST /v1/projects/:projectId/review/bulk  ({ ids, verdict })
 projectsApp.openapi(

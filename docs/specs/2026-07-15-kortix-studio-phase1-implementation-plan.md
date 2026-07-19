@@ -6,6 +6,8 @@
 
 **Branch:** `studio-platform`
 
+> **Historical status note (2026-07-20):** This file records the original Phase 1 procedure. Its unchecked boxes are not current implementation evidence. Use `docs/operations/studio-acceleration-progress.md` for authoritative status and `docs/plans/2026-07-20-milestone-0-1-image-studio-plan.md` for the active Web Image Studio milestone. The implemented `kortix.project(projectId).intelligence` facade supersedes this plan's unimplemented `project().studio` proposal.
+
 **Architecture sources:** `docs/specs/2026-07-15-kortix-studio-platform-design.md` and `docs/specs/2026-07-16-studio-production-provider-storage-design.md`
 
 **Goal:** Ship the first usable Studio slice: shared Studio foundations, OpenAI-compatible `image.generate`, durable jobs/assets/billing/events, SDK bindings, Image Studio, mobile monitoring, Electron compatibility, Agent tools, deployment manifests, and black-box verification.

@@ -126,7 +126,10 @@ real output. `typecheck` is not evidence.
 - Public surface: additive only; no new SDK subpath.
 - Required gates: typecheck, test, public-surface snapshot, smoke install.
 - Plan: `docs/specs/2026-07-15-kortix-studio-phase1-implementation-plan.md`
-- Status: active
+- Status: superseded
+
+Superseded by the Intelligence SDK implemented at `kortix.project(projectId).intelligence`.
+The current execution state lives in `docs/operations/studio-acceleration-progress.md`.
 
 ---
 

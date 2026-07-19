@@ -70,4 +70,15 @@ describe('Intelligence workflow CI and operations contract', () => {
     expect(platformDesign).not.toContain('/projects/:projectId/studio/digital-human');
     expect(platformDesign).not.toContain('/projects/:projectId/studio/batch-remix');
   });
+
+  test('tracks Image Studio acceleration through the canonical Intelligence SDK', () => {
+    const progress = source('docs/operations/studio-acceleration-progress.md');
+    const sdkProgress = source('packages/sdk/PROGRESS.md');
+
+    expect(progress).toContain('Milestone 0-1');
+    expect(progress).toContain('kortix.project(projectId).intelligence');
+    expect(progress).toContain('Web Image Studio');
+    expect(sdkProgress).toContain('Superseded by the Intelligence SDK');
+    expect(sdkProgress).not.toContain('- Status: active\n\n---\n\n## NOW');
+  });
 });

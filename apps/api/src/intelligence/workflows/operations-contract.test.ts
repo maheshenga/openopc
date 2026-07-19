@@ -16,6 +16,7 @@ describe('Intelligence workflow CI and operations contract', () => {
     expect(ci).toContain("- 'packages/sdk/**'");
     expect(ci).toContain("- 'packages/api-contract/**'");
     expect(ci).toContain("- 'packages/intelligence-contracts/**'");
+    expect(ci).toContain("- 'packages/intelligence-temporal-adapter/**'");
   });
 
   test('runs workflow acceptance plus required PostgreSQL restart and concurrency gates', () => {

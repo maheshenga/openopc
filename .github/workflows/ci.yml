@@ -66,6 +66,7 @@ jobs:
               - 'packages/db/**'
               - 'packages/intelligence-contracts/**'
               - 'packages/intelligence-orchestration/**'
+              - 'packages/intelligence-temporal-adapter/**'
               - 'packages/manifest-schema/**'
               - 'packages/shared/**'
               - 'packages/starter/**'

@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import type {
-  IntelligenceWorkflowApprovalDecisionRequest,
   IntelligenceWorkflowAddDependencyRequest,
   IntelligenceWorkflowAppendNodeRequest,
+  IntelligenceWorkflowApprovalDecisionRequest,
   IntelligenceWorkflowSealRequest,
   IntelligenceWorkflowStartRequest,
 } from '@kortix/api-contract';
@@ -58,8 +58,8 @@ const appendRequest = (
     node_key: nodeKey,
     role: 'executor',
     kind: 'capability',
-    agent_name: null,
-    agent_card_hash: null,
+    agent_name: 'image-executor',
+    agent_card_hash: CARD_HASH,
     capability_id: 'studio.image.generate',
     capability_version: '1.0.0',
     policy_snapshot_hash: SHA256_HASH,

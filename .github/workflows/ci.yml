@@ -65,6 +65,7 @@ jobs:
               - 'packages/api-contract/**'
               - 'packages/db/**'
               - 'packages/intelligence-contracts/**'
+              - 'packages/intelligence-orchestration/**'
               - 'packages/manifest-schema/**'
               - 'packages/shared/**'
               - 'packages/starter/**'
@@ -82,7 +83,9 @@ jobs:
             frontend:
               - *pnpm
               - 'apps/web/**'
+              - 'packages/api-contract/**'
               - 'packages/intelligence-contracts/**'
+              - 'packages/sdk/**'
               - 'packages/shared/**'
             cli:
               - *pnpm

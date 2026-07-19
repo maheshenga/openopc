@@ -151,10 +151,14 @@ jobs:
                --filter "kortix" \
                --if-present test
 
-      - name: Intelligence API, MCP, A2A, and IAM acceptance (no decrypted secrets required)
+      - name: Intelligence task/workflow API, MCP, A2A, and IAM acceptance
         run: |
           pnpm --filter kortix-api exec bun test src/__tests__/e2e-intelligence-protocol.test.ts
+          pnpm --filter kortix-api exec bun test src/__tests__/e2e-intelligence-workflow.test.ts
           pnpm --filter @kortix/cli exec bun test src/__tests__/e2e-intelligence-mcp.test.ts
+          RUN_INTEGRATION_TESTS=1 pnpm --filter kortix-api exec bun test src/intelligence/workflows/postgres.integration.test.ts
+          pnpm --filter @kortix/intelligence-temporal-adapter --if-present test
+          pnpm --filter @kortix/intelligence-temporal-adapter --if-present typecheck
 
       - name: Typecheck Studio runtime, adapters, and worker
         run: |

@@ -229,7 +229,7 @@ const IntelligenceWorkflowNodeInputSchema = z
       });
     }
     const agentIdentity = node.agent_name !== null && node.agent_card_hash !== null;
-    if ((node.kind === 'agent') !== agentIdentity) {
+    if ((node.kind !== 'approval') !== agentIdentity) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'workflow Agent identity does not match node kind',

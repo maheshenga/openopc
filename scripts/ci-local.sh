@@ -75,7 +75,13 @@ run_studio_gates() {
 
 run_intelligence_protocol_gates() {
   pnpm --filter kortix-api exec bun test src/__tests__/e2e-intelligence-protocol.test.ts &&
+    pnpm --filter kortix-api exec bun test src/__tests__/e2e-intelligence-workflow.test.ts &&
     pnpm --filter @kortix/cli exec bun test src/__tests__/e2e-intelligence-mcp.test.ts
+}
+
+run_intelligence_workflow_postgres() {
+  RUN_INTEGRATION_TESTS=1 pnpm --filter kortix-api exec bun test \
+    src/intelligence/workflows/postgres.integration.test.ts
 }
 
 run_studio_minio_conformance() {
@@ -137,8 +143,10 @@ pass "lint: biome" pnpm lint:biome
 
 if docker_ok; then
   pass "Studio MinIO S3 conformance (ci.yml)" run_studio_minio_conformance
+  pass "Intelligence workflow PostgreSQL restart + concurrency" run_intelligence_workflow_postgres
 else
   skip "Studio MinIO S3 conformance (ci.yml)" "Docker not running; GitHub CI treats this as required"
+  skip "Intelligence workflow PostgreSQL restart + concurrency" "Docker not running; GitHub CI treats this as required"
 fi
 
 # qa-pr.yml runs `make ci-pr`; needs tests/ deps (bun) + Docker for integration.

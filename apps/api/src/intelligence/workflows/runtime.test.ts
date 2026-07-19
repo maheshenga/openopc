@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { WorkflowTelemetry } from './metrics';
 import {
   buildIntelligenceWorkflowRuntime,
   setDefaultIntelligenceWorkflowRuntime,
@@ -57,12 +58,15 @@ describe('intelligence workflow runtime', () => {
 
   test('owns the injected scheduler lifecycle when enabled', async () => {
     const service = {} as WorkflowService;
+    const telemetry = {} as WorkflowTelemetry;
     const calls: string[] = [];
     const runtime = buildIntelligenceWorkflowRuntime({
       enabled: true,
+      telemetry,
       createService: () => service,
-      createScheduler(receivedService) {
+      createScheduler(receivedService, receivedTelemetry) {
         expect(receivedService).toBe(service);
+        expect(receivedTelemetry).toBe(telemetry);
         calls.push('construct');
         return {
           runOnce: async () => ({
@@ -84,6 +88,7 @@ describe('intelligence workflow runtime', () => {
     });
 
     if (!runtime.enabled) throw new Error('runtime must be enabled');
+    expect(runtime.telemetry).toBe(telemetry);
     runtime.start();
     await runtime.stop();
     expect(calls).toEqual(['construct', 'start', 'stop']);

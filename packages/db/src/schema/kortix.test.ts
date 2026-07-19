@@ -732,6 +732,9 @@ describe('intelligence durable workflow schema', () => {
     expect(uniqueConstraintNames(intelligenceWorkflowPayloads)).toContain(
       'intelligence_workflow_payloads_ref_unique',
     );
+    expect(uniqueConstraintNames(intelligenceWorkflowPayloads)).toContain(
+      'intelligence_workflow_payloads_run_node_purpose_unique',
+    );
     expect(indexNames(intelligenceWorkflowPayloads)).toEqual(
       expect.arrayContaining([
         'idx_intelligence_workflow_payloads_run_node',

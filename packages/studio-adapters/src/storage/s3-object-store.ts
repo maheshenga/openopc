@@ -243,7 +243,7 @@ export class S3StudioObjectStore implements StudioObjectStore {
           !head.last_modified ||
           head.etag !== listed.ETag ||
           head.size_bytes !== listed.Size ||
-          head.last_modified !== listedLastModified
+          !sameStorageSecond(head.last_modified, listedLastModified)
         ) {
           throw new StudioStorageUnavailableError();
         }
@@ -415,6 +415,16 @@ export class S3StudioObjectStore implements StudioObjectStore {
       ...(output.LastModified ? { last_modified: output.LastModified.toISOString() } : {}),
     };
   }
+}
+
+function sameStorageSecond(left: string, right: string): boolean {
+  const leftMilliseconds = Date.parse(left);
+  const rightMilliseconds = Date.parse(right);
+  return (
+    Number.isFinite(leftMilliseconds) &&
+    Number.isFinite(rightMilliseconds) &&
+    Math.floor(leftMilliseconds / 1_000) === Math.floor(rightMilliseconds / 1_000)
+  );
 }
 
 function createIntegrityCheckedBody(

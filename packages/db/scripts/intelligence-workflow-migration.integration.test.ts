@@ -13,6 +13,12 @@ const nodeIdempotencyMigrationPath = resolve(
   'migrations',
   '20260718151000000_intelligence_workflow_node_idempotency.sql',
 );
+const payloadIdentityMigrationPath = resolve(
+  import.meta.dir,
+  '..',
+  'migrations',
+  '20260719100000000_intelligence_workflow_payload_identity.sql',
+);
 
 const dockerAvailable =
   Bun.spawnSync(['docker', 'version'], { stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
@@ -114,8 +120,9 @@ describe.skipIf(!dockerAvailable)('Intelligence workflow migration - real Postgr
       if (initComplete && probe.exitCode === 0) {
         const migration = await Bun.file(migrationPath).text();
         const nodeIdempotencyMigration = await Bun.file(nodeIdempotencyMigrationPath).text();
+        const payloadIdentityMigration = await Bun.file(payloadIdentityMigrationPath).text();
         dockerPsql(
-          `BEGIN;\n${PRE_SCHEMA}\n${migration}\n${nodeIdempotencyMigration}\nCOMMIT;`,
+          `BEGIN;\n${PRE_SCHEMA}\n${migration}\n${nodeIdempotencyMigration}\n${payloadIdentityMigration}\nCOMMIT;`,
         );
         return;
       }
@@ -313,6 +320,11 @@ describe.skipIf(!dockerAvailable)('Intelligence workflow migration - real Postgr
       INSERT INTO kortix.intelligence_workflow_payloads(
         run_id, node_id, purpose, payload_ref, content_hash, byte_length
       ) VALUES ('${runA}', '${childA}', 'node_input', 'https://object.invalid/raw', '${hash}', 128);
+    `);
+    expectRejected(`
+      INSERT INTO kortix.intelligence_workflow_payloads(
+        run_id, node_id, purpose, payload_ref, content_hash, byte_length
+      ) VALUES ('${runA}', '${childA}', 'node_input', 'sealed:payload-replay', '${hash}', 128);
     `);
     expectRejected(`
       INSERT INTO kortix.intelligence_workflow_approvals(

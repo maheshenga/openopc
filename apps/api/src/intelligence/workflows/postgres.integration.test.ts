@@ -1,15 +1,16 @@
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test';
 import { resolve } from 'node:path';
-import { type Database, createDb } from '@kortix/db';
+import { type Database, createDb, intelligenceWorkflowPayloads } from '@kortix/db';
 import {
   workflowApprovalFixture,
   workflowNodeFixture,
   workflowRunFixture,
 } from '@kortix/intelligence-orchestration/fixtures';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import postgres, { type Sql } from 'postgres';
 import { applyVerdict, bulkApplyVerdict } from '../../projects/review-items';
 import { createWorkflowReviewProjectionStore } from '../../projects/workflow-review-projection';
+import { createPostgresWorkflowPayloadRepository } from './payload-repository';
 import { createPostgresWorkflowStore } from './postgres-store';
 import {
   createPostgresWorkflowApprovalLookup,
@@ -32,6 +33,7 @@ const container = `kortix-workflow-store-${crypto.randomUUID().slice(0, 8)}`;
 const migrationPaths = [
   '20260718150000000_intelligence_workflows.sql',
   '20260718151000000_intelligence_workflow_node_idempotency.sql',
+  '20260719100000000_intelligence_workflow_payload_identity.sql',
 ].map((name) => resolve(import.meta.dir, '../../../../../packages/db/migrations', name));
 
 const ACCOUNT_ID = '63000000-0000-4000-a000-000000000001';
@@ -92,22 +94,26 @@ async function startPostgres(): Promise<void> {
   );
   if (started.exitCode !== 0) throw new Error(started.stderr.toString());
 
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + 180_000;
   let ready = false;
   while (Date.now() < deadline) {
-    const logs = Bun.spawnSync(['docker', 'logs', container], {
-      env: dockerEnvironment,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const initialized = `${logs.stdout.toString()}${logs.stderr.toString()}`.includes(
-      'PostgreSQL init process complete; ready for start up.',
-    );
     const probe = Bun.spawnSync(
-      ['docker', 'exec', container, 'pg_isready', '-U', 'postgres', '-d', 'testdb'],
+      [
+        'docker',
+        'exec',
+        container,
+        'psql',
+        '-X',
+        '-U',
+        'postgres',
+        '-d',
+        'testdb',
+        '-tAc',
+        'SELECT 1',
+      ],
       { env: dockerEnvironment, stdout: 'ignore', stderr: 'ignore' },
     );
-    if (initialized && probe.exitCode === 0) {
+    if (probe.exitCode === 0) {
       ready = true;
       break;
     }
@@ -214,7 +220,14 @@ function createIndependentDatabases(): [Database, Database] {
 
 if (enabled) {
   setDefaultTimeout(30_000);
-  beforeAll(startPostgres, 120_000);
+  beforeAll(async () => {
+    try {
+      await startPostgres();
+    } catch (error) {
+      removePostgresContainer();
+      throw error;
+    }
+  }, 210_000);
   afterAll(async () => {
     await Promise.all([
       client?.end({ timeout: 5 }),
@@ -222,11 +235,7 @@ if (enabled) {
         database as unknown as { $client?: { end(options?: unknown): Promise<void> } } | null
       )?.$client?.end({ timeout: 5 }),
     ]);
-    Bun.spawnSync(['docker', 'rm', '-f', container], {
-      env: dockerEnvironment,
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
+    removePostgresContainer();
   });
 
   runWorkflowStoreConformance('PostgreSQL', async () => {
@@ -256,6 +265,115 @@ if (enabled) {
         limit: 100,
       });
       expect(page.items.map((event) => event.type)).toEqual(['run_created']);
+    } finally {
+      await Promise.all([closeDatabase(databaseA), closeDatabase(databaseB)]);
+    }
+  });
+
+  test('persists one project-scoped node input locator for scheduler restart', async () => {
+    if (!database) throw new Error('PostgreSQL workflow fixture is not ready');
+    await resetWorkflowTables();
+    const store = createPostgresWorkflowStore(database);
+    const run = workflowRunFixture({ account_id: ACCOUNT_ID, project_id: PROJECT_ID });
+    const node = workflowNodeFixture({ run_id: run.run_id });
+    await store.startRun({ run });
+    await store.appendNode({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      runId: run.run_id,
+      expectedGraphVersion: 0,
+      idempotencyKey: 'workflow-postgres-payload-node-0001',
+      requestHash: `sha256:${'a'.repeat(64)}`,
+      node,
+    });
+    const repository = createPostgresWorkflowPayloadRepository(database);
+    const input = {
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      runId: run.run_id,
+      nodeId: node.node_id,
+      payload: {
+        payloadRef: 'sealed:69000000-0000-4000-a000-000000000099',
+        contentHash: node.input_hash,
+        byteLength: 256,
+        contentType: 'application/json' as const,
+      },
+      createdAt: '2026-07-18T10:00:01.000Z',
+    };
+
+    await expect(repository.putNodeInput(input)).resolves.toMatchObject({ created: true });
+    await expect(repository.putNodeInput(input)).resolves.toMatchObject({ created: false });
+    await expect(repository.getNodeInput(input)).resolves.toMatchObject({
+      payloadRef: input.payload.payloadRef,
+      contentHash: node.input_hash,
+      purpose: 'node_input',
+    });
+    await expect(
+      repository.getNodeInput({
+        ...input,
+        projectId: '64000000-0000-4000-a000-000000000099',
+      }),
+    ).resolves.toBeNull();
+  });
+
+  test('uses database uniqueness for concurrent node input locator writes', async () => {
+    if (!database) throw new Error('PostgreSQL workflow fixture is not ready');
+    await resetWorkflowTables();
+    const store = createPostgresWorkflowStore(database);
+    const run = workflowRunFixture({ account_id: ACCOUNT_ID, project_id: PROJECT_ID });
+    const node = workflowNodeFixture({ run_id: run.run_id });
+    await store.startRun({ run });
+    await store.appendNode({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      runId: run.run_id,
+      expectedGraphVersion: 0,
+      idempotencyKey: 'workflow-postgres-payload-concurrent-node-0001',
+      requestHash: `sha256:${'b'.repeat(64)}`,
+      node,
+    });
+    const [databaseA, databaseB] = createIndependentDatabases();
+    try {
+      const repositoryA = createPostgresWorkflowPayloadRepository(databaseA);
+      const repositoryB = createPostgresWorkflowPayloadRepository(databaseB);
+      const input = {
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        runId: run.run_id,
+        nodeId: node.node_id,
+        payload: {
+          payloadRef: 'sealed:69000000-0000-4000-a000-000000000097',
+          contentHash: node.input_hash,
+          byteLength: 256,
+          contentType: 'application/json' as const,
+        },
+        createdAt: '2026-07-18T10:00:01.000Z',
+      };
+
+      const [first, second] = await Promise.all([
+        repositoryA.putNodeInput(input),
+        repositoryB.putNodeInput({
+          ...input,
+          payload: {
+            ...input.payload,
+            payloadRef: 'sealed:69000000-0000-4000-a000-000000000098',
+          },
+        }),
+      ]);
+
+      expect([first.created, second.created].sort()).toEqual([false, true]);
+      expect(first.record.payloadRef).toBe(second.record.payloadRef);
+      const [{ count }] = await databaseA
+        .select({ count: sql<number>`count(*)::int` })
+        .from(intelligenceWorkflowPayloads)
+        .where(
+          and(
+            eq(intelligenceWorkflowPayloads.runId, run.run_id),
+            eq(intelligenceWorkflowPayloads.nodeId, node.node_id),
+            eq(intelligenceWorkflowPayloads.purpose, 'node_input'),
+          ),
+        );
+      expect(count).toBe(1);
     } finally {
       await Promise.all([closeDatabase(databaseA), closeDatabase(databaseB)]);
     }
@@ -705,4 +823,12 @@ if (enabled) {
       'project.review.act',
     ]);
   }, 60_000);
+}
+
+function removePostgresContainer(): void {
+  Bun.spawnSync(['docker', 'rm', '-f', container], {
+    env: dockerEnvironment,
+    stdout: 'ignore',
+    stderr: 'ignore',
+  });
 }

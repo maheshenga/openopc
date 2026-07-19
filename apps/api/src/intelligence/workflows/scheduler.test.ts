@@ -893,4 +893,76 @@ describe('workflow scheduler', () => {
     expect(readyCalls).toBe(0);
     expect(cancelled).toEqual([1, 2]);
   });
+
+  test('reports one bounded telemetry record for each scheduler pass', async () => {
+    const records: unknown[] = [];
+    let milliseconds = 1_000;
+    const scheduler = createWorkflowScheduler({
+      workflow: workflowPort(),
+      bridge: taskBridge(),
+      isReady: async () => false,
+      listScopes: async () => [],
+      authorizeNode: async () => null,
+      readNodeRequest: async () => null,
+      workerId: 'workflow-worker-a',
+      now: () => NOW,
+      leaseMs: 30_000,
+      maxClaimsPerRun: 4,
+      telemetry: {
+        schedulerRun: (record) => records.push(record),
+      },
+      traceparent: () => '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01',
+      nowMilliseconds: () => {
+        const current = milliseconds;
+        milliseconds += 250;
+        return current;
+      },
+    });
+
+    await expect(scheduler.runOnce()).resolves.toEqual({
+      scopes: 0,
+      claimed: 0,
+      attached: 0,
+      completed: 0,
+      failed: 0,
+      leaseLost: 0,
+    });
+    expect(records).toEqual([
+      {
+        outcome: 'not_ready',
+        durationSeconds: 0.25,
+        traceparent: '00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01',
+        stats: {
+          scopes: 0,
+          claimed: 0,
+          attached: 0,
+          completed: 0,
+          failed: 0,
+          leaseLost: 0,
+        },
+      },
+    ]);
+  });
+
+  test('never lets a telemetry sink change scheduler behavior', async () => {
+    const scheduler = createWorkflowScheduler({
+      workflow: workflowPort(),
+      bridge: taskBridge(),
+      isReady: async () => false,
+      listScopes: async () => [],
+      authorizeNode: async () => null,
+      readNodeRequest: async () => null,
+      workerId: 'workflow-worker-a',
+      now: () => NOW,
+      leaseMs: 30_000,
+      maxClaimsPerRun: 4,
+      telemetry: {
+        schedulerRun: () => {
+          throw new Error('telemetry unavailable');
+        },
+      },
+    });
+
+    await expect(scheduler.runOnce()).resolves.toMatchObject({ scopes: 0, claimed: 0 });
+  });
 });

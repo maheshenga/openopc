@@ -89,6 +89,15 @@ describe('Intelligence MCP acceptance', () => {
         }
         if (url.pathname.endsWith('/intelligence/agent-card')) return respond(agentCard);
         if (url.pathname.endsWith('/intelligence/workflows') && request.method === 'POST') {
+          if (revoked) {
+            return respond(
+              {
+                error: 'Agent Card is not trusted for this project',
+                code: 'INTELLIGENCE_WORKFLOW_UNTRUSTED',
+              },
+              403,
+            );
+          }
           const parsed = IntelligenceWorkflowStartRequestSchema.safeParse(body);
           if (!parsed.success) {
             return respond(
@@ -111,7 +120,10 @@ describe('Intelligence MCP acceptance', () => {
         ) {
           return respond({
             protocol_version: 'intelligence.workflow.v1',
-            run: workflowRun({ protocol_version: 'intelligence.workflow.v1', ...workflowArguments() }),
+            run: workflowRun({
+              protocol_version: 'intelligence.workflow.v1',
+              ...workflowArguments(),
+            }),
           });
         }
         if (url.pathname.endsWith('/intelligence/tasks')) {
@@ -280,6 +292,19 @@ describe('Intelligence MCP acceptance', () => {
         },
       });
       const denied = await readResponse();
+      send({
+        jsonrpc: '2.0',
+        id: 10,
+        method: 'tools/call',
+        params: {
+          name: 'workflow_start',
+          arguments: {
+            ...workflowArguments(),
+            idempotency_key: 'mcp-workflow-revoked-acceptance-0001',
+          },
+        },
+      });
+      const workflowDenied = await readResponse();
       child.stdin.end();
 
       const [exitCode, stderr] = await Promise.all([child.exited, stderrPromise]);
@@ -323,11 +348,16 @@ describe('Intelligence MCP acceptance', () => {
         ok: false,
         code: 'INTELLIGENCE_AGENT_CARD_UNTRUSTED',
       });
+      expect(workflowDenied.result.isError).toBe(true);
+      expect(toolPayload(workflowDenied)).toMatchObject({
+        ok: false,
+        code: 'INTELLIGENCE_WORKFLOW_UNTRUSTED',
+      });
 
       expect(taskRows).toHaveLength(1);
       expect(studioJobs).toEqual(new Set([JOB_ID]));
       expect(providerSubmissions).toBe(1);
-      expect(httpCalls).toHaveLength(8);
+      expect(httpCalls).toHaveLength(9);
       expect(
         httpCalls.every((call) => call.authorization === 'Bearer kortix_pat_mcp_acceptance'),
       ).toBe(true);

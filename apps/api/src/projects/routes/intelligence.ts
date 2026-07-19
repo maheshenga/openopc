@@ -24,12 +24,14 @@ projectsApp.route('/', createDefaultIntelligenceProjectRoutes());
 let workflowRuntime: IntelligenceWorkflowRuntime = { enabled: false };
 setDefaultWorkflowReviewAdapter(null);
 if (config.INTELLIGENCE_WORKFLOWS_ENABLED) {
-  const [databaseModule, payloadModule, storeModule, serviceModule] = await Promise.all([
-    import('../../shared/db'),
-    import('../../intelligence/workflows/payload-store'),
-    import('../../intelligence/workflows/postgres-store'),
-    import('../../intelligence/workflows/service'),
-  ]);
+  const [databaseModule, payloadModule, payloadRepositoryModule, storeModule, serviceModule] =
+    await Promise.all([
+      import('../../shared/db'),
+      import('../../intelligence/workflows/payload-store'),
+      import('../../intelligence/workflows/payload-repository'),
+      import('../../intelligence/workflows/postgres-store'),
+      import('../../intelligence/workflows/service'),
+    ]);
   workflowRuntime = buildIntelligenceWorkflowRuntime({
     enabled: true,
     createService() {
@@ -42,6 +44,9 @@ if (config.INTELLIGENCE_WORKFLOWS_ENABLED) {
       return serviceModule.createWorkflowService({
         port: storeModule.createPostgresWorkflowStore(databaseModule.db),
         payloads: payloadModule.createStudioWorkflowPayloadStore(studioRuntime.store),
+        payloadRepository: payloadRepositoryModule.createPostgresWorkflowPayloadRepository(
+          databaseModule.db,
+        ),
       });
     },
   });

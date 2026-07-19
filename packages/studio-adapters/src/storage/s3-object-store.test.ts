@@ -420,6 +420,38 @@ describe('S3StudioObjectStore', () => {
     });
   });
 
+  test('accepts sub-second ListObjects precision when HeadObject truncates to the same second', async () => {
+    const listedModified = new Date('2026-07-01T10:00:00.308Z');
+    const headModified = new Date('2026-07-01T10:00:00.000Z');
+    const client = new RecordingClient(async (command) => {
+      if (command instanceof ListObjectsV2Command) {
+        return {
+          Contents: [
+            {
+              Key: 'fixed-prefix/accounts/a/submissions/hash/a.png',
+              ETag: '"etag-1"',
+              Size: BYTES.byteLength,
+              LastModified: listedModified,
+            },
+          ],
+          IsTruncated: false,
+        };
+      }
+      if (command instanceof HeadObjectCommand) {
+        return { ...storedOutput(), LastModified: headModified };
+      }
+      throw new Error('unexpected command');
+    });
+    const { store } = makeStore({ client });
+
+    await expect(
+      store.listObjects({ prefix: 'accounts/a/submissions/hash/', limit: 1 }),
+    ).resolves.toMatchObject({
+      objects: [{ last_modified: headModified.toISOString() }],
+      next_cursor: null,
+    });
+  });
+
   test('rejects conflicting native and metadata checksums from storage', async () => {
     const client = new RecordingClient(async (command) => {
       if (!(command instanceof HeadObjectCommand)) throw new Error('unexpected command');

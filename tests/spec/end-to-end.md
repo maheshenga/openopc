@@ -10,9 +10,11 @@
 
 `INTEL-4` A different project receives an opaque 404. A revoked project Agent is denied before task persistence, Studio job creation, or provider I/O. Every success and error response is scanned for the test-only private prompt, provider body, storage location, credential value, and settlement identifier.
 
-`INTEL-5` The real `kortix executor mcp` stdio process negotiates MCP revision `2025-11-25`, exposes only `studio_capabilities` and `studio_create_task` for this slice, uses the project-scoped HTTP contract, replays idempotently, and surfaces a stable redacted denial after Agent revocation.
+`INTEL-5` The real `kortix executor mcp` stdio process negotiates MCP revision `2025-11-25` and exposes the stable ordered Intelligence tools `studio_capabilities`, `studio_create_task`, `workflow_capabilities`, `workflow_start`, and `workflow_status`. It uses project-scoped HTTP contracts, replays task/workflow requests idempotently, and surfaces stable redacted task and workflow denials after Agent revocation. It exposes no per-node, per-model, video, voice, 3D, avatar, or batch-remix tool catalog.
 
 `INTEL-6` Production enablement remains outside this gate. The executable slice is limited to `studio.image.generate`; video, voice, 3D, avatar/digital-human, and batch-remix capabilities require their separate implementation plans and acceptance evidence.
+
+`INTEL-7` `POST /projects/:id/intelligence/workflows` starts and replays one versioned image-only workflow. A governed Planner proposal appends and seals one executor node, deterministic routing records the policy/evaluation versions, and the scheduler creates exactly one Intelligence task and one Studio job. A separate Reviewer result projects a high-risk decision into Review Center; a human approval pauses/resumes the run, the resumed lease is reclaimed, and public workflow events remain monotonic through `node_succeeded` and `run_succeeded`. A foreign project receives opaque 404, Agent revocation fails before payload/task/job/provider side effects, A2A maps the terminal run to `completed`, and telemetry/public responses pass redaction scans.
 
 ## Studio Provider and Storage Gates
 

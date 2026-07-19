@@ -1,5 +1,6 @@
 import type { WorkflowNode, WorkflowRun } from '@kortix/intelligence-contracts';
 import type { WorkflowPort, WorkflowScope } from '@kortix/intelligence-orchestration';
+import type { WorkflowTelemetry } from './metrics';
 import {
   type WorkflowImageTaskBridge,
   WorkflowTaskBridgeError,
@@ -51,6 +52,9 @@ export function createWorkflowScheduler(input: {
   intervalMs?: number;
   schedule?(callback: () => void, delayMs: number): unknown;
   cancelScheduled?(timer: unknown): void;
+  telemetry?: WorkflowTelemetry;
+  traceparent?(): string | null;
+  nowMilliseconds?(): number;
 }): WorkflowScheduler {
   if (
     input.workerId.trim() === '' ||
@@ -70,6 +74,7 @@ export function createWorkflowScheduler(input: {
   const cancelScheduled =
     input.cancelScheduled ??
     ((timer: unknown) => clearTimeout(timer as ReturnType<typeof setTimeout>));
+  const nowMilliseconds = input.nowMilliseconds ?? performance.now.bind(performance);
   let started = false;
   let lifecycleGeneration = 0;
   let scheduledTimer: unknown | null = null;
@@ -77,163 +82,182 @@ export function createWorkflowScheduler(input: {
 
   const scheduler: WorkflowScheduler = {
     async runOnce() {
-      if (!(await input.isReady())) return emptyStats();
-      const scopes = await input.listScopes();
-      if (scopes.length > 100) throw new Error('WORKFLOW_SCHEDULER_SCOPE_LIMIT_EXCEEDED');
       const stats = emptyStats();
-      stats.scopes = scopes.length;
-      for (const scope of scopes) {
-        while (stats.claimed < input.maxClaimsPerRun) {
-          const claimed = await input.workflow.claimReadyNode({
-            ...scope,
-            workerId: input.workerId,
-            now: input.now(),
-            leaseMs: input.leaseMs,
-          });
-          if (!claimed) break;
-          stats.claimed += 1;
-          let authorization: WorkflowNodeAuthorization | null = null;
-          try {
-            authorization = await input.authorizeNode({
+      const startedAt = nowMilliseconds();
+      let outcome: 'succeeded' | 'not_ready' | 'failed' = 'failed';
+      try {
+        if (!(await input.isReady())) {
+          outcome = 'not_ready';
+          return stats;
+        }
+        const scopes = await input.listScopes();
+        if (scopes.length > 100) throw new Error('WORKFLOW_SCHEDULER_SCOPE_LIMIT_EXCEEDED');
+        stats.scopes = scopes.length;
+        for (const scope of scopes) {
+          while (stats.claimed < input.maxClaimsPerRun) {
+            const claimed = await input.workflow.claimReadyNode({
+              ...scope,
+              workerId: input.workerId,
+              now: input.now(),
+              leaseMs: input.leaseMs,
+            });
+            if (!claimed) break;
+            stats.claimed += 1;
+            let authorization: WorkflowNodeAuthorization | null = null;
+            try {
+              authorization = await input.authorizeNode({
+                ...claimed,
+                workerId: input.workerId,
+                now: input.now(),
+              });
+            } catch {
+              authorization = null;
+            }
+            if (!authorization) {
+              const failed = await input.workflow.failNode({
+                ...scope,
+                runId: claimed.run.run_id,
+                nodeId: claimed.node.node_id,
+                workerId: input.workerId,
+                reasonCode: 'WORKFLOW_AUTHORIZATION_REVOKED',
+                retryable: false,
+                failedAt: input.now(),
+              });
+              if (failed) stats.failed += 1;
+              else stats.leaseLost += 1;
+              continue;
+            }
+            const leaseAlive = await input.workflow.heartbeatNode({
+              ...scope,
+              runId: claimed.run.run_id,
+              nodeId: claimed.node.node_id,
+              workerId: input.workerId,
+              now: input.now(),
+              leaseMs: input.leaseMs,
+            });
+            if (!leaseAlive) {
+              stats.leaseLost += 1;
+              continue;
+            }
+            if (claimed.node.task_id !== null) {
+              const reconciliation = await input.bridge.reconcile({
+                run: claimed.run,
+                node: claimed.node,
+                taskId: claimed.node.task_id,
+              });
+              await settleReconciliation(
+                input,
+                scope,
+                claimed.run,
+                claimed.node,
+                reconciliation,
+                stats,
+              );
+              continue;
+            }
+            const request = await input.readNodeRequest({
               ...claimed,
               workerId: input.workerId,
               now: input.now(),
             });
-          } catch {
-            authorization = null;
-          }
-          if (!authorization) {
-            const failed = await input.workflow.failNode({
+            if (request === null) {
+              const failed = await input.workflow.failNode({
+                ...scope,
+                runId: claimed.run.run_id,
+                nodeId: claimed.node.node_id,
+                workerId: input.workerId,
+                reasonCode: 'WORKFLOW_PAYLOAD_INVALID',
+                retryable: false,
+                failedAt: input.now(),
+              });
+              if (failed) stats.failed += 1;
+              else stats.leaseLost += 1;
+              continue;
+            }
+            const createLeaseAlive = await input.workflow.heartbeatNode({
               ...scope,
               runId: claimed.run.run_id,
               nodeId: claimed.node.node_id,
               workerId: input.workerId,
-              reasonCode: 'WORKFLOW_AUTHORIZATION_REVOKED',
-              retryable: false,
-              failedAt: input.now(),
+              now: input.now(),
+              leaseMs: input.leaseMs,
             });
-            if (failed) stats.failed += 1;
-            else stats.leaseLost += 1;
-            continue;
-          }
-          const leaseAlive = await input.workflow.heartbeatNode({
-            ...scope,
-            runId: claimed.run.run_id,
-            nodeId: claimed.node.node_id,
-            workerId: input.workerId,
-            now: input.now(),
-            leaseMs: input.leaseMs,
-          });
-          if (!leaseAlive) {
-            stats.leaseLost += 1;
-            continue;
-          }
-          if (claimed.node.task_id !== null) {
+            if (!createLeaseAlive) {
+              stats.leaseLost += 1;
+              continue;
+            }
+            let task: Awaited<ReturnType<WorkflowImageTaskBridge['createOrReplay']>>;
+            try {
+              task = await input.bridge.createOrReplay({
+                run: claimed.run,
+                node: claimed.node,
+                request,
+                parentTaskId: authorization.parentTaskId,
+                actingTokenId: authorization.actingTokenId,
+                sessionId: authorization.sessionId,
+              });
+            } catch (error) {
+              if (!(error instanceof WorkflowTaskBridgeError)) throw error;
+              const failed = await input.workflow.failNode({
+                ...scope,
+                runId: claimed.run.run_id,
+                nodeId: claimed.node.node_id,
+                workerId: input.workerId,
+                reasonCode: error.code,
+                retryable: false,
+                failedAt: input.now(),
+              });
+              if (failed) stats.failed += 1;
+              else stats.leaseLost += 1;
+              continue;
+            }
+            const attached = await input.workflow.attachTask({
+              ...scope,
+              runId: claimed.run.run_id,
+              nodeId: claimed.node.node_id,
+              workerId: input.workerId,
+              taskId: task.taskId,
+              updatedAt: input.now(),
+            });
+            if (!attached) {
+              stats.leaseLost += 1;
+              continue;
+            }
+            stats.attached += 1;
+            const reconcileLeaseAlive = await input.workflow.heartbeatNode({
+              ...scope,
+              runId: claimed.run.run_id,
+              nodeId: claimed.node.node_id,
+              workerId: input.workerId,
+              now: input.now(),
+              leaseMs: input.leaseMs,
+            });
+            if (!reconcileLeaseAlive) {
+              stats.leaseLost += 1;
+              continue;
+            }
             const reconciliation = await input.bridge.reconcile({
               run: claimed.run,
-              node: claimed.node,
-              taskId: claimed.node.task_id,
+              node: attached,
+              taskId: task.taskId,
             });
-            await settleReconciliation(
-              input,
-              scope,
-              claimed.run,
-              claimed.node,
-              reconciliation,
-              stats,
-            );
-            continue;
+            await settleReconciliation(input, scope, claimed.run, attached, reconciliation, stats);
           }
-          const request = await input.readNodeRequest({
-            ...claimed,
-            workerId: input.workerId,
-            now: input.now(),
+        }
+        outcome = 'succeeded';
+        return stats;
+      } finally {
+        try {
+          input.telemetry?.schedulerRun({
+            outcome,
+            durationSeconds: Math.max(0, nowMilliseconds() - startedAt) / 1_000,
+            traceparent: input.traceparent?.() ?? null,
+            stats: { ...stats },
           });
-          if (request === null) {
-            const failed = await input.workflow.failNode({
-              ...scope,
-              runId: claimed.run.run_id,
-              nodeId: claimed.node.node_id,
-              workerId: input.workerId,
-              reasonCode: 'WORKFLOW_PAYLOAD_INVALID',
-              retryable: false,
-              failedAt: input.now(),
-            });
-            if (failed) stats.failed += 1;
-            else stats.leaseLost += 1;
-            continue;
-          }
-          const createLeaseAlive = await input.workflow.heartbeatNode({
-            ...scope,
-            runId: claimed.run.run_id,
-            nodeId: claimed.node.node_id,
-            workerId: input.workerId,
-            now: input.now(),
-            leaseMs: input.leaseMs,
-          });
-          if (!createLeaseAlive) {
-            stats.leaseLost += 1;
-            continue;
-          }
-          let task: Awaited<ReturnType<WorkflowImageTaskBridge['createOrReplay']>>;
-          try {
-            task = await input.bridge.createOrReplay({
-              run: claimed.run,
-              node: claimed.node,
-              request,
-              parentTaskId: authorization.parentTaskId,
-              actingTokenId: authorization.actingTokenId,
-              sessionId: authorization.sessionId,
-            });
-          } catch (error) {
-            if (!(error instanceof WorkflowTaskBridgeError)) throw error;
-            const failed = await input.workflow.failNode({
-              ...scope,
-              runId: claimed.run.run_id,
-              nodeId: claimed.node.node_id,
-              workerId: input.workerId,
-              reasonCode: error.code,
-              retryable: false,
-              failedAt: input.now(),
-            });
-            if (failed) stats.failed += 1;
-            else stats.leaseLost += 1;
-            continue;
-          }
-          const attached = await input.workflow.attachTask({
-            ...scope,
-            runId: claimed.run.run_id,
-            nodeId: claimed.node.node_id,
-            workerId: input.workerId,
-            taskId: task.taskId,
-            updatedAt: input.now(),
-          });
-          if (!attached) {
-            stats.leaseLost += 1;
-            continue;
-          }
-          stats.attached += 1;
-          const reconcileLeaseAlive = await input.workflow.heartbeatNode({
-            ...scope,
-            runId: claimed.run.run_id,
-            nodeId: claimed.node.node_id,
-            workerId: input.workerId,
-            now: input.now(),
-            leaseMs: input.leaseMs,
-          });
-          if (!reconcileLeaseAlive) {
-            stats.leaseLost += 1;
-            continue;
-          }
-          const reconciliation = await input.bridge.reconcile({
-            run: claimed.run,
-            node: attached,
-            taskId: task.taskId,
-          });
-          await settleReconciliation(input, scope, claimed.run, attached, reconciliation, stats);
+        } catch {
+          // Observability must never change scheduler state or retries.
         }
       }
-      return stats;
     },
     start() {
       if (started) return;

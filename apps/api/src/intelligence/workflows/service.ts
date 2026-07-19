@@ -1,5 +1,5 @@
-import type { WorkflowNode, WorkflowRun } from '@kortix/intelligence-contracts';
 import type { StudioJobInput } from '@kortix/api-contract';
+import type { WorkflowNode, WorkflowRun } from '@kortix/intelligence-contracts';
 import {
   type IntelligenceRouteDecision,
   type IntelligenceRoutePolicySnapshot,
@@ -14,6 +14,7 @@ import {
 import type { CapabilityRegistryActor } from '../capability-registry';
 import type { IntelligenceRouteCandidateSource } from '../routing/candidate-source';
 import type { IntelligenceRouteDecisionStore } from '../routing/decision-store';
+import type { WorkflowPayloadRepository } from './payload-repository';
 import { WorkflowPayloadStoreError } from './payload-store';
 
 export type WorkflowServiceErrorCode =
@@ -42,6 +43,7 @@ export type WorkflowServiceOptions = {
   payloads: WorkflowPayloadStore;
   now?: () => string;
   authorizePayloadRead?: (input: WorkflowPayloadReadAuthorization) => Promise<boolean>;
+  payloadRepository?: WorkflowPayloadRepository;
   routing?: {
     candidateSource: Pick<IntelligenceRouteCandidateSource, 'listImageCandidates'>;
     decisionStore: IntelligenceRouteDecisionStore;
@@ -79,6 +81,7 @@ export interface WorkflowService extends WorkflowPort {
       expectedHash: string;
     },
   ): Promise<unknown | null>;
+  readNodePayloadForExecution(input: WorkflowPayloadReadAuthorization): Promise<unknown | null>;
   routeImageNode(input: WorkflowImageRouteInput): Promise<{
     decision: IntelligenceRouteDecision;
     created: boolean;
@@ -87,6 +90,32 @@ export interface WorkflowService extends WorkflowPort {
 
 export function createWorkflowService(options: WorkflowServiceOptions): WorkflowService {
   const now = options.now ?? (() => new Date().toISOString());
+
+  const readNodePayload: WorkflowService['readNodePayload'] = async (input) => {
+    const run = await options.port.getRun(input);
+    if (!run) return null;
+    if (!options.authorizePayloadRead) {
+      throw new WorkflowServiceError('WORKFLOW_PAYLOAD_AUTHORIZATION_REQUIRED');
+    }
+    if (!(await options.authorizePayloadRead(input))) {
+      throw new WorkflowServiceError('WORKFLOW_PAYLOAD_AUTHORIZATION_REQUIRED');
+    }
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await options.payloads.read(input);
+    } catch (error) {
+      if (error instanceof WorkflowPayloadStoreError) {
+        throw new WorkflowServiceError('WORKFLOW_PAYLOAD_INVALID');
+      }
+      throw error;
+    }
+    if (!bytes) return null;
+    try {
+      return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    } catch {
+      throw new WorkflowServiceError('WORKFLOW_PAYLOAD_INVALID');
+    }
+  };
 
   return {
     ...options.port,
@@ -137,7 +166,25 @@ export function createWorkflowService(options: WorkflowServiceOptions): Workflow
           requestHash,
           node: { ...input.node, input_hash: contentHash },
         });
-        if (!result.created) {
+        if (options.payloadRepository) {
+          let indexed: Awaited<ReturnType<WorkflowPayloadRepository['putNodeInput']>>;
+          try {
+            indexed = await options.payloadRepository.putNodeInput({
+              accountId: input.accountId,
+              projectId: input.projectId,
+              runId: input.runId,
+              nodeId: result.node.node_id,
+              payload: sealed,
+              createdAt: now(),
+            });
+          } catch (error) {
+            await cleanupPayload(options.payloads, input, sealed.payloadRef, contentHash);
+            throw error;
+          }
+          if (!indexed.created) {
+            await cleanupPayload(options.payloads, input, sealed.payloadRef, contentHash);
+          }
+        } else if (!result.created) {
           await cleanupPayload(options.payloads, input, sealed.payloadRef, contentHash);
         }
         return result;
@@ -147,30 +194,16 @@ export function createWorkflowService(options: WorkflowServiceOptions): Workflow
       }
     },
 
-    async readNodePayload(input) {
-      const run = await options.port.getRun(input);
-      if (!run) return null;
-      if (!options.authorizePayloadRead) {
-        throw new WorkflowServiceError('WORKFLOW_PAYLOAD_AUTHORIZATION_REQUIRED');
-      }
-      if (!(await options.authorizePayloadRead(input))) {
-        throw new WorkflowServiceError('WORKFLOW_PAYLOAD_AUTHORIZATION_REQUIRED');
-      }
-      let bytes: Uint8Array | null;
-      try {
-        bytes = await options.payloads.read(input);
-      } catch (error) {
-        if (error instanceof WorkflowPayloadStoreError) {
-          throw new WorkflowServiceError('WORKFLOW_PAYLOAD_INVALID');
-        }
-        throw error;
-      }
-      if (!bytes) return null;
-      try {
-        return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-      } catch {
-        throw new WorkflowServiceError('WORKFLOW_PAYLOAD_INVALID');
-      }
+    readNodePayload,
+
+    async readNodePayloadForExecution(input) {
+      const indexed = await options.payloadRepository?.getNodeInput(input);
+      if (!indexed) return null;
+      return readNodePayload({
+        ...input,
+        payloadRef: indexed.payloadRef,
+        expectedHash: indexed.contentHash,
+      });
     },
 
     async routeImageNode(input) {

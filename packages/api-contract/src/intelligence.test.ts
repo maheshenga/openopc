@@ -5,9 +5,9 @@ import {
   IntelligenceCreateTaskRequestSchema,
   IntelligenceErrorCodeSchema,
   IntelligenceExecutionTargetSchema,
-  IntelligenceWorkflowApprovalDecisionRequestSchema,
   IntelligenceWorkflowAddDependencyRequestSchema,
   IntelligenceWorkflowAppendNodeRequestSchema,
+  IntelligenceWorkflowApprovalDecisionRequestSchema,
   IntelligenceWorkflowCancelRequestSchema,
   IntelligenceWorkflowEventsResponseSchema,
   IntelligenceWorkflowNodeResponseSchema,
@@ -239,8 +239,8 @@ describe('Intelligence API contract', () => {
         node_key: 'render-primary',
         role: 'executor' as const,
         kind: 'capability' as const,
-        agent_name: null,
-        agent_card_hash: null,
+        agent_name: 'image-executor',
+        agent_card_hash: CARD_HASH,
         capability_id: 'studio.image.generate' as const,
         capability_version: '1.0.0' as const,
         policy_snapshot_hash: SHA256_HASH,
@@ -251,6 +251,12 @@ describe('Intelligence API contract', () => {
     };
 
     expect(IntelligenceWorkflowAppendNodeRequestSchema.parse(append)).toEqual(append);
+    expect(
+      IntelligenceWorkflowAppendNodeRequestSchema.safeParse({
+        ...append,
+        node: { ...append.node, agent_card_hash: null },
+      }).success,
+    ).toBe(false);
     expect(
       IntelligenceWorkflowAppendNodeRequestSchema.safeParse({
         ...append,

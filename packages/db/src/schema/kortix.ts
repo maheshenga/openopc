@@ -3094,6 +3094,11 @@ export const intelligenceWorkflowPayloads = kortixSchema.table(
       name: 'intelligence_workflow_payloads_node_fk',
     }).onDelete('cascade'),
     unique('intelligence_workflow_payloads_ref_unique').on(table.payloadRef),
+    unique('intelligence_workflow_payloads_run_node_purpose_unique').on(
+      table.runId,
+      table.nodeId,
+      table.purpose,
+    ),
     index('idx_intelligence_workflow_payloads_run_node').on(table.runId, table.nodeId),
     index('idx_intelligence_workflow_payloads_retention').on(
       table.retentionStatus,

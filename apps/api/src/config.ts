@@ -107,6 +107,9 @@ const envSchema = z.object({
   // routes plus the use-case-page button + install wizard. Single kill-switch;
   // off by default so it stays hidden in prod while templates are authored.
   KORTIX_TEMPLATES_ENABLED:         optBoolFalse,
+  // Durable Intelligence workflows remain extension-owned and inert until the
+  // full route, scheduler, Studio, and acceptance gates are explicitly enabled.
+  INTELLIGENCE_WORKFLOWS_ENABLED:   optBoolFalse,
 
   // ── Search Providers (optional — features degrade gracefully) ────────────
   TAVILY_API_URL:              optUrl('https://api.tavily.com'),
@@ -608,6 +611,7 @@ export const config = {
   // Single master switch — see schema docstring above.
   KORTIX_BILLING_INTERNAL_ENABLED: env.KORTIX_BILLING_INTERNAL_ENABLED,
   KORTIX_TEMPLATES_ENABLED: env.KORTIX_TEMPLATES_ENABLED,
+  INTELLIGENCE_WORKFLOWS_ENABLED: env.INTELLIGENCE_WORKFLOWS_ENABLED,
 
   // ─── Database ──────────────────────────────────────────────────────────────
   DATABASE_URL: env.DATABASE_URL,

@@ -3,6 +3,15 @@ import {
   CapabilityDescriptorSchema,
   ProtocolVersionSchema,
   TaskEventSchema,
+  WORKFLOW_MAX_DEPENDENCIES,
+  WORKFLOW_MAX_NODES,
+  WorkflowDependencySchema,
+  WorkflowEventSchema,
+  WorkflowNodeKindSchema,
+  WorkflowNodeSchema,
+  WorkflowProtocolVersionSchema,
+  WorkflowRoleSchema,
+  WorkflowRunSchema,
 } from '@kortix/intelligence-contracts';
 import { z } from 'zod';
 import { StudioJobInputSchema } from './studio';
@@ -27,6 +36,10 @@ export const IntelligenceErrorCodeSchema = z.enum([
   'INTELLIGENCE_TASK_EXECUTION_FAILED',
   'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE',
   'INTELLIGENCE_VALIDATION_ERROR',
+  'INTELLIGENCE_WORKFLOW_CONFLICT',
+  'INTELLIGENCE_WORKFLOW_UNAVAILABLE',
+  'INTELLIGENCE_WORKFLOW_UNTRUSTED',
+  'INTELLIGENCE_WORKFLOW_VALIDATION_ERROR',
 ]);
 export type IntelligenceErrorCode = z.infer<typeof IntelligenceErrorCodeSchema>;
 const URI_SCHEME_PATTERN = /^[a-z][a-z\d+.-]*:/i;
@@ -49,6 +62,8 @@ const SENSITIVE_PUBLIC_KEY_PATTERN =
   /(^|[._-])(api[_-]?key|secret|token|access[_-]?token|password|credential|authorization|cookie|signed[_-]?url|provider[_-]?url|base[_-]?url|signature|x[_-]?amz)([._-]|$)/i;
 const UNSAFE_PUBLIC_URL_PATTERN = /(?:[a-z][a-z\d+.-]*:\/\/|\/\/)/i;
 const UNSAFE_PUBLIC_SCHEME_PATTERN = /(?:^|[\s"'=(:,])(data|file|mailto|javascript|blob|urn):/i;
+const UNSAFE_WORKFLOW_SECRET_TEXT_PATTERN =
+  /(?:api[_-]?key|secret|password|credential|authorization|access[_-]?token)\s*[:=]|\bbearer\s+[A-Za-z0-9._-]{8,}/i;
 const StrictStudioJobInputSchema = z
   .object({
     capability: z.literal('image.generate'),
@@ -125,6 +140,201 @@ export const IntelligenceCreateTaskRequestSchema = z
   })
   .strict();
 export type IntelligenceCreateTaskRequest = z.infer<typeof IntelligenceCreateTaskRequestSchema>;
+
+const WorkflowSha256HashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const WorkflowVersionIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+const WorkflowNodeKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*$/);
+const WorkflowReasonCodeSchema = z.string().regex(/^[A-Z][A-Z0-9_.-]{0,127}$/);
+const WorkflowPayloadSchema = z.record(z.string(), z.unknown()).superRefine((value, context) => {
+  if (Object.keys(value).length > 128 || encodedJsonSize(value) > 1024 * 1024) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'workflow payload exceeds the public request limit',
+    });
+    return;
+  }
+  if (hasUnsafeWorkflowPayload(value)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'workflow payload cannot contain credentials or provider URLs',
+    });
+  }
+});
+
+export const IntelligenceWorkflowStartRequestSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    idempotency_key: z.string().trim().min(16).max(255),
+    goal: z.string().trim().min(1).max(16_384),
+    context_asset_ids: z.array(z.string().uuid()).max(64),
+    policy_snapshot_hash: WorkflowSha256HashSchema.nullable(),
+    evaluation_version: WorkflowVersionIdSchema.nullable(),
+    max_nodes: z.number().int().positive().max(WORKFLOW_MAX_NODES),
+    max_dependencies: z.number().int().nonnegative().max(WORKFLOW_MAX_DEPENDENCIES),
+    max_approved_credits: z.number().finite().nonnegative().max(1_000_000),
+    deadline_at: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (hasUnsafeWorkflowPayload(value.goal)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'workflow goal cannot contain provider URLs',
+        path: ['goal'],
+      });
+    }
+  });
+export type IntelligenceWorkflowStartRequest = z.infer<
+  typeof IntelligenceWorkflowStartRequestSchema
+>;
+
+const IntelligenceWorkflowNodeInputSchema = z
+  .object({
+    node_id: z.string().uuid(),
+    node_key: WorkflowNodeKeySchema,
+    role: WorkflowRoleSchema,
+    kind: WorkflowNodeKindSchema,
+    agent_name: z.string().trim().min(1).max(255).nullable(),
+    agent_card_hash: HashSchema.nullable(),
+    capability_id: z.literal('studio.image.generate').nullable(),
+    capability_version: z.literal('1.0.0').nullable(),
+    policy_snapshot_hash: WorkflowSha256HashSchema.nullable(),
+    evaluation_version: WorkflowVersionIdSchema.nullable(),
+    deadline_at: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict()
+  .superRefine((node, context) => {
+    const capabilityIdentity =
+      node.capability_id === 'studio.image.generate' && node.capability_version === '1.0.0';
+    if ((node.kind === 'capability') !== capabilityIdentity) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'workflow capability identity does not match node kind',
+        path: ['kind'],
+      });
+    }
+    const agentIdentity = node.agent_name !== null && node.agent_card_hash !== null;
+    if ((node.kind === 'agent') !== agentIdentity) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'workflow Agent identity does not match node kind',
+        path: ['agent_name'],
+      });
+    }
+  });
+
+export const IntelligenceWorkflowAppendNodeRequestSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    sender_card_hash: HashSchema,
+    expected_graph_version: z.number().int().nonnegative(),
+    idempotency_key: z.string().trim().min(16).max(255),
+    node: IntelligenceWorkflowNodeInputSchema,
+    payload: WorkflowPayloadSchema,
+  })
+  .strict();
+export type IntelligenceWorkflowAppendNodeRequest = z.infer<
+  typeof IntelligenceWorkflowAppendNodeRequestSchema
+>;
+
+export const IntelligenceWorkflowAddDependencyRequestSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    sender_card_hash: HashSchema,
+    expected_graph_version: z.number().int().nonnegative(),
+    dependency_id: z.string().uuid(),
+    node_id: z.string().uuid(),
+    depends_on_node_id: z.string().uuid(),
+    condition: z.enum(['on_success', 'on_completion']),
+  })
+  .strict();
+export type IntelligenceWorkflowAddDependencyRequest = z.infer<
+  typeof IntelligenceWorkflowAddDependencyRequestSchema
+>;
+
+export const IntelligenceWorkflowSealRequestSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    sender_card_hash: HashSchema,
+    expected_graph_version: z.number().int().nonnegative(),
+  })
+  .strict();
+export type IntelligenceWorkflowSealRequest = z.infer<typeof IntelligenceWorkflowSealRequestSchema>;
+
+export const IntelligenceWorkflowCancelRequestSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    reason_code: WorkflowReasonCodeSchema,
+  })
+  .strict();
+export type IntelligenceWorkflowCancelRequest = z.infer<
+  typeof IntelligenceWorkflowCancelRequestSchema
+>;
+
+export const IntelligenceWorkflowStartResponseSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    run: WorkflowRunSchema,
+    created: z.boolean(),
+  })
+  .strict();
+export type IntelligenceWorkflowStartResponse = z.infer<
+  typeof IntelligenceWorkflowStartResponseSchema
+>;
+
+export const IntelligenceWorkflowRunResponseSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    run: WorkflowRunSchema,
+  })
+  .strict();
+export type IntelligenceWorkflowRunResponse = z.infer<typeof IntelligenceWorkflowRunResponseSchema>;
+
+export const IntelligenceWorkflowNodeResponseSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    node: WorkflowNodeSchema,
+    created: z.boolean(),
+    graph_version: z.number().int().nonnegative(),
+  })
+  .strict();
+export type IntelligenceWorkflowNodeResponse = z.infer<
+  typeof IntelligenceWorkflowNodeResponseSchema
+>;
+
+export const IntelligenceWorkflowDependencyResponseSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    dependency: WorkflowDependencySchema,
+    created: z.boolean(),
+    graph_version: z.number().int().nonnegative(),
+  })
+  .strict();
+export type IntelligenceWorkflowDependencyResponse = z.infer<
+  typeof IntelligenceWorkflowDependencyResponseSchema
+>;
+
+export const IntelligenceWorkflowEventsResponseSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    run_id: z.string().uuid(),
+    items: z.array(WorkflowEventSchema).max(100),
+    next_cursor: CursorSchema,
+  })
+  .strict();
+export type IntelligenceWorkflowEventsResponse = z.infer<
+  typeof IntelligenceWorkflowEventsResponseSchema
+>;
 
 const IntelligenceA2ARequestIdSchema = z.union([
   z.string().trim().min(1).max(256),
@@ -219,4 +429,23 @@ function hasUnsafePublicPayload(value: unknown): boolean {
   return Object.entries(value).some(
     ([key, nested]) => SENSITIVE_PUBLIC_KEY_PATTERN.test(key) || hasUnsafePublicPayload(nested),
   );
+}
+
+function hasUnsafeWorkflowPayload(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return hasUnsafePublicPayload(value) || UNSAFE_WORKFLOW_SECRET_TEXT_PATTERN.test(value);
+  }
+  if (Array.isArray(value)) return value.some(hasUnsafeWorkflowPayload);
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value).some(
+    ([key, nested]) => SENSITIVE_PUBLIC_KEY_PATTERN.test(key) || hasUnsafeWorkflowPayload(nested),
+  );
+}
+
+function encodedJsonSize(value: unknown): number {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
 }

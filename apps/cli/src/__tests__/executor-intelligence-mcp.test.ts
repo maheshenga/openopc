@@ -5,6 +5,9 @@ import type {
   IntelligenceCapabilitiesResponse,
   IntelligenceCapabilityDiscoveryResponse,
   IntelligenceCreateTaskRequest,
+  IntelligenceWorkflowRunResponse,
+  IntelligenceWorkflowStartRequest,
+  IntelligenceWorkflowStartResponse,
 } from '@kortix/api-contract';
 import type { ExecutorClient } from '@kortix/executor-sdk';
 import { IntelligenceClientError } from '../executor/intelligence.ts';
@@ -13,6 +16,10 @@ import { type IntelligenceMcpDependencies, handleExecutorMcpRequest } from '../e
 const PROVIDER_CONFIG_ID = '14000000-0000-4000-a000-000000000001';
 const TASK_ID = '15000000-0000-4000-a000-000000000001';
 const CARD_HASH = 'a'.repeat(64);
+const PROJECT_ID = '12000000-0000-4000-a000-000000000001';
+const RUN_ID = '16000000-0000-4000-a000-000000000001';
+const SHA256_HASH = `sha256:${'b'.repeat(64)}`;
+const NOW = '2026-07-19T10:00:00.000Z';
 
 const capabilities: IntelligenceCapabilitiesResponse = {
   protocol_version: 'intelligence.v1' as const,
@@ -55,6 +62,40 @@ const agentCard: IntelligenceAgentCardResponse = {
   card_hash: CARD_HASH,
 };
 
+const workflowRun = {
+  protocol_version: 'intelligence.workflow.v1' as const,
+  run_id: RUN_ID,
+  account_id: '19000000-0000-4000-a000-000000000001',
+  project_id: PROJECT_ID,
+  actor_type: 'agent' as const,
+  actor_id: '1a000000-0000-4000-a000-000000000001',
+  agent_name: 'content-planner',
+  idempotency_key: 'mcp-workflow-run-0001',
+  request_hash: SHA256_HASH,
+  status: 'draft' as const,
+  graph_version: 0,
+  policy_snapshot_hash: SHA256_HASH,
+  evaluation_version: null,
+  max_nodes: 16,
+  max_dependencies: 32,
+  max_approved_credits: 100,
+  deadline_at: null,
+  created_at: NOW,
+  updated_at: NOW,
+  terminal_at: null,
+};
+
+const workflowStartResponse: IntelligenceWorkflowStartResponse = {
+  protocol_version: 'intelligence.workflow.v1',
+  run: workflowRun,
+  created: true,
+};
+
+const workflowRunResponse: IntelligenceWorkflowRunResponse = {
+  protocol_version: 'intelligence.workflow.v1',
+  run: workflowRun,
+};
+
 function createDeps(
   overrides: Partial<IntelligenceMcpDependencies> = {},
 ): IntelligenceMcpDependencies {
@@ -62,6 +103,8 @@ function createDeps(
     discoverCapabilities: async () => discovery,
     getAgentCard: async () => agentCard,
     createTask: async (_request: IntelligenceCreateTaskRequest) => TASK_ID,
+    startWorkflow: async (_request: IntelligenceWorkflowStartRequest) => workflowStartResponse,
+    getWorkflow: async () => workflowRunResponse,
     canCreateTask: () => true,
     ...overrides,
   };
@@ -70,7 +113,7 @@ function createDeps(
 const executor = {} as ExecutorClient;
 
 describe('Executor Intelligence MCP tools', () => {
-  test('adds two stable tools without changing the existing meta-tool order', async () => {
+  test('appends workflow meta-tools without changing the existing tool order', async () => {
     const result = (await handleExecutorMcpRequest(
       { jsonrpc: '2.0', id: 1, method: 'tools/list' },
       executor,
@@ -120,6 +163,151 @@ describe('Executor Intelligence MCP tools', () => {
     expect(Object.keys(createSchema.properties)).not.toContain('provider_url');
     expect(Object.keys(createSchema.properties)).not.toContain('credential');
     expect(Object.keys(createSchema.properties)).not.toContain('secret');
+    expect(result.tools.map((tool) => tool.name)).toEqual([
+      'connectors',
+      'discover',
+      'describe',
+      'call',
+      'connect',
+      'request_secret',
+      'add_connector',
+      'remove_connector',
+      'studio_capabilities',
+      'studio_create_task',
+      'workflow_capabilities',
+      'workflow_start',
+      'workflow_status',
+    ]);
+    const workflowStart = result.tools.find((tool) => tool.name === 'workflow_start');
+    expect(workflowStart).toMatchObject({
+      annotations: { readOnlyHint: false },
+      inputSchema: { additionalProperties: false },
+    });
+    expect(Object.keys((workflowStart?.inputSchema as { properties: object }).properties)).not.toContain(
+      'protocol_version',
+    );
+    expect(JSON.stringify(workflowStart)).not.toMatch(/provider_url|credential|secret/i);
+  });
+
+  test('negotiates only supported MCP revisions and falls back to the latest revision', async () => {
+    const initialize = async (protocolVersion?: string) =>
+      (await handleExecutorMcpRequest(
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: protocolVersion === undefined ? {} : { protocolVersion },
+        },
+        executor,
+        createDeps(),
+      )) as { protocolVersion: string };
+
+    expect((await initialize('2025-11-25')).protocolVersion).toBe('2025-11-25');
+    expect((await initialize('2025-06-18')).protocolVersion).toBe('2025-06-18');
+    expect((await initialize('2099-01-01')).protocolVersion).toBe('2025-11-25');
+    expect((await initialize()).protocolVersion).toBe('2025-11-25');
+  });
+
+  test('exposes strict redacted workflow capability, start, and status tools', async () => {
+    let startCalls = 0;
+    const deps = createDeps({
+      getProjectId: () => PROJECT_ID,
+      startWorkflow: async (request, projectOverride) => {
+        startCalls += 1;
+        expect(projectOverride).toBe(PROJECT_ID);
+        expect(request.protocol_version).toBe('intelligence.workflow.v1');
+        return workflowStartResponse;
+      },
+      getWorkflow: async (runId, projectOverride) => {
+        expect(runId).toBe(RUN_ID);
+        expect(projectOverride).toBe(PROJECT_ID);
+        return workflowRunResponse;
+      },
+    });
+
+    const capabilityResult = await callTool('workflow_capabilities', {}, deps);
+    expect(capabilityResult.isError).toBe(false);
+    expect(JSON.parse(capabilityResult.content[0]?.text ?? '{}')).toEqual({
+      protocol_version: 'intelligence.workflow.v1',
+      capabilities: [{ capability_id: 'studio.image.generate', capability_version: '1.0.0' }],
+      limits: { max_nodes: 128, max_dependencies: 256, max_depth: 16, max_fan_out: 16 },
+    });
+
+    const args = workflowStartArgs();
+    const started = await callTool('workflow_start', args, deps);
+    expect(started.isError).toBe(false);
+    expect(JSON.parse(started.content[0]?.text ?? '{}')).toEqual({
+      ok: true,
+      protocol_version: 'intelligence.workflow.v1',
+      run_id: RUN_ID,
+      status: 'draft',
+      created: true,
+    });
+
+    const invalid = await callTool(
+      'workflow_start',
+      { ...args, provider_url: 'https://forbidden.example.test' },
+      deps,
+    );
+    expect(invalid.isError).toBe(true);
+    expect(startCalls).toBe(1);
+
+    const status = await callTool('workflow_status', { run_id: RUN_ID }, deps);
+    expect(status.isError).toBe(false);
+    const statusPayload = JSON.parse(status.content[0]?.text ?? '{}');
+    expect(statusPayload).toEqual({
+      ok: true,
+      protocol_version: 'intelligence.workflow.v1',
+      run_id: RUN_ID,
+      status: 'draft',
+      graph_version: 0,
+      updated_at: NOW,
+      terminal_at: null,
+    });
+    expect(JSON.stringify(statusPayload)).not.toMatch(/prompt|payload_ref|provider|credential/i);
+  });
+
+  test('revalidates injected workflow responses before writing MCP stdout', async () => {
+    const malformed = {
+      ...workflowStartResponse,
+      provider_url: 'https://forbidden.example.test',
+    } as unknown as IntelligenceWorkflowStartResponse;
+    const result = await callTool(
+      'workflow_start',
+      workflowStartArgs(),
+      createDeps({
+        getProjectId: () => PROJECT_ID,
+        startWorkflow: async () => malformed,
+      }),
+    );
+
+    expect(result.isError).toBe(true);
+    const text = result.content[0]?.text ?? '';
+    expect(text).not.toContain('forbidden.example.test');
+    expect(JSON.parse(text)).toMatchObject({ ok: false, code: 'INTELLIGENCE_PROTOCOL_ERROR' });
+  });
+
+  test('rejects an injected workflow response from another project scope', async () => {
+    const result = await callTool(
+      'workflow_status',
+      { run_id: RUN_ID },
+      createDeps({
+        getProjectId: () => PROJECT_ID,
+        getWorkflow: async () => ({
+          ...workflowRunResponse,
+          run: {
+            ...workflowRunResponse.run,
+            project_id: '12000000-0000-4000-a000-000000000099',
+          },
+        }),
+      }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0]?.text ?? '{}')).toMatchObject({
+      ok: false,
+      code: 'INTELLIGENCE_PROTOCOL_ERROR',
+    });
   });
 
   test('keeps the advertised model schema aligned with request validation', async () => {
@@ -711,6 +899,20 @@ async function callTool(
     executor,
     deps,
   )) as { content: Array<{ type: string; text: string }>; isError: boolean };
+}
+
+function workflowStartArgs(): Omit<IntelligenceWorkflowStartRequest, 'protocol_version'> {
+  return {
+    idempotency_key: 'mcp-workflow-run-0001',
+    goal: 'Create a governed image workflow',
+    context_asset_ids: [],
+    policy_snapshot_hash: SHA256_HASH,
+    evaluation_version: null,
+    max_nodes: 16,
+    max_dependencies: 32,
+    max_approved_credits: 100,
+    deadline_at: null,
+  };
 }
 
 function validToolArgs(target = executionTarget) {

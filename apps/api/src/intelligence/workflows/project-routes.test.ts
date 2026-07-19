@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import type {
+  IntelligenceWorkflowApprovalDecisionRequest,
   IntelligenceWorkflowAddDependencyRequest,
   IntelligenceWorkflowAppendNodeRequest,
   IntelligenceWorkflowSealRequest,
   IntelligenceWorkflowStartRequest,
 } from '@kortix/api-contract';
+import type { WorkflowApproval, WorkflowNode } from '@kortix/intelligence-contracts';
 import { InMemoryStudioObjectStore } from '@kortix/studio-runtime';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -23,6 +25,7 @@ const NODE_ID = '62000000-0000-4000-a000-000000000001';
 const OTHER_NODE_ID = '62000000-0000-4000-a000-000000000002';
 const THIRD_NODE_ID = '62000000-0000-4000-a000-000000000003';
 const DEPENDENCY_ID = '65000000-0000-4000-a000-000000000001';
+const APPROVAL_ID = '67000000-0000-4000-a000-000000000001';
 const IAM_TOKEN_ID = '68000000-0000-4000-a000-000000000001';
 const CARD_HASH = 'b'.repeat(64);
 const SHA256_HASH = `sha256:${'a'.repeat(64)}`;
@@ -127,7 +130,7 @@ function createApp(options: TestOptions = {}) {
     }
     return context.json({ error: 'Internal error' }, 500);
   });
-  return { app, actions, trustCalls };
+  return { app, actions, trustCalls, service };
 }
 
 async function post(app: Hono, path: string, body: unknown) {
@@ -140,6 +143,80 @@ async function post(app: Hono, path: string, body: unknown) {
 
 async function start(app: Hono, projectId = PROJECT_ID) {
   return post(app, `/v1/projects/${projectId}/intelligence/workflows`, startRequest());
+}
+
+async function pauseForApproval(appState: ReturnType<typeof createApp>) {
+  await start(appState.app);
+  const request = appendRequest();
+  const node: WorkflowNode = {
+    protocol_version: 'intelligence.workflow.v1',
+    node_id: request.node.node_id,
+    run_id: RUN_ID,
+    node_key: request.node.node_key,
+    role: request.node.role,
+    kind: request.node.kind,
+    agent_name: request.node.agent_name,
+    agent_card_hash: request.node.agent_card_hash,
+    capability_id: request.node.capability_id,
+    capability_version: request.node.capability_version,
+    input_hash: SHA256_HASH,
+    policy_snapshot_hash: request.node.policy_snapshot_hash,
+    evaluation_version: request.node.evaluation_version,
+    task_id: null,
+    status: 'pending',
+    attempt_count: 0,
+    deadline_at: null,
+    created_at: NOW,
+    updated_at: NOW,
+    terminal_at: null,
+  };
+  await appState.service.appendNodeWithPayload({
+    accountId: ACCOUNT_ID,
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    expectedGraphVersion: 0,
+    idempotencyKey: request.idempotency_key,
+    node,
+    payload: request.payload,
+  });
+  await appState.service.sealGraph({
+    accountId: ACCOUNT_ID,
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    expectedGraphVersion: 1,
+    updatedAt: NOW,
+  });
+  await appState.service.claimReadyNode({
+    accountId: ACCOUNT_ID,
+    projectId: PROJECT_ID,
+    workerId: 'workflow-route-worker',
+    now: NOW,
+    leaseMs: 60_000,
+  });
+  const approval: WorkflowApproval = {
+    protocol_version: 'intelligence.workflow.v1',
+    approval_id: APPROVAL_ID,
+    run_id: RUN_ID,
+    node_id: NODE_ID,
+    risk: 'high',
+    reason_code: 'WORKFLOW_POLICY_APPROVAL_REQUIRED',
+    action_summary: 'Approve image generation',
+    status: 'pending',
+    review_item_id: null,
+    acting_user_id: null,
+    decision: null,
+    feedback_hash: null,
+    requested_at: NOW,
+    resolved_at: null,
+  };
+  await appState.service.pauseForApproval({
+    accountId: ACCOUNT_ID,
+    projectId: PROJECT_ID,
+    runId: RUN_ID,
+    nodeId: NODE_ID,
+    workerId: 'workflow-route-worker',
+    approval,
+  });
 }
 
 describe('intelligence workflow project routes', () => {
@@ -188,6 +265,65 @@ describe('intelligence workflow project routes', () => {
     expect(cancelled.status).toBe(200);
     expect(actions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_READ);
     expect(actions).toContain(PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_CANCEL);
+  });
+
+  test('lets only a human with project.review.act resolve a scoped approval', async () => {
+    const human = createApp();
+    await pauseForApproval(human);
+    const request: IntelligenceWorkflowApprovalDecisionRequest = {
+      protocol_version: 'intelligence.workflow.v1',
+      decision: 'approve',
+      feedback_hash: SHA256_HASH,
+    };
+
+    const approved = await post(
+      human.app,
+      `/v1/projects/${PROJECT_ID}/intelligence/workflows/${RUN_ID}/approvals/${APPROVAL_ID}/decision`,
+      request,
+    );
+    expect(approved.status).toBe(200);
+    const body = await approved.json();
+    expect(body).toMatchObject({
+      protocol_version: 'intelligence.workflow.v1',
+      run: { run_id: RUN_ID },
+      node: { node_id: NODE_ID, status: 'running' },
+      approval: {
+        approval_id: APPROVAL_ID,
+        status: 'approved',
+        acting_user_id: USER_ID,
+        decision: 'approve',
+        feedback_hash: SHA256_HASH,
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/payload_ref|prompt|provider|credential/i);
+    expect(human.actions).toContain(PROJECT_ACTIONS.PROJECT_REVIEW_ACT);
+
+    const agent = createApp({ actor: 'agent' });
+    await pauseForApproval(agent);
+    const forbidden = await post(
+      agent.app,
+      `/v1/projects/${PROJECT_ID}/intelligence/workflows/${RUN_ID}/approvals/${APPROVAL_ID}/decision`,
+      request,
+    );
+    expect(forbidden.status).toBe(403);
+  });
+
+  test('returns opaque 404 for unknown workflow approval identifiers', async () => {
+    const state = createApp();
+    await pauseForApproval(state);
+    const request: IntelligenceWorkflowApprovalDecisionRequest = {
+      protocol_version: 'intelligence.workflow.v1',
+      decision: 'reject',
+      feedback_hash: null,
+    };
+
+    const missing = await post(
+      state.app,
+      `/v1/projects/${PROJECT_ID}/intelligence/workflows/${RUN_ID}/approvals/67000000-0000-4000-a000-000000000099/decision`,
+      request,
+    );
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: 'Not found' });
   });
 
   test('allows only a trusted granted Agent to mutate and seal the graph', async () => {

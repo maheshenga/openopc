@@ -604,6 +604,22 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
           events: (taskId: string, cursor?: string | null) =>
             P.getIntelligenceTaskEvents(projectId, taskId, cursor),
         },
+        workflows: {
+          start: (input: Parameters<typeof P.startIntelligenceWorkflow>[1]) =>
+            P.startIntelligenceWorkflow(projectId, input),
+          get: (runId: string) => P.getIntelligenceWorkflow(projectId, runId),
+          cancel: (
+            runId: string,
+            input: Parameters<typeof P.cancelIntelligenceWorkflow>[2],
+          ) => P.cancelIntelligenceWorkflow(projectId, runId, input),
+          events: (runId: string, cursor?: string | null, limit?: number) =>
+            P.getIntelligenceWorkflowEvents(projectId, runId, cursor, limit),
+          decideApproval: (
+            runId: string,
+            approvalId: string,
+            input: Parameters<typeof P.decideIntelligenceWorkflowApproval>[3],
+          ) => P.decideIntelligenceWorkflowApproval(projectId, runId, approvalId, input),
+        },
       },
 
       /** Set the agent used when a new project session does not name one explicitly. */

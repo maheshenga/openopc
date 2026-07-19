@@ -5,6 +5,12 @@ import {
   type IntelligenceCreateTaskRequest,
   IntelligenceCreateTaskRequestSchema,
   IntelligenceTaskResponseSchema,
+  type IntelligenceWorkflowRunResponse,
+  IntelligenceWorkflowRunResponseSchema,
+  type IntelligenceWorkflowStartRequest,
+  IntelligenceWorkflowStartRequestSchema,
+  type IntelligenceWorkflowStartResponse,
+  IntelligenceWorkflowStartResponseSchema,
 } from '@kortix/api-contract';
 import type {
   IntelligenceAgentCardResponse,
@@ -31,6 +37,10 @@ const SAFE_INTELLIGENCE_CODES = [
   'INTELLIGENCE_TASK_EXECUTION_FAILED',
   'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE',
   'INTELLIGENCE_VALIDATION_ERROR',
+  'INTELLIGENCE_WORKFLOW_CONFLICT',
+  'INTELLIGENCE_WORKFLOW_UNAVAILABLE',
+  'INTELLIGENCE_WORKFLOW_UNTRUSTED',
+  'INTELLIGENCE_WORKFLOW_VALIDATION_ERROR',
 ] as const;
 type SafeIntelligenceCode = (typeof SAFE_INTELLIGENCE_CODES)[number];
 const SAFE_INTELLIGENCE_CODE_SET = new Set<SafeIntelligenceCode>(SAFE_INTELLIGENCE_CODES);
@@ -40,6 +50,9 @@ export type {
   IntelligenceCapabilityDiscoveryResponse,
   IntelligenceCapabilitiesResponse,
   IntelligenceCreateTaskRequest,
+  IntelligenceWorkflowRunResponse,
+  IntelligenceWorkflowStartRequest,
+  IntelligenceWorkflowStartResponse,
 } from '@kortix/api-contract';
 
 export interface IntelligenceCapabilityDiscoveryStatus {
@@ -161,6 +174,54 @@ export function parseIntelligenceCreateTaskRequest(
   input: unknown,
 ): IntelligenceCreateTaskRequest | null {
   const parsed = IntelligenceCreateTaskRequestSchema.safeParse(input);
+  return parsed.success ? parsed.data : null;
+}
+
+export async function startIntelligenceWorkflow(
+  input: unknown,
+  projectOverride?: string,
+): Promise<IntelligenceWorkflowStartResponse> {
+  const request = parseIntelligenceWorkflowStartRequest(input);
+  if (!request) {
+    throw new IntelligenceClientError('INTELLIGENCE_WORKFLOW_VALIDATION_ERROR', 400);
+  }
+  const { client, projectId } = intelligenceProjectContext(projectOverride);
+  let response: unknown;
+  try {
+    response = await client.post<unknown>(
+      `/projects/${encodeURIComponent(projectId)}/intelligence/workflows`,
+      request,
+    );
+  } catch (error) {
+    throw mapIntelligenceError(error);
+  }
+  const parsed = IntelligenceWorkflowStartResponseSchema.safeParse(response);
+  if (!parsed.success) throw new IntelligenceClientError('INTELLIGENCE_PROTOCOL_ERROR', 0);
+  return parsed.data;
+}
+
+export async function getIntelligenceWorkflow(
+  runId: string,
+  projectOverride?: string,
+): Promise<IntelligenceWorkflowRunResponse> {
+  const { client, projectId } = intelligenceProjectContext(projectOverride);
+  let response: unknown;
+  try {
+    response = await client.get<unknown>(
+      `/projects/${encodeURIComponent(projectId)}/intelligence/workflows/${encodeURIComponent(runId)}`,
+    );
+  } catch (error) {
+    throw mapIntelligenceError(error);
+  }
+  const parsed = IntelligenceWorkflowRunResponseSchema.safeParse(response);
+  if (!parsed.success) throw new IntelligenceClientError('INTELLIGENCE_PROTOCOL_ERROR', 0);
+  return parsed.data;
+}
+
+export function parseIntelligenceWorkflowStartRequest(
+  input: unknown,
+): IntelligenceWorkflowStartRequest | null {
+  const parsed = IntelligenceWorkflowStartRequestSchema.safeParse(input);
   return parsed.success ? parsed.data : null;
 }
 

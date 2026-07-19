@@ -42,7 +42,7 @@ test('project(id) handle binds the id and hits the right endpoint', async () => 
   expect(last().method).toBe('GET');
 });
 
-test('project(id).intelligence binds capability, card, task, and event endpoints', async () => {
+test('project(id).intelligence binds capability, task, and workflow endpoints', async () => {
   globalThis.fetch = mock(async (url: unknown, opts: { method?: string; body?: unknown } = {}) => {
     const requestUrl = String(url);
     calls.push({
@@ -120,6 +120,11 @@ test('project(id).intelligence binds capability, card, task, and event endpoints
   expect(typeof project.intelligence.agentCard.get).toBe('function');
   expect(typeof project.intelligence.tasks.create).toBe('function');
   expect(typeof project.intelligence.tasks.events).toBe('function');
+  expect(typeof project.intelligence.workflows.start).toBe('function');
+  expect(typeof project.intelligence.workflows.get).toBe('function');
+  expect(typeof project.intelligence.workflows.cancel).toBe('function');
+  expect(typeof project.intelligence.workflows.events).toBe('function');
+  expect(typeof project.intelligence.workflows.decideApproval).toBe('function');
 
   await project.intelligence.capabilities.list();
   expect(last().url).toContain('/projects/PID123/intelligence/capabilities');

@@ -16,12 +16,20 @@ const {
   intelligenceCapabilityDiscoveryKey,
   intelligenceCapabilitiesKey,
   intelligenceTaskEventsKey,
+  intelligenceWorkflowEventsKey,
+  intelligenceWorkflowKey,
+  intelligenceWorkflowsKey,
+  useCancelIntelligenceWorkflow,
   useCreateIntelligenceTask,
+  useDecideIntelligenceWorkflowApproval,
   useIntelligence,
   useIntelligenceAgentCard,
   useIntelligenceCapabilityDiscovery,
   useIntelligenceCapabilities,
   useIntelligenceTaskEvents,
+  useIntelligenceWorkflow,
+  useIntelligenceWorkflowEvents,
+  useStartIntelligenceWorkflow,
 } = await import('./use-intelligence');
 
 type MockQueryConfig = {
@@ -53,6 +61,13 @@ describe('Intelligence React Query bindings', () => {
     ).toEqual(intelligenceTaskEventsKey('project-1', 'task-1', 'cursor-1'));
     expect(asMockQueryConfig(useIntelligenceCapabilities(null)).enabled).toBe(false);
     expect(asMockQueryConfig(useIntelligenceTaskEvents('project-1', '')).enabled).toBe(false);
+    expect(asMockQueryConfig(useIntelligenceWorkflow('project-1', 'run-1')).queryKey).toEqual([
+      ...intelligenceWorkflowKey('project-1', 'run-1'),
+    ]);
+    expect(
+      asMockQueryConfig(useIntelligenceWorkflowEvents('project-1', 'run-1', 'cursor-1')).queryKey,
+    ).toEqual(intelligenceWorkflowEventsKey('project-1', 'run-1', 'cursor-1'));
+    expect(asMockQueryConfig(useIntelligenceWorkflowEvents('project-1', '')).enabled).toBe(false);
   });
 
   test('task creation invalidates only intelligence queries for the same project', () => {
@@ -73,10 +88,35 @@ describe('Intelligence React Query bindings', () => {
       discovery: MockQueryConfig;
       agentCard: MockQueryConfig;
       createTask: MockQueryConfig;
+      startWorkflow: MockQueryConfig;
     };
     expect(result.capabilities.queryKey).toEqual([...intelligenceCapabilitiesKey('project-1')]);
     expect(result.discovery.queryKey).toEqual([...intelligenceCapabilityDiscoveryKey('project-1')]);
     expect(result.agentCard.queryKey).toEqual([...intelligenceAgentCardKey('project-1')]);
     expect(result.createTask.mutationFn).toBeFunction();
+    expect(result.startWorkflow.mutationFn).toBeFunction();
+  });
+
+  test('workflow mutations invalidate only the same project workflow queries', () => {
+    const startMutation = asMockQueryConfig(useStartIntelligenceWorkflow('project-1'));
+    startMutation.onSuccess?.();
+    expect(invalidated).toContainEqual([...intelligenceWorkflowsKey('project-1')]);
+
+    invalidated = [];
+    const cancelMutation = asMockQueryConfig(
+      useCancelIntelligenceWorkflow('project-1', 'run-1'),
+    );
+    cancelMutation.onSuccess?.();
+    expect(invalidated).toContainEqual([...intelligenceWorkflowKey('project-1', 'run-1')]);
+    expect(invalidated).toContainEqual(['intelligence-workflow-events', 'project-1', 'run-1']);
+
+    invalidated = [];
+    const approvalMutation = asMockQueryConfig(
+      useDecideIntelligenceWorkflowApproval('project-1', 'run-1', 'approval-1'),
+    );
+    approvalMutation.onSuccess?.();
+    expect(invalidated).toContainEqual([...intelligenceWorkflowKey('project-1', 'run-1')]);
+    expect(invalidated.some((key) => key.includes('project-2'))).toBe(false);
+    expect(invalidated.some((key) => key[0] === 'session' || key[0] === 'opencode')).toBe(false);
   });
 });

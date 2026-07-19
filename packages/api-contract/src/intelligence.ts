@@ -5,6 +5,7 @@ import {
   TaskEventSchema,
   WORKFLOW_MAX_DEPENDENCIES,
   WORKFLOW_MAX_NODES,
+  WorkflowApprovalSchema,
   WorkflowDependencySchema,
   WorkflowEventSchema,
   WorkflowNodeKindSchema,
@@ -171,29 +172,33 @@ const WorkflowPayloadSchema = z.record(z.string(), z.unknown()).superRefine((val
   }
 });
 
+const IntelligenceWorkflowStartRequestShape = {
+  protocol_version: WorkflowProtocolVersionSchema,
+  idempotency_key: z.string().trim().min(16).max(255),
+  goal: z.string().trim().min(1).max(16_384),
+  context_asset_ids: z.array(z.string().uuid()).max(64),
+  policy_snapshot_hash: WorkflowSha256HashSchema.nullable(),
+  evaluation_version: WorkflowVersionIdSchema.nullable(),
+  max_nodes: z.number().int().positive().max(WORKFLOW_MAX_NODES),
+  max_dependencies: z.number().int().nonnegative().max(WORKFLOW_MAX_DEPENDENCIES),
+  max_approved_credits: z.number().finite().nonnegative().max(1_000_000),
+  deadline_at: z.string().datetime({ offset: true }).nullable(),
+} as const;
+
+function rejectUnsafeWorkflowGoal(value: { goal: string }, context: z.RefinementCtx): void {
+  if (hasUnsafeWorkflowPayload(value.goal)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'workflow goal cannot contain provider URLs',
+      path: ['goal'],
+    });
+  }
+}
+
 export const IntelligenceWorkflowStartRequestSchema = z
-  .object({
-    protocol_version: WorkflowProtocolVersionSchema,
-    idempotency_key: z.string().trim().min(16).max(255),
-    goal: z.string().trim().min(1).max(16_384),
-    context_asset_ids: z.array(z.string().uuid()).max(64),
-    policy_snapshot_hash: WorkflowSha256HashSchema.nullable(),
-    evaluation_version: WorkflowVersionIdSchema.nullable(),
-    max_nodes: z.number().int().positive().max(WORKFLOW_MAX_NODES),
-    max_dependencies: z.number().int().nonnegative().max(WORKFLOW_MAX_DEPENDENCIES),
-    max_approved_credits: z.number().finite().nonnegative().max(1_000_000),
-    deadline_at: z.string().datetime({ offset: true }).nullable(),
-  })
+  .object(IntelligenceWorkflowStartRequestShape)
   .strict()
-  .superRefine((value, context) => {
-    if (hasUnsafeWorkflowPayload(value.goal)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'workflow goal cannot contain provider URLs',
-        path: ['goal'],
-      });
-    }
-  });
+  .superRefine(rejectUnsafeWorkflowGoal);
 export type IntelligenceWorkflowStartRequest = z.infer<
   typeof IntelligenceWorkflowStartRequestSchema
 >;
@@ -281,6 +286,17 @@ export type IntelligenceWorkflowCancelRequest = z.infer<
   typeof IntelligenceWorkflowCancelRequestSchema
 >;
 
+export const IntelligenceWorkflowApprovalDecisionRequestSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    decision: z.enum(['approve', 'reject', 'changes_requested']),
+    feedback_hash: WorkflowSha256HashSchema.nullable(),
+  })
+  .strict();
+export type IntelligenceWorkflowApprovalDecisionRequest = z.infer<
+  typeof IntelligenceWorkflowApprovalDecisionRequestSchema
+>;
+
 export const IntelligenceWorkflowStartResponseSchema = z
   .object({
     protocol_version: WorkflowProtocolVersionSchema,
@@ -336,6 +352,18 @@ export type IntelligenceWorkflowEventsResponse = z.infer<
   typeof IntelligenceWorkflowEventsResponseSchema
 >;
 
+export const IntelligenceWorkflowApprovalDecisionResponseSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    run: WorkflowRunSchema,
+    node: WorkflowNodeSchema,
+    approval: WorkflowApprovalSchema,
+  })
+  .strict();
+export type IntelligenceWorkflowApprovalDecisionResponse = z.infer<
+  typeof IntelligenceWorkflowApprovalDecisionResponseSchema
+>;
+
 const IntelligenceA2ARequestIdSchema = z.union([
   z.string().trim().min(1).max(256),
   z.number().int().finite(),
@@ -369,6 +397,31 @@ export type IntelligenceA2AMessageSendRequest = z.infer<
   typeof IntelligenceA2AMessageSendRequestSchema
 >;
 
+const IntelligenceWorkflowA2ATaskRequestSchema = z
+  .object({
+    ...IntelligenceWorkflowStartRequestShape,
+    parent_task_id: z.string().uuid().nullable(),
+  })
+  .strict()
+  .superRefine(rejectUnsafeWorkflowGoal);
+
+export const IntelligenceWorkflowA2AMessageSendRequestSchema = z
+  .object({
+    jsonrpc: z.literal('2.0'),
+    id: IntelligenceA2ARequestIdSchema,
+    method: z.literal('message/send'),
+    params: z
+      .object({
+        sender_card_hash: HashSchema,
+        task: IntelligenceWorkflowA2ATaskRequestSchema,
+      })
+      .strict(),
+  })
+  .strict();
+export type IntelligenceWorkflowA2AMessageSendRequest = z.infer<
+  typeof IntelligenceWorkflowA2AMessageSendRequestSchema
+>;
+
 export const IntelligenceTaskResponseSchema = z
   .object({
     protocol_version: ProtocolVersionSchema,
@@ -398,6 +451,28 @@ export const IntelligenceA2ATaskStateSchema = z.enum([
   'canceled',
 ]);
 export type IntelligenceA2ATaskState = z.infer<typeof IntelligenceA2ATaskStateSchema>;
+
+export const IntelligenceWorkflowA2ATaskResponseSchema = z
+  .object({
+    id: z.string().uuid(),
+    contextId: z.string().uuid(),
+    status: z
+      .object({
+        state: IntelligenceA2ATaskStateSchema,
+        timestamp: z.string().datetime({ offset: true }),
+      })
+      .strict(),
+    metadata: z
+      .object({
+        parent_task_id: z.string().uuid().nullable(),
+        graph_version: z.number().int().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();
+export type IntelligenceWorkflowA2ATaskResponse = z.infer<
+  typeof IntelligenceWorkflowA2ATaskResponseSchema
+>;
 
 export const IntelligenceA2ATaskResponseSchema = z
   .object({

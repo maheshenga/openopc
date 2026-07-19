@@ -22,6 +22,8 @@
 import {
   IntelligenceAgentCardResponseSchema,
   IntelligenceCapabilityDiscoveryResponseSchema,
+  IntelligenceWorkflowRunResponseSchema,
+  IntelligenceWorkflowStartResponseSchema,
 } from '@kortix/api-contract';
 import type { ExecutorClient } from '@kortix/executor-sdk';
 import {
@@ -38,13 +40,19 @@ import {
   type IntelligenceCapabilityDiscoveryStatus,
   IntelligenceClientError,
   type IntelligenceCreateTaskRequest,
+  type IntelligenceWorkflowRunResponse,
+  type IntelligenceWorkflowStartRequest,
+  type IntelligenceWorkflowStartResponse,
   createIntelligenceTask,
   discoverIntelligenceCapabilities,
   discoverIntelligenceCapabilitiesWithStatus,
   getIntelligenceAgentCard,
+  getIntelligenceWorkflow,
   intelligenceProjectContext,
   isSafeIntelligenceCode,
   parseIntelligenceCreateTaskRequest,
+  parseIntelligenceWorkflowStartRequest,
+  startIntelligenceWorkflow,
 } from './intelligence.ts';
 
 export interface JsonRpcRequest {
@@ -65,6 +73,14 @@ export interface IntelligenceMcpDependencies {
   ) => Promise<IntelligenceCapabilityDiscoveryStatus>;
   getAgentCard(projectOverride?: string): Promise<IntelligenceAgentCardResponse>;
   createTask(request: IntelligenceCreateTaskRequest, projectOverride?: string): Promise<string>;
+  startWorkflow?: (
+    request: IntelligenceWorkflowStartRequest,
+    projectOverride?: string,
+  ) => Promise<IntelligenceWorkflowStartResponse>;
+  getWorkflow?: (
+    runId: string,
+    projectOverride?: string,
+  ) => Promise<IntelligenceWorkflowRunResponse>;
   /** Optional test/host gate for callers that own the discovery session. */
   canCreateTask?: () => boolean | Promise<boolean>;
   /** Optional project resolver used to invalidate cached discovery after a switch. */
@@ -76,6 +92,8 @@ const defaultIntelligenceDependencies: IntelligenceMcpDependencies = {
   discoverCapabilitiesWithStatus: discoverIntelligenceCapabilitiesWithStatus,
   getAgentCard: getIntelligenceAgentCard,
   createTask: createIntelligenceTask,
+  startWorkflow: startIntelligenceWorkflow,
+  getWorkflow: getIntelligenceWorkflow,
   getProjectId: () => intelligenceProjectContext().projectId,
 };
 
@@ -259,6 +277,61 @@ const STUDIO_CREATE_TASK_INPUT_SCHEMA = {
     'input',
     'idempotency_key',
   ],
+  additionalProperties: false,
+} as const;
+
+const WORKFLOW_START_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    idempotency_key: { type: 'string', minLength: 16, maxLength: 255 },
+    goal: { type: 'string', minLength: 1, maxLength: 16_384 },
+    context_asset_ids: {
+      type: 'array',
+      items: { type: 'string', format: 'uuid' },
+      maxItems: 64,
+    },
+    policy_snapshot_hash: {
+      anyOf: [
+        { type: 'string', pattern: '^sha256:[a-f0-9]{64}$' },
+        { type: 'null' },
+      ],
+    },
+    evaluation_version: {
+      anyOf: [
+        {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]*$',
+        },
+        { type: 'null' },
+      ],
+    },
+    max_nodes: { type: 'integer', minimum: 1, maximum: 128 },
+    max_dependencies: { type: 'integer', minimum: 0, maximum: 256 },
+    max_approved_credits: { type: 'number', minimum: 0, maximum: 1_000_000 },
+    deadline_at: {
+      anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
+    },
+  },
+  required: [
+    'idempotency_key',
+    'goal',
+    'context_asset_ids',
+    'policy_snapshot_hash',
+    'evaluation_version',
+    'max_nodes',
+    'max_dependencies',
+    'max_approved_credits',
+    'deadline_at',
+  ],
+  additionalProperties: false,
+} as const;
+
+const WORKFLOW_STATUS_INPUT_SCHEMA = {
+  type: 'object',
+  properties: { run_id: { type: 'string', format: 'uuid' } },
+  required: ['run_id'],
   additionalProperties: false,
 } as const;
 
@@ -448,6 +521,26 @@ const META_TOOLS = [
       'Create one governed asynchronous Studio task. The Kortix API enforces IAM, trust, approval, billing, and provider credential isolation.',
     inputSchema: STUDIO_CREATE_TASK_INPUT_SCHEMA,
     readOnly: false,
+  },
+  {
+    name: 'workflow_capabilities',
+    description:
+      'List the governed workflow protocol, currently executable capabilities, and fixed graph limits for this project.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    readOnly: true,
+  },
+  {
+    name: 'workflow_start',
+    description:
+      'Start one governed project workflow. The API owns IAM, Agent trust, graph validation, routing, approvals, and execution.',
+    inputSchema: WORKFLOW_START_INPUT_SCHEMA,
+    readOnly: false,
+  },
+  {
+    name: 'workflow_status',
+    description: 'Read the current public status of one project workflow run.',
+    inputSchema: WORKFLOW_STATUS_INPUT_SCHEMA,
+    readOnly: true,
   },
 ] as const;
 
@@ -728,6 +821,113 @@ async function runMetaTool(
       }
     }
 
+    case 'workflow_capabilities': {
+      if (Object.keys(args).length > 0) return workflowValidationError();
+      try {
+        const projectSnapshot = await currentIntelligenceProjectId(intelligence);
+        const response = IntelligenceCapabilityDiscoveryResponseSchema.parse(
+          await intelligence.discoverCapabilities(projectSnapshot ?? undefined),
+        );
+        if (projectSnapshot !== null) {
+          const currentProject = await currentIntelligenceProjectId(intelligence);
+          if (currentProject === null || currentProject !== projectSnapshot) {
+            throw new IntelligenceClientError('INTELLIGENCE_DISCOVERY_UNAVAILABLE', 409);
+          }
+        }
+        return {
+          content: content({
+            protocol_version: 'intelligence.workflow.v1',
+            capabilities: response.items.map((item) => ({
+              capability_id: item.id,
+              capability_version: item.version,
+            })),
+            limits: {
+              max_nodes: 128,
+              max_dependencies: 256,
+              max_depth: 16,
+              max_fan_out: 16,
+            },
+          }),
+          isError: false,
+        };
+      } catch (error) {
+        return intelligenceErrorResult(error);
+      }
+    }
+
+    case 'workflow_start': {
+      if (Object.hasOwn(args, 'protocol_version') || !intelligence.startWorkflow) {
+        return workflowValidationError();
+      }
+      const parsed = parseIntelligenceWorkflowStartRequest({
+        protocol_version: 'intelligence.workflow.v1',
+        ...args,
+      });
+      if (!parsed) return workflowValidationError();
+      try {
+        const projectSnapshot = await currentIntelligenceProjectId(intelligence);
+        const response = IntelligenceWorkflowStartResponseSchema.safeParse(
+          await intelligence.startWorkflow(parsed, projectSnapshot ?? undefined),
+        );
+        if (!response.success) {
+          throw new IntelligenceClientError('INTELLIGENCE_PROTOCOL_ERROR', 0);
+        }
+        if (projectSnapshot !== null && response.data.run.project_id !== projectSnapshot) {
+          throw new IntelligenceClientError('INTELLIGENCE_PROTOCOL_ERROR', 0);
+        }
+        return {
+          content: content({
+            ok: true,
+            protocol_version: response.data.protocol_version,
+            run_id: response.data.run.run_id,
+            status: response.data.run.status,
+            created: response.data.created,
+          }),
+          isError: false,
+        };
+      } catch (error) {
+        return intelligenceErrorResult(error);
+      }
+    }
+
+    case 'workflow_status': {
+      if (!intelligence.getWorkflow || !isWorkflowStatusArgs(args)) {
+        return workflowValidationError();
+      }
+      try {
+        const projectSnapshot = await currentIntelligenceProjectId(intelligence);
+        const response = IntelligenceWorkflowRunResponseSchema.safeParse(
+          await intelligence.getWorkflow(
+            args.run_id as string,
+            projectSnapshot ?? undefined,
+          ),
+        );
+        if (!response.success) {
+          throw new IntelligenceClientError('INTELLIGENCE_PROTOCOL_ERROR', 0);
+        }
+        if (
+          response.data.run.run_id !== args.run_id ||
+          (projectSnapshot !== null && response.data.run.project_id !== projectSnapshot)
+        ) {
+          throw new IntelligenceClientError('INTELLIGENCE_PROTOCOL_ERROR', 0);
+        }
+        return {
+          content: content({
+            ok: true,
+            protocol_version: response.data.protocol_version,
+            run_id: response.data.run.run_id,
+            status: response.data.run.status,
+            graph_version: response.data.run.graph_version,
+            updated_at: response.data.run.updated_at,
+            terminal_at: response.data.run.terminal_at,
+          }),
+          isError: false,
+        };
+      } catch (error) {
+        return intelligenceErrorResult(error);
+      }
+    }
+
     default:
       return { content: content({ ok: false, error: `unknown tool ${name}` }), isError: true };
   }
@@ -742,7 +942,7 @@ export async function handleExecutorMcpRequest(
     case 'initialize':
       clearIntelligenceSession(intelligenceSessionState(intelligence));
       return {
-        protocolVersion: asRecord(req.params).protocolVersion ?? '2025-06-18',
+        protocolVersion: negotiateMcpProtocolVersion(asRecord(req.params).protocolVersion),
         serverInfo: SERVER_INFO,
         capabilities: { tools: {} },
       };
@@ -775,12 +975,37 @@ export async function handleExecutorMcpRequest(
   }
 }
 
+function negotiateMcpProtocolVersion(value: unknown): '2025-11-25' | '2025-06-18' {
+  return value === '2025-06-18' ? value : '2025-11-25';
+}
+
+function isWorkflowStatusArgs(args: Record<string, unknown>): args is { run_id: string } {
+  return (
+    Object.keys(args).length === 1 &&
+    typeof args.run_id === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      args.run_id,
+    )
+  );
+}
+
 function intelligenceValidationError() {
   return {
     content: content({
       ok: false,
       error: 'Invalid Intelligence request',
       code: 'INTELLIGENCE_VALIDATION_ERROR',
+    }),
+    isError: true,
+  };
+}
+
+function workflowValidationError() {
+  return {
+    content: content({
+      ok: false,
+      error: 'Invalid Intelligence workflow request',
+      code: 'INTELLIGENCE_WORKFLOW_VALIDATION_ERROR',
     }),
     isError: true,
   };

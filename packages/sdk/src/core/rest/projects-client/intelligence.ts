@@ -13,6 +13,15 @@ import {
   type ProtocolVersion,
   type TaskEvent,
   TaskEventSchema,
+  type WorkflowApproval,
+  WorkflowApprovalSchema,
+  type WorkflowEvent,
+  WorkflowEventSchema,
+  type WorkflowNode,
+  WorkflowNodeSchema,
+  type WorkflowProtocolVersion,
+  type WorkflowRun,
+  WorkflowRunSchema,
 } from '@kortix/intelligence-contracts';
 import { ApiError, type ApiResponse } from '../../http/api-client';
 import { backendApi } from '../../http/api-client';
@@ -23,6 +32,11 @@ export type {
   CapabilityDescriptor,
   ProtocolVersion,
   TaskEvent,
+  WorkflowApproval,
+  WorkflowEvent,
+  WorkflowNode,
+  WorkflowProtocolVersion,
+  WorkflowRun,
 } from '@kortix/intelligence-contracts';
 
 const SAFE_INTELLIGENCE_CODES = [
@@ -42,6 +56,10 @@ const SAFE_INTELLIGENCE_CODES = [
   'INTELLIGENCE_TASK_EXECUTION_FAILED',
   'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE',
   'INTELLIGENCE_VALIDATION_ERROR',
+  'INTELLIGENCE_WORKFLOW_CONFLICT',
+  'INTELLIGENCE_WORKFLOW_UNAVAILABLE',
+  'INTELLIGENCE_WORKFLOW_UNTRUSTED',
+  'INTELLIGENCE_WORKFLOW_VALIDATION_ERROR',
 ] as const;
 const SAFE_INTELLIGENCE_CODE_SET = new Set<(typeof SAFE_INTELLIGENCE_CODES)[number]>(
   SAFE_INTELLIGENCE_CODES,
@@ -58,6 +76,8 @@ const MODEL_IDENTIFIER_SENSITIVE_PATTERN =
 
 /** The only protocol revision currently accepted by the Intelligence API. */
 export const INTELLIGENCE_PROTOCOL_VERSION = 'intelligence.v1' as const satisfies ProtocolVersion;
+export const INTELLIGENCE_WORKFLOW_PROTOCOL_VERSION =
+  'intelligence.workflow.v1' as const satisfies WorkflowProtocolVersion;
 
 export interface IntelligenceCapabilitiesResponse {
   protocol_version: ProtocolVersion;
@@ -119,6 +139,55 @@ export interface IntelligenceTaskEventsResponse {
   task_id: string;
   items: TaskEvent[];
   next_cursor: string | null;
+}
+
+export interface IntelligenceWorkflowStartRequest {
+  protocol_version: WorkflowProtocolVersion;
+  idempotency_key: string;
+  goal: string;
+  context_asset_ids: string[];
+  policy_snapshot_hash: string | null;
+  evaluation_version: string | null;
+  max_nodes: number;
+  max_dependencies: number;
+  max_approved_credits: number;
+  deadline_at: string | null;
+}
+
+export interface IntelligenceWorkflowCancelRequest {
+  protocol_version: WorkflowProtocolVersion;
+  reason_code: string;
+}
+
+export interface IntelligenceWorkflowApprovalDecisionRequest {
+  protocol_version: WorkflowProtocolVersion;
+  decision: 'approve' | 'reject' | 'changes_requested';
+  feedback_hash: string | null;
+}
+
+export interface IntelligenceWorkflowStartResponse {
+  protocol_version: WorkflowProtocolVersion;
+  run: WorkflowRun;
+  created: boolean;
+}
+
+export interface IntelligenceWorkflowRunResponse {
+  protocol_version: WorkflowProtocolVersion;
+  run: WorkflowRun;
+}
+
+export interface IntelligenceWorkflowEventsResponse {
+  protocol_version: WorkflowProtocolVersion;
+  run_id: string;
+  items: WorkflowEvent[];
+  next_cursor: string | null;
+}
+
+export interface IntelligenceWorkflowApprovalDecisionResponse {
+  protocol_version: WorkflowProtocolVersion;
+  run: WorkflowRun;
+  node: WorkflowNode;
+  approval: WorkflowApproval;
 }
 
 /**
@@ -220,6 +289,13 @@ function parseProtocolVersion(value: unknown): ProtocolVersion {
   return value;
 }
 
+function parseWorkflowProtocolVersion(value: unknown): WorkflowProtocolVersion {
+  if (value !== INTELLIGENCE_WORKFLOW_PROTOCOL_VERSION) {
+    throw new Error('invalid workflow protocol version');
+  }
+  return value;
+}
+
 function parseCursor(value: unknown): string | null {
   if (value === null) return null;
   if (typeof value !== 'string' || value.length < 1 || value.length > 256) {
@@ -314,6 +390,86 @@ function parseTaskEventsResponse(value: unknown): IntelligenceTaskEventsResponse
   };
 }
 
+function parseWorkflowStartResponse(
+  value: unknown,
+  projectId: string,
+): IntelligenceWorkflowStartResponse {
+  const record = asStrictRecord(value, ['protocol_version', 'run', 'created']);
+  if (typeof record.created !== 'boolean') throw new Error('invalid workflow response');
+  const response = {
+    protocol_version: parseWorkflowProtocolVersion(record.protocol_version),
+    run: WorkflowRunSchema.parse(record.run),
+    created: record.created,
+  };
+  assertWorkflowRunScope(response.run, projectId);
+  return response;
+}
+
+function parseWorkflowRunResponse(
+  value: unknown,
+  projectId: string,
+  runId: string,
+): IntelligenceWorkflowRunResponse {
+  const record = asStrictRecord(value, ['protocol_version', 'run']);
+  const response = {
+    protocol_version: parseWorkflowProtocolVersion(record.protocol_version),
+    run: WorkflowRunSchema.parse(record.run),
+  };
+  assertWorkflowRunScope(response.run, projectId, runId);
+  return response;
+}
+
+function parseWorkflowEventsResponse(
+  value: unknown,
+  runId: string,
+): IntelligenceWorkflowEventsResponse {
+  const record = asStrictRecord(value, ['protocol_version', 'run_id', 'items', 'next_cursor']);
+  if (!Array.isArray(record.items) || record.items.length > 100) {
+    throw new Error('invalid workflow events');
+  }
+  const response = {
+    protocol_version: parseWorkflowProtocolVersion(record.protocol_version),
+    run_id: parseUuid(record.run_id),
+    items: record.items.map((item) => WorkflowEventSchema.parse(item)),
+    next_cursor: parseCursor(record.next_cursor),
+  };
+  if (response.run_id !== runId || response.items.some((item) => item.run_id !== runId)) {
+    throw new Error('invalid workflow scope');
+  }
+  return response;
+}
+
+function parseWorkflowApprovalDecisionResponse(
+  value: unknown,
+  projectId: string,
+  runId: string,
+  approvalId: string,
+): IntelligenceWorkflowApprovalDecisionResponse {
+  const record = asStrictRecord(value, ['protocol_version', 'run', 'node', 'approval']);
+  const response = {
+    protocol_version: parseWorkflowProtocolVersion(record.protocol_version),
+    run: WorkflowRunSchema.parse(record.run),
+    node: WorkflowNodeSchema.parse(record.node),
+    approval: WorkflowApprovalSchema.parse(record.approval),
+  };
+  assertWorkflowRunScope(response.run, projectId, runId);
+  if (
+    response.node.run_id !== runId ||
+    response.approval.run_id !== runId ||
+    response.approval.approval_id !== approvalId ||
+    response.approval.node_id !== response.node.node_id
+  ) {
+    throw new Error('invalid workflow scope');
+  }
+  return response;
+}
+
+function assertWorkflowRunScope(run: WorkflowRun, projectId: string, runId?: string): void {
+  if (run.project_id !== projectId || (runId !== undefined && run.run_id !== runId)) {
+    throw new Error('invalid workflow scope');
+  }
+}
+
 export async function listIntelligenceCapabilities(
   projectId: string,
 ): Promise<IntelligenceCapabilitiesResponse> {
@@ -385,4 +541,85 @@ export async function getIntelligenceTaskEvents(
       { showErrors: false },
     );
   }, parseTaskEventsResponse);
+}
+
+export async function startIntelligenceWorkflow(
+  projectId: string,
+  input: IntelligenceWorkflowStartRequest,
+): Promise<IntelligenceWorkflowStartResponse> {
+  return requestIntelligence(
+    () =>
+      backendApi.post<unknown>(
+        `/projects/${encodeURIComponent(projectId)}/intelligence/workflows`,
+        input,
+        { showErrors: false },
+      ),
+    (value) => parseWorkflowStartResponse(value, projectId),
+  );
+}
+
+export async function getIntelligenceWorkflow(
+  projectId: string,
+  runId: string,
+): Promise<IntelligenceWorkflowRunResponse> {
+  return requestIntelligence(
+    () =>
+      backendApi.get<unknown>(
+        `/projects/${encodeURIComponent(projectId)}/intelligence/workflows/${encodeURIComponent(runId)}`,
+        { showErrors: false },
+      ),
+    (value) => parseWorkflowRunResponse(value, projectId, runId),
+  );
+}
+
+export async function cancelIntelligenceWorkflow(
+  projectId: string,
+  runId: string,
+  input: IntelligenceWorkflowCancelRequest,
+): Promise<IntelligenceWorkflowRunResponse> {
+  return requestIntelligence(
+    () =>
+      backendApi.post<unknown>(
+        `/projects/${encodeURIComponent(projectId)}/intelligence/workflows/${encodeURIComponent(runId)}/cancel`,
+        input,
+        { showErrors: false },
+      ),
+    (value) => parseWorkflowRunResponse(value, projectId, runId),
+  );
+}
+
+export async function getIntelligenceWorkflowEvents(
+  projectId: string,
+  runId: string,
+  cursor?: string | null,
+  limit?: number,
+): Promise<IntelligenceWorkflowEventsResponse> {
+  return requestIntelligence(() => {
+    const query: string[] = [];
+    if (cursor != null) query.push(`cursor=${encodeURIComponent(cursor)}`);
+    if (limit !== undefined) query.push(`limit=${encodeURIComponent(String(limit))}`);
+    const suffix = query.length === 0 ? '' : `?${query.join('&')}`;
+    return backendApi.get<unknown>(
+      `/projects/${encodeURIComponent(projectId)}/intelligence/workflows/${encodeURIComponent(runId)}/events${suffix}`,
+      { showErrors: false },
+    );
+  }, (value) => parseWorkflowEventsResponse(value, runId));
+}
+
+export async function decideIntelligenceWorkflowApproval(
+  projectId: string,
+  runId: string,
+  approvalId: string,
+  input: IntelligenceWorkflowApprovalDecisionRequest,
+): Promise<IntelligenceWorkflowApprovalDecisionResponse> {
+  return requestIntelligence(
+    () =>
+      backendApi.post<unknown>(
+        `/projects/${encodeURIComponent(projectId)}/intelligence/workflows/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/decision`,
+        input,
+        { showErrors: false },
+      ),
+    (value) =>
+      parseWorkflowApprovalDecisionResponse(value, projectId, runId, approvalId),
+  );
 }

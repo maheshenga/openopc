@@ -896,3 +896,44 @@ gated on a restricted `NPM_TOKEN`, followed by npm Trusted Publisher setup.
 
 **Shippable to production: YES** for the source/package contract; external npm
 publication and the durable Task 6 bridge remain separate release gates.
+
+---
+
+### 2026-07-19 - Intelligence Workflow Task 11 (completion)
+
+Completed the additive shared workflow surface from
+`docs/plans/2026-07-18-intelligence-workflow-evaluation-plan.md`. The SDK now
+exposes project-scoped workflow start/read/cancel/events/approval transports,
+the `createKortix().project(id).intelligence.workflows` facade, React Query
+reads/mutations, and project-scoped invalidation. Runtime/type snapshots contain
+additions only; no existing Intelligence name was removed or renamed.
+
+The CLI appends `workflow_capabilities`, `workflow_start`, and
+`workflow_status` after the existing MCP tools, negotiates only `2025-11-25`
+and `2025-06-18`, and revalidates injected responses before stdout. The API adds
+human-only approval decisions plus a strict project Agent-trusted A2A workflow
+adapter with run-as-context state mapping and parent task propagation.
+
+**Final verification evidence**
+
+```
+pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
+pnpm.cmd --filter @kortix/sdk test -> 1116 pass, 0 fail, 5086 expect() calls, 83 files
+pnpm.cmd --filter @kortix/sdk smoke:install -> Install smoke test passed
+pnpm.cmd --filter @kortix/api-contract test -> 49 pass, 0 fail
+pnpm.cmd --filter @kortix/api-contract typecheck -> exit 0
+pnpm.cmd --filter kortix-api exec bun test src/intelligence -> 185 pass, 0 fail
+pnpm.cmd --filter kortix-api typecheck -> exit 0
+pnpm.cmd --filter @kortix/cli typecheck -> exit 0
+pnpm.cmd --filter @kortix/cli exec bun test src/__tests__/executor-intelligence-mcp.test.ts src/__tests__/e2e-intelligence-mcp.test.ts -> 24 pass, 0 fail
+git diff --check -> exit 0
+```
+
+The full CLI suite remains red on the pre-existing Windows/self-host baseline:
+251 pass and 24 fail in symlink, AWS/Terraform, and Docker distribution tests.
+None of those failures touches the Task 11 files; the focused MCP/HTTP black-box
+tests and CLI typecheck are green.
+
+**Shippable to production: YES** for the additive SDK surface. The wider
+workflow feature remains disabled by default and the existing unrelated CLI
+baseline failures remain a repository-level release risk.

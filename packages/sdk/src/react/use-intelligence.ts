@@ -8,11 +8,23 @@ import {
   type IntelligenceCreateTaskRequest,
   type IntelligenceTaskEventsResponse,
   type IntelligenceTaskResponse,
+  type IntelligenceWorkflowApprovalDecisionRequest,
+  type IntelligenceWorkflowApprovalDecisionResponse,
+  type IntelligenceWorkflowCancelRequest,
+  type IntelligenceWorkflowEventsResponse,
+  type IntelligenceWorkflowRunResponse,
+  type IntelligenceWorkflowStartRequest,
+  type IntelligenceWorkflowStartResponse,
+  cancelIntelligenceWorkflow,
   createIntelligenceTask,
+  decideIntelligenceWorkflowApproval,
   discoverIntelligenceCapabilities,
   getIntelligenceAgentCard,
   getIntelligenceTaskEvents,
+  getIntelligenceWorkflow,
+  getIntelligenceWorkflowEvents,
   listIntelligenceCapabilities,
+  startIntelligenceWorkflow,
 } from '../core/rest/projects-client';
 
 export const intelligenceCapabilitiesKey = (projectId: string | null | undefined) =>
@@ -35,6 +47,28 @@ export const intelligenceTaskEventsKey = (
 
 export const intelligenceTaskEventsPrefix = (projectId: string | null | undefined) =>
   ['intelligence-task-events', projectId] as const;
+
+export const intelligenceWorkflowsKey = (projectId: string | null | undefined) =>
+  ['intelligence-workflows', projectId] as const;
+
+export const intelligenceWorkflowKey = (
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+) => [...intelligenceWorkflowsKey(projectId), runId] as const;
+
+export const intelligenceWorkflowEventsKey = (
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+  cursor?: string | null,
+) => ['intelligence-workflow-events', projectId, runId, cursor ?? null] as const;
+
+export const intelligenceWorkflowEventsPrefix = (
+  projectId: string | null | undefined,
+  runId?: string | null,
+) =>
+  runId == null
+    ? (['intelligence-workflow-events', projectId] as const)
+    : (['intelligence-workflow-events', projectId, runId] as const);
 
 export interface IntelligenceQueryOptions {
   enabled?: boolean;
@@ -115,6 +149,47 @@ export function useIntelligenceTaskEvents(
   });
 }
 
+export function useIntelligenceWorkflow(
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+  options: IntelligenceQueryOptions = {},
+) {
+  return useQuery<IntelligenceWorkflowRunResponse>({
+    queryKey: intelligenceWorkflowKey(projectId, runId),
+    queryFn: () => getIntelligenceWorkflow(projectId as string, runId as string),
+    enabled: !!projectId && !!runId && (options.enabled ?? true),
+    ...(options.pollingEnabled === false
+      ? { refetchInterval: false }
+      : options.refetchInterval !== undefined
+        ? { refetchInterval: options.refetchInterval }
+        : {}),
+  });
+}
+
+export function useIntelligenceWorkflowEvents(
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+  cursor?: string | null,
+  options: IntelligenceQueryOptions & { limit?: number } = {},
+) {
+  return useQuery<IntelligenceWorkflowEventsResponse>({
+    queryKey: intelligenceWorkflowEventsKey(projectId, runId, cursor),
+    queryFn: () =>
+      getIntelligenceWorkflowEvents(
+        projectId as string,
+        runId as string,
+        cursor,
+        options.limit,
+      ),
+    enabled: !!projectId && !!runId && (options.enabled ?? true),
+    ...(options.pollingEnabled === false
+      ? { refetchInterval: false }
+      : options.refetchInterval !== undefined
+        ? { refetchInterval: options.refetchInterval }
+        : {}),
+  });
+}
+
 export function useCreateIntelligenceTask(projectId: string | null | undefined) {
   const queryClient = useQueryClient();
   return useMutation<IntelligenceTaskResponse, Error, IntelligenceCreateTaskRequest>({
@@ -134,6 +209,66 @@ export function useCreateIntelligenceTask(projectId: string | null | undefined) 
   });
 }
 
+export function useStartIntelligenceWorkflow(projectId: string | null | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation<IntelligenceWorkflowStartResponse, Error, IntelligenceWorkflowStartRequest>({
+    mutationKey: intelligenceWorkflowsKey(projectId),
+    mutationFn: (input) => startIntelligenceWorkflow(projectId as string, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: intelligenceWorkflowsKey(projectId) });
+      void queryClient.invalidateQueries({
+        queryKey: intelligenceWorkflowEventsPrefix(projectId),
+      });
+    },
+  });
+}
+
+export function useCancelIntelligenceWorkflow(
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+) {
+  const queryClient = useQueryClient();
+  return useMutation<IntelligenceWorkflowRunResponse, Error, IntelligenceWorkflowCancelRequest>({
+    mutationKey: [...intelligenceWorkflowKey(projectId, runId), 'cancel'],
+    mutationFn: (input) =>
+      cancelIntelligenceWorkflow(projectId as string, runId as string, input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: intelligenceWorkflowKey(projectId, runId) });
+      void queryClient.invalidateQueries({
+        queryKey: intelligenceWorkflowEventsPrefix(projectId, runId),
+      });
+    },
+  });
+}
+
+export function useDecideIntelligenceWorkflowApproval(
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+  approvalId: string | null | undefined,
+) {
+  const queryClient = useQueryClient();
+  return useMutation<
+    IntelligenceWorkflowApprovalDecisionResponse,
+    Error,
+    IntelligenceWorkflowApprovalDecisionRequest
+  >({
+    mutationKey: [...intelligenceWorkflowKey(projectId, runId), 'approval', approvalId],
+    mutationFn: (input) =>
+      decideIntelligenceWorkflowApproval(
+        projectId as string,
+        runId as string,
+        approvalId as string,
+        input,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: intelligenceWorkflowKey(projectId, runId) });
+      void queryClient.invalidateQueries({
+        queryKey: intelligenceWorkflowEventsPrefix(projectId, runId),
+      });
+    },
+  });
+}
+
 /** Aggregate the stable project-level reads and task mutation for workbench UIs. */
 export function useIntelligence(projectId: string | null | undefined) {
   return {
@@ -141,5 +276,6 @@ export function useIntelligence(projectId: string | null | undefined) {
     discovery: useIntelligenceCapabilityDiscovery(projectId),
     agentCard: useIntelligenceAgentCard(projectId),
     createTask: useCreateIntelligenceTask(projectId),
+    startWorkflow: useStartIntelligenceWorkflow(projectId),
   };
 }

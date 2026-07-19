@@ -1,4 +1,6 @@
 import {
+  IntelligenceWorkflowApprovalDecisionRequestSchema,
+  IntelligenceWorkflowApprovalDecisionResponseSchema,
   type IntelligenceWorkflowAddDependencyRequest,
   IntelligenceWorkflowAddDependencyRequestSchema,
   type IntelligenceWorkflowAppendNodeRequest,
@@ -179,6 +181,40 @@ export function createIntelligenceWorkflowProjectRoutes(
     }
   });
 
+  app.post(
+    '/:projectId/intelligence/workflows/:runId/approvals/:approvalId/decision',
+    async (c) => {
+      const scope = await loadRunScope(c, deps, PROJECT_ACTIONS.PROJECT_REVIEW_ACT);
+      if (scope instanceof Response) return scope;
+      const approvalId = RunIdSchema.safeParse(c.req.param('approvalId'));
+      if (!approvalId.success) return notFound(c);
+      if (reviewActorType(c) !== 'user') return humanRequired(c);
+      const request = await parseBody(c, IntelligenceWorkflowApprovalDecisionRequestSchema);
+      if (request instanceof Response) return request;
+      try {
+        const result = await deps.service.resolveApproval({
+          accountId: scope.accountId,
+          projectId: scope.projectId,
+          runId: scope.runId,
+          approvalId: approvalId.data,
+          actingUserId: scope.actorUserId,
+          decision: request.decision,
+          feedbackHash: request.feedback_hash,
+          resolvedAt: now(),
+        });
+        if (!result) return notFound(c);
+        return c.json(
+          IntelligenceWorkflowApprovalDecisionResponseSchema.parse({
+            protocol_version: 'intelligence.workflow.v1',
+            ...result,
+          }),
+        );
+      } catch (error) {
+        return workflowError(c, error);
+      }
+    },
+  );
+
   app.post('/:projectId/intelligence/workflows/:runId/nodes', async (c) => {
     const scope = await loadRunScope(c, deps, PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_RUN);
     if (scope instanceof Response) return scope;
@@ -338,6 +374,7 @@ async function loadRunScope(
     accountId: loaded.row.accountId,
     projectId: loaded.row.projectId,
     runId: parsedRunId.data,
+    actorUserId: loaded.userId,
   };
 }
 
@@ -395,6 +432,11 @@ function requestActor(c: Context<AppEnv>) {
     agentName: grant?.agent ?? null,
     actingTokenId: c.get('iamTokenId') ?? null,
   };
+}
+
+function reviewActorType(c: Context<AppEnv>): 'user' | 'agent' | 'system' {
+  if (c.get('authType') === 'service_account') return 'system';
+  return requestActor(c).agentName ? 'agent' : 'user';
 }
 
 async function parseBody<T extends z.ZodTypeAny>(
@@ -495,6 +537,16 @@ function untrusted(c: Context<AppEnv>) {
   return c.json(
     {
       error: 'Intelligence workflow Agent is not trusted',
+      code: 'INTELLIGENCE_WORKFLOW_UNTRUSTED',
+    },
+    403,
+  );
+}
+
+function humanRequired(c: Context<AppEnv>) {
+  return c.json(
+    {
+      error: 'Intelligence workflow approval requires a human reviewer',
       code: 'INTELLIGENCE_WORKFLOW_UNTRUSTED',
     },
     403,

@@ -5,6 +5,7 @@ import {
   IntelligenceCreateTaskRequestSchema,
   IntelligenceErrorCodeSchema,
   IntelligenceExecutionTargetSchema,
+  IntelligenceWorkflowApprovalDecisionRequestSchema,
   IntelligenceWorkflowAddDependencyRequestSchema,
   IntelligenceWorkflowAppendNodeRequestSchema,
   IntelligenceWorkflowCancelRequestSchema,
@@ -292,6 +293,20 @@ describe('Intelligence API contract', () => {
         protocol_version: 'intelligence.workflow.v1',
         reason_code: 'WORKFLOW_CANCELLED_BY_USER',
         raw_error: 'provider=https://secret.example.test',
+      }).success,
+    ).toBe(false);
+    const approvalDecision = {
+      protocol_version: 'intelligence.workflow.v1' as const,
+      decision: 'approve' as const,
+      feedback_hash: null,
+    };
+    expect(IntelligenceWorkflowApprovalDecisionRequestSchema.parse(approvalDecision)).toEqual(
+      approvalDecision,
+    );
+    expect(
+      IntelligenceWorkflowApprovalDecisionRequestSchema.safeParse({
+        ...approvalDecision,
+        provider_url: 'https://forbidden.example',
       }).success,
     ).toBe(false);
   });

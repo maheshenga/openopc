@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import {
   type IntelligenceCreateTaskRequest,
   IntelligenceCreateTaskRequestSchema,
+  type IntelligenceWorkflowStartRequest,
+  IntelligenceWorkflowStartRequestSchema,
 } from '@kortix/api-contract';
 
 const PROJECT_ID = '42000000-0000-4000-a000-000000000001';
@@ -11,6 +13,8 @@ const TASK_ID = '44000000-0000-4000-a000-000000000001';
 const JOB_ID = '45000000-0000-4000-a000-000000000001';
 const CARD_HASH = 'a'.repeat(64);
 const PRIVATE_PROMPT = 'PRIVATE_MCP_ACCEPTANCE_PROMPT';
+const PRIVATE_WORKFLOW_GOAL = 'PRIVATE_MCP_WORKFLOW_GOAL';
+const RUN_ID = '46000000-0000-4000-a000-000000000001';
 
 const capability = {
   id: 'studio.image.generate' as const,
@@ -84,6 +88,32 @@ describe('Intelligence MCP acceptance', () => {
           return respond(discovery);
         }
         if (url.pathname.endsWith('/intelligence/agent-card')) return respond(agentCard);
+        if (url.pathname.endsWith('/intelligence/workflows') && request.method === 'POST') {
+          const parsed = IntelligenceWorkflowStartRequestSchema.safeParse(body);
+          if (!parsed.success) {
+            return respond(
+              {
+                error: 'Invalid Intelligence workflow request',
+                code: 'INTELLIGENCE_WORKFLOW_VALIDATION_ERROR',
+              },
+              400,
+            );
+          }
+          return respond({
+            protocol_version: 'intelligence.workflow.v1',
+            run: workflowRun(parsed.data),
+            created: true,
+          });
+        }
+        if (
+          url.pathname.endsWith(`/intelligence/workflows/${RUN_ID}`) &&
+          request.method === 'GET'
+        ) {
+          return respond({
+            protocol_version: 'intelligence.workflow.v1',
+            run: workflowRun({ protocol_version: 'intelligence.workflow.v1', ...workflowArguments() }),
+          });
+        }
         if (url.pathname.endsWith('/intelligence/tasks')) {
           const parsed = IntelligenceCreateTaskRequestSchema.safeParse(body);
           if (!parsed.success) {
@@ -206,12 +236,34 @@ describe('Intelligence MCP acceptance', () => {
         jsonrpc: '2.0',
         id: 4,
         method: 'tools/call',
+        params: { name: 'workflow_capabilities', arguments: {} },
+      });
+      const workflowCapabilities = await readResponse();
+      send({
+        jsonrpc: '2.0',
+        id: 5,
+        method: 'tools/call',
+        params: { name: 'workflow_start', arguments: workflowArguments() },
+      });
+      const workflowStarted = await readResponse();
+      send({
+        jsonrpc: '2.0',
+        id: 6,
+        method: 'tools/call',
+        params: { name: 'workflow_status', arguments: { run_id: RUN_ID } },
+      });
+      const workflowStatus = await readResponse();
+
+      send({
+        jsonrpc: '2.0',
+        id: 7,
+        method: 'tools/call',
         params: { name: 'studio_create_task', arguments: args },
       });
       const created = await readResponse();
       send({
         jsonrpc: '2.0',
-        id: 5,
+        id: 8,
         method: 'tools/call',
         params: { name: 'studio_create_task', arguments: args },
       });
@@ -220,7 +272,7 @@ describe('Intelligence MCP acceptance', () => {
       revoked = true;
       send({
         jsonrpc: '2.0',
-        id: 6,
+        id: 9,
         method: 'tools/call',
         params: {
           name: 'studio_create_task',
@@ -240,9 +292,30 @@ describe('Intelligence MCP acceptance', () => {
       const toolNames = listed.result.tools?.map((tool) => tool.name) ?? [];
       expect(toolNames).toContain('studio_capabilities');
       expect(toolNames).toContain('studio_create_task');
+      expect(toolNames.slice(-3)).toEqual([
+        'workflow_capabilities',
+        'workflow_start',
+        'workflow_status',
+      ]);
       expect(toolNames.some((name) => /video|voice|3d|avatar|batch/i.test(name))).toBe(false);
       expect(discoveryPayload.agent_card.card_hash).toBe(CARD_HASH);
       expect(discoveryPayload.execution_targets).toEqual([target]);
+      expect(toolPayload(workflowCapabilities)).toMatchObject({
+        protocol_version: 'intelligence.workflow.v1',
+        capabilities: [{ capability_id: 'studio.image.generate' }],
+      });
+      expect(toolPayload(workflowStarted)).toEqual({
+        ok: true,
+        protocol_version: 'intelligence.workflow.v1',
+        run_id: RUN_ID,
+        status: 'draft',
+        created: true,
+      });
+      expect(toolPayload(workflowStatus)).toMatchObject({
+        ok: true,
+        run_id: RUN_ID,
+        status: 'draft',
+      });
       expect(toolPayload(created)).toEqual({ ok: true, task_id: TASK_ID });
       expect(toolPayload(replayed)).toEqual({ ok: true, task_id: TASK_ID });
       expect(denied.result.isError).toBe(true);
@@ -254,7 +327,7 @@ describe('Intelligence MCP acceptance', () => {
       expect(taskRows).toHaveLength(1);
       expect(studioJobs).toEqual(new Set([JOB_ID]));
       expect(providerSubmissions).toBe(1);
-      expect(httpCalls).toHaveLength(5);
+      expect(httpCalls).toHaveLength(8);
       expect(
         httpCalls.every((call) => call.authorization === 'Bearer kortix_pat_mcp_acceptance'),
       ).toBe(true);
@@ -264,6 +337,7 @@ describe('Intelligence MCP acceptance', () => {
 
       const publicWire = `${stdoutLines.join('\n')}\n${JSON.stringify(publicHttpBodies)}`;
       expect(publicWire).not.toContain(PRIVATE_PROMPT);
+      expect(publicWire).not.toContain(PRIVATE_WORKFLOW_GOAL);
       expect(publicWire).not.toContain('kortix_pat_mcp_acceptance');
       expect(publicWire).not.toMatch(/PRIVATE_(?:PROVIDER_BODY|SIGNED_URL|CREDENTIAL)/);
     } finally {
@@ -293,6 +367,46 @@ function taskArguments(selected = target): Omit<IntelligenceCreateTaskRequest, '
     idempotency_key: 'mcp-intelligence-acceptance-0001',
     parent_task_id: null,
     deadline_at: null,
+  };
+}
+
+function workflowArguments(): Omit<IntelligenceWorkflowStartRequest, 'protocol_version'> {
+  return {
+    idempotency_key: 'mcp-workflow-acceptance-0001',
+    goal: PRIVATE_WORKFLOW_GOAL,
+    context_asset_ids: [],
+    policy_snapshot_hash: `sha256:${'b'.repeat(64)}`,
+    evaluation_version: null,
+    max_nodes: 16,
+    max_dependencies: 32,
+    max_approved_credits: 100,
+    deadline_at: null,
+  };
+}
+
+function workflowRun(request: IntelligenceWorkflowStartRequest) {
+  const now = '2026-07-19T10:00:00.000Z';
+  return {
+    protocol_version: 'intelligence.workflow.v1' as const,
+    run_id: RUN_ID,
+    account_id: '47000000-0000-4000-a000-000000000001',
+    project_id: PROJECT_ID,
+    actor_type: 'agent' as const,
+    actor_id: '48000000-0000-4000-a000-000000000001',
+    agent_name: 'content-planner',
+    idempotency_key: request.idempotency_key,
+    request_hash: `sha256:${'c'.repeat(64)}`,
+    status: 'draft' as const,
+    graph_version: 0,
+    policy_snapshot_hash: request.policy_snapshot_hash,
+    evaluation_version: request.evaluation_version,
+    max_nodes: request.max_nodes,
+    max_dependencies: request.max_dependencies,
+    max_approved_credits: request.max_approved_credits,
+    deadline_at: request.deadline_at,
+    created_at: now,
+    updated_at: now,
+    terminal_at: null,
   };
 }
 

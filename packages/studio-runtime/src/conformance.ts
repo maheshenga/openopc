@@ -107,12 +107,14 @@ export function runStudioObjectStoreConformance(
         expires_in_seconds: 60,
       });
 
-      expect(upload).toContain('file.png');
+      expect(upload.url).toContain('file.png');
+      expect(upload.headers['content-type']).toBe('image/png');
+      expect(upload.headers).not.toHaveProperty('content-length');
       expect(download).toContain('file.png');
-      expect(upload).not.toBe(download);
-      expect(new Set([upload, ...uploadVariants]).size).toBe(5);
+      expect(upload.url).not.toBe(download);
+      expect(new Set([upload.url, ...uploadVariants.map((variant) => variant.url)]).size).toBe(5);
       expect(new Set([download, ...downloadVariants]).size).toBe(3);
-      expect(specialKeyUpload).toContain('file%20%3F%23%25.png');
+      expect(specialKeyUpload.url).toContain('file%20%3F%23%25.png');
       expect(specialKeyDownload).toContain('file%20%3F%23%25.png');
     });
 
@@ -188,7 +190,10 @@ export function runStudioObjectStoreConformance(
           checksum_sha256: SHA256,
           expires_in_seconds: 60,
         }),
-      ).resolves.toBeString();
+      ).resolves.toMatchObject({
+        url: expect.any(String),
+        headers: expect.any(Object),
+      });
       await expect(
         store.createSignedDownloadUrl({
           key: KEY,

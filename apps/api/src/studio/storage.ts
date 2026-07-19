@@ -10,6 +10,7 @@ import {
   type StudioReferenceAssetResolver,
   StudioStorageUnavailableError,
   type StudioStoredObject,
+  createStudioSignedUploadRequest,
 } from '@kortix/studio-runtime';
 import type { StudioCreateUploadInput, StudioRepository } from './types';
 
@@ -149,15 +150,16 @@ export class StudioStorageService {
     const expiresAt = new Date(
       this.now().getTime() + PENDING_UPLOAD_TTL_SECONDS * 1_000,
     ).toISOString();
-    const signedUploadUrl = await runStorageDriverOperation(() =>
-      this.input.store.createSignedUploadUrl({
+    const signedUpload = await runStorageDriverOperation(async () => {
+      const request = await this.input.store.createSignedUploadUrl({
         key: objectKey,
         content_type: input.declared_mime_type,
         size_bytes: input.expected_size_bytes,
         checksum_sha256: input.expected_checksum_sha256,
         expires_in_seconds: SIGNED_URL_TTL_SECONDS,
-      }),
-    );
+      });
+      return createStudioSignedUploadRequest(request.url, request.headers);
+    });
     const { metadata: _metadata, ...pendingInput } = input;
     const record = await this.input.repository.createPendingUpload({
       ...pendingInput,
@@ -166,7 +168,11 @@ export class StudioStorageService {
       expires_at: expiresAt,
     });
     const { account_id: _accountId, actor_user_id: _actorUserId, ...wire } = record;
-    return { ...wire, signed_upload_url: signedUploadUrl };
+    return {
+      ...wire,
+      signed_upload_url: signedUpload.url,
+      signed_upload_headers: { ...signedUpload.headers },
+    };
   }
 
   async finalizeUpload(input: {

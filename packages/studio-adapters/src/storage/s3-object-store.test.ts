@@ -96,6 +96,46 @@ describe('S3StudioObjectStore', () => {
     expect(disposeCalls).toBe(1);
   });
 
+  test('returns the exact browser-settable headers bound to a signed upload', async () => {
+    const calls: Array<{
+      command: PutObjectCommand;
+      options: Parameters<StudioS3Presigner>[2];
+    }> = [];
+    const { store } = makeStore({
+      presign: async (_client, command, options) => {
+        if (!(command instanceof PutObjectCommand)) throw new Error('unexpected command');
+        calls.push({ command, options });
+        return 'https://public-s3.example.test/signed-upload';
+      },
+    });
+
+    const request = await store.createSignedUploadUrl({
+      key: 'file.png',
+      content_type: 'image/png',
+      size_bytes: BYTES.byteLength,
+      checksum_sha256: CHECKSUM_HEX,
+      expires_in_seconds: 60,
+    });
+
+    const headers = {
+      'content-type': 'image/png',
+      'x-amz-checksum-sha256': CHECKSUM_BASE64,
+      'x-amz-expected-bucket-owner': '123456789012',
+      'x-amz-meta-studio-checksum-sha256': CHECKSUM_HEX,
+      'x-amz-meta-studio-required-sse': 'AES256',
+      'x-amz-server-side-encryption': 'AES256',
+    };
+    expect(request).toEqual({
+      url: 'https://public-s3.example.test/signed-upload',
+      headers,
+    });
+    expect(calls[0]?.command.input.ContentLength).toBeUndefined();
+    expect(calls[0]?.options.signableHeaders).toEqual(new Set(['content-type']));
+    expect(calls[0]?.options.unhoistableHeaders).toEqual(
+      new Set(Object.keys(headers).filter((name) => name.startsWith('x-amz-'))),
+    );
+  });
+
   test('factory signs with the configured public endpoint instead of the internal endpoint', async () => {
     const store = createS3StudioObjectStore({ config: BASE_CONFIG, role: 'api' });
 
@@ -107,21 +147,25 @@ describe('S3StudioObjectStore', () => {
       expires_in_seconds: 60,
     });
 
-    const signedUrl = new URL(signed);
+    const signedUrl = new URL(signed.url);
     expect(signedUrl.origin).toBe(BASE_CONFIG.publicEndpoint?.origin as string);
-    expect(signed).not.toContain(BASE_CONFIG.endpoint.origin);
+    expect(signed.url).not.toContain(BASE_CONFIG.endpoint.origin);
     const signedHeaders = signedUrl.searchParams.get('X-Amz-SignedHeaders')?.split(';');
     expect(signedHeaders).toEqual(
       expect.arrayContaining([
-        'content-length',
         'content-type',
         'x-amz-checksum-sha256',
         'x-amz-server-side-encryption',
       ]),
     );
+    expect(new Set(signedHeaders?.filter((name) => name !== 'host'))).toEqual(
+      new Set(Object.keys(signed.headers)),
+    );
+    expect(signedHeaders).not.toContain('content-length');
     expect(signedUrl.searchParams.has('x-amz-checksum-sha256')).toBeFalse();
     expect(signedUrl.searchParams.has('x-amz-server-side-encryption')).toBeFalse();
-    expect(signedUrl.searchParams.get('x-amz-meta-studio-required-sse')).toBe('AES256');
+    expect(signedUrl.searchParams.has('x-amz-meta-studio-required-sse')).toBeFalse();
+    expect(signed.headers['x-amz-meta-studio-required-sse']).toBe('AES256');
     store.destroy();
   });
 
@@ -140,15 +184,14 @@ describe('S3StudioObjectStore', () => {
       role: 'worker',
     });
 
-    const signed = new URL(
-      await store.createSignedUploadUrl({
-        key: 'file.png',
-        content_type: 'image/png',
-        size_bytes: BYTES.byteLength,
-        checksum_sha256: CHECKSUM_HEX,
-        expires_in_seconds: 60,
-      }),
-    );
+    const request = await store.createSignedUploadUrl({
+      key: 'file.png',
+      content_type: 'image/png',
+      size_bytes: BYTES.byteLength,
+      checksum_sha256: CHECKSUM_HEX,
+      expires_in_seconds: 60,
+    });
+    const signed = new URL(request.url);
     const signedHeaders = signed.searchParams.get('X-Amz-SignedHeaders')?.split(';');
     expect(signedHeaders).toEqual(
       expect.arrayContaining([
@@ -156,8 +199,14 @@ describe('S3StudioObjectStore', () => {
         'x-amz-server-side-encryption-aws-kms-key-id',
       ]),
     );
-    expect(signed.searchParams.get('x-amz-meta-studio-required-sse')).toBe('aws:kms');
-    expect(signed.searchParams.get('x-amz-meta-studio-required-kms-key-id')).toBe('kms-key-id');
+    expect(signed.searchParams.has('x-amz-meta-studio-required-sse')).toBeFalse();
+    expect(signed.searchParams.has('x-amz-meta-studio-required-kms-key-id')).toBeFalse();
+    expect(request.headers).toMatchObject({
+      'x-amz-meta-studio-required-sse': 'aws:kms',
+      'x-amz-meta-studio-required-kms-key-id': 'kms-key-id',
+      'x-amz-server-side-encryption': 'aws:kms',
+      'x-amz-server-side-encryption-aws-kms-key-id': 'kms-key-id',
+    });
     store.destroy();
   });
 
@@ -482,15 +531,14 @@ describe('S3StudioObjectStore', () => {
       },
     });
 
-    await expect(
-      store.createSignedUploadUrl({
-        key: 'file.png',
-        content_type: 'image/png',
-        size_bytes: BYTES.byteLength,
-        checksum_sha256: CHECKSUM_HEX,
-        expires_in_seconds: 1,
-      }),
-    ).resolves.toContain('public-s3.example.test');
+    const upload = await store.createSignedUploadUrl({
+      key: 'file.png',
+      content_type: 'image/png',
+      size_bytes: BYTES.byteLength,
+      checksum_sha256: CHECKSUM_HEX,
+      expires_in_seconds: 1,
+    });
+    expect(upload.url).toContain('public-s3.example.test');
     await store.createSignedDownloadUrl({
       key: 'file.png',
       filename: '..\\unsafe\r\n"file.png',
@@ -503,10 +551,10 @@ describe('S3StudioObjectStore', () => {
       Bucket: 'configured-private-bucket',
       Key: 'fixed-prefix/file.png',
       ContentType: 'image/png',
-      ContentLength: BYTES.byteLength,
       ChecksumSHA256: CHECKSUM_BASE64,
       ServerSideEncryption: 'AES256',
     });
+    expect((calls[0]?.command as PutObjectCommand).input.ContentLength).toBeUndefined();
     const disposition = (calls[1]?.command as GetObjectCommand).input.ResponseContentDisposition;
     expect(disposition).toStartWith('attachment;');
     expect(disposition).not.toContain('\r');

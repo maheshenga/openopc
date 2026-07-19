@@ -1,3 +1,5 @@
+import { StudioSignedUploadHeadersSchema } from '@kortix/api-contract';
+
 export interface StudioObjectRef {
   key: string;
 }
@@ -58,6 +60,11 @@ export interface StudioSignedUploadInput extends StudioObjectRef {
   expires_in_seconds: number;
 }
 
+export interface StudioSignedUploadRequest {
+  url: string;
+  headers: Readonly<Record<string, string>>;
+}
+
 export interface StudioSignedDownloadInput extends StudioObjectRef {
   filename: string;
   expires_in_seconds: number;
@@ -73,7 +80,7 @@ export interface StudioObjectStore {
   getObject(ref: StudioObjectRef): Promise<StudioStoredObject>;
   listObjects(input: StudioListObjectsInput): Promise<StudioListObjectsResult>;
   deleteObject(input: StudioDeleteObjectInput): Promise<void>;
-  createSignedUploadUrl(input: StudioSignedUploadInput): Promise<string>;
+  createSignedUploadUrl(input: StudioSignedUploadInput): Promise<StudioSignedUploadRequest>;
   createSignedDownloadUrl(input: StudioSignedDownloadInput): Promise<string>;
 }
 
@@ -84,6 +91,15 @@ export class StudioStorageUnavailableError extends Error {
     super('STUDIO_STORAGE_UNAVAILABLE');
     this.name = 'StudioStorageUnavailableError';
   }
+}
+
+export function createStudioSignedUploadRequest(
+  url: string,
+  headers: Readonly<Record<string, string>>,
+): StudioSignedUploadRequest {
+  const parsedHeaders = StudioSignedUploadHeadersSchema.safeParse({ ...headers });
+  if (!url || !parsedHeaders.success) throw new StudioStorageUnavailableError();
+  return { url, headers: parsedHeaders.data };
 }
 
 export type StudioObjectStoreErrorCode =
@@ -223,14 +239,23 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
     this.objects.delete(input.key);
   }
 
-  async createSignedUploadUrl(input: StudioSignedUploadInput): Promise<string> {
+  async createSignedUploadUrl(input: StudioSignedUploadInput): Promise<StudioSignedUploadRequest> {
     const query = new URLSearchParams({
       content_type: input.content_type,
       size_bytes: String(input.size_bytes),
       checksum_sha256: input.checksum_sha256,
       ttl: String(input.expires_in_seconds),
     });
-    return `memory-upload://${encodeURIComponent(this.namespace)}/${encodeObjectKey(input.key)}?${query}`;
+    return createStudioSignedUploadRequest(
+      `memory-upload://${encodeURIComponent(this.namespace)}/${encodeObjectKey(input.key)}?${query}`,
+      {
+        'content-type': input.content_type,
+        'x-amz-checksum-sha256': Buffer.from(input.checksum_sha256, 'hex').toString('base64'),
+        'x-amz-meta-studio-checksum-sha256': input.checksum_sha256,
+        'x-amz-meta-studio-required-sse': this.required_server_side_encryption,
+        'x-amz-server-side-encryption': this.required_server_side_encryption,
+      },
+    );
   }
 
   async createSignedDownloadUrl(input: StudioSignedDownloadInput): Promise<string> {

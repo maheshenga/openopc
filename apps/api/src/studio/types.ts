@@ -76,7 +76,10 @@ export type StudioCreateUploadInput = {
   metadata: Record<string, unknown>;
 };
 
-export type StudioPendingUploadRecord = Omit<StudioUpload, 'signed_upload_url'> & {
+export type StudioPendingUploadRecord = Omit<
+  StudioUpload,
+  'signed_upload_url' | 'signed_upload_headers'
+> & {
   account_id: string;
   actor_user_id: string | null;
 };

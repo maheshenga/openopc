@@ -111,6 +111,78 @@ describe('studio phase 1 contracts', () => {
     expect(StudioErrorCodeSchema.safeParse('STUDIO_VIDEO_NOT_IN_PHASE_1').success).toBe(false);
   });
 
+  test('requires browser-safe signed upload headers', () => {
+    const upload = studioUploadFixture();
+    const { signed_upload_headers: _headers, ...withoutHeaders } = upload;
+
+    expect(
+      StudioUploadSchema.strict().parse({
+        ...upload,
+        signed_upload_headers: {
+          'content-type': 'image/png',
+          'x-amz-checksum-sha256': 'YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=',
+        },
+      }).signed_upload_headers,
+    ).toEqual({
+      'content-type': 'image/png',
+      'x-amz-checksum-sha256': 'YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=',
+    });
+    expect(StudioUploadSchema.safeParse(withoutHeaders).success).toBe(false);
+  });
+
+  test('rejects unsafe signed upload header names', () => {
+    const unsafeNames = [
+      'content-length',
+      'authorization',
+      'cookie',
+      'host',
+      'X-Amz-Checksum-Sha256',
+      'bad header',
+    ];
+
+    for (const name of unsafeNames) {
+      expect(
+        StudioUploadSchema.safeParse({
+          ...studioUploadFixture(),
+          signed_upload_headers: { [name]: 'unsafe' },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  test('rejects signed upload header values containing CR or LF', () => {
+    for (const value of ['safe\runsafe', 'safe\nunsafe', 'safe\r\nunsafe']) {
+      expect(
+        StudioUploadSchema.safeParse({
+          ...studioUploadFixture(),
+          signed_upload_headers: { 'content-type': value },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  test('rejects more than sixteen signed upload headers', () => {
+    const headers = Object.fromEntries(
+      Array.from({ length: 17 }, (_, index) => [`x-studio-${index}`, 'value']),
+    );
+
+    expect(
+      StudioUploadSchema.safeParse({
+        ...studioUploadFixture(),
+        signed_upload_headers: headers,
+      }).success,
+    ).toBe(false);
+  });
+
+  test('rejects signed upload header values longer than 2048 characters', () => {
+    expect(
+      StudioUploadSchema.safeParse({
+        ...studioUploadFixture(),
+        signed_upload_headers: { 'content-type': 'a'.repeat(2049) },
+      }).success,
+    ).toBe(false);
+  });
+
   test('keeps list envelopes typed and rejects future media capabilities in phase 1', () => {
     expect(
       StudioJobListResponseSchema.parse({

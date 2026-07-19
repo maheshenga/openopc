@@ -7,6 +7,7 @@ import type {
   StudioPutObjectInput,
   StudioSignedDownloadInput,
   StudioSignedUploadInput,
+  StudioSignedUploadRequest,
   StudioStoredObject,
   StudioListObjectsInput,
   StudioListObjectsResult,
@@ -214,7 +215,7 @@ class RecordingStore implements StudioObjectStore {
     return { objects: [], next_cursor: null };
   }
 
-  async createSignedUploadUrl(_input: StudioSignedUploadInput): Promise<string> {
+  async createSignedUploadUrl(_input: StudioSignedUploadInput): Promise<StudioSignedUploadRequest> {
     throw new Error('not implemented');
   }
 

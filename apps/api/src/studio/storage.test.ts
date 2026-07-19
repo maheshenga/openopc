@@ -21,7 +21,7 @@ const PNG = Uint8Array.from(
 const PNG_CHECKSUM = new Bun.CryptoHasher('sha256').update(PNG).digest('hex');
 
 describe('Studio storage service', () => {
-  test('creates a tenant-scoped 30-minute upload with a driver URL bound for 15 minutes', async () => {
+  test('creates a tenant-scoped upload with a browser-executable request that is never persisted', async () => {
     const repository = createMemoryStudioRepository({ now: () => NOW.toISOString() });
     const store = new InMemoryStudioObjectStore({ namespace: 'private-studio', ready: true });
     let readinessChecks = 0;
@@ -60,6 +60,13 @@ describe('Studio storage service', () => {
       status: 'pending',
     });
     expect(upload.signed_upload_url).toStartWith('memory-upload://private-studio/');
+    expect(upload.signed_upload_headers).toEqual({
+      'content-type': 'image/png',
+      'x-amz-checksum-sha256': Buffer.from(CHECKSUM, 'hex').toString('base64'),
+      'x-amz-meta-studio-checksum-sha256': CHECKSUM,
+      'x-amz-meta-studio-required-sse': 'AES256',
+      'x-amz-server-side-encryption': 'AES256',
+    });
     const signedUrl = new URL(upload.signed_upload_url);
     expect(decodeURIComponent(signedUrl.pathname.slice(1))).toBe(expectedKey);
     expect(Object.fromEntries(signedUrl.searchParams)).toEqual({
@@ -69,9 +76,10 @@ describe('Studio storage service', () => {
       ttl: '900',
     });
     expect(readinessChecks).toBe(1);
-    expect(await repository.getUploadRecord(ACCOUNT_ID, PROJECT_ID, UPLOAD_ID)).not.toHaveProperty(
-      'metadata',
-    );
+    const persisted = await repository.getUploadRecord(ACCOUNT_ID, PROJECT_ID, UPLOAD_ID);
+    expect(persisted).not.toHaveProperty('metadata');
+    expect(persisted).not.toHaveProperty('signed_upload_url');
+    expect(persisted).not.toHaveProperty('signed_upload_headers');
   });
 
   test('rejects unsupported upload declarations before readiness, presign, or persistence', async () => {
@@ -90,7 +98,7 @@ describe('Studio storage service', () => {
     };
     store.createSignedUploadUrl = async () => {
       uploadPresigns += 1;
-      return 'https://uploads.example.test/signed';
+      return { url: 'https://uploads.example.test/signed', headers: {} };
     };
     const service = new StudioStorageService({
       repository,
@@ -140,6 +148,40 @@ describe('Studio storage service', () => {
     });
 
     expect(upload.upload_id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  test('rejects unsafe driver upload headers before persisting a pending row', async () => {
+    const repository = createMemoryStudioRepository({ now: () => NOW.toISOString() });
+    let writes = 0;
+    const createPendingUpload = repository.createPendingUpload.bind(repository);
+    repository.createPendingUpload = async (input) => {
+      writes += 1;
+      return createPendingUpload(input);
+    };
+    const store = new InMemoryStudioObjectStore({ namespace: 'private-studio', ready: true });
+    store.createSignedUploadUrl = async () => ({
+      url: 'https://uploads.example.test/signed',
+      headers: { authorization: 'must-not-cross-the-api-boundary' },
+    });
+    const service = new StudioStorageService({
+      repository,
+      store,
+      now: () => NOW,
+      randomUUID: () => UPLOAD_ID,
+    });
+
+    await expect(
+      service.createUpload({
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        actor_user_id: ACTOR_USER_ID,
+        declared_mime_type: 'image/png',
+        expected_size_bytes: 128,
+        expected_checksum_sha256: CHECKSUM,
+        metadata: {},
+      }),
+    ).rejects.toMatchObject({ code: 'STUDIO_STORAGE_UNAVAILABLE' });
+    expect(writes).toBe(0);
   });
 
   test('finalizes from actual object metadata and image bytes idempotently', async () => {
@@ -877,9 +919,12 @@ describe('Studio storage routes', () => {
       upload_id: string;
       object_key: string;
       signed_upload_url: string;
+      signed_upload_headers: Record<string, string>;
     };
     expect(upload.signed_upload_url).toStartWith('memory-upload://private-studio/');
     expect(upload.signed_upload_url).not.toContain('studio.local');
+    expect(upload.signed_upload_headers['content-type']).toBe('image/png');
+    expect(upload.signed_upload_headers).not.toHaveProperty('content-length');
     const missingObject = await app.request(
       `/v1/projects/${PROJECT_ID}/studio/uploads/${upload.upload_id}/finalize`,
       { method: 'POST' },

@@ -8,6 +8,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { runStudioObjectStoreConformance } from '@kortix/studio-runtime/conformance';
+import type { StudioSignedUploadRequest } from '@kortix/studio-runtime';
 import type { StudioS3StorageConfig } from '../config';
 import { type S3StudioObjectStore, createS3StudioObjectStore } from './s3-object-store';
 
@@ -19,7 +20,6 @@ const bucket = 'studio-test';
 const runPrefix = `integration/${crypto.randomUUID()}`;
 const TEST_BYTES = new Uint8Array([137, 80, 78, 71]);
 const TEST_CHECKSUM_HEX = new Bun.CryptoHasher('sha256').update(TEST_BYTES).digest('hex');
-const TEST_CHECKSUM_BASE64 = Buffer.from(TEST_CHECKSUM_HEX, 'hex').toString('base64');
 
 describe.skipIf(!integrationEnabled)('S3StudioObjectStore - real MinIO', () => {
   let adminClient: S3Client;
@@ -59,7 +59,7 @@ describe.skipIf(!integrationEnabled)('S3StudioObjectStore - real MinIO', () => {
     const prefix = `${runPrefix}/signed-browser`;
     const key = 'accounts/a/projects/p/file.png';
     const store = createStore({ config: storageConfig(prefix), role: 'worker' });
-    const uploadUrl = await store.createSignedUploadUrl({
+    const uploadRequest = await store.createSignedUploadUrl({
       key,
       content_type: 'image/png',
       size_bytes: TEST_BYTES.byteLength,
@@ -68,24 +68,21 @@ describe.skipIf(!integrationEnabled)('S3StudioObjectStore - real MinIO', () => {
     });
 
     const rejectedUploads = [
-      await fetchWithoutSensitiveDiagnostics(uploadUrl, {
+      await fetchWithoutSensitiveDiagnostics(uploadRequest.url, {
         method: 'PUT',
-        headers: signedUploadHeaders(uploadUrl, { omitEncryption: true }),
+        headers: signedUploadHeaders(uploadRequest, { omitEncryption: true }),
         body: TEST_BYTES,
       }),
-      await fetchWithoutSensitiveDiagnostics(uploadUrl, {
+      await fetchWithoutSensitiveDiagnostics(uploadRequest.url, {
         method: 'PUT',
-        headers: signedUploadHeaders(uploadUrl, { contentType: 'application/octet-stream' }),
+        headers: signedUploadHeaders(uploadRequest, {
+          contentType: 'application/octet-stream',
+        }),
         body: TEST_BYTES,
       }),
-      await fetchWithoutSensitiveDiagnostics(uploadUrl, {
+      await fetchWithoutSensitiveDiagnostics(uploadRequest.url, {
         method: 'PUT',
-        headers: signedUploadHeaders(uploadUrl, { sizeBytes: TEST_BYTES.byteLength - 1 }),
-        body: TEST_BYTES.slice(0, -1),
-      }),
-      await fetchWithoutSensitiveDiagnostics(uploadUrl, {
-        method: 'PUT',
-        headers: signedUploadHeaders(uploadUrl, {
+        headers: signedUploadHeaders(uploadRequest, {
           checksumBase64: Buffer.alloc(32).toString('base64'),
         }),
         body: TEST_BYTES,
@@ -97,9 +94,9 @@ describe.skipIf(!integrationEnabled)('S3StudioObjectStore - real MinIO', () => {
     }
     await expect(store.headObject({ key })).rejects.toMatchObject({ code: 'NOT_FOUND' });
 
-    const upload = await fetchWithoutSensitiveDiagnostics(uploadUrl, {
+    const upload = await fetchWithoutSensitiveDiagnostics(uploadRequest.url, {
       method: 'PUT',
-      headers: signedUploadHeaders(uploadUrl),
+      headers: signedUploadHeaders(uploadRequest),
       body: TEST_BYTES,
     });
     expect(upload.status).toBe(200);
@@ -186,26 +183,23 @@ function anonymousObjectUrl(prefix: string, key: string): string {
 }
 
 function signedUploadHeaders(
-  signedUrl: string,
+  request: StudioSignedUploadRequest,
   overrides: {
     contentType?: string;
-    sizeBytes?: number;
     checksumBase64?: string;
     omitEncryption?: boolean;
   } = {},
 ): Record<string, string> {
-  const signed = new URL(signedUrl);
-  const headers: Record<string, string> = {
-    'content-type': overrides.contentType ?? 'image/png',
-    'content-length': String(overrides.sizeBytes ?? TEST_BYTES.byteLength),
-    'x-amz-checksum-sha256': overrides.checksumBase64 ?? TEST_CHECKSUM_BASE64,
-  };
-  if (!overrides.omitEncryption) {
-    const sse = signed.searchParams.get('x-amz-meta-studio-required-sse');
-    const kmsKeyId = signed.searchParams.get('x-amz-meta-studio-required-kms-key-id');
-    if (sse) headers['x-amz-server-side-encryption'] = sse;
-    if (kmsKeyId) headers['x-amz-server-side-encryption-aws-kms-key-id'] = kmsKeyId;
+  const headers: Record<string, string> = { ...request.headers };
+  if (overrides.contentType) headers['content-type'] = overrides.contentType;
+  if (overrides.checksumBase64) {
+    headers['x-amz-checksum-sha256'] = overrides.checksumBase64;
   }
+  if (!overrides.omitEncryption) {
+    return headers;
+  }
+  delete headers['x-amz-server-side-encryption'];
+  delete headers['x-amz-server-side-encryption-aws-kms-key-id'];
   return headers;
 }
 

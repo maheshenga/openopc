@@ -253,6 +253,10 @@ export function studioUploadFixture(overrides: Partial<StudioUpload> = {}): Stud
     expected_size_bytes: 2048,
     expected_checksum_sha256: 'b'.repeat(64),
     signed_upload_url: 'https://storage.kortix.test/signed-upload/reference.png',
+    signed_upload_headers: {
+      'content-type': 'image/png',
+      'x-amz-checksum-sha256': 'YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=',
+    },
     expires_at: STUDIO_FIXTURE_NOW,
     status: 'pending',
     ...overrides,

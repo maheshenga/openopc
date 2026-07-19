@@ -24,9 +24,11 @@ import {
   type StudioPutObjectInput,
   type StudioSignedDownloadInput,
   type StudioSignedUploadInput,
+  type StudioSignedUploadRequest,
   StudioStorageUnavailableError,
   type StudioStoredObject,
   assertStudioListObjectsInput,
+  createStudioSignedUploadRequest,
 } from '@kortix/studio-runtime';
 import type { StudioS3StorageConfig } from '../config';
 import { createCachedStudioReadinessProbe } from './readiness';
@@ -285,24 +287,42 @@ export class S3StudioObjectStore implements StudioObjectStore {
     await this.send(this.input.client, command);
   }
 
-  async createSignedUploadUrl(input: StudioSignedUploadInput): Promise<string> {
+  async createSignedUploadUrl(input: StudioSignedUploadInput): Promise<StudioSignedUploadRequest> {
+    const checksum = hexChecksumToBase64(input.checksum_sha256);
+    const metadata = {
+      [CHECKSUM_METADATA_KEY]: input.checksum_sha256,
+      [REQUIRED_SSE_METADATA_KEY]: this.input.config.sse,
+      ...(this.input.config.sse === 'aws:kms' && this.input.config.kmsKeyId
+        ? { [REQUIRED_KMS_KEY_METADATA_KEY]: this.input.config.kmsKeyId }
+        : {}),
+    };
+    const encryption = this.encryptionInput();
+    const expectedOwner = this.expectedOwnerInput();
+    const headers = {
+      'content-type': input.content_type,
+      'x-amz-checksum-sha256': checksum,
+      ...Object.fromEntries(
+        Object.entries(metadata).map(([name, value]) => [`x-amz-meta-${name}`, value]),
+      ),
+      'x-amz-server-side-encryption': encryption.ServerSideEncryption,
+      ...(encryption.SSEKMSKeyId
+        ? { 'x-amz-server-side-encryption-aws-kms-key-id': encryption.SSEKMSKeyId }
+        : {}),
+      ...(expectedOwner.ExpectedBucketOwner
+        ? { 'x-amz-expected-bucket-owner': expectedOwner.ExpectedBucketOwner }
+        : {}),
+    };
     const command = new PutObjectCommand({
       Bucket: this.namespace,
       Key: this.objectKey(input.key),
       ContentType: input.content_type,
-      ContentLength: input.size_bytes,
-      ChecksumSHA256: hexChecksumToBase64(input.checksum_sha256),
-      Metadata: {
-        [CHECKSUM_METADATA_KEY]: input.checksum_sha256,
-        [REQUIRED_SSE_METADATA_KEY]: this.input.config.sse,
-        ...(this.input.config.sse === 'aws:kms' && this.input.config.kmsKeyId
-          ? { [REQUIRED_KMS_KEY_METADATA_KEY]: this.input.config.kmsKeyId }
-          : {}),
-      },
-      ...this.encryptionInput(),
-      ...this.expectedOwnerInput(),
+      ChecksumSHA256: checksum,
+      Metadata: metadata,
+      ...encryption,
+      ...expectedOwner,
     });
-    return this.presign(command, input.expires_in_seconds);
+    const url = await this.presign(command, input.expires_in_seconds, headers);
+    return createStudioSignedUploadRequest(url, headers);
   }
 
   async createSignedDownloadUrl(input: StudioSignedDownloadInput): Promise<string> {
@@ -318,6 +338,7 @@ export class S3StudioObjectStore implements StudioObjectStore {
   private async presign(
     command: PutObjectCommand | GetObjectCommand,
     expiresInSeconds: number,
+    uploadHeaders?: Readonly<Record<string, string>>,
   ): Promise<string> {
     try {
       return await this.input.presign(this.input.signingClient, command, {
@@ -325,7 +346,9 @@ export class S3StudioObjectStore implements StudioObjectStore {
         ...(command instanceof PutObjectCommand
           ? {
               signableHeaders: new Set(['content-type']),
-              unhoistableHeaders: new Set(['x-amz-checksum-sha256']),
+              unhoistableHeaders: new Set(
+                Object.keys(uploadHeaders ?? {}).filter((name) => name.startsWith('x-amz-')),
+              ),
             }
           : {}),
       });

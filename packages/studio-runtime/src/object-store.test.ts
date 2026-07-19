@@ -37,6 +37,28 @@ test('InMemoryStudioObjectStore exposes required and observed server-side encryp
   expect(head.sse_kms_key_id).toBeNull();
 });
 
+test('InMemoryStudioObjectStore returns a browser-executable signed upload request', async () => {
+  const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
+  const checksum = 'a'.repeat(64);
+
+  const request = await store.createSignedUploadUrl({
+    key: 'objects/reference.png',
+    content_type: 'image/png',
+    size_bytes: 128,
+    checksum_sha256: checksum,
+    expires_in_seconds: 60,
+  });
+
+  expect(request.url).toStartWith('memory-upload://studio-test/objects/reference.png?');
+  expect(request.headers).toEqual({
+    'content-type': 'image/png',
+    'x-amz-checksum-sha256': Buffer.from(checksum, 'hex').toString('base64'),
+    'x-amz-meta-studio-checksum-sha256': checksum,
+    'x-amz-meta-studio-required-sse': 'AES256',
+    'x-amz-server-side-encryption': 'AES256',
+  });
+});
+
 test('InMemoryStudioObjectStore rejects an exclusive cursor outside the exact prefix', async () => {
   const store = new InMemoryStudioObjectStore({ namespace: 'studio-test', ready: true });
   await expect(

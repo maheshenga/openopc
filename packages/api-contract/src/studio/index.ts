@@ -262,6 +262,27 @@ export const StudioAssetSchema = z
   .strict();
 export type StudioAsset = z.infer<typeof StudioAssetSchema>;
 
+const FORBIDDEN_STUDIO_SIGNED_UPLOAD_HEADERS = new Set([
+  'authorization',
+  'content-length',
+  'cookie',
+  'host',
+]);
+const StudioSignedUploadHeaderNameSchema = z
+  .string()
+  .regex(/^[!#$%&'*+\-.^_`|~0-9a-z]+$/)
+  .refine((name) => !FORBIDDEN_STUDIO_SIGNED_UPLOAD_HEADERS.has(name));
+const StudioSignedUploadHeaderValueSchema = z
+  .string()
+  .max(2048)
+  .refine((value) => !/[\r\n]/.test(value));
+
+export const StudioSignedUploadHeadersSchema = z
+  .record(StudioSignedUploadHeaderNameSchema, StudioSignedUploadHeaderValueSchema)
+  .refine((headers) => Object.keys(headers).length <= 16)
+  .readonly();
+export type StudioSignedUploadHeaders = z.infer<typeof StudioSignedUploadHeadersSchema>;
+
 export const StudioUploadSchema = z
   .object({
     upload_id: z.string().uuid(),
@@ -272,6 +293,7 @@ export const StudioUploadSchema = z
     expected_size_bytes: z.number().int().positive(),
     expected_checksum_sha256: z.string().min(32),
     signed_upload_url: z.string().url(),
+    signed_upload_headers: StudioSignedUploadHeadersSchema,
     expires_at: z.string(),
     status: z.enum(['pending', 'finalized', 'expired']),
   })

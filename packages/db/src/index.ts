@@ -106,6 +106,7 @@ export {
   intelligenceWorkflowApprovals,
   intelligenceWorkflowEvents,
   intelligenceWorkflowPayloads,
+  intelligenceRouteDecisions,
   intelligenceEvaluationSuites,
   intelligenceEvaluationRuns,
   intelligenceModelEvaluationSnapshots,

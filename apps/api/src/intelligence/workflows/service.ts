@@ -1,17 +1,28 @@
 import type { WorkflowNode, WorkflowRun } from '@kortix/intelligence-contracts';
+import type { StudioJobInput } from '@kortix/api-contract';
 import {
+  type IntelligenceRouteDecision,
+  type IntelligenceRoutePolicySnapshot,
+  type IntelligenceRouteRequest,
   type WorkflowNodeRef,
   type WorkflowPayloadStore,
   type WorkflowPort,
   canonicalWorkflowHash,
   canonicalWorkflowJson,
+  routeIntelligenceCandidates,
 } from '@kortix/intelligence-orchestration';
+import type { CapabilityRegistryActor } from '../capability-registry';
+import type { IntelligenceRouteCandidateSource } from '../routing/candidate-source';
+import type { IntelligenceRouteDecisionStore } from '../routing/decision-store';
 import { WorkflowPayloadStoreError } from './payload-store';
 
 export type WorkflowServiceErrorCode =
   | 'WORKFLOW_DEADLINE_EXCEEDED'
   | 'WORKFLOW_PAYLOAD_AUTHORIZATION_REQUIRED'
   | 'WORKFLOW_PAYLOAD_INVALID'
+  | 'WORKFLOW_ROUTING_UNAVAILABLE'
+  | 'WORKFLOW_ROUTE_CONFLICT'
+  | 'WORKFLOW_ROUTE_SCOPE_DENIED'
   | 'WORKFLOW_TERMINAL';
 
 export class WorkflowServiceError extends Error {
@@ -31,6 +42,21 @@ export type WorkflowServiceOptions = {
   payloads: WorkflowPayloadStore;
   now?: () => string;
   authorizePayloadRead?: (input: WorkflowPayloadReadAuthorization) => Promise<boolean>;
+  routing?: {
+    candidateSource: Pick<IntelligenceRouteCandidateSource, 'listImageCandidates'>;
+    decisionStore: IntelligenceRouteDecisionStore;
+    router?: typeof routeIntelligenceCandidates;
+  };
+};
+
+export type WorkflowImageRouteInput = WorkflowNodeRef & {
+  request: IntelligenceRouteRequest;
+  policy: IntelligenceRoutePolicySnapshot;
+  actor: CapabilityRegistryActor;
+  imageInput: StudioJobInput;
+  iamAllowed: boolean;
+  agentAllowed: boolean;
+  projectPolicy: 'allow' | 'deny';
 };
 
 export interface WorkflowService extends WorkflowPort {
@@ -53,6 +79,10 @@ export interface WorkflowService extends WorkflowPort {
       expectedHash: string;
     },
   ): Promise<unknown | null>;
+  routeImageNode(input: WorkflowImageRouteInput): Promise<{
+    decision: IntelligenceRouteDecision;
+    created: boolean;
+  }>;
 }
 
 export function createWorkflowService(options: WorkflowServiceOptions): WorkflowService {
@@ -141,6 +171,63 @@ export function createWorkflowService(options: WorkflowServiceOptions): Workflow
       } catch {
         throw new WorkflowServiceError('WORKFLOW_PAYLOAD_INVALID');
       }
+    },
+
+    async routeImageNode(input) {
+      const routing = options.routing;
+      if (!routing) throw new WorkflowServiceError('WORKFLOW_ROUTING_UNAVAILABLE');
+      if (
+        input.request.accountId !== input.accountId ||
+        input.request.projectId !== input.projectId ||
+        input.actor.accountId !== input.accountId ||
+        input.request.capabilityId !== 'studio.image.generate' ||
+        input.request.capabilityVersion !== '1.0.0'
+      ) {
+        throw new WorkflowServiceError('WORKFLOW_ROUTE_SCOPE_DENIED');
+      }
+      const run = await options.port.getRun(input);
+      if (!run) throw new WorkflowServiceError('WORKFLOW_ROUTE_SCOPE_DENIED');
+
+      const existing = await routing.decisionStore.get({
+        accountId: input.accountId,
+        projectId: input.projectId,
+        runId: input.runId,
+        nodeId: input.nodeId,
+      });
+      if (existing) {
+        if (
+          existing.decisionId !== input.request.decisionId ||
+          existing.requestHash !== input.request.requestHash ||
+          existing.policyVersion !== input.policy.policyVersion ||
+          existing.policyHash !== input.policy.policyHash
+        ) {
+          throw new WorkflowServiceError('WORKFLOW_ROUTE_CONFLICT');
+        }
+        return { decision: existing, created: false };
+      }
+      if (isTerminal(run.status)) throw new WorkflowServiceError('WORKFLOW_TERMINAL');
+
+      const candidates = await routing.candidateSource.listImageCandidates({
+        accountId: input.accountId,
+        projectId: input.projectId,
+        actor: input.actor,
+        input: input.imageInput,
+        iamAllowed: input.iamAllowed,
+        agentAllowed: input.agentAllowed,
+        projectPolicy: input.projectPolicy,
+      });
+      const decision = (routing.router ?? routeIntelligenceCandidates)({
+        request: input.request,
+        policy: input.policy,
+        candidates,
+      });
+      return routing.decisionStore.put({
+        accountId: input.accountId,
+        projectId: input.projectId,
+        runId: input.runId,
+        nodeId: input.nodeId,
+        decision,
+      });
     },
   };
 }

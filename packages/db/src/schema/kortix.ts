@@ -1,4 +1,4 @@
-import { relations, sql } from 'drizzle-orm';
+import { relations, sql, type SQLWrapper } from 'drizzle-orm';
 import {
   bigint,
   boolean,
@@ -2675,6 +2675,11 @@ export const intelligenceWorkflowRuns = kortixSchema.table(
       table.projectId,
       table.idempotencyKey,
     ),
+    unique('intelligence_workflow_runs_scope_identity_unique').on(
+      table.runId,
+      table.accountId,
+      table.projectId,
+    ),
     check(
       'intelligence_workflow_runs_protocol_version_check',
       sql`${table.protocolVersion} = 'intelligence.workflow.v1'`,
@@ -3128,6 +3133,151 @@ export const intelligenceWorkflowPayloads = kortixSchema.table(
   ],
 );
 
+function routeCandidateSnapshotCheck(column: SQLWrapper) {
+  return sql`${column} IS NULL OR (
+    jsonb_typeof(${column}) = 'object'
+    AND ${column} ?& ARRAY[
+      'candidateId', 'providerDefinitionId', 'providerConfigId', 'modelId',
+      'evaluationVersion', 'scorePpm', 'components'
+    ]
+    AND ${column} - ARRAY[
+      'candidateId', 'providerDefinitionId', 'providerConfigId', 'modelId',
+      'evaluationVersion', 'scorePpm', 'components'
+    ] = '{}'::jsonb
+    AND (${column} ->> 'candidateId') ~ '^sha256:[0-9a-f]{64}$'
+    AND length(${column} ->> 'providerDefinitionId') BETWEEN 1 AND 128
+    AND length(${column} ->> 'providerConfigId') BETWEEN 1 AND 256
+    AND length(${column} ->> 'modelId') BETWEEN 1 AND 255
+    AND (${column} ->> 'evaluationVersion') ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND (${column} ->> 'scorePpm') ~ '^-?[0-9]+$'
+    AND (${column} ->> 'scorePpm')::bigint BETWEEN -5000000 AND 5000000
+    AND jsonb_typeof(${column} -> 'components') = 'object'
+    AND (${column} -> 'components') ?& ARRAY[
+      'qualityPpm', 'availabilityPpm', 'latencyPenaltyPpm', 'costPenaltyPpm', 'riskPenaltyPpm'
+    ]
+    AND (${column} -> 'components') - ARRAY[
+      'qualityPpm', 'availabilityPpm', 'latencyPenaltyPpm', 'costPenaltyPpm', 'riskPenaltyPpm'
+    ] = '{}'::jsonb
+    AND (${column} -> 'components' ->> 'qualityPpm') ~ '^[0-9]+$'
+    AND (${column} -> 'components' ->> 'availabilityPpm') ~ '^[0-9]+$'
+    AND (${column} -> 'components' ->> 'latencyPenaltyPpm') ~ '^[0-9]+$'
+    AND (${column} -> 'components' ->> 'costPenaltyPpm') ~ '^[0-9]+$'
+    AND (${column} -> 'components' ->> 'riskPenaltyPpm') ~ '^[0-9]+$'
+    AND (${column} -> 'components' ->> 'qualityPpm')::bigint BETWEEN 0 AND 1000000
+    AND (${column} -> 'components' ->> 'availabilityPpm')::bigint BETWEEN 0 AND 1000000
+    AND (${column} -> 'components' ->> 'latencyPenaltyPpm')::bigint BETWEEN 0 AND 1000000
+    AND (${column} -> 'components' ->> 'costPenaltyPpm')::bigint BETWEEN 0 AND 1000000
+    AND (${column} -> 'components' ->> 'riskPenaltyPpm')::bigint BETWEEN 0 AND 1000000
+    AND pg_column_size(${column}) <= 4096
+  )`;
+}
+
+type IntelligenceStoredRouteCandidate = {
+  candidateId: string;
+  providerDefinitionId: string;
+  providerConfigId: string;
+  modelId: string;
+  evaluationVersion: string;
+  scorePpm: number;
+  components: {
+    qualityPpm: number;
+    availabilityPpm: number;
+    latencyPenaltyPpm: number;
+    costPenaltyPpm: number;
+    riskPenaltyPpm: number;
+  };
+};
+
+type IntelligenceStoredRouteRejection = {
+  candidateId: string;
+  reasonCodes: string[];
+};
+
+export const intelligenceRouteDecisions = kortixSchema.table(
+  'intelligence_route_decisions',
+  {
+    decisionId: uuid('decision_id').primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    runId: uuid('run_id').notNull(),
+    nodeId: uuid('node_id').notNull(),
+    protocolVersion: text('protocol_version').default('intelligence.route.v1').notNull(),
+    requestHash: text('request_hash').notNull(),
+    policyVersion: text('policy_version').notNull(),
+    policyHash: text('policy_hash').notNull(),
+    primaryCandidate: jsonb('primary_candidate').$type<IntelligenceStoredRouteCandidate | null>(),
+    fallbackCandidate: jsonb('fallback_candidate').$type<IntelligenceStoredRouteCandidate | null>(),
+    rejectedCandidates: jsonb('rejected_candidates')
+      .default([])
+      .notNull()
+      .$type<IntelligenceStoredRouteRejection[]>(),
+    reasonCodes: jsonb('reason_codes').default([]).notNull().$type<string[]>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'intelligence_route_decisions_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.runId, table.accountId, table.projectId],
+      foreignColumns: [
+        intelligenceWorkflowRuns.runId,
+        intelligenceWorkflowRuns.accountId,
+        intelligenceWorkflowRuns.projectId,
+      ],
+      name: 'intelligence_route_decisions_run_scope_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.runId, table.nodeId],
+      foreignColumns: [intelligenceWorkflowNodes.runId, intelligenceWorkflowNodes.nodeId],
+      name: 'intelligence_route_decisions_node_fk',
+    }).onDelete('cascade'),
+    unique('intelligence_route_decisions_run_node_unique').on(table.runId, table.nodeId),
+    index('idx_intelligence_route_decisions_project_created').on(
+      table.projectId,
+      table.createdAt,
+    ),
+    check(
+      'intelligence_route_decisions_protocol_version_check',
+      sql`${table.protocolVersion} = 'intelligence.route.v1'`,
+    ),
+    check(
+      'intelligence_route_decisions_request_hash_check',
+      sql`${table.requestHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_route_decisions_policy_check',
+      sql`${table.policyVersion} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND ${table.policyHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_route_decisions_primary_candidate_check',
+      routeCandidateSnapshotCheck(table.primaryCandidate),
+    ),
+    check(
+      'intelligence_route_decisions_fallback_candidate_check',
+      sql`${table.fallbackCandidate} IS NULL OR (
+        ${table.primaryCandidate} IS NOT NULL
+        AND ${routeCandidateSnapshotCheck(table.fallbackCandidate)}
+      )`,
+    ),
+    check(
+      'intelligence_route_decisions_rejected_candidates_check',
+      sql`jsonb_typeof(${table.rejectedCandidates}) = 'array'
+        AND jsonb_array_length(${table.rejectedCandidates}) <= 128
+        AND pg_column_size(${table.rejectedCandidates}) <= 32768`,
+    ),
+    check(
+      'intelligence_route_decisions_reason_codes_check',
+      sql`jsonb_typeof(${table.reasonCodes}) = 'array'
+        AND jsonb_array_length(${table.reasonCodes}) BETWEEN 1 AND 32
+        AND pg_column_size(${table.reasonCodes}) <= 4096`,
+    ),
+  ],
+);
+
 export const intelligenceEvaluationSuites = kortixSchema.table(
   'intelligence_evaluation_suites',
   {
@@ -3444,6 +3594,11 @@ export const intelligenceModelEvaluationSnapshots = kortixSchema.table(
     ),
     index('idx_intelligence_model_evaluation_snapshots_project_published').on(
       table.projectId,
+      table.publishedAt,
+    ),
+    index('idx_intelligence_model_evaluation_snapshots_project_candidate_published').on(
+      table.projectId,
+      table.candidateHash,
       table.publishedAt,
     ),
     index('idx_intelligence_model_evaluation_snapshots_suite_created').on(

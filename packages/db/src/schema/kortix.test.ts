@@ -35,6 +35,7 @@ import {
   intelligenceWorkflowApprovals,
   intelligenceWorkflowEvents,
   intelligenceWorkflowPayloads,
+  intelligenceRouteDecisions,
   intelligenceEvaluationSuites,
   intelligenceEvaluationRuns,
   intelligenceModelEvaluationSnapshots,
@@ -839,6 +840,9 @@ describe('intelligence evaluation schema', () => {
         'intelligence_model_evaluation_snapshots_run_candidate_unique',
       ]),
     );
+    expect(indexNames(intelligenceModelEvaluationSnapshots)).toContain(
+      'idx_intelligence_model_evaluation_snapshots_project_candidate_published',
+    );
     expect(columnNames(intelligenceModelEvaluationSnapshots)).not.toEqual(
       expect.arrayContaining([
         'prompt',
@@ -846,6 +850,73 @@ describe('intelligence evaluation schema', () => {
         'provider',
         'provider_config_id',
         'model',
+        'raw_response',
+      ]),
+    );
+  });
+});
+
+describe('intelligence route decision schema', () => {
+  test('persists one private snapshot-bound decision per workflow node', () => {
+    expect(getTableConfig(intelligenceRouteDecisions).schema).toBe('kortix');
+    expect(getTableConfig(intelligenceRouteDecisions).name).toBe(
+      'intelligence_route_decisions',
+    );
+    expect(columnNames(intelligenceRouteDecisions)).toEqual([
+      'decision_id',
+      'account_id',
+      'project_id',
+      'run_id',
+      'node_id',
+      'protocol_version',
+      'request_hash',
+      'policy_version',
+      'policy_hash',
+      'primary_candidate',
+      'fallback_candidate',
+      'rejected_candidates',
+      'reason_codes',
+      'created_at',
+    ]);
+    expect(uniqueConstraintNames(intelligenceRouteDecisions)).toContain(
+      'intelligence_route_decisions_run_node_unique',
+    );
+    expect(indexNames(intelligenceRouteDecisions)).toEqual(
+      expect.arrayContaining([
+        'idx_intelligence_route_decisions_project_created',
+      ]),
+    );
+
+    const foreignKeys = getTableConfig(intelligenceRouteDecisions).foreignKeys.map((key) => {
+      const reference = key.reference();
+      return {
+        columns: reference.columns.map((column) => column.name),
+        foreignColumns: reference.foreignColumns.map((column) => column.name),
+      };
+    });
+    expect(foreignKeys).toEqual(
+      expect.arrayContaining([
+        {
+          columns: ['project_id', 'account_id'],
+          foreignColumns: ['project_id', 'account_id'],
+        },
+        {
+          columns: ['run_id', 'account_id', 'project_id'],
+          foreignColumns: ['run_id', 'account_id', 'project_id'],
+        },
+        {
+          columns: ['run_id', 'node_id'],
+          foreignColumns: ['run_id', 'node_id'],
+        },
+      ]),
+    );
+    expect(columnNames(intelligenceRouteDecisions)).not.toEqual(
+      expect.arrayContaining([
+        'prompt',
+        'provider_url',
+        'api_key',
+        'authorization',
+        'payload_ref',
         'raw_response',
       ]),
     );

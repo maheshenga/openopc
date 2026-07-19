@@ -222,10 +222,52 @@ describe('intelligence evaluation repository', () => {
     });
   });
 
+  test('finds a published snapshot only through its exact account, project, and candidate fence', async () => {
+    const repository = createMemoryIntelligenceEvaluationRepository();
+    await repository.createSuite(draftSuite());
+    await repository.publishSuite({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      suiteId: SUITE_ID,
+      publishedAt: '2026-07-19T00:01:00.000Z',
+    });
+    await repository.createRun(succeededRun());
+    await repository.insertSnapshot(evaluationSnapshot());
+
+    const query = {
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      candidateHash: HASH_B,
+      capabilityId: 'studio.image.generate' as const,
+      capabilityVersion: '1.0.0' as const,
+    };
+    expect(await repository.findPublishedSnapshot(query)).toEqual(evaluationSnapshot());
+    expect(
+      await repository.findPublishedSnapshot({
+        ...query,
+        accountId: '41000000-0000-4000-a000-000000000002',
+      }),
+    ).toBeNull();
+    expect(
+      await repository.findPublishedSnapshot({
+        ...query,
+        projectId: '42000000-0000-4000-a000-000000000002',
+      }),
+    ).toBeNull();
+    expect(await repository.findPublishedSnapshot({ ...query, candidateHash: HASH_A })).toBeNull();
+  });
+
   test('constructs the Drizzle repository without opening a database connection', () => {
     const repository = createDrizzleIntelligenceEvaluationRepository({} as never);
     expect(Object.keys(repository).sort()).toEqual(
-      ['createRun', 'createSuite', 'insertSnapshot', 'publishSuite', 'updateRun'].sort(),
+      [
+        'createRun',
+        'createSuite',
+        'findPublishedSnapshot',
+        'insertSnapshot',
+        'publishSuite',
+        'updateRun',
+      ].sort(),
     );
   });
 

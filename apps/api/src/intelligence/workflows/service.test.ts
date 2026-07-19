@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import type { WorkflowNode } from '@kortix/intelligence-contracts';
-import type { WorkflowPayloadStore } from '@kortix/intelligence-orchestration';
+import type {
+  IntelligenceRouteCandidate,
+  IntelligenceRoutePolicySnapshot,
+  IntelligenceRouteRequest,
+  WorkflowPayloadStore,
+} from '@kortix/intelligence-orchestration';
 import {
   workflowNodeFixture,
   workflowRunFixture,
@@ -8,6 +13,7 @@ import {
 import { InMemoryStudioObjectStore } from '@kortix/studio-runtime';
 import { createMemoryWorkflowStore } from './memory-store';
 import { createStudioWorkflowPayloadStore } from './payload-store';
+import { createMemoryIntelligenceRouteDecisionStore } from '../routing/decision-store';
 import { createWorkflowService } from './service';
 
 const NOW = '2026-07-18T10:00:00.000Z';
@@ -45,6 +51,7 @@ function serviceFixture(
   options: {
     payloads?: WorkflowPayloadStore;
     authorizePayloadRead?: Parameters<typeof createWorkflowService>[0]['authorizePayloadRead'];
+    routing?: Parameters<typeof createWorkflowService>[0]['routing'];
   } = {},
 ) {
   return createWorkflowService({
@@ -52,6 +59,7 @@ function serviceFixture(
     payloads: options.payloads ?? new RecordingPayloadStore(),
     now: () => NOW,
     authorizePayloadRead: options.authorizePayloadRead,
+    routing: options.routing,
   });
 }
 
@@ -220,4 +228,198 @@ describe('workflow service', () => {
       }),
     ).resolves.toMatchObject({ status: 'cancelled' });
   });
+
+  test('keeps deterministic routing unavailable unless its optional adapters are injected', async () => {
+    const service = serviceFixture();
+    const run = workflowRunFixture();
+    await service.startRun({ run });
+
+    await expect(
+      service.routeImageNode(routeInput(run.account_id, run.project_id, run.run_id)),
+    ).rejects.toMatchObject({ code: 'WORKFLOW_ROUTING_UNAVAILABLE' });
+  });
+
+  test('routes an in-scope image node once and rejects a foreign scope before discovery', async () => {
+    const calls: unknown[] = [];
+    const decisionStore = createMemoryIntelligenceRouteDecisionStore();
+    const service = serviceFixture({
+      routing: {
+        candidateSource: {
+          async listImageCandidates(input) {
+            calls.push(input);
+            return [routeCandidate()];
+          },
+        },
+        decisionStore,
+      },
+    });
+    const run = workflowRunFixture();
+    const node = workflowNodeFixture({ run_id: run.run_id });
+    await service.startRun({ run });
+    await service.appendNode({
+      accountId: run.account_id,
+      projectId: run.project_id,
+      runId: run.run_id,
+      expectedGraphVersion: 0,
+      idempotencyKey: 'workflow-route-node-0001',
+      requestHash: HASH_A,
+      node,
+    });
+
+    const input = routeInput(run.account_id, run.project_id, run.run_id, node.node_id);
+    expect(await service.routeImageNode(input)).toMatchObject({
+      created: true,
+      decision: {
+        primary: { candidateId: HASH_B },
+        fallback: null,
+        reasonCodes: ['ROUTE_PRIMARY_SELECTED'],
+      },
+    });
+    expect(await service.routeImageNode(input)).toMatchObject({ created: false });
+    expect(calls).toHaveLength(1);
+    await expect(
+      service.routeImageNode({
+        ...input,
+        request: { ...input.request, requestHash: HASH_A },
+      }),
+    ).rejects.toMatchObject({ code: 'WORKFLOW_ROUTE_CONFLICT' });
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(await decisionStore.get(input))).not.toMatch(
+      /private route prompt|provider_url|api_key|credential|raw_response/i,
+    );
+
+    await expect(
+      service.routeImageNode({
+        ...input,
+        projectId: '22000000-0000-4000-a000-000000000099',
+        request: {
+          ...input.request,
+          projectId: '22000000-0000-4000-a000-000000000099',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'WORKFLOW_ROUTE_SCOPE_DENIED' });
+    expect(calls).toHaveLength(1);
+
+    await service.cancelRun({
+      accountId: run.account_id,
+      projectId: run.project_id,
+      runId: run.run_id,
+      reasonCode: 'WORKFLOW_CANCELLED_BY_USER',
+      cancelledAt: NOW,
+    });
+    expect(await service.routeImageNode(input)).toMatchObject({ created: false });
+    expect(calls).toHaveLength(1);
+  });
 });
+
+const HASH_A = `sha256:${'a'.repeat(64)}`;
+const HASH_B = `sha256:${'b'.repeat(64)}`;
+
+function routeCandidate(): IntelligenceRouteCandidate {
+  return {
+    candidateId: HASH_B,
+    providerDefinitionId: 'openai-compatible',
+    providerConfigId: '26000000-0000-4000-a000-000000000001',
+    modelId: 'images/pro-v1',
+    capabilityId: 'studio.image.generate',
+    capabilityVersion: '1.0.0',
+    schemaVersion: 'studio.image.generate.request.v1',
+    region: 'cn-east-1',
+    safetyClass: 'standard',
+    supportedInputKinds: ['text', 'image'],
+    outputKind: 'image',
+    ready: true,
+    iamAllowed: true,
+    agentAllowed: true,
+    projectPolicy: 'allow',
+    estimatedCostMicredits: 2_000_000,
+    estimatedLatencyMs: 1_500,
+    riskPenaltyPpm: 0,
+    evaluation: {
+      snapshotVersion: 'image-route-eval-v1',
+      publishedAt: '2026-07-18T09:00:00.000Z',
+      sampleCount: 100,
+      minimumSampleCount: 30,
+      meetsMinimumSamples: true,
+      confidenceLowerBoundPpm: 900_000,
+      qualityRatePpm: 920_000,
+      availabilityRatePpm: 970_000,
+      failureRatePpm: 30_000,
+    },
+  };
+}
+
+function routePolicy(): IntelligenceRoutePolicySnapshot {
+  return {
+    policyVersion: 'image-route-policy-v1',
+    policyHash: HASH_A,
+    allowedRegions: ['cn-east-1'],
+    allowedSafetyClasses: ['standard'],
+    maximumCandidateRiskPpm: 1_000_000,
+    maximumCostMicredits: 5_000_000,
+    maximumLatencyMs: 10_000,
+    maximumEvaluationAgeMs: 24 * 60 * 60 * 1_000,
+    minimumSampleCount: 30,
+    minimumConfidenceLowerBoundPpm: 800_000,
+    minimumQualityRatePpm: 800_000,
+    minimumAvailabilityRatePpm: 800_000,
+    maximumFailureRatePpm: 200_000,
+    weightsBps: {
+      quality: 10_000,
+      availability: 10_000,
+      latency: 10_000,
+      cost: 10_000,
+      risk: 10_000,
+    },
+    normalization: { latencyMs: 10_000, costMicredits: 10_000_000 },
+  };
+}
+
+function routeInput(
+  accountId: string,
+  projectId: string,
+  runId: string,
+  nodeId = '24000000-0000-4000-a000-000000000001',
+) {
+  const request: IntelligenceRouteRequest = {
+    decisionId: '25000000-0000-4000-a000-000000000001',
+    accountId,
+    projectId,
+    capabilityId: 'studio.image.generate',
+    capabilityVersion: '1.0.0',
+    schemaVersion: 'studio.image.generate.request.v1',
+    inputKinds: ['text'],
+    outputKind: 'image',
+    requiredRegion: 'cn-east-1',
+    maximumSafetyClass: 'standard',
+    remainingBudgetMicredits: 5_000_000,
+    deadlineAt: '2026-07-18T10:00:10.000Z',
+    now: NOW,
+    proposedCandidateId: null,
+    requestHash: HASH_B,
+  };
+  return {
+    accountId,
+    projectId,
+    runId,
+    nodeId,
+    request,
+    policy: routePolicy(),
+    actor: { accountId, actorType: 'system' as const },
+    imageInput: {
+      capability: 'image.generate' as const,
+      image: {
+        prompt: 'private route prompt',
+        reference_asset_ids: [],
+        aspect_ratio: '1:1' as const,
+        width: 1024,
+        height: 1024,
+        quality: 'standard' as const,
+        output_count: 1,
+      },
+    },
+    iamAllowed: true,
+    agentAllowed: true,
+    projectPolicy: 'allow' as const,
+  };
+}

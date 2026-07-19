@@ -12,7 +12,7 @@ import {
   type IntelligenceModelEvaluationSnapshot,
   IntelligenceModelEvaluationSnapshotSchema,
 } from '@kortix/intelligence-contracts';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 
 export type IntelligenceEvaluationRepositoryErrorCode =
   | 'EVALUATION_SCOPE_DENIED'
@@ -45,6 +45,13 @@ export interface IntelligenceEvaluationRepository {
   insertSnapshot(
     snapshot: IntelligenceModelEvaluationSnapshot,
   ): Promise<IntelligenceModelEvaluationSnapshot>;
+  findPublishedSnapshot(input: {
+    accountId: string;
+    projectId: string;
+    candidateHash: string;
+    capabilityId: IntelligenceModelEvaluationSnapshot['capability_id'];
+    capabilityVersion: IntelligenceModelEvaluationSnapshot['capability_version'];
+  }): Promise<IntelligenceModelEvaluationSnapshot | null>;
   updateRun(input: {
     run: IntelligenceEvaluationRun;
     updatedAt: string;
@@ -248,6 +255,24 @@ export function createMemoryIntelligenceEvaluationRepository(): IntelligenceEval
       snapshotIdsByProjectVersion.set(projectVersion, snapshot.snapshot_id);
       snapshotIdsByRunCandidate.set(runCandidate, snapshot.snapshot_id);
       return clone(snapshot);
+    },
+
+    async findPublishedSnapshot(input) {
+      const matching = [...snapshots.values()]
+        .filter(
+          (snapshot) =>
+            snapshot.account_id === input.accountId &&
+            snapshot.project_id === input.projectId &&
+            snapshot.candidate_hash === input.candidateHash &&
+            snapshot.capability_id === input.capabilityId &&
+            snapshot.capability_version === input.capabilityVersion,
+        )
+        .sort(
+          (left, right) =>
+            Date.parse(right.published_at) - Date.parse(left.published_at) ||
+            compareAscii(right.snapshot_version, left.snapshot_version),
+        );
+      return matching[0] ? clone(matching[0]) : null;
     },
 
     async updateRun(input) {
@@ -527,6 +552,27 @@ export function createDrizzleIntelligenceEvaluationRepository(
       return toSnapshot(row);
     },
 
+    async findPublishedSnapshot(input) {
+      const [row] = await database
+        .select()
+        .from(intelligenceModelEvaluationSnapshots)
+        .where(
+          and(
+            eq(intelligenceModelEvaluationSnapshots.accountId, input.accountId),
+            eq(intelligenceModelEvaluationSnapshots.projectId, input.projectId),
+            eq(intelligenceModelEvaluationSnapshots.candidateHash, input.candidateHash),
+            eq(intelligenceModelEvaluationSnapshots.capabilityId, input.capabilityId),
+            eq(intelligenceModelEvaluationSnapshots.capabilityVersion, input.capabilityVersion),
+          ),
+        )
+        .orderBy(
+          desc(intelligenceModelEvaluationSnapshots.publishedAt),
+          desc(intelligenceModelEvaluationSnapshots.snapshotVersion),
+        )
+        .limit(1);
+      return row ? toSnapshot(row) : null;
+    },
+
     async updateRun(input) {
       const next = IntelligenceEvaluationRunSchema.parse(input.run);
       const [currentRow] = await database
@@ -616,4 +662,8 @@ export function createDrizzleIntelligenceEvaluationRepository(
       return toSuite(row);
     },
   };
+}
+
+function compareAscii(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

@@ -4,7 +4,13 @@ This runbook covers the disabled-by-default `intelligence.workflow.v1` Phase 2 s
 
 ## Production boundary
 
-Keep `INTELLIGENCE_WORKFLOWS_ENABLED=false` in production until a separately reviewed rollout binds the scheduler, installed Agent/card sources, provider/storage readiness, alerts, and protected smoke checks. The current application composition exposes no global Agent Card and does not start a production workflow scheduler. The PostgreSQL coordinator remains the default design; no Temporal package is installed because the Task 12 local test server preflight did not pass.
+Keep `INTELLIGENCE_WORKFLOWS_ENABLED=false` in production until a separately reviewed rollout binds the scheduler, installed Agent/card sources, provider/storage readiness, alerts, and protected smoke checks. The current application composition exposes no global Agent Card and does not start a production workflow scheduler. The PostgreSQL coordinator remains the default design; the optional Temporal adapter is installed but is not composed into the production runtime.
+
+## Optional Temporal dependency decision
+
+Task 12 pins `@temporalio/client`, `@temporalio/testing`, `@temporalio/worker`, and `@temporalio/workflow` to `1.20.3`. The official npm registry records MIT licensing, Node `>=20.3.0`, and these pinned package integrity values: client `sha512-RmEX0Z7h3mWq8PMqeDSbbDZPK8IweajGnRsghiJI0fnaWx61YeW8bhAAKfD/iSop+0PM0oe0KaW5XPAKEY4XEw==`, worker `sha512-29W39KxGoz8QfiELT5al1jr+nnZEnpWCjr5gYT2a6ZlXr2WKxbJw4rRBy+OyGwHs5kGT0pPYayYvwcDTvWRpQQ==`, and testing `sha512-YptZtr/HPKov+9GxOEY9Onpuzy/WppBVOdqWaNbZasD5x3vo3aVOyFA1eVcGXSLnKMmQC+JGr+LLLJP/9Dn36A==`.
+
+On 2026-07-20, Node `22.23.1` and Bun `1.3.14` both created and tore down a local time-skipping test server. The adapter remains a disabled selection behind both `INTELLIGENCE_WORKFLOWS_ENABLED=true` and `INTELLIGENCE_TEMPORAL_ADAPTER_ENABLED=true`; PostgreSQL stays the default. Removing the optional package and leaving the Temporal flag false changes no persisted Kortix contract, workflow table, Studio ownership, MCP/A2A surface, or telemetry schema.
 
 Enabling the route flag alone is not rollout approval. It constructs the project-scoped service and Review Center adapter only. Existing Studio, billing, credential, asset, Provider, and IAM ownership remains unchanged.
 

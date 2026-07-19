@@ -94,6 +94,39 @@ describe('intelligence workflow runtime', () => {
     expect(calls).toEqual(['construct', 'start', 'stop']);
   });
 
+  test('constructs the separately enabled Temporal coordinator instead of the default scheduler', async () => {
+    const service = {} as WorkflowService;
+    const calls: string[] = [];
+    const runtime = buildIntelligenceWorkflowRuntime({
+      env: {
+        INTELLIGENCE_WORKFLOWS_ENABLED: 'true',
+        INTELLIGENCE_TEMPORAL_ADAPTER_ENABLED: 'true',
+      },
+      createService: () => service,
+      createScheduler() {
+        calls.push('scheduler');
+        throw new Error('default scheduler must not be constructed');
+      },
+      createTemporalCoordinator(receivedService) {
+        expect(receivedService).toBe(service);
+        calls.push('temporal');
+        return {
+          start: () => {
+            calls.push('start');
+          },
+          stop: async () => {
+            calls.push('stop');
+          },
+        };
+      },
+    });
+
+    if (!runtime.enabled) throw new Error('runtime must be enabled');
+    runtime.start();
+    await runtime.stop();
+    expect(calls).toEqual(['temporal', 'start', 'stop']);
+  });
+
   test('constructs governed Agent role ports only inside the enabled runtime', () => {
     const service = {} as WorkflowService;
     const agentRoles = {

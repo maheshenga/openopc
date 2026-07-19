@@ -11,6 +11,11 @@ export type WorkflowAgentRoles = {
   reviewer: ReviewerPort;
 };
 
+export type WorkflowTemporalCoordinator = {
+  start(): void;
+  stop(): Promise<void>;
+};
+
 export type IntelligenceWorkflowRuntime =
   | { enabled: false }
   | {
@@ -33,20 +38,30 @@ export function buildIntelligenceWorkflowRuntime(input: {
     service: WorkflowService,
     telemetry: WorkflowTelemetry | undefined,
   ) => WorkflowScheduler;
+  createTemporalCoordinator?: (service: WorkflowService) => WorkflowTemporalCoordinator;
   createAgentRoles?: (service: WorkflowService) => WorkflowAgentRoles;
 }): IntelligenceWorkflowRuntime {
   const enabled = input.enabled ?? input.env?.INTELLIGENCE_WORKFLOWS_ENABLED === 'true';
   if (!enabled) return { enabled: false };
   const service = input.createService();
-  const scheduler = input.createScheduler?.(service, input.telemetry);
+  const temporalEnabled = input.env?.INTELLIGENCE_TEMPORAL_ADAPTER_ENABLED === 'true';
+  const temporalCoordinator = temporalEnabled
+    ? input.createTemporalCoordinator?.(service)
+    : undefined;
+  if (temporalEnabled && !temporalCoordinator) {
+    throw new Error('INTELLIGENCE_TEMPORAL_ADAPTER_UNAVAILABLE');
+  }
+  const scheduler = temporalCoordinator
+    ? undefined
+    : input.createScheduler?.(service, input.telemetry);
   const agentRoles = input.createAgentRoles?.(service);
   return {
     enabled: true,
     service,
     ...(agentRoles ? { agentRoles } : {}),
     ...(input.telemetry ? { telemetry: input.telemetry } : {}),
-    start: () => scheduler?.start(),
-    stop: () => scheduler?.stop() ?? Promise.resolve(),
+    start: () => temporalCoordinator?.start() ?? scheduler?.start(),
+    stop: () => temporalCoordinator?.stop() ?? scheduler?.stop() ?? Promise.resolve(),
   };
 }
 

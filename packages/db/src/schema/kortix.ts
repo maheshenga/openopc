@@ -3128,6 +3128,384 @@ export const intelligenceWorkflowPayloads = kortixSchema.table(
   ],
 );
 
+export const intelligenceEvaluationSuites = kortixSchema.table(
+  'intelligence_evaluation_suites',
+  {
+    suiteId: uuid('suite_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    protocolVersion: text('protocol_version').default('intelligence.workflow.v1').notNull(),
+    suiteVersion: text('suite_version').notNull(),
+    capabilityId: text('capability_id').notNull(),
+    capabilityVersion: text('capability_version').notNull(),
+    datasetManifestHash: text('dataset_manifest_hash').notNull(),
+    datasetRef: text('dataset_ref').notNull(),
+    scorerVersions: jsonb('scorer_versions')
+      .notNull()
+      .$type<Array<{ scorer_id: string; version: string }>>(),
+    thresholds: jsonb('thresholds').notNull().$type<Record<string, number>>(),
+    minimumSampleCount: integer('minimum_sample_count').notNull(),
+    confidenceLevelBps: integer('confidence_level_bps').notNull(),
+    status: text('status').default('draft').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'intelligence_evaluation_suites_project_account_fk',
+    }).onDelete('cascade'),
+    unique('intelligence_evaluation_suites_project_version_unique').on(
+      table.projectId,
+      table.suiteVersion,
+    ),
+    unique('intelligence_evaluation_suites_scope_version_unique').on(
+      table.suiteId,
+      table.accountId,
+      table.projectId,
+      table.suiteVersion,
+    ),
+    index('idx_intelligence_evaluation_suites_project_status').on(
+      table.projectId,
+      table.status,
+      table.suiteVersion,
+    ),
+    check(
+      'intelligence_evaluation_suites_protocol_version_check',
+      sql`${table.protocolVersion} = 'intelligence.workflow.v1'`,
+    ),
+    check(
+      'intelligence_evaluation_suites_version_check',
+      sql`${table.suiteVersion} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'`,
+    ),
+    check(
+      'intelligence_evaluation_suites_capability_check',
+      sql`${table.capabilityId} = 'studio.image.generate'
+        AND ${table.capabilityVersion} = '1.0.0'`,
+    ),
+    check(
+      'intelligence_evaluation_suites_dataset_hash_check',
+      sql`${table.datasetManifestHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_evaluation_suites_dataset_ref_check',
+      sql`${table.datasetRef} ~ '^sealed:[A-Za-z0-9][A-Za-z0-9._:-]*$'
+        AND length(${table.datasetRef}) <= 263`,
+    ),
+    check(
+      'intelligence_evaluation_suites_scorers_check',
+      sql`jsonb_typeof(${table.scorerVersions}) = 'array'
+        AND jsonb_array_length(${table.scorerVersions}) BETWEEN 1 AND 32`,
+    ),
+    check(
+      'intelligence_evaluation_suites_thresholds_check',
+      sql`jsonb_typeof(${table.thresholds}) = 'object'
+        AND jsonb_object_length(${table.thresholds}) BETWEEN 1 AND 32`,
+    ),
+    check(
+      'intelligence_evaluation_suites_limits_check',
+      sql`${table.minimumSampleCount} BETWEEN 1 AND 10000
+        AND ${table.confidenceLevelBps} BETWEEN 1 AND 10000`,
+    ),
+    check(
+      'intelligence_evaluation_suites_status_check',
+      sql`${table.status} IN ('draft', 'published', 'retired')`,
+    ),
+    check(
+      'intelligence_evaluation_suites_publication_check',
+      sql`(${table.status} = 'draft') = (${table.publishedAt} IS NULL)`,
+    ),
+  ],
+);
+
+export const intelligenceEvaluationRuns = kortixSchema.table(
+  'intelligence_evaluation_runs',
+  {
+    evaluationRunId: uuid('evaluation_run_id').defaultRandom().primaryKey(),
+    suiteId: uuid('suite_id').notNull(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    suiteVersion: text('suite_version').notNull(),
+    protocolVersion: text('protocol_version').default('intelligence.workflow.v1').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    requestHash: text('request_hash').notNull(),
+    status: text('status').default('queued').notNull(),
+    budgetMicredits: bigint('budget_micredits', { mode: 'number' }).notNull(),
+    maxSamples: integer('max_samples').notNull(),
+    processedSamples: integer('processed_samples').default(0).notNull(),
+    spentMicredits: bigint('spent_micredits', { mode: 'number' }).default(0).notNull(),
+    failureCode: text('failure_code'),
+    startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+    completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'intelligence_evaluation_runs_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.suiteId, table.accountId, table.projectId, table.suiteVersion],
+      foreignColumns: [
+        intelligenceEvaluationSuites.suiteId,
+        intelligenceEvaluationSuites.accountId,
+        intelligenceEvaluationSuites.projectId,
+        intelligenceEvaluationSuites.suiteVersion,
+      ],
+      name: 'intelligence_evaluation_runs_suite_scope_fk',
+    }).onDelete('restrict'),
+    unique('intelligence_evaluation_runs_project_idempotency_unique').on(
+      table.projectId,
+      table.idempotencyKey,
+    ),
+    unique('intelligence_evaluation_runs_scope_identity_unique').on(
+      table.evaluationRunId,
+      table.suiteId,
+      table.accountId,
+      table.projectId,
+      table.suiteVersion,
+    ),
+    index('idx_intelligence_evaluation_runs_project_status').on(
+      table.projectId,
+      table.status,
+      table.updatedAt,
+    ),
+    index('idx_intelligence_evaluation_runs_suite_created').on(
+      table.suiteId,
+      table.createdAt,
+    ),
+    check(
+      'intelligence_evaluation_runs_protocol_version_check',
+      sql`${table.protocolVersion} = 'intelligence.workflow.v1'`,
+    ),
+    check(
+      'intelligence_evaluation_runs_request_hash_check',
+      sql`${table.requestHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_evaluation_runs_status_check',
+      sql`${table.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`,
+    ),
+    check(
+      'intelligence_evaluation_runs_budget_check',
+      sql`${table.budgetMicredits} BETWEEN 1 AND 9007199254740991
+        AND ${table.spentMicredits} BETWEEN 0 AND ${table.budgetMicredits}`,
+    ),
+    check(
+      'intelligence_evaluation_runs_samples_check',
+      sql`${table.maxSamples} BETWEEN 1 AND 10000
+        AND ${table.processedSamples} BETWEEN 0 AND ${table.maxSamples}`,
+    ),
+    check(
+      'intelligence_evaluation_runs_failure_code_check',
+      sql`${table.failureCode} IS NULL OR ${table.failureCode} ~ '^[A-Z][A-Z0-9_.-]{0,127}$'`,
+    ),
+    check(
+      'intelligence_evaluation_runs_lifecycle_check',
+      sql`(
+        ${table.status} = 'queued'
+        AND ${table.startedAt} IS NULL
+        AND ${table.completedAt} IS NULL
+        AND ${table.processedSamples} = 0
+        AND ${table.spentMicredits} = 0
+        AND ${table.failureCode} IS NULL
+      ) OR (
+        ${table.status} = 'running'
+        AND ${table.startedAt} IS NOT NULL
+        AND ${table.completedAt} IS NULL
+        AND ${table.failureCode} IS NULL
+      ) OR (
+        ${table.status} = 'succeeded'
+        AND ${table.startedAt} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.failureCode} IS NULL
+      ) OR (
+        ${table.status} = 'failed'
+        AND ${table.startedAt} IS NOT NULL
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.failureCode} IS NOT NULL
+      ) OR (
+        ${table.status} = 'cancelled'
+        AND ${table.completedAt} IS NOT NULL
+        AND ${table.failureCode} IS NULL
+      )`,
+    ),
+  ],
+);
+
+export const intelligenceModelEvaluationSnapshots = kortixSchema.table(
+  'intelligence_model_evaluation_snapshots',
+  {
+    snapshotId: uuid('snapshot_id').defaultRandom().primaryKey(),
+    snapshotVersion: text('snapshot_version').notNull(),
+    evaluationRunId: uuid('evaluation_run_id').notNull(),
+    suiteId: uuid('suite_id').notNull(),
+    accountId: uuid('account_id').notNull().references(() => accounts.accountId, {
+      onDelete: 'cascade',
+    }),
+    projectId: uuid('project_id').notNull().references(() => projects.projectId, {
+      onDelete: 'cascade',
+    }),
+    suiteVersion: text('suite_version').notNull(),
+    candidateHash: text('candidate_hash').notNull(),
+    capabilityId: text('capability_id').notNull(),
+    capabilityVersion: text('capability_version').notNull(),
+    sampleCount: integer('sample_count').notNull(),
+    minimumSampleCount: integer('minimum_sample_count').notNull(),
+    meetsMinimumSamples: boolean('meets_minimum_samples').notNull(),
+    confidence: jsonb('confidence')
+      .notNull()
+      .$type<{
+        method: 'wilson' | 'none';
+        level_bps: number;
+        lower_bound_ppm: number;
+        upper_bound_ppm: number;
+      }>(),
+    metrics: jsonb('metrics')
+      .notNull()
+      .$type<{
+        schema_valid_rate_ppm: number;
+        integrity_rate_ppm: number;
+        safety_rate_ppm: number;
+        availability_rate_ppm: number;
+        failure_rate_ppm: number;
+        retry_rate_ppm: number;
+        human_approval_rate_ppm: number;
+        latency_p50_ms: number;
+        latency_p95_ms: number;
+        mean_cost_micredits: number;
+        total_cost_micredits: number;
+      }>(),
+    scorerVersions: jsonb('scorer_versions')
+      .notNull()
+      .$type<Array<{ scorer_id: string; version: string }>>(),
+    publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'intelligence_model_evaluation_snapshots_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.suiteId, table.accountId, table.projectId, table.suiteVersion],
+      foreignColumns: [
+        intelligenceEvaluationSuites.suiteId,
+        intelligenceEvaluationSuites.accountId,
+        intelligenceEvaluationSuites.projectId,
+        intelligenceEvaluationSuites.suiteVersion,
+      ],
+      name: 'intelligence_model_evaluation_snapshots_suite_scope_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [
+        table.evaluationRunId,
+        table.suiteId,
+        table.accountId,
+        table.projectId,
+        table.suiteVersion,
+      ],
+      foreignColumns: [
+        intelligenceEvaluationRuns.evaluationRunId,
+        intelligenceEvaluationRuns.suiteId,
+        intelligenceEvaluationRuns.accountId,
+        intelligenceEvaluationRuns.projectId,
+        intelligenceEvaluationRuns.suiteVersion,
+      ],
+      name: 'intelligence_model_evaluation_snapshots_run_scope_fk',
+    }).onDelete('restrict'),
+    unique('intelligence_model_evaluation_snapshots_project_version_unique').on(
+      table.projectId,
+      table.snapshotVersion,
+    ),
+    unique('intelligence_model_evaluation_snapshots_run_candidate_unique').on(
+      table.evaluationRunId,
+      table.candidateHash,
+    ),
+    index('idx_intelligence_model_evaluation_snapshots_project_published').on(
+      table.projectId,
+      table.publishedAt,
+    ),
+    index('idx_intelligence_model_evaluation_snapshots_suite_created').on(
+      table.suiteId,
+      table.createdAt,
+    ),
+    check(
+      'intelligence_model_evaluation_snapshots_version_check',
+      sql`${table.snapshotVersion} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'`,
+    ),
+    check(
+      'intelligence_model_evaluation_snapshots_suite_version_check',
+      sql`${table.suiteVersion} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'`,
+    ),
+    check(
+      'intelligence_model_evaluation_snapshots_candidate_hash_check',
+      sql`${table.candidateHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'intelligence_model_evaluation_snapshots_capability_check',
+      sql`${table.capabilityId} = 'studio.image.generate'
+        AND ${table.capabilityVersion} = '1.0.0'`,
+    ),
+    check(
+      'intelligence_model_evaluation_snapshots_sample_limits_check',
+      sql`${table.sampleCount} BETWEEN 1 AND 10000
+        AND ${table.minimumSampleCount} BETWEEN 1 AND 10000
+        AND ${table.meetsMinimumSamples} = (${table.sampleCount} >= ${table.minimumSampleCount})`,
+    ),
+    check(
+      'intelligence_model_evaluation_snapshots_confidence_check',
+      sql`jsonb_typeof(${table.confidence}) = 'object'
+        AND (${table.confidence} ->> 'method') IN ('wilson', 'none')
+        AND ((${table.confidence} ->> 'level_bps')::integer) BETWEEN 1 AND 10000
+        AND ((${table.confidence} ->> 'lower_bound_ppm')::integer) BETWEEN 0 AND 1000000
+        AND ((${table.confidence} ->> 'upper_bound_ppm')::integer) BETWEEN 0 AND 1000000
+        AND ((${table.confidence} ->> 'lower_bound_ppm')::integer)
+          <= ((${table.confidence} ->> 'upper_bound_ppm')::integer)`,
+    ),
+    check(
+      'intelligence_model_evaluation_snapshots_metrics_check',
+      sql`jsonb_typeof(${table.metrics}) = 'object'
+        AND ((${table.metrics} ->> 'schema_valid_rate_ppm')::integer) BETWEEN 0 AND 1000000
+        AND ((${table.metrics} ->> 'integrity_rate_ppm')::integer) BETWEEN 0 AND 1000000
+        AND ((${table.metrics} ->> 'safety_rate_ppm')::integer) BETWEEN 0 AND 1000000
+        AND ((${table.metrics} ->> 'availability_rate_ppm')::integer) BETWEEN 0 AND 1000000
+        AND ((${table.metrics} ->> 'failure_rate_ppm')::integer) BETWEEN 0 AND 1000000
+        AND ((${table.metrics} ->> 'retry_rate_ppm')::integer) BETWEEN 0 AND 1000000
+        AND ((${table.metrics} ->> 'human_approval_rate_ppm')::integer) BETWEEN 0 AND 1000000
+        AND ((${table.metrics} ->> 'latency_p50_ms')::integer) >= 0
+        AND ((${table.metrics} ->> 'latency_p95_ms')::integer) >= ((${table.metrics} ->> 'latency_p50_ms')::integer)
+        AND ((${table.metrics} ->> 'mean_cost_micredits')::bigint) >= 0
+        AND ((${table.metrics} ->> 'total_cost_micredits')::bigint) >= 0`,
+    ),
+    check(
+      'intelligence_model_evaluation_snapshots_scorers_check',
+      sql`jsonb_typeof(${table.scorerVersions}) = 'array'
+        AND jsonb_array_length(${table.scorerVersions}) BETWEEN 1 AND 32`,
+    ),
+  ],
+);
+
 export const studioAssets = kortixSchema.table(
   'studio_assets',
   {

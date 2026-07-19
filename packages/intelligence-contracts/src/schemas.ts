@@ -413,3 +413,218 @@ export const WorkflowReviewerVerdictSchema = z
   })
   .strict();
 export type WorkflowReviewerVerdict = z.infer<typeof WorkflowReviewerVerdictSchema>;
+
+export const IntelligenceEvaluationScorerIdSchema = z.enum([
+  'image.schema_validity',
+  'image.integrity',
+  'image.safety',
+  'system.latency',
+  'system.availability',
+  'system.failure',
+  'system.retry',
+  'system.cost',
+  'human.image_quality',
+]);
+export type IntelligenceEvaluationScorerId = z.infer<
+  typeof IntelligenceEvaluationScorerIdSchema
+>;
+
+const IntelligenceEvaluationScorerVersionSchema = z
+  .object({
+    scorer_id: IntelligenceEvaluationScorerIdSchema,
+    version: SemverSchema,
+  })
+  .strict();
+
+const FixedPointRateSchema = z.number().int().min(0).max(1_000_000);
+
+export const IntelligenceEvaluationSuiteSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    suite_id: UuidSchema,
+    suite_version: WorkflowVersionIdSchema,
+    account_id: UuidSchema,
+    project_id: UuidSchema,
+    capability_id: z.literal('studio.image.generate'),
+    capability_version: z.literal('1.0.0'),
+    dataset_manifest_hash: Sha256HashSchema,
+    dataset_ref: WorkflowPayloadRefSchema,
+    scorer_versions: z.array(IntelligenceEvaluationScorerVersionSchema).min(1).max(32),
+    thresholds: z
+      .object({
+        minimum_schema_valid_rate_ppm: FixedPointRateSchema,
+        minimum_integrity_rate_ppm: FixedPointRateSchema,
+        minimum_safety_rate_ppm: FixedPointRateSchema,
+        minimum_human_approval_rate_ppm: FixedPointRateSchema,
+        maximum_failure_rate_ppm: FixedPointRateSchema,
+      })
+      .strict(),
+    minimum_sample_count: z.number().int().positive().max(10_000),
+    confidence_level_bps: z.number().int().positive().max(10_000),
+    status: z.enum(['draft', 'published', 'retired']),
+    created_at: DateTimeSchema,
+    published_at: DateTimeSchema.nullable(),
+  })
+  .strict()
+  .superRefine((suite, context) => {
+    const scorerIds = suite.scorer_versions.map((scorer) => scorer.scorer_id);
+    if (new Set(scorerIds).size !== scorerIds.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'evaluation scorer ids must be unique',
+        path: ['scorer_versions'],
+      });
+    }
+    if ((suite.status === 'draft') !== (suite.published_at === null)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'evaluation suite publication state is inconsistent',
+        path: ['published_at'],
+      });
+    }
+  });
+export type IntelligenceEvaluationSuite = z.infer<typeof IntelligenceEvaluationSuiteSchema>;
+
+const EvaluationMicreditsSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
+export const IntelligenceEvaluationRunSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    evaluation_run_id: UuidSchema,
+    suite_id: UuidSchema,
+    suite_version: WorkflowVersionIdSchema,
+    account_id: UuidSchema,
+    project_id: UuidSchema,
+    idempotency_key: z.string().trim().min(16).max(255),
+    request_hash: Sha256HashSchema,
+    status: z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']),
+    budget_micredits: EvaluationMicreditsSchema.positive(),
+    max_samples: z.number().int().positive().max(10_000),
+    processed_samples: z.number().int().nonnegative().max(10_000),
+    spent_micredits: EvaluationMicreditsSchema,
+    failure_code: WorkflowReasonCodeSchema.nullable(),
+    started_at: DateTimeSchema.nullable(),
+    completed_at: DateTimeSchema.nullable(),
+    created_at: DateTimeSchema,
+  })
+  .strict()
+  .superRefine((run, context) => {
+    if (run.processed_samples > run.max_samples || run.spent_micredits > run.budget_micredits) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'evaluation run exceeded its declared budget',
+        path: ['processed_samples'],
+      });
+    }
+    const validState =
+      (run.status === 'queued' &&
+        run.started_at === null &&
+        run.completed_at === null &&
+        run.processed_samples === 0 &&
+        run.spent_micredits === 0 &&
+        run.failure_code === null) ||
+      (run.status === 'running' &&
+        run.started_at !== null &&
+        run.completed_at === null &&
+        run.failure_code === null) ||
+      (run.status === 'succeeded' &&
+        run.started_at !== null &&
+        run.completed_at !== null &&
+        run.failure_code === null) ||
+      (run.status === 'failed' &&
+        run.started_at !== null &&
+        run.completed_at !== null &&
+        run.failure_code !== null) ||
+      (run.status === 'cancelled' && run.completed_at !== null && run.failure_code === null);
+    if (!validState) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'evaluation run lifecycle is inconsistent',
+        path: ['status'],
+      });
+    }
+  });
+export type IntelligenceEvaluationRun = z.infer<typeof IntelligenceEvaluationRunSchema>;
+
+const IntelligenceEvaluationMetricsSchema = z
+  .object({
+    schema_valid_rate_ppm: FixedPointRateSchema,
+    integrity_rate_ppm: FixedPointRateSchema,
+    safety_rate_ppm: FixedPointRateSchema,
+    availability_rate_ppm: FixedPointRateSchema,
+    failure_rate_ppm: FixedPointRateSchema,
+    retry_rate_ppm: FixedPointRateSchema,
+    human_approval_rate_ppm: FixedPointRateSchema,
+    latency_p50_ms: z.number().int().nonnegative().max(7 * 24 * 60 * 60 * 1_000),
+    latency_p95_ms: z.number().int().nonnegative().max(7 * 24 * 60 * 60 * 1_000),
+    mean_cost_micredits: EvaluationMicreditsSchema,
+    total_cost_micredits: EvaluationMicreditsSchema,
+  })
+  .strict();
+export type IntelligenceEvaluationMetrics = z.infer<
+  typeof IntelligenceEvaluationMetricsSchema
+>;
+
+export const IntelligenceModelEvaluationSnapshotSchema = z
+  .object({
+    protocol_version: WorkflowProtocolVersionSchema,
+    snapshot_id: UuidSchema,
+    snapshot_version: WorkflowVersionIdSchema,
+    evaluation_run_id: UuidSchema,
+    suite_id: UuidSchema,
+    suite_version: WorkflowVersionIdSchema,
+    account_id: UuidSchema,
+    project_id: UuidSchema,
+    candidate_hash: Sha256HashSchema,
+    capability_id: z.literal('studio.image.generate'),
+    capability_version: z.literal('1.0.0'),
+    sample_count: z.number().int().positive().max(10_000),
+    minimum_sample_count: z.number().int().positive().max(10_000),
+    meets_minimum_samples: z.boolean(),
+    confidence: z
+      .object({
+        method: z.enum(['wilson', 'none']),
+        level_bps: z.number().int().positive().max(10_000),
+        lower_bound_ppm: FixedPointRateSchema,
+        upper_bound_ppm: FixedPointRateSchema,
+      })
+      .strict(),
+    metrics: IntelligenceEvaluationMetricsSchema,
+    scorer_versions: z.array(IntelligenceEvaluationScorerVersionSchema).min(1).max(32),
+    published_at: DateTimeSchema,
+  })
+  .strict()
+  .superRefine((snapshot, context) => {
+    if (snapshot.meets_minimum_samples !== (snapshot.sample_count >= snapshot.minimum_sample_count)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'evaluation sample sufficiency is inconsistent',
+        path: ['meets_minimum_samples'],
+      });
+    }
+    if (snapshot.confidence.lower_bound_ppm > snapshot.confidence.upper_bound_ppm) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'evaluation confidence interval is invalid',
+        path: ['confidence'],
+      });
+    }
+    if (snapshot.metrics.latency_p50_ms > snapshot.metrics.latency_p95_ms) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'evaluation latency percentiles are invalid',
+        path: ['metrics'],
+      });
+    }
+    const scorerIds = snapshot.scorer_versions.map((scorer) => scorer.scorer_id);
+    if (new Set(scorerIds).size !== scorerIds.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'evaluation scorer ids must be unique',
+        path: ['scorer_versions'],
+      });
+    }
+  });
+export type IntelligenceModelEvaluationSnapshot = z.infer<
+  typeof IntelligenceModelEvaluationSnapshotSchema
+>;

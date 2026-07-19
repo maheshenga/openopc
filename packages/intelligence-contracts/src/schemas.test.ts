@@ -2,6 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import {
   AgentCardSchema,
   CapabilityDescriptorSchema,
+  IntelligenceEvaluationRunSchema,
+  IntelligenceEvaluationSuiteSchema,
+  IntelligenceModelEvaluationSnapshotSchema,
   TaskEnvelopeSchema,
   TaskEventSchema,
   WorkflowApprovalSchema,
@@ -28,6 +31,9 @@ const APPROVAL_ID = '19000000-0000-4000-a000-000000000001';
 const WORKFLOW_EVENT_ID = '1a000000-0000-4000-a000-000000000001';
 const PROPOSAL_ID = '1b000000-0000-4000-a000-000000000001';
 const VERDICT_ID = '1c000000-0000-4000-a000-000000000001';
+const EVALUATION_SUITE_ID = '1d000000-0000-4000-a000-000000000001';
+const EVALUATION_RUN_ID = '1e000000-0000-4000-a000-000000000001';
+const EVALUATION_SNAPSHOT_ID = '1f000000-0000-4000-a000-000000000001';
 const CARD_HASH = 'a'.repeat(64);
 
 const imageCapability = {
@@ -345,5 +351,121 @@ describe('intelligence contract schemas', () => {
 
     expect(verdict.verdict).toBe('approve');
     expect(verdict).not.toHaveProperty('reasoning');
+  });
+
+  test('accepts a published versioned image golden-set suite', () => {
+    const suite = IntelligenceEvaluationSuiteSchema.parse({
+      protocol_version: 'intelligence.workflow.v1',
+      suite_id: EVALUATION_SUITE_ID,
+      suite_version: 'image-golden-v1',
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      capability_id: 'studio.image.generate',
+      capability_version: '1.0.0',
+      dataset_manifest_hash: `sha256:${CARD_HASH}`,
+      dataset_ref: 'sealed:evaluation-dataset-1',
+      scorer_versions: [
+        { scorer_id: 'image.schema_validity', version: '1.0.0' },
+        { scorer_id: 'image.integrity', version: '1.0.0' },
+        { scorer_id: 'image.safety', version: '1.0.0' },
+      ],
+      thresholds: {
+        minimum_schema_valid_rate_ppm: 1_000_000,
+        minimum_integrity_rate_ppm: 990_000,
+        minimum_safety_rate_ppm: 1_000_000,
+        minimum_human_approval_rate_ppm: 800_000,
+        maximum_failure_rate_ppm: 10_000,
+      },
+      minimum_sample_count: 30,
+      confidence_level_bps: 9_500,
+      status: 'published',
+      created_at: '2026-07-19T00:00:00.000Z',
+      published_at: '2026-07-19T00:01:00.000Z',
+    });
+
+    expect(suite).toMatchObject({
+      suite_version: 'image-golden-v1',
+      status: 'published',
+      minimum_sample_count: 30,
+    });
+  });
+
+  test('accepts an isolated evaluation run with explicit sample and credit budgets', () => {
+    const run = IntelligenceEvaluationRunSchema.parse({
+      protocol_version: 'intelligence.workflow.v1',
+      evaluation_run_id: EVALUATION_RUN_ID,
+      suite_id: EVALUATION_SUITE_ID,
+      suite_version: 'image-golden-v1',
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      idempotency_key: 'evaluation-run-key-000001',
+      request_hash: `sha256:${CARD_HASH}`,
+      status: 'queued',
+      budget_micredits: 5_000_000,
+      max_samples: 100,
+      processed_samples: 0,
+      spent_micredits: 0,
+      failure_code: null,
+      started_at: null,
+      completed_at: null,
+      created_at: '2026-07-19T00:00:00.000Z',
+    });
+
+    expect(run).toMatchObject({
+      status: 'queued',
+      budget_micredits: 5_000_000,
+      max_samples: 100,
+    });
+  });
+
+  test('accepts a published aggregate-only model evaluation snapshot', () => {
+    const snapshot = IntelligenceModelEvaluationSnapshotSchema.parse({
+      protocol_version: 'intelligence.workflow.v1',
+      snapshot_id: EVALUATION_SNAPSHOT_ID,
+      snapshot_version: 'image-golden-v1.fake-image-v1.1',
+      evaluation_run_id: EVALUATION_RUN_ID,
+      suite_id: EVALUATION_SUITE_ID,
+      suite_version: 'image-golden-v1',
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      candidate_hash: `sha256:${'b'.repeat(64)}`,
+      capability_id: 'studio.image.generate',
+      capability_version: '1.0.0',
+      sample_count: 100,
+      minimum_sample_count: 30,
+      meets_minimum_samples: true,
+      confidence: {
+        method: 'wilson',
+        level_bps: 9_500,
+        lower_bound_ppm: 900_000,
+        upper_bound_ppm: 990_000,
+      },
+      metrics: {
+        schema_valid_rate_ppm: 1_000_000,
+        integrity_rate_ppm: 990_000,
+        safety_rate_ppm: 1_000_000,
+        availability_rate_ppm: 980_000,
+        failure_rate_ppm: 20_000,
+        retry_rate_ppm: 50_000,
+        human_approval_rate_ppm: 900_000,
+        latency_p50_ms: 1_200,
+        latency_p95_ms: 2_500,
+        mean_cost_micredits: 42_000,
+        total_cost_micredits: 4_200_000,
+      },
+      scorer_versions: [
+        { scorer_id: 'image.schema_validity', version: '1.0.0' },
+        { scorer_id: 'system.latency', version: '1.0.0' },
+      ],
+      published_at: '2026-07-19T00:05:00.000Z',
+    });
+
+    expect(snapshot).toMatchObject({
+      sample_count: 100,
+      meets_minimum_samples: true,
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      candidate_hash: `sha256:${'b'.repeat(64)}`,
+    });
   });
 });

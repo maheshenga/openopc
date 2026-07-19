@@ -35,6 +35,9 @@ import {
   intelligenceWorkflowApprovals,
   intelligenceWorkflowEvents,
   intelligenceWorkflowPayloads,
+  intelligenceEvaluationSuites,
+  intelligenceEvaluationRuns,
+  intelligenceModelEvaluationSnapshots,
   accounts,
   accountMembers,
   projects,
@@ -732,6 +735,118 @@ describe('intelligence durable workflow schema', () => {
       expect.arrayContaining([
         'idx_intelligence_workflow_payloads_run_node',
         'idx_intelligence_workflow_payloads_retention',
+      ]),
+    );
+  });
+});
+
+describe('intelligence evaluation schema', () => {
+  test('persists project-scoped versioned suites without raw evaluation inputs', () => {
+    expect(getTableConfig(intelligenceEvaluationSuites).schema).toBe('kortix');
+    expect(getTableConfig(intelligenceEvaluationSuites).name).toBe(
+      'intelligence_evaluation_suites',
+    );
+    expect(columnNames(intelligenceEvaluationSuites)).toEqual([
+      'suite_id',
+      'account_id',
+      'project_id',
+      'protocol_version',
+      'suite_version',
+      'capability_id',
+      'capability_version',
+      'dataset_manifest_hash',
+      'dataset_ref',
+      'scorer_versions',
+      'thresholds',
+      'minimum_sample_count',
+      'confidence_level_bps',
+      'status',
+      'created_at',
+      'published_at',
+    ]);
+    expect(uniqueConstraintNames(intelligenceEvaluationSuites)).toContain(
+      'intelligence_evaluation_suites_project_version_unique',
+    );
+    expect(columnNames(intelligenceEvaluationSuites)).not.toEqual(
+      expect.arrayContaining(['prompt', 'asset_id', 'provider', 'provider_response']),
+    );
+  });
+
+  test('persists isolated budgeted evaluation runs against an exact suite version', () => {
+    expect(getTableConfig(intelligenceEvaluationRuns).name).toBe('intelligence_evaluation_runs');
+    expect(columnNames(intelligenceEvaluationRuns)).toEqual([
+      'evaluation_run_id',
+      'suite_id',
+      'account_id',
+      'project_id',
+      'suite_version',
+      'protocol_version',
+      'idempotency_key',
+      'request_hash',
+      'status',
+      'budget_micredits',
+      'max_samples',
+      'processed_samples',
+      'spent_micredits',
+      'failure_code',
+      'started_at',
+      'completed_at',
+      'created_at',
+      'updated_at',
+    ]);
+    expect(uniqueConstraintNames(intelligenceEvaluationRuns)).toContain(
+      'intelligence_evaluation_runs_project_idempotency_unique',
+    );
+    const suiteScopeKey = getTableConfig(intelligenceEvaluationRuns).foreignKeys.find((key) => {
+      const reference = key.reference();
+      return (
+        reference.columns.map((column) => column.name).join(',') ===
+          'suite_id,account_id,project_id,suite_version' &&
+        reference.foreignColumns.map((column) => column.name).join(',') ===
+          'suite_id,account_id,project_id,suite_version'
+      );
+    });
+    expect(suiteScopeKey).toBeDefined();
+  });
+
+  test('persists immutable aggregate model snapshots without candidate internals', () => {
+    expect(getTableConfig(intelligenceModelEvaluationSnapshots).name).toBe(
+      'intelligence_model_evaluation_snapshots',
+    );
+    expect(columnNames(intelligenceModelEvaluationSnapshots)).toEqual([
+      'snapshot_id',
+      'snapshot_version',
+      'evaluation_run_id',
+      'suite_id',
+      'account_id',
+      'project_id',
+      'suite_version',
+      'candidate_hash',
+      'capability_id',
+      'capability_version',
+      'sample_count',
+      'minimum_sample_count',
+      'meets_minimum_samples',
+      'confidence',
+      'metrics',
+      'scorer_versions',
+      'published_at',
+      'created_at',
+    ]);
+    expect(uniqueConstraintNames(intelligenceModelEvaluationSnapshots)).toEqual(
+      expect.arrayContaining([
+        'intelligence_model_evaluation_snapshots_project_version_unique',
+        'intelligence_model_evaluation_snapshots_run_candidate_unique',
+      ]),
+    );
+    expect(columnNames(intelligenceModelEvaluationSnapshots)).not.toEqual(
+      expect.arrayContaining([
+        'prompt',
+        'asset_id',
+        'provider',
+        'provider_config_id',
+        'model',
+        'raw_response',
       ]),
     );
   });

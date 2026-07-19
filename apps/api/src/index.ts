@@ -75,6 +75,10 @@ import { auditStateChangingRequest } from './shared/audit';
 import { opsApp } from './ops';
 import { adminApp } from './admin';
 import { closeDefaultStudioApiRuntime } from './studio/default-routes';
+import {
+  startDefaultIntelligenceWorkflowRuntime,
+  stopDefaultIntelligenceWorkflowRuntime,
+} from './intelligence/workflows/runtime';
 
 // ─── Process-level crash guards ───────────────────────────────────────────────
 // A stray rejected promise or throw escaping any fire-and-forget path — the
@@ -975,10 +979,12 @@ async function startSingletonWorkers() {
   // of authorize() so correctness doesn't depend on this — it's the audit trail.
   const { startGrantExpirySweeper } = await import('./iam/expiry-sweeper');
   startGrantExpirySweeper();
+  startDefaultIntelligenceWorkflowRuntime();
 }
 async function stopSingletonWorkers() {
   if (!singletonWorkersRunning) return;
   singletonWorkersRunning = false;
+  await stopDefaultIntelligenceWorkflowRuntime();
   stopProjectTriggerScheduler();
   stopProjectMaintenance();
   stopSunaMigrationWorker();

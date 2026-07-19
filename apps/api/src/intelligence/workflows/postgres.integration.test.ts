@@ -8,7 +8,9 @@ import {
 import { sql } from 'drizzle-orm';
 import postgres, { type Sql } from 'postgres';
 import { createPostgresWorkflowStore } from './postgres-store';
+import { createWorkflowScheduler } from './scheduler';
 import { runWorkflowStoreConformance } from './store-conformance.test';
+import type { WorkflowImageTaskBridge } from './task-bridge';
 
 const dockerEnvironment = { ...process.env };
 delete dockerEnvironment.DOCKER_HOST;
@@ -399,6 +401,140 @@ if (enabled) {
       expect(rejected[0]?.reason).toMatchObject({ code: 'WORKFLOW_TASK_ATTACHMENT_CONFLICT' });
     } finally {
       await Promise.all([closeDatabase(databaseA), closeDatabase(databaseB)]);
+    }
+  });
+
+  test('recovers one task across lease loss and scheduler process restarts', async () => {
+    if (!database) throw new Error('PostgreSQL workflow fixture is not ready');
+    await resetWorkflowTables();
+    const [databaseA, databaseB] = createIndependentDatabases();
+    const databaseC = createDb(databaseUrl ?? '', { max: 1, onnotice: () => undefined });
+    try {
+      const storeA = createPostgresWorkflowStore(databaseA);
+      const storeB = createPostgresWorkflowStore(databaseB);
+      const storeC = createPostgresWorkflowStore(databaseC);
+      const run = workflowRunFixture({
+        deadline_at: '2026-07-18T11:00:00.000Z',
+      });
+      const node = workflowNodeFixture({
+        run_id: run.run_id,
+        deadline_at: '2026-07-18T11:00:00.000Z',
+      });
+      await storeA.startRun({ run });
+      await storeA.appendNode({
+        accountId: run.account_id,
+        projectId: run.project_id,
+        runId: run.run_id,
+        expectedGraphVersion: 0,
+        idempotencyKey: 'workflow-node-restart-primary-0001',
+        requestHash: node.input_hash,
+        node,
+      });
+      await storeA.sealGraph({
+        accountId: run.account_id,
+        projectId: run.project_id,
+        runId: run.run_id,
+        expectedGraphVersion: 1,
+        updatedAt: '2026-07-18T10:01:00.000Z',
+      });
+
+      let taskExists = false;
+      let taskSubmissions = 0;
+      let taskRequests = 0;
+      let reconciliations = 0;
+      const bridge: WorkflowImageTaskBridge = {
+        createOrReplay: async () => {
+          taskRequests += 1;
+          const created = !taskExists;
+          if (created) {
+            taskExists = true;
+            taskSubmissions += 1;
+          }
+          return { taskId: TASK_ID, jobId: '66000000-0000-4000-a000-000000000001', created };
+        },
+        reconcile: async () => {
+          reconciliations += 1;
+          if (reconciliations === 1) throw new Error('simulated scheduler process crash');
+          return { status: 'succeeded', assetIds: [], reasonCode: null };
+        },
+      };
+      const common = {
+        bridge,
+        isReady: async () => true,
+        listScopes: async () => [{ accountId: ACCOUNT_ID, projectId: PROJECT_ID }],
+        authorizeNode: async () => ({
+          actingTokenId: null,
+          sessionId: null,
+          parentTaskId: null,
+        }),
+        readNodeRequest: async () => ({ capability: 'image.generate' }),
+        leaseMs: 1_000,
+        maxClaimsPerRun: 1,
+      };
+
+      let schedulerANowCalls = 0;
+      const schedulerA = createWorkflowScheduler({
+        ...common,
+        workflow: storeA,
+        workerId: 'workflow-worker-a',
+        now: () => {
+          schedulerANowCalls += 1;
+          return schedulerANowCalls < 6 ? '2026-07-18T10:02:00.000Z' : '2026-07-18T10:04:00.000Z';
+        },
+      });
+      await expect(schedulerA.runOnce()).resolves.toMatchObject({
+        claimed: 1,
+        attached: 0,
+        leaseLost: 1,
+      });
+
+      const schedulerB = createWorkflowScheduler({
+        ...common,
+        workflow: storeB,
+        workerId: 'workflow-worker-b',
+        now: () => '2026-07-18T10:04:00.000Z',
+      });
+      await expect(schedulerB.runOnce()).rejects.toThrow('simulated scheduler process crash');
+
+      const schedulerC = createWorkflowScheduler({
+        ...common,
+        workflow: storeC,
+        workerId: 'workflow-worker-c',
+        now: () => '2026-07-18T10:06:00.000Z',
+      });
+      await expect(schedulerC.runOnce()).resolves.toMatchObject({
+        claimed: 1,
+        attached: 0,
+        completed: 1,
+        leaseLost: 0,
+      });
+
+      await expect(
+        storeC.getRun({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+        }),
+      ).resolves.toMatchObject({ status: 'succeeded' });
+      const events = await storeC.readEvents({
+        accountId: run.account_id,
+        projectId: run.project_id,
+        runId: run.run_id,
+        afterSequence: 0,
+        limit: 100,
+      });
+      expect(events.items.filter((event) => event.type === 'task_attached')).toHaveLength(1);
+      expect({ taskRequests, taskSubmissions, reconciliations }).toEqual({
+        taskRequests: 2,
+        taskSubmissions: 1,
+        reconciliations: 2,
+      });
+    } finally {
+      await Promise.all([
+        closeDatabase(databaseA),
+        closeDatabase(databaseB),
+        closeDatabase(databaseC),
+      ]);
     }
   });
 }

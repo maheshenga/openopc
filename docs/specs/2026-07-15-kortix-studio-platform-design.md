@@ -1,6 +1,6 @@
 # Kortix Studio Platform Design
 
-**Status:** Approved for phased implementation; Task 9 amended 2026-07-16
+**Status:** Approved; first-party multimedia finished-product pages cancelled 2026-07-20
 
 **Date:** 2026-07-15
 
@@ -10,14 +10,9 @@
 
 ## 1. Outcome
 
-Kortix gains a team-oriented AI production workspace with direct, production-ready pages for:
+Kortix gains a team-oriented AI production workspace centered on Image Studio, shared jobs, assets, governed Agents, and developer-published modules. Image Studio is the only first-party Studio product.
 
-- image generation;
-- video generation and scene editing;
-- multi-speaker voice dialogue synthesis;
-- professional AI-assisted 3D modeling;
-- Alibaba Cloud digital-human production;
-- Alibaba Cloud batch remix production.
+First-party finished-product pages, built-in capability IDs, dedicated provider adapters, and roadmap commitments for video, voice, 3D, digital human, and batch remix are cancelled product scope. Generic module contracts may still describe non-image workloads, but Kortix does not ship or promise first-party Studio pages for them.
 
 The same platform later hosts developer-published industry modules and AI applications. Modules can be discovered in the marketplace, installed into projects, invoked by people or Agents, metered, and included in developer revenue sharing.
 
@@ -29,16 +24,12 @@ This design is an umbrella architecture. Implementation is divided into independ
 
 1. **Studio foundation and Image Studio**
    - shared contracts, job engine, asset storage, provider registry, OpenAI-compatible image adapter, SDK surface, Image Studio page, IAM, metering, and end-to-end verification;
-2. **Video Studio and Voice Studio**
-   - scene-oriented video jobs, timelines, dialogue speakers, per-line takes, audio alignment, and media-specific provider adapters;
-3. **Professional 3D Studio, Digital Human Studio, and batch remix**
-   - Three.js professional modeling workspace, 3D asset/version pipeline, Alibaba Cloud avatar adapter, signed callbacks, render timelines, and template-driven batch remix;
-4. **Developer Center and module marketplace**
+2. **Developer Center and module marketplace**
    - module authoring, schema validation, security review, signed versions, sandbox execution, catalog publishing, usage analytics, revenue events, and settlement;
-5. **Advanced multi-Agent workflows**
+3. **Advanced multi-Agent workflows**
    - reusable workflow definitions, dependency graphs, approval gates, and richer orchestration on top of existing Kortix Agent sessions.
 
-Only subproject 1 is in the first implementation plan. The remaining subprojects must not be partially scaffolded into production code unless an interface is required by subproject 1.
+First-party multimedia finished-product pages are not deferred subprojects. They are cancelled and must not be scaffolded into production code. Developer Center and advanced workflow work remain separate subprojects.
 
 ## 3. Non-goals
 
@@ -47,7 +38,8 @@ Only subproject 1 is in the first implementation plan. The remaining subprojects
 - Do not execute arbitrary developer JavaScript in the trusted web origin.
 - Do not introduce Redis, Kafka, RabbitMQ, or a second database in the first delivery.
 - Do not build a second mobile or desktop business-logic implementation.
-- Do not make the first delivery implement video, voice, 3D, digital human, batch remix, payouts, or a general workflow DAG.
+- Do not introduce first-party video, voice, 3D, digital-human, or batch-remix pages, routes, capability IDs, adapters, seed data, or navigation. This is a permanent product boundary, not a phase deferral.
+- Do not make the first delivery implement payouts or a general workflow DAG.
 
 ## 4. Upstream compatibility
 
@@ -103,14 +95,14 @@ Studio is project-scoped because Kortix projects already define team membership,
 All Studio pages share:
 
 - current account and project context;
-- navigation between production pages and assets;
+- navigation between Image Studio, jobs, and assets;
 - job status and run history;
 - asset selection and version lineage;
 - actor, Agent, cost, provider, and model attribution;
 - review and handoff metadata;
 - consistent loading, empty, error, retry, permission, and insufficient-credit states.
 
-Each capability still receives a direct product page. The shared backend is not exposed as a generic module runner to ordinary users.
+Image Studio is the only first-party Studio capability page. Developer modules use the governed module surface rather than creating hidden first-party multimedia routes.
 
 ### 5.2 Image Studio
 
@@ -122,57 +114,13 @@ Image Studio presents the complete generation workflow immediately:
 - run history and asset handoff;
 - estimated and actual credit usage.
 
-This is the first implemented page. Comparison, upscale, edit, and variation controls appear only when later executable capabilities advertise them; no inactive future controls ship in the first delivery.
+This is the complete first-party Studio page. Comparison, upscale, edit, and variation controls appear only when executable image capabilities advertise them.
 
-### 5.3 Video Studio
+### 5.3 Cancelled multimedia finished-product pages
 
-Video Studio is scene-oriented and includes:
+Kortix will not ship first-party Video Studio, Voice Studio, 3D Studio, Digital Human Studio, or batch-remix pages. No placeholder navigation, disabled tabs, reserved routes, built-in capability descriptors, provider-specific callbacks, database seed rows, or partially implemented editors may be added for those products.
 
-- storyboard scene list and ordering;
-- per-scene prompt, model, duration, references, and motion controls;
-- preview player;
-- video and audio timeline;
-- scene rendering, whole-cut rendering, review, and Agent handoff.
-
-### 5.4 Voice Studio
-
-Voice Studio treats dialogue as a first-class production artifact:
-
-- cast and licensed/cloned/platform voice assignments;
-- multi-speaker script lines;
-- per-line emotion, speed, pitch, pronunciation, provider, and take history;
-- per-line re-synthesis and comparison;
-- waveform preview, loudness normalization, subtitle/alignment metadata, and full-mix export;
-- separate modes for dialogue synthesis, text to speech, live conversation, transcription, and the voice library.
-
-### 5.5 Professional 3D Studio
-
-3D Studio is a professional modeling workspace, not only a prompt-and-download screen. Its desktop experience includes:
-
-- Scene Outliner and Asset Browser;
-- a full-bleed Three.js viewport with orbit, transform gizmos, grids, cameras, lights, selection, and multiple shading modes;
-- Object/Edit/Sculpt/Paint-style modes where supported;
-- transform, mesh, normals, UV, materials, rig, animation, and export properties;
-- animation timeline and version history;
-- AI operations for generation, retopology, UV unwrap, texturing, mesh repair, rigging, LOD generation, and map baking;
-- GLB, OBJ, USDZ, textures, and preview exports.
-
-Mobile exposes review, comments, asset preview, render status, and approvals. Professional mesh editing remains desktop/web only.
-
-### 5.6 Digital Human Studio
-
-Digital Human Studio includes:
-
-- scenes, avatars, voices, backgrounds, brand kits, and render history;
-- presenter preview with safe areas, subtitles, and branding;
-- avatar, voice, script, scene, output, gesture, framing, and automation controls;
-- Avatar, Voice, Captions, and Gestures timeline tracks;
-- Alibaba Cloud connection and region status;
-- scene templates that can feed batch remix jobs.
-
-### 5.7 Batch remix
-
-Batch remix creates controlled variants from an approved template. A batch input combines rows from CSV/XLSX/API data with selected template variables such as presenter, language, script, background, product media, captions, and output format. Each row becomes a child job with independent status, cost, error, and output assets. The batch exposes aggregate progress and a downloadable report.
+The Developer Center may host independently reviewed modules that use generic capability and asset contracts. Those modules do not become first-party Studio products and cannot claim the first-party Studio route family or built-in provider ownership.
 
 ## 6. Frontend architecture
 
@@ -182,17 +130,12 @@ The final route family is project-scoped:
 
 ```text
 /projects/:projectId/studio/image
-/projects/:projectId/studio/video
-/projects/:projectId/studio/voice
-/projects/:projectId/studio/3d
-/projects/:projectId/studio/digital-human
-/projects/:projectId/studio/batch-remix
 /projects/:projectId/studio/jobs/:jobId
 /projects/:projectId/studio/assets
 /developer/modules
 ```
 
-Only the Image Studio, jobs, and assets routes ship in subproject 1.
+The first-party route family is complete with Image Studio, jobs, and assets. Developer modules use their own governed module routes and manifests.
 
 ### 6.2 State ownership
 
@@ -220,7 +163,7 @@ Studio reuses Kortix primitives and tokens. It must not introduce a separate des
 - Web is the complete product surface.
 - Electron continues to wrap the same web application.
 - Expo mobile consumes the same SDK and implements task creation, job status, asset review, comments, approvals, and downloads.
-- Mobile does not reproduce the professional 3D editor or a dense video timeline in the first related delivery.
+- Mobile does not expose placeholders or navigation for cancelled first-party multimedia products.
 
 ## 7. Backend architecture
 
@@ -243,21 +186,13 @@ Web/Mobile/Desktop or Agent tool
 
 ### 7.2 Capabilities
 
-The platform reserves these capability identifiers for the subprojects that implement them:
+The first-party Studio reserves one executable capability identifier:
 
 ```text
 image.generate
-video.generate
-voice.dialogue
-voice.synthesize
-voice.transcribe
-model3d.generate
-model3d.process
-avatar.render
-video.batch_mix
 ```
 
-Subproject 1 advertises only executable `image.generate` descriptors. Reserved identifiers for video, voice, 3D, digital human, and batch remix do not appear in `/capabilities`, routes, database seed rows, or UI controls until their own subproject is enabled.
+No first-party identifiers are reserved for cancelled multimedia pages. Generic developer modules must use versioned module-owned capability namespaces and pass the normal trust, review, IAM, and sandbox gates.
 
 Capability descriptors include a version, accepted input contract, output asset kinds, supported models, limits, estimated-cost inputs, asynchronous behavior, cancellation support, region constraints, and required credential type.
 
@@ -310,12 +245,7 @@ interface StudioProviderAdapter {
 
 Definitions validate models and calculate estimates without provider credentials. Invocation adapters return either a synchronous completed result or an asynchronous canonical handle, plus canonical statuses, errors, usage, and replayable-within-attempt asset streams. Raw provider bodies may be stored only as redacted diagnostic metadata with bounded size and retention.
 
-Planned adapters are:
-
-- `openai-compatible` for compatible image/audio/media endpoints and custom base URLs;
-- `aliyun` for Alibaba Cloud digital human and batch remix APIs;
-- `http-json` for reviewed REST providers supporting synchronous, polling, or webhook completion;
-- later local/private adapters for enterprise GPU deployments.
+First-party Studio adapters are limited to reviewed image-generation adapters such as `openai-compatible`, plus later local/private image adapters when explicitly approved. Generic `http-json` or provider-specific integrations belong to governed developer modules and do not create first-party multimedia products.
 
 ### 7.5 Credential resolution
 
@@ -688,17 +618,16 @@ Studio foundation and Image Studio are complete when:
 
 ## 21. Decisions
 
-- Direct specialized product pages are preferred over a generic end-user module runner.
-- Shared jobs, assets, permissions, billing, and provider adapters remain unified behind those pages.
-- Professional 3D editing is a first-class desktop/web experience built on Three.js.
+- Image Studio is the only first-party Studio product page.
+- Shared jobs, assets, permissions, billing, and image provider adapters remain unified behind Image Studio.
+- First-party video, voice, 3D, digital-human, and batch-remix products are cancelled scope and require a new explicit product decision before any reintroduction.
 - Postgres is the authoritative first queue; row leases allow horizontal worker concurrency.
 - A Studio-owned parameterized lease instance controls the `studio-maintenance` row in `worker_leader_lease`; it is independent from the API's hardcoded `background-workers` singleton, and normal submission/provider polling remain horizontally claimable by `apps/studio-worker` replicas.
 - Studio media assets use the streaming `StudioObjectStore` abstraction and do not automatically enter git.
-- OpenAI-compatible configuration is supported, but provider-specific media protocols use dedicated adapters.
-- Alibaba Cloud digital human and batch remix use a dedicated adapter with signed callback handling.
+- OpenAI-compatible image configuration is supported through the reviewed image adapter boundary.
 - Existing Kortix Agent sessions remain the orchestration runtime.
 - Developer modules use versioned manifests, scoped capabilities, sandboxing, review, signing, and an independent revenue ledger.
-- The first implementation is foundation plus Image Studio only.
+- Image Studio is the only first-party Studio product.
 
 ## 22. Risks and mitigations
 
@@ -713,5 +642,5 @@ Studio foundation and Image Studio are complete when:
 | Large outputs overload API memory or bandwidth | Streaming server-side transfers, size limits, object storage, and signed URLs |
 | Upstream Kortix changes conflict with Studio | Concentrated extension paths, thin mounts, additive contracts, and upstream-sync CI |
 | Arbitrary developer modules threaten tenant data | Declarative UI by default, sandboxed custom UI, scoped tokens, scanning, and review |
-| A professional 3D editor expands without bound | Separate 3D subproject with explicit mode/tool acceptance criteria |
+| Cancelled multimedia products reappear through partial scaffolding | Scope decision, route/capability allowlists, absence tests, and no placeholder navigation |
 | Mobile cannot reproduce desktop creative tools | Mobile focuses on creation parameters, monitoring, review, approvals, and assets |

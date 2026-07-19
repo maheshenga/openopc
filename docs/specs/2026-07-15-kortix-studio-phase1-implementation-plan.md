@@ -10,7 +10,7 @@
 
 **Goal:** Ship the first usable Studio slice: shared Studio foundations, OpenAI-compatible `image.generate`, durable jobs/assets/billing/events, SDK bindings, Image Studio, mobile monitoring, Electron compatibility, Agent tools, deployment manifests, and black-box verification.
 
-**Scope:** This plan implements only Phase 1. It does not implement Video Studio, Voice Studio, 3D Studio, Alibaba digital human, Alibaba batch remix, Developer Center, revenue sharing, arbitrary developer modules, or workflow DAG execution.
+**Scope:** This plan implements Image Studio. First-party Video Studio, Voice Studio, 3D Studio, Alibaba digital human, and Alibaba batch remix are cancelled product scope. Developer Center, revenue sharing, arbitrary developer modules, and workflow DAG execution remain separate work.
 
 **Execution rule:** Track this plan in `docs/specs` and execute it through normal repo tasks, tests, commits, and review gates. Do not move this work into any external planning workflow or alternate docs tree.
 
@@ -23,7 +23,7 @@
 - Add SDK surface at `kortix.project(projectId).studio` and `@kortix/sdk/react`; do not create a new SDK subpath.
 - Public job states are exactly `queued`, `running`, `succeeded`, `failed`, and `cancelled`.
 - Phase 1 exposes only executable `image.generate`.
-- No disabled tabs, seed rows, route links, or capability descriptors for video, voice, 3D, digital human, batch remix, Developer Center, or DAG workflows.
+- No disabled tabs, seed rows, route links, or capability descriptors for the cancelled video, voice, 3D, digital-human, or batch-remix products. Developer Center and DAG workflows remain separate work.
 - Use a separate `apps/studio-worker` process; API pods never claim Studio jobs.
 - Use Postgres row leases and a Studio-owned parameterized `studio-maintenance` lease, not the API module-global `background-workers` leader singleton.
 - Provider attempts commit a stable submission key before external I/O. Unknown submission outcomes reconcile or enter explicit unknown recovery; they are never blindly retried.

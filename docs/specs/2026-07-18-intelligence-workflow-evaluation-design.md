@@ -32,7 +32,8 @@ The delivery provides:
 
 - `STUDIO_ENABLED` remains false in production values until the existing deployment and acceptance gates pass.
 - Add `INTELLIGENCE_WORKFLOWS_ENABLED`, default false. A disabled runtime must not create a database pool, object-store client, scheduler, telemetry exporter, or model client.
-- Do not add video, voice, audio, 3D, digital-human, batch-remix, C2PA signing, Developer Center publication, revenue sharing, or arbitrary module execution.
+- First-party video, voice, audio, 3D, digital-human, and batch-remix finished-product pages are cancelled product scope. Do not add their executable routes, capability IDs, adapters, seed data, or navigation.
+- Do not add C2PA signing, Developer Center publication, revenue sharing, or arbitrary module execution in this design.
 - Do not add a global `/.well-known` route. Agent Cards and workflow APIs remain project-scoped.
 - Do not change the current Studio worker lease, recovery, provider, storage, reservation, settlement, or unknown-outcome ownership.
 - Do not make Temporal, LangGraph, an OpenAI Agents SDK, or another agent framework the source of truth for Kortix tasks, approvals, IAM, billing, or assets.

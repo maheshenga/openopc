@@ -12,7 +12,7 @@
 
 ## 1. Outcome
 
-Task 9 turns the existing fake-only Studio worker into a production-capable Phase 1 image pipeline without exposing video, voice, 3D, digital-human, batch-remix, Developer Center, or workflow-DAG capabilities.
+Task 9 turns the existing fake-only Studio worker into a production-capable image pipeline without exposing Developer Center or workflow-DAG capabilities. First-party video, voice, 3D, digital-human, and batch-remix products are cancelled scope.
 
 The delivery provides:
 
@@ -66,7 +66,7 @@ This adds extension-owned packages and thin dependency-injection points instead 
 
 ### 3.2 Out of scope
 
-- Video, voice, 3D, digital-human, or batch-remix adapters.
+- First-party video, voice, 3D, digital-human, or batch-remix adapters; these are cancelled product scope rather than deferred work.
 - Provider callbacks or the `/v1/webhooks/studio/:provider` route. The webhook surface is deferred until the first provider that requires signed callbacks.
 - Public Developer Center modules, revenue sharing, or arbitrary code execution.
 - A production UI for operator recovery; Task 9 provides an audited server-side service and command surface.
@@ -233,7 +233,7 @@ interface StudioProviderAsset {
 }
 ```
 
-`openBody()` permits a bounded storage retry in the same worker attempt when the adapter can reopen a base64 buffer or refetch an unexpired validated output URL. It is not a durable function and is never serialized. The Phase 1 OpenAI-compatible adapter may parse a bounded JSON/base64 response, but it must expose decoded bytes through `openBody()` and enforce the limits in section 10. Later video and 3D adapters must not use base64 JSON for large outputs.
+`openBody()` permits a bounded storage retry in the same worker attempt when the adapter can reopen a base64 buffer or refetch an unexpired validated output URL. It is not a durable function and is never serialized. The Phase 1 OpenAI-compatible adapter may parse a bounded JSON/base64 response, but it must expose decoded bytes through `openBody()` and enforce the limits in section 10. Any separately reviewed module-owned adapter for large non-image outputs must use streaming rather than base64 JSON.
 
 ### 6.5 Reference assets
 

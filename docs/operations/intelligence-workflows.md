@@ -1,6 +1,6 @@
 # Intelligence Workflow Operations
 
-This runbook covers the disabled-by-default `intelligence.workflow.v1` Phase 2 slice. Kortix remains the system of record. The only executable leaf is `studio.image.generate@1.0.0`; video, voice, 3D, digital-human, and batch-remix execution are outside this gate.
+This runbook covers the disabled-by-default `intelligence.workflow.v1` Phase 2 slice. Kortix remains the system of record. The only executable leaf is `studio.image.generate@1.0.0`; first-party video, voice, 3D, digital-human, and batch-remix products are cancelled and must not be added as workflow leaves.
 
 ## Production boundary
 

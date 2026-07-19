@@ -12,7 +12,8 @@
 - Preserve Kortix as the sole base and keep all new behavior extension-owned and additive.
 - Do not modify the existing Studio Worker lease, recovery, billing, object-store, or provider credential contracts.
 - Keep `STUDIO_ENABLED=false` in production values until the existing Studio deployment and acceptance gates pass.
-- This plan adds no production `video`, `voice`, `3d`, `digital-human`, `batch-remix`, or Developer Center UI route.
+- First-party video, voice, 3D, digital-human, and batch-remix finished-product pages are cancelled product scope. This plan must not add their routes, capability IDs, adapters, seed data, or navigation.
+- This plan adds no Developer Center UI route.
 - Never expose credentials, provider API keys, provider URLs, signed URLs, authorization headers, raw provider bodies, or high-cardinality tenant/job labels.
 - Reuse existing IAM project/agent grants, Executor policy/approval, Registry lock/hash, and Daytona Sandbox boundaries; do not create a second permission or marketplace system.
 - New wire payloads are strict Zod schemas with explicit version fields. Unknown future protocol versions fail closed with a typed error.
@@ -26,9 +27,8 @@ This plan is the first independently testable release slice. The following are d
 - `2026-07-18-intelligence-workflow-evaluation-plan.md`: durable workflow graph, model routing, golden-set evaluation, and Temporal adapter.
 - `2026-07-18-intelligence-provenance-plan.md`: C2PA-compatible manifests, signing/KMS, and asset lineage across media types.
 - `2026-07-18-developer-module-trust-plan.md`: capability honesty scans, Cosign/Sigstore verification, SBOM, trust tiers, and marketplace consent UI.
-- `2026-07-18-multimedia-studio-plan.md`: video, voice, 3D/OpenUSD, digital-human, batch remix, and finished product pages.
 
-The current plan must leave stable ports for those plans without pretending they are implemented.
+The current plan must leave stable ports for those plans without pretending they are implemented. Multimedia finished-product pages are not a follow-on plan; they are cancelled product scope under `docs/specs/2026-07-20-multimedia-product-scope-cancellation.md`.
 
 ---
 
@@ -549,7 +549,7 @@ git commit -m "feat: add project-scoped a2a task adapter"
 
 **Interfaces:**
 - Produces a recorded local acceptance flow from capability discovery through one image task, event cursor replay, asset ID return, and terminal settlement.
-- Does not enable production Studio or claim video/voice/3D/digital-human readiness.
+- Does not enable production Studio and preserves the permanent exclusion of first-party video, voice, 3D, digital-human, and batch-remix products.
 
 - [ ] **Step 1: Write the end-to-end RED fixtures.**
 
@@ -618,7 +618,7 @@ git commit -m "test: gate intelligence protocol slice"
 | Multi-node workflow graph and deterministic model evaluation/routing | Deliberately separate | `2026-07-18-intelligence-workflow-evaluation-plan.md` |
 | C2PA-compatible signing and cross-media provenance | Deliberately separate | `2026-07-18-intelligence-provenance-plan.md` |
 | Cosign/SBOM/trust-tier marketplace enforcement | Deliberately separate | `2026-07-18-developer-module-trust-plan.md` |
-| Video, voice, 3D, digital human, batch remix, and finished pages | Deliberately separate | `2026-07-18-multimedia-studio-plan.md` |
+| Video, voice, 3D, digital human, batch remix, and finished pages | Cancelled product scope | `docs/specs/2026-07-20-multimedia-product-scope-cancellation.md` |
 
 ## Plan-Level Completion Checklist
 
@@ -630,7 +630,7 @@ git commit -m "test: gate intelligence protocol slice"
 - [ ] SDK, CLI, and A2A adapters share the same task/event wire contract.
 - [ ] Real PostgreSQL proves idempotency, project fencing, and one-job ownership.
 - [ ] Protocol-slice E2E passes through API, MCP, and A2A faces.
-- [ ] Follow-on plans are required before workflow evaluation, C2PA signing, marketplace trust, or future media production work begins.
+- [ ] Follow-on plans are required before workflow evaluation, C2PA signing, or marketplace trust work begins. First-party multimedia production work remains cancelled.
 
 ## Review Gates
 

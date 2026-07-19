@@ -51,4 +51,23 @@ describe('Intelligence workflow CI and operations contract', () => {
     expect(flows).toContain('Studio job');
     expect(flows).toContain('Review Center');
   });
+
+  test('records multimedia finished-product pages as cancelled product scope', () => {
+    const protocolPlan = source('docs/plans/2026-07-18-intelligence-fabric-protocol-slice.md');
+    const platformDesign = source('docs/specs/2026-07-15-kortix-studio-platform-design.md');
+    const cancellationDecision = source(
+      'docs/specs/2026-07-20-multimedia-product-scope-cancellation.md',
+    );
+
+    expect(protocolPlan).not.toContain('2026-07-18-multimedia-studio-plan.md');
+    expect(protocolPlan).toContain('Cancelled product scope');
+    expect(platformDesign).toContain('Image Studio is the only first-party Studio product');
+    expect(cancellationDecision).toContain('Developer Center module interfaces remain extensible');
+    expect(cancellationDecision).toContain('Reintroducing any cancelled first-party multimedia product');
+    expect(platformDesign).not.toContain('/projects/:projectId/studio/video');
+    expect(platformDesign).not.toContain('/projects/:projectId/studio/voice');
+    expect(platformDesign).not.toContain('/projects/:projectId/studio/3d');
+    expect(platformDesign).not.toContain('/projects/:projectId/studio/digital-human');
+    expect(platformDesign).not.toContain('/projects/:projectId/studio/batch-remix');
+  });
 });

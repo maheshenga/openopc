@@ -13,7 +13,8 @@
 - Do not use the `superpowers` skill family or its execution sub-skills.
 - Preserve Kortix as the base. Keep new behavior extension-owned, additive, and disabled by default.
 - Keep `STUDIO_ENABLED=false` in production values and add `INTELLIGENCE_WORKFLOWS_ENABLED=false` by default.
-- Do not add executable video, voice, audio, 3D, digital-human, batch-remix, provenance signing, Developer Center, revenue sharing, or arbitrary module code.
+- First-party video, voice, audio, 3D, digital-human, and batch-remix finished-product pages are cancelled product scope. Do not add their executable routes, capability IDs, adapters, seed data, or navigation.
+- Do not add provenance signing, Developer Center publication, revenue sharing, or arbitrary module code in this plan.
 - Do not add a global `/.well-known` route or a second Agent/IAM/approval/billing/marketplace system.
 - Do not modify Studio worker lease, provider, storage, recovery, reservation, settlement, or unknown-outcome ownership.
 - Workflow executor leaves call `IntelligenceTaskService`; no workflow module inserts an Intelligence task or Studio job directly.

@@ -1591,7 +1591,7 @@ Then run the MinIO command from Task 3. Live provider and Alibaba Cloud OSS smok
 
 - [ ] **Step 8: Review production-disable boundary**
 
-Verify `STUDIO_ENABLED` remains false in production deployment values and that Task 14 still owns compose/Kubernetes enablement. Verify no video, voice, 3D, digital-human, batch-remix, Developer Center, or webhook capability/routes were added.
+Verify `STUDIO_ENABLED` remains false in production deployment values and that Task 14 still owns compose/Kubernetes enablement. Verify no cancelled first-party video, voice, 3D, digital-human, or batch-remix product capability/routes were added, and no Developer Center or webhook capability/routes were added by this plan.
 
 - [ ] **Step 9: Commit**
 

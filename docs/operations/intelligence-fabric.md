@@ -1,6 +1,6 @@
 # Intelligence Fabric Protocol Operations
 
-This runbook covers the project-scoped `intelligence.v1` protocol slice for image generation. It records how to validate the API, MCP, A2A, IAM, and task/event contracts without enabling a production Studio deployment. It does not authorize production enablement and does not claim video, voice, 3D, avatar/digital-human, or batch-remix readiness.
+This runbook covers the project-scoped `intelligence.v1` protocol slice for image generation. It records how to validate the API, MCP, A2A, IAM, and task/event contracts without enabling a production Studio deployment. Image Studio is the only first-party Studio product; video, voice, 3D, avatar/digital-human, and batch-remix finished-product pages are cancelled product scope.
 
 ## Supported boundary
 

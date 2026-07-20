@@ -790,6 +790,67 @@ describe('workflow scheduler', () => {
     ]);
   });
 
+  test('defers a retryable execution failure to the next scheduler tick', async () => {
+    const run = workflowRunFixture({ status: 'running' });
+    const node = workflowNodeFixture({ status: 'running', attempt_count: 1 });
+    let ready = true;
+    let createCalls = 0;
+    const failCalls: unknown[] = [];
+    const scheduler = createWorkflowScheduler({
+      workflow: workflowPort({
+        claimReadyNode: async () => {
+          if (!ready) return null;
+          ready = false;
+          return { run, node };
+        },
+        heartbeatNode: async () => true,
+        failNode: async (input) => {
+          failCalls.push(input);
+          ready = true;
+          return { run, node: { ...node, status: 'ready' } };
+        },
+      }),
+      bridge: taskBridge({
+        createOrReplay: async () => {
+          createCalls += 1;
+          throw new WorkflowTaskBridgeError('WORKFLOW_TASK_EXECUTION_FAILED');
+        },
+      }),
+      isReady: async () => true,
+      listScopes: async () => [{ accountId: ACCOUNT_ID, projectId: PROJECT_ID }],
+      authorizeNode: async () => ({
+        actingTokenId: null,
+        sessionId: null,
+        parentTaskId: null,
+      }),
+      readNodeRequest: async () => ({ capability: 'image.generate' }),
+      workerId: 'workflow-worker-a',
+      now: () => NOW,
+      leaseMs: 30_000,
+      maxClaimsPerRun: 4,
+    });
+
+    await expect(scheduler.runOnce()).resolves.toMatchObject({
+      scopes: 1,
+      claimed: 1,
+      failed: 1,
+    });
+    expect(createCalls).toBe(1);
+    expect(failCalls).toHaveLength(1);
+    expect(failCalls[0]).toMatchObject({
+      reasonCode: 'WORKFLOW_TASK_EXECUTION_FAILED',
+      retryable: true,
+    });
+
+    await expect(scheduler.runOnce()).resolves.toMatchObject({
+      scopes: 1,
+      claimed: 1,
+      failed: 1,
+    });
+    expect(createCalls).toBe(2);
+    expect(failCalls).toHaveLength(2);
+  });
+
   test('stops gracefully by waiting for the active tick without rearming', async () => {
     let resolveReady: ((value: boolean) => void) | undefined;
     const ready = new Promise<boolean>((resolve) => {

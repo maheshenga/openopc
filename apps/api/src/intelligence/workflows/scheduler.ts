@@ -200,17 +200,20 @@ export function createWorkflowScheduler(input: {
               });
             } catch (error) {
               if (!(error instanceof WorkflowTaskBridgeError)) throw error;
+              const retryable = error.code === 'WORKFLOW_TASK_EXECUTION_FAILED';
               const failed = await input.workflow.failNode({
                 ...scope,
                 runId: claimed.run.run_id,
                 nodeId: claimed.node.node_id,
                 workerId: input.workerId,
                 reasonCode: error.code,
-                retryable: error.code === 'WORKFLOW_TASK_EXECUTION_FAILED',
+                retryable,
                 failedAt: input.now(),
               });
               if (failed) stats.failed += 1;
               else stats.leaseLost += 1;
+              // Leave transiently failed work for the next tick instead of hot-looping it.
+              if (retryable && failed) break;
               continue;
             }
             const attached = await input.workflow.attachTask({

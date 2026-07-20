@@ -9,23 +9,35 @@ mock.module('@tanstack/react-query', () => ({
       invalidated.push(options.queryKey);
     },
   }),
+  keepPreviousData: Symbol('keepPreviousData'),
 }));
 
 const {
   intelligenceAgentCardKey,
   intelligenceCapabilityDiscoveryKey,
   intelligenceCapabilitiesKey,
+  intelligenceAssetsKey,
+  intelligenceAssetsPrefix,
+  intelligenceJobsKey,
+  intelligenceJobsPrefix,
   intelligenceTaskEventsKey,
   intelligenceWorkflowEventsKey,
   intelligenceWorkflowKey,
   intelligenceWorkflowsKey,
   useCancelIntelligenceWorkflow,
+  useCancelIntelligenceJob,
+  useCreateIntelligenceUpload,
   useCreateIntelligenceTask,
   useDecideIntelligenceWorkflowApproval,
   useIntelligence,
   useIntelligenceAgentCard,
   useIntelligenceCapabilityDiscovery,
   useIntelligenceCapabilities,
+  useIntelligenceAssets,
+  useEstimateIntelligenceImage,
+  useFinalizeIntelligenceUpload,
+  useIntelligenceAssetDownload,
+  useIntelligenceJobs,
   useIntelligenceTaskEvents,
   useIntelligenceWorkflow,
   useIntelligenceWorkflowEvents,
@@ -46,6 +58,30 @@ beforeEach(() => {
 });
 
 describe('Intelligence React Query bindings', () => {
+  test('exports Image Studio hooks and keys through the existing React barrel', async () => {
+    const barrel = await import('./index');
+    expect(typeof barrel.intelligenceJobsKey).toBe('function');
+    expect(typeof barrel.intelligenceAssetsKey).toBe('function');
+    expect(typeof barrel.useIntelligenceJobs).toBe('function');
+    expect(typeof barrel.useIntelligenceAssets).toBe('function');
+    expect(typeof barrel.useEstimateIntelligenceImage).toBe('function');
+    expect(typeof barrel.useCancelIntelligenceJob).toBe('function');
+    expect(typeof barrel.useCreateIntelligenceUpload).toBe('function');
+    expect(typeof barrel.useFinalizeIntelligenceUpload).toBe('function');
+    expect(typeof barrel.useIntelligenceAssetDownload).toBe('function');
+  });
+
+  test('partitions Studio jobs and assets by project and cursor', () => {
+    expect(asMockQueryConfig(useIntelligenceJobs('project-1', 'jobs-1')).queryKey).toEqual([
+      ...intelligenceJobsKey('project-1', 'jobs-1'),
+    ]);
+    expect(asMockQueryConfig(useIntelligenceAssets('project-1', 'assets-1')).queryKey).toEqual([
+      ...intelligenceAssetsKey('project-1', 'assets-1'),
+    ]);
+    expect(asMockQueryConfig(useIntelligenceJobs(null)).enabled).toBe(false);
+    expect(asMockQueryConfig(useIntelligenceAssets(undefined)).enabled).toBe(false);
+  });
+
   test('partitions capability, Agent Card, and event queries by project/task', () => {
     expect(asMockQueryConfig(useIntelligenceCapabilities('project-1')).queryKey).toEqual([
       ...intelligenceCapabilitiesKey('project-1'),
@@ -82,6 +118,27 @@ describe('Intelligence React Query bindings', () => {
     expect(invalidated.some((key) => key[0] === 'session' || key[0] === 'opencode')).toBe(false);
   });
 
+  test('Studio mutations invalidate only durable project data and never cache download URLs', () => {
+    const cancellation = asMockQueryConfig(useCancelIntelligenceJob('project-1'));
+    cancellation.onSuccess?.();
+    expect(invalidated).toContainEqual([...intelligenceJobsPrefix('project-1')]);
+    expect(invalidated).toContainEqual(['intelligence-task-events', 'project-1']);
+
+    invalidated = [];
+    const finalized = asMockQueryConfig(useFinalizeIntelligenceUpload('project-1'));
+    finalized.onSuccess?.();
+    expect(invalidated).toContainEqual([...intelligenceAssetsPrefix('project-1')]);
+    expect(invalidated).not.toContainEqual(['project-sessions', 'project-1']);
+
+    invalidated = [];
+    expect(asMockQueryConfig(useEstimateIntelligenceImage('project-1')).mutationFn).toBeFunction();
+    expect(asMockQueryConfig(useCreateIntelligenceUpload('project-1')).mutationFn).toBeFunction();
+    const download = asMockQueryConfig(useIntelligenceAssetDownload('project-1'));
+    expect(download.mutationFn).toBeFunction();
+    download.onSuccess?.();
+    expect(invalidated).toEqual([]);
+  });
+
   test('aggregate hook exposes the three project intelligence surfaces', () => {
     const result = useIntelligence('project-1') as unknown as {
       capabilities: MockQueryConfig;
@@ -103,9 +160,7 @@ describe('Intelligence React Query bindings', () => {
     expect(invalidated).toContainEqual([...intelligenceWorkflowsKey('project-1')]);
 
     invalidated = [];
-    const cancelMutation = asMockQueryConfig(
-      useCancelIntelligenceWorkflow('project-1', 'run-1'),
-    );
+    const cancelMutation = asMockQueryConfig(useCancelIntelligenceWorkflow('project-1', 'run-1'));
     cancelMutation.onSuccess?.();
     expect(invalidated).toContainEqual([...intelligenceWorkflowKey('project-1', 'run-1')]);
     expect(invalidated).toContainEqual(['intelligence-workflow-events', 'project-1', 'run-1']);

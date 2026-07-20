@@ -3,9 +3,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   type IntelligenceAgentCardResponse,
+  type IntelligenceAssetDownload,
   type IntelligenceCapabilitiesResponse,
   type IntelligenceCapabilityDiscoveryResponse,
   type IntelligenceCreateTaskRequest,
+  type IntelligenceCreateUploadRequest,
+  type IntelligenceImageEstimate,
+  type IntelligenceImageEstimateRequest,
+  type IntelligenceStudioAsset,
+  type IntelligenceStudioAssetList,
+  type IntelligenceStudioJob,
+  type IntelligenceStudioJobList,
+  type IntelligenceStudioUpload,
   type IntelligenceTaskEventsResponse,
   type IntelligenceTaskResponse,
   type IntelligenceWorkflowApprovalDecisionRequest,
@@ -15,15 +24,22 @@ import {
   type IntelligenceWorkflowRunResponse,
   type IntelligenceWorkflowStartRequest,
   type IntelligenceWorkflowStartResponse,
+  cancelIntelligenceJob,
   cancelIntelligenceWorkflow,
+  createIntelligenceAssetDownloadUrl,
   createIntelligenceTask,
+  createIntelligenceUpload,
   decideIntelligenceWorkflowApproval,
   discoverIntelligenceCapabilities,
+  estimateIntelligenceImage,
+  finalizeIntelligenceUpload,
   getIntelligenceAgentCard,
   getIntelligenceTaskEvents,
   getIntelligenceWorkflow,
   getIntelligenceWorkflowEvents,
+  listIntelligenceAssets,
   listIntelligenceCapabilities,
+  listIntelligenceJobs,
   startIntelligenceWorkflow,
 } from '../core/rest/projects-client';
 
@@ -38,6 +54,20 @@ export const intelligenceAgentCardKey = (projectId: string | null | undefined) =
 
 export const intelligenceTasksKey = (projectId: string | null | undefined) =>
   ['intelligence-tasks', projectId] as const;
+
+export const intelligenceJobsKey = (projectId: string | null | undefined, cursor?: string | null) =>
+  ['intelligence-jobs', projectId, cursor ?? null] as const;
+
+export const intelligenceJobsPrefix = (projectId: string | null | undefined) =>
+  ['intelligence-jobs', projectId] as const;
+
+export const intelligenceAssetsKey = (
+  projectId: string | null | undefined,
+  cursor?: string | null,
+) => ['intelligence-assets', projectId, cursor ?? null] as const;
+
+export const intelligenceAssetsPrefix = (projectId: string | null | undefined) =>
+  ['intelligence-assets', projectId] as const;
 
 export const intelligenceTaskEventsKey = (
   projectId: string | null | undefined,
@@ -149,6 +179,40 @@ export function useIntelligenceTaskEvents(
   });
 }
 
+export function useIntelligenceJobs(
+  projectId: string | null | undefined,
+  cursor?: string | null,
+  options: IntelligenceQueryOptions = {},
+) {
+  return useQuery<IntelligenceStudioJobList>({
+    queryKey: intelligenceJobsKey(projectId, cursor),
+    queryFn: () => listIntelligenceJobs(projectId as string, cursor),
+    enabled: !!projectId && (options.enabled ?? true),
+    ...(options.pollingEnabled === false
+      ? { refetchInterval: false }
+      : options.refetchInterval !== undefined
+        ? { refetchInterval: options.refetchInterval }
+        : {}),
+  });
+}
+
+export function useIntelligenceAssets(
+  projectId: string | null | undefined,
+  cursor?: string | null,
+  options: IntelligenceQueryOptions = {},
+) {
+  return useQuery<IntelligenceStudioAssetList>({
+    queryKey: intelligenceAssetsKey(projectId, cursor),
+    queryFn: () => listIntelligenceAssets(projectId as string, cursor),
+    enabled: !!projectId && (options.enabled ?? true),
+    ...(options.pollingEnabled === false
+      ? { refetchInterval: false }
+      : options.refetchInterval !== undefined
+        ? { refetchInterval: options.refetchInterval }
+        : {}),
+  });
+}
+
 export function useIntelligenceWorkflow(
   projectId: string | null | undefined,
   runId: string | null | undefined,
@@ -175,12 +239,7 @@ export function useIntelligenceWorkflowEvents(
   return useQuery<IntelligenceWorkflowEventsResponse>({
     queryKey: intelligenceWorkflowEventsKey(projectId, runId, cursor),
     queryFn: () =>
-      getIntelligenceWorkflowEvents(
-        projectId as string,
-        runId as string,
-        cursor,
-        options.limit,
-      ),
+      getIntelligenceWorkflowEvents(projectId as string, runId as string, cursor, options.limit),
     enabled: !!projectId && !!runId && (options.enabled ?? true),
     ...(options.pollingEnabled === false
       ? { refetchInterval: false }
@@ -209,6 +268,50 @@ export function useCreateIntelligenceTask(projectId: string | null | undefined) 
   });
 }
 
+export function useEstimateIntelligenceImage(projectId: string | null | undefined) {
+  return useMutation<IntelligenceImageEstimate, Error, IntelligenceImageEstimateRequest>({
+    mutationKey: ['intelligence-image-estimate', projectId],
+    mutationFn: (input) => estimateIntelligenceImage(projectId as string, input),
+  });
+}
+
+export function useCancelIntelligenceJob(projectId: string | null | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation<IntelligenceStudioJob, Error, string>({
+    mutationKey: [...intelligenceJobsPrefix(projectId), 'cancel'],
+    mutationFn: (jobId) => cancelIntelligenceJob(projectId as string, jobId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: intelligenceJobsPrefix(projectId) });
+      void queryClient.invalidateQueries({ queryKey: intelligenceTaskEventsPrefix(projectId) });
+    },
+  });
+}
+
+export function useCreateIntelligenceUpload(projectId: string | null | undefined) {
+  return useMutation<IntelligenceStudioUpload, Error, IntelligenceCreateUploadRequest>({
+    mutationKey: ['intelligence-uploads', projectId, 'create'],
+    mutationFn: (input) => createIntelligenceUpload(projectId as string, input),
+  });
+}
+
+export function useFinalizeIntelligenceUpload(projectId: string | null | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation<IntelligenceStudioAsset, Error, string>({
+    mutationKey: ['intelligence-uploads', projectId, 'finalize'],
+    mutationFn: (uploadId) => finalizeIntelligenceUpload(projectId as string, uploadId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: intelligenceAssetsPrefix(projectId) });
+    },
+  });
+}
+
+export function useIntelligenceAssetDownload(projectId: string | null | undefined) {
+  return useMutation<IntelligenceAssetDownload, Error, string>({
+    mutationKey: ['intelligence-assets', projectId, 'download'],
+    mutationFn: (assetId) => createIntelligenceAssetDownloadUrl(projectId as string, assetId),
+  });
+}
+
 export function useStartIntelligenceWorkflow(projectId: string | null | undefined) {
   const queryClient = useQueryClient();
   return useMutation<IntelligenceWorkflowStartResponse, Error, IntelligenceWorkflowStartRequest>({
@@ -230,8 +333,7 @@ export function useCancelIntelligenceWorkflow(
   const queryClient = useQueryClient();
   return useMutation<IntelligenceWorkflowRunResponse, Error, IntelligenceWorkflowCancelRequest>({
     mutationKey: [...intelligenceWorkflowKey(projectId, runId), 'cancel'],
-    mutationFn: (input) =>
-      cancelIntelligenceWorkflow(projectId as string, runId as string, input),
+    mutationFn: (input) => cancelIntelligenceWorkflow(projectId as string, runId as string, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: intelligenceWorkflowKey(projectId, runId) });
       void queryClient.invalidateQueries({

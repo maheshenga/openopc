@@ -114,12 +114,12 @@ export function createImageEstimateController(
   let currentFingerprint = imageEstimateFingerprint(initialForm);
   let state: ImageEstimateState | null = null;
   return Object.freeze({
-    updateForm(input) {
+    updateForm(input: IntelligenceImageFormState) {
       const nextFingerprint = imageEstimateFingerprint(input);
       if (nextFingerprint !== currentFingerprint) state = null;
       currentFingerprint = nextFingerprint;
     },
-    storeEstimate(estimate) {
+    storeEstimate(estimate: IntelligenceImageEstimate) {
       state = Object.freeze({ formFingerprint: currentFingerprint, estimate });
     },
     getApproval() {
@@ -158,7 +158,9 @@ export function selectImageExecutionTarget(
   return targets.find((target) => target.capability_id === 'studio.image.generate') ?? null;
 }
 
-export function createImageIdempotencyKey(randomUuid: () => string = crypto.randomUUID): string {
+export function createImageIdempotencyKey(
+  randomUuid: () => string = () => crypto.randomUUID(),
+): string {
   return `image-studio:${randomUuid()}`;
 }
 

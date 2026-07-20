@@ -1,9 +1,9 @@
-import { expect, mock, test } from 'bun:test';
 import type {
   IntelligenceCreateUploadRequest,
   IntelligenceStudioAsset,
   IntelligenceStudioUpload,
 } from '@kortix/sdk';
+import { expect, mock, test } from 'bun:test';
 import { uploadReferenceImage } from './reference-upload';
 
 const PROJECT_ID = '12000000-0000-4000-a000-000000000001';
@@ -15,7 +15,7 @@ test('uploads exact bytes and signed headers before finalizing the reference ass
   const checksum = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
   const order: string[] = [];
   let createInput: IntelligenceCreateUploadRequest | null = null;
-  let fetchInput: { url: string; init?: RequestInit } | null = null;
+  const fetchInput: { current: { url: string; init?: RequestInit } | null } = { current: null };
   const upload: IntelligenceStudioUpload = {
     upload_id: UPLOAD_ID,
     project_id: PROJECT_ID,
@@ -62,9 +62,9 @@ test('uploads exact bytes and signed headers before finalizing the reference ass
     },
     fetch: mock(async (url: string, init?: RequestInit) => {
       order.push('put');
-      fetchInput = { url, init };
+      fetchInput.current = { url, init };
       return new Response(null, { status: 200 });
-    }) as typeof fetch,
+    }) as unknown as typeof fetch,
   });
 
   expect(createInput).toMatchObject({
@@ -72,12 +72,15 @@ test('uploads exact bytes and signed headers before finalizing the reference ass
     expected_size_bytes: bytes.byteLength,
     expected_checksum_sha256: checksum,
   });
-  expect(fetchInput?.url).toBe(upload.signed_upload_url);
-  expect(fetchInput?.init?.headers).toEqual(upload.signed_upload_headers);
-  expect(fetchInput?.init?.method).toBe('PUT');
-  expect(fetchInput?.init?.headers).not.toHaveProperty('content-length');
-  expect(fetchInput?.init?.headers).not.toHaveProperty('authorization');
-  expect(new Uint8Array(fetchInput?.init?.body as ArrayBuffer)).toEqual(bytes);
+  const request = fetchInput.current;
+  expect(request).not.toBeNull();
+  if (!request) throw new Error('expected signed upload request');
+  expect(request.url).toBe(upload.signed_upload_url);
+  expect(request.init?.headers).toEqual(upload.signed_upload_headers);
+  expect(request.init?.method).toBe('PUT');
+  expect(request.init?.headers).not.toHaveProperty('content-length');
+  expect(request.init?.headers).not.toHaveProperty('authorization');
+  expect(new Uint8Array(request.init?.body as ArrayBuffer)).toEqual(bytes);
   expect(order).toEqual(['create', 'put', `finalize:${UPLOAD_ID}`]);
   expect(result).toEqual(asset);
 });
@@ -111,7 +114,7 @@ test('never finalizes or logs signed material after a failed PUT', async () => {
           finalizeCalls += 1;
           throw new Error('must not finalize');
         },
-        fetch: mock(async () => new Response(null, { status: 403 })) as typeof fetch,
+        fetch: mock(async () => new Response(null, { status: 403 })) as unknown as typeof fetch,
       }),
     ).rejects.toThrow('REFERENCE_UPLOAD_FAILED_403');
   } finally {

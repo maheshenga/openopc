@@ -373,6 +373,7 @@ export function ImageStudioView({
 
   return (
     <main
+      data-testid="image-studio-accepted"
       className="grid min-h-0 flex-1 grid-rows-[auto_minmax(360px,1fr)] overflow-y-auto md:grid-cols-[minmax(320px,380px)_minmax(0,1fr)] md:grid-rows-1 md:overflow-hidden"
       aria-label={labels.title}
     >

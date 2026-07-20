@@ -108,6 +108,10 @@ test('normalizes estimate fields, reuses idempotency, and bounds output count', 
   );
 });
 
+test('creates a browser-safe idempotency key with the default UUID source', () => {
+  expect(createImageIdempotencyKey()).toStartWith('image-studio:');
+});
+
 test('selects only an executable image target matching provider and model', () => {
   const target = {
     capability_id: 'studio.image.generate' as const,

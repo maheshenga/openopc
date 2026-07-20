@@ -911,7 +911,8 @@
 
 .kortix-markdown.streaming-active p:last-child,
 .kortix-markdown.streaming-active li:last-child,
-.kortix-markdown.streaming-active div:last-child:not(:has(table)):not(:has(.katex)):not(.katex-math-block) {
+.kortix-markdown.streaming-active
+  div:last-child:not(:has(table)):not(:has(.katex)):not(.katex-math-block) {
   display: inline;
 }
 
@@ -1104,8 +1105,9 @@ html:not(.consent-enabled) #cookieyes {
 /* ─── Desktop shell chrome (Tauri) ───────────────────────────────────────
    No visible chrome — the web app's UI extends to the window edge, with
    the OS traffic lights floating over the sidebar's top-left on macOS.
-   This layer just provides a 28px invisible drag strip + Win/Linux
-   controls. `[data-desktop]` is set on <html> pre-hydration. */
+   This layer provides Win/Linux controls and the macOS-only 6px drag strip.
+   Win/Linux dragging belongs to explicit app surfaces, never an overlay above
+   interactive content. `[data-desktop]` is set on <html> pre-hydration. */
 .kx-desktop-chrome {
   display: none;
 }
@@ -1128,7 +1130,9 @@ html[data-desktop='true'] .kx-desktop-chrome > * {
 }
 html[data-desktop='true'] .kx-desktop-drag {
   flex: 1;
-  -webkit-app-region: drag;
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 /* macOS: skip the traffic-light gutter so the OS's own click handling owns
    that area. */
@@ -1251,6 +1255,7 @@ html[data-desktop-platform='macos'] .kx-desktop-chrome {
   app-region: drag;
 }
 html[data-desktop-platform='macos'] .kx-desktop-drag {
+  pointer-events: auto;
   -webkit-app-region: drag;
   app-region: drag;
   flex: none;

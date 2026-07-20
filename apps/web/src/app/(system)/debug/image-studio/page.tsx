@@ -9,6 +9,7 @@ import { AssetsPage } from '@/features/studio/assets-page';
 import { ImageStudioPage } from '@/features/studio/image-studio-page';
 import { StudioShell } from '@/features/studio/studio-shell';
 import { setBootstrapAuthToken } from '@/lib/auth-token';
+import { desktopShellPlatform } from '@/lib/desktop';
 
 const DEBUG_PROJECT_ID = '12000000-0000-4000-a000-000000000001';
 
@@ -24,10 +25,13 @@ export default function DebugImageStudioPage() {
   }, []);
 
   if (!ready) return null;
+  const headerPadding = desktopShellPlatform() === 'other' ? 'pr-32' : 'pr-3';
 
   return (
     <main className="bg-background text-foreground flex h-svh min-h-0 flex-col overflow-hidden">
-      <header className="border-border flex h-11 shrink-0 items-center justify-end gap-1 border-b px-3">
+      <header
+        className={`border-border flex h-11 shrink-0 items-center justify-end gap-1 border-b pl-3 ${headerPadding}`}
+      >
         <Button
           type="button"
           size="sm"

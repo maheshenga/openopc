@@ -1,14 +1,21 @@
 #!/usr/bin/env bun
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
-import { chromium, type Page, type Route } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page, type Route } from 'playwright';
+
+import { createElectronSmokeLaunchOptions } from './electron-smoke-launch.ts';
 
 type EstimateMode = 'success' | 'insufficient' | 'permission';
 
 const baseUrl = process.env.E2E_BASE_URL || 'http://localhost:3300';
 const resultsDir = fileURLToPath(new URL('../../test-results/', import.meta.url));
+const desktopElectron =
+  process.argv.includes('--electron') || process.env.E2E_DESKTOP_SHELL === 'electron';
 
 const PROJECT_ID = '12000000-0000-4000-a000-000000000001';
 const ACCOUNT_ID = '11000000-0000-4000-a000-000000000001';
@@ -519,11 +526,66 @@ async function screenshotAndAssertPixels(page: Page, outputPath: string) {
   assert(pixels.unique > 16, `screenshot ${outputPath} appears blank`);
 }
 
+interface SmokeSurface {
+  page: Page;
+  close(): Promise<void>;
+}
+
+async function launchSmokeSurface(): Promise<SmokeSurface> {
+  if (!desktopElectron) {
+    const browser: Browser = await chromium.launch();
+    return {
+      page: await browser.newPage({ viewport: { width: 1440, height: 1000 } }),
+      close: () => browser.close(),
+    };
+  }
+
+  const desktopRoot = fileURLToPath(new URL('../../../desktop-electron/', import.meta.url));
+  const desktopRequire = createRequire(
+    new URL('../../../desktop-electron/package.json', import.meta.url),
+  );
+  const executablePath = desktopRequire('electron') as string;
+  const appDataDir = await mkdtemp(join(tmpdir(), 'kortix-electron-smoke-'));
+  let context: BrowserContext | null = null;
+
+  try {
+    context = await chromium.launchPersistentContext(
+      '',
+      createElectronSmokeLaunchOptions({
+        executablePath,
+        desktopRoot,
+        appDataDir,
+        baseUrl,
+        baseEnv: process.env,
+      }),
+    );
+    let page: Page | undefined;
+    await waitFor('the Electron main window', () => {
+      page = context?.pages().find((candidate) => candidate.url().startsWith(baseUrl));
+      return page !== undefined;
+    });
+    if (!page) throw new Error('Electron main window was not found');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+
+    return {
+      page,
+      async close() {
+        await context?.close();
+        await rm(appDataDir, { recursive: true, force: true });
+      },
+    };
+  } catch (error) {
+    await context?.close();
+    await rm(appDataDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 async function main() {
   await mkdir(resultsDir, { recursive: true });
-  const browser = await chromium.launch();
+  const surface = await launchSmokeSurface();
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const page = surface.page;
     const consoleMessages: string[] = [];
     const pageErrors: string[] = [];
     page.on('console', (message) => consoleMessages.push(message.text()));
@@ -544,6 +606,17 @@ async function main() {
           `Page errors: ${pageErrors.join(' | ')}`,
         ].join('\n'),
         { cause: error },
+      );
+    }
+    if (desktopElectron) {
+      const desktopRuntime = await page.evaluate(() => ({
+        userAgent: navigator.userAgent,
+        shell: (window as unknown as { kortixDesktop?: { shell?: string } }).kortixDesktop?.shell,
+      }));
+      assert(desktopRuntime.shell === 'electron', 'Electron preload marker is missing');
+      assert(
+        desktopRuntime.userAgent.includes('KortixDesktop/'),
+        'Electron desktop user-agent marker is missing',
       );
     }
     await page
@@ -613,11 +686,16 @@ async function main() {
     }
 
     await assertLayout(page, 'desktop');
-    await screenshotAndAssertPixels(page, `${resultsDir}/image-studio-desktop.png`);
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.locator('section[aria-label="Results"]').scrollIntoViewIfNeeded();
-    await assertLayout(page, 'mobile');
-    await screenshotAndAssertPixels(page, `${resultsDir}/image-studio-mobile.png`);
+    await screenshotAndAssertPixels(
+      page,
+      `${resultsDir}/image-studio-${desktopElectron ? 'electron' : 'desktop'}.png`,
+    );
+    if (!desktopElectron) {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.locator('section[aria-label="Results"]').scrollIntoViewIfNeeded();
+      await assertLayout(page, 'mobile');
+      await screenshotAndAssertPixels(page, `${resultsDir}/image-studio-mobile.png`);
+    }
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByRole('img', { name: 'Generated image 1' }).waitFor({
@@ -631,11 +709,13 @@ async function main() {
       .getByRole('button', { name: 'Remove reference image' })
       .waitFor({ state: 'visible' });
     assert(routes.uploadCreateCalls() === 1, 'reuse should not upload the generated asset');
+    const imageDownload = desktopElectron ? page.waitForEvent('download') : null;
     await page.getByRole('button', { name: 'Download image' }).click();
     await waitFor(
       'explicit generated image download',
       () => routes.downloadUrlCalls() > downloadBefore,
     );
+    if (imageDownload) await (await imageDownload).cancel();
 
     routes.setEstimateMode('success');
     await page
@@ -722,8 +802,10 @@ async function main() {
       .first()
       .click();
     const downloadsBeforeAsset = routes.downloadUrlCalls();
+    const assetDownload = desktopElectron ? page.waitForEvent('download') : null;
     await generatedAsset.getByRole('button', { name: 'Download' }).click();
     await waitFor('asset download URL', () => routes.downloadUrlCalls() > downloadsBeforeAsset);
+    if (assetDownload) await (await assetDownload).cancel();
 
     const browserOutput = `${consoleMessages.join('\n')}\n${pageErrors.join('\n')}`;
     assert(
@@ -735,10 +817,10 @@ async function main() {
     assert(pageErrors.length === 0, `browser page errors: ${pageErrors.join(' | ')}`);
 
     console.log(
-      '[image-studio] ok: desktop/mobile generation, recovery, cancellation, upload, errors, assets, downloads',
+      `[image-studio] ok (${desktopElectron ? 'electron' : 'browser'}): generation, recovery, cancellation, upload, errors, assets, downloads`,
     );
   } finally {
-    await browser.close();
+    await surface.close();
   }
 }
 

@@ -195,6 +195,29 @@ describe('IntelligenceTaskService', () => {
     expect(createCalls).toHaveLength(1);
   });
 
+  test('looks up only the project-scoped Intelligence task bound to a Studio job', async () => {
+    const { service } = createService();
+    await service.create(createInput());
+    const lookup = service as IntelligenceTaskService & {
+      findByJob?: (input: {
+        accountId: string;
+        projectId: string;
+        jobId: string;
+      }) => Promise<{ taskId: string; jobId: string | null } | null>;
+    };
+
+    expect(lookup.findByJob).toBeFunction();
+    await expect(
+      lookup.findByJob?.({ accountId: ACCOUNT_ID, projectId: PROJECT_ID, jobId: JOB_ID }),
+    ).resolves.toMatchObject({ taskId: TASK_ID, jobId: JOB_ID });
+    await expect(
+      lookup.findByJob?.({ accountId: ACCOUNT_ID, projectId: OTHER_PROJECT_ID, jobId: JOB_ID }),
+    ).resolves.toBeNull();
+    await expect(
+      lookup.findByJob?.({ accountId: ACCOUNT_ID, projectId: PROJECT_ID, jobId: OTHER_JOB_ID }),
+    ).resolves.toBeNull();
+  });
+
   test('rejects an idempotency replay whose request hash differs', async () => {
     const { service, createCalls } = createService();
     await service.create(createInput());
@@ -1189,6 +1212,7 @@ describe('IntelligenceTaskService', () => {
     });
     expect(firstPage).not.toBeNull();
     expect(firstPage?.items.map((event) => event.sequence)).toEqual([1, 2, 3]);
+    expect(firstPage?.items.map((event) => event.job_id)).toEqual([JOB_ID, JOB_ID, JOB_ID]);
     expect(firstPage?.nextCursor).toBeNull();
     expect(firstPage?.items[1]).toMatchObject({ type: 'progress', progress: 0.5 });
     expect(firstPage?.items[2]).toMatchObject({

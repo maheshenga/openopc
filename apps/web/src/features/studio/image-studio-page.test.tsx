@@ -22,6 +22,7 @@ mock.module('@kortix/sdk/react', () => ({
   useIntelligenceAgentCard: () => undefined,
   useIntelligenceAssetDownload: () => undefined,
   useIntelligenceCapabilityDiscovery: () => undefined,
+  useIntelligenceTaskByJob: () => undefined,
   useIntelligenceTaskEvents: () => undefined,
 }));
 
@@ -31,6 +32,7 @@ const {
   imageStudioErrorCode,
   isImageEstimateRefreshError,
   ImageStudioView,
+  readImageStudioJobId,
   readImageStudioTaskId,
   readRememberedImageStudioJobId,
   rememberImageStudioJobId,
@@ -319,6 +321,12 @@ describe('ImageStudioView', () => {
 });
 
 describe('Image Studio controller', () => {
+  test('reads only a valid source job from the route query string', () => {
+    expect(readImageStudioJobId).toBeFunction();
+    expect(readImageStudioJobId?.(new URLSearchParams(`job=${JOB_ID}`))).toBe(JOB_ID);
+    expect(readImageStudioJobId?.(new URLSearchParams('job=not-a-uuid'))).toBeNull();
+  });
+
   test('submits one canonical signed Intelligence task for concurrent commands', async () => {
     let resolveTask!: (value: IntelligenceTaskResponse) => void;
     const createTask = mock(

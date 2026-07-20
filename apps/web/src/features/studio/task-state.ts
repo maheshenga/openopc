@@ -4,6 +4,7 @@ export type ImageTaskStatus = TaskEvent['status'] | 'unknown';
 
 export interface ImageTaskViewState {
   taskId: string | null;
+  jobId: string | null;
   status: ImageTaskStatus;
   progress: number;
   assetIds: string[];
@@ -18,6 +19,7 @@ const TERMINAL_STATUSES = new Set<TaskEvent['status']>(['succeeded', 'failed', '
 export function emptyImageTaskState(taskId: string | null = null): ImageTaskViewState {
   return {
     taskId,
+    jobId: null,
     status: 'unknown',
     progress: 0,
     assetIds: [],
@@ -44,10 +46,14 @@ export function reduceTaskEvents(
     if (state.taskId !== null && state.taskId !== event.task_id) {
       throw new Error('INTELLIGENCE_TASK_SCOPE_MISMATCH');
     }
+    if (state.jobId !== null && event.job_id !== undefined && state.jobId !== event.job_id) {
+      throw new Error('INTELLIGENCE_TASK_JOB_SCOPE_MISMATCH');
+    }
     for (const assetId of event.asset_ids ?? []) assetIds.add(assetId);
     const terminal = TERMINAL_STATUSES.has(event.status);
     state = {
       taskId: event.task_id,
+      jobId: event.job_id ?? state.jobId,
       status: event.status,
       progress:
         event.status === 'succeeded'

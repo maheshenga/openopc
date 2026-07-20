@@ -150,6 +150,11 @@ export interface IntelligenceTaskStore {
     projectId: string;
     taskId: string;
   }): Promise<IntelligenceTaskRecord | null>;
+  findByJob(input: {
+    accountId: string;
+    projectId: string;
+    jobId: string;
+  }): Promise<IntelligenceTaskRecord | null>;
   findByIdempotency(input: {
     accountId: string;
     projectId: string;
@@ -306,7 +311,9 @@ export class IntelligenceTaskService {
       afterSequence,
       limit: PUBLIC_EVENT_PAGE_SIZE + 1,
     });
-    const items = page.items.slice(0, PUBLIC_EVENT_PAGE_SIZE).map(toPublicTaskEvent);
+    const items = page.items
+      .slice(0, PUBLIC_EVENT_PAGE_SIZE)
+      .map((event) => toPublicTaskEvent(event, task.jobId));
     return {
       items,
       nextCursor:
@@ -321,6 +328,10 @@ export class IntelligenceTaskService {
     cursor: string | null;
   }) {
     return this.events(input);
+  }
+
+  findByJob(input: { accountId: string; projectId: string; jobId: string }) {
+    return this.input.store.findByJob(input);
   }
 
   private async createLocked(
@@ -983,6 +994,21 @@ export function createDrizzleIntelligenceTaskStore(database: Database): Intellig
       return row ? serializeTask(row) : null;
     },
 
+    async findByJob(input) {
+      const [row] = await database
+        .select()
+        .from(intelligenceTasks)
+        .where(
+          and(
+            eq(intelligenceTasks.accountId, input.accountId),
+            eq(intelligenceTasks.projectId, input.projectId),
+            eq(intelligenceTasks.jobId, input.jobId),
+          ),
+        )
+        .limit(1);
+      return row ? serializeTask(row) : null;
+    },
+
     async findByIdempotency(input) {
       const [row] = await database
         .select()
@@ -1259,6 +1285,19 @@ export function createInMemoryIntelligenceTaskStore(options: { taskId?: string }
         : null;
     },
 
+    async findByJob(input) {
+      for (const task of tasks.values()) {
+        if (
+          task.accountId === input.accountId &&
+          task.projectId === input.projectId &&
+          task.jobId === input.jobId
+        ) {
+          return task;
+        }
+      }
+      return null;
+    },
+
     async findByIdempotency(input) {
       const taskId = byIdempotency.get(`${input.projectId}\u0000${input.idempotencyKey}`);
       const task = taskId ? tasks.get(taskId) : null;
@@ -1502,9 +1541,12 @@ function publicEventPayload(event: TaskEvent) {
   };
 }
 
-function toPublicTaskEvent(event: IntelligenceStoredTaskEvent): TaskEvent {
+function toPublicTaskEvent(event: IntelligenceStoredTaskEvent, jobId: string | null): TaskEvent {
   const { studioCursor: _studioCursor, ...publicEvent } = event;
-  return TaskEventSchema.parse(publicEvent);
+  return TaskEventSchema.parse({
+    ...publicEvent,
+    ...(jobId ? { job_id: jobId } : {}),
+  });
 }
 
 function parsePublicCursor(cursor: string | null): number {

@@ -245,7 +245,10 @@ export function createDefaultIntelligenceProjectRoutes(
       replay: input.taskService.replay.bind(input.taskService),
       create: input.taskService.create.bind(input.taskService),
     };
-    taskEventReader = { read: input.taskService.events.bind(input.taskService) };
+    taskEventReader = {
+      findByJob: input.taskService.findByJob.bind(input.taskService),
+      read: input.taskService.events.bind(input.taskService),
+    };
   } else if (
     !taskExecutor &&
     !taskEventReader &&
@@ -268,7 +271,10 @@ export function createDefaultIntelligenceProjectRoutes(
       replay: service.replay.bind(service),
       create: service.create.bind(service),
     };
-    taskEventReader = { read: service.events.bind(service) };
+    taskEventReader = {
+      findByJob: service.findByJob.bind(service),
+      read: service.events.bind(service),
+    };
   }
 
   return createIntelligenceProjectRoutes({

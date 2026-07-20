@@ -57,6 +57,7 @@ const SAFE_INTELLIGENCE_CODES = [
   'INTELLIGENCE_TASK_EVENTS_UNAVAILABLE',
   'INTELLIGENCE_TASK_EXECUTION_FAILED',
   'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE',
+  'INTELLIGENCE_TASK_LOOKUP_UNAVAILABLE',
   'INTELLIGENCE_VALIDATION_ERROR',
   'INTELLIGENCE_WORKFLOW_CONFLICT',
   'INTELLIGENCE_WORKFLOW_UNAVAILABLE',
@@ -141,6 +142,12 @@ export interface IntelligenceTaskResponse {
   task_id: string;
   job_id: string;
   created: boolean;
+}
+
+export interface IntelligenceTaskLookupResponse {
+  protocol_version: ProtocolVersion;
+  task_id: string;
+  job_id: string;
 }
 
 export interface IntelligenceTaskEventsResponse {
@@ -386,6 +393,15 @@ function parseTaskResponse(value: unknown): IntelligenceTaskResponse {
   };
 }
 
+function parseTaskLookupResponse(value: unknown): IntelligenceTaskLookupResponse {
+  const record = asStrictRecord(value, ['protocol_version', 'task_id', 'job_id']);
+  return {
+    protocol_version: parseProtocolVersion(record.protocol_version),
+    task_id: parseUuid(record.task_id),
+    job_id: parseUuid(record.job_id),
+  };
+}
+
 function parseTaskEventsResponse(value: unknown): IntelligenceTaskEventsResponse {
   const record = asStrictRecord(value, ['protocol_version', 'task_id', 'items', 'next_cursor']);
   if (!Array.isArray(record.items) || record.items.length > 1024) {
@@ -550,6 +566,20 @@ export async function getIntelligenceTaskEvents(
       { showErrors: false },
     );
   }, parseTaskEventsResponse);
+}
+
+export async function getIntelligenceTaskByJob(
+  projectId: string,
+  jobId: string,
+): Promise<IntelligenceTaskLookupResponse> {
+  return requestIntelligence(
+    () =>
+      backendApi.get<unknown>(
+        `/projects/${encodeURIComponent(projectId)}/intelligence/tasks/by-job/${encodeURIComponent(jobId)}`,
+        { showErrors: false },
+      ),
+    parseTaskLookupResponse,
+  );
 }
 
 export async function startIntelligenceWorkflow(

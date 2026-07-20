@@ -990,3 +990,28 @@ pnpm.cmd --filter @kortix/sdk run smoke:install -> Install smoke test passed
 
 **Shippable to production: NOT YET** for the milestone; the Task 5 SDK package
 surface itself passed its release-level gates.
+
+---
+
+### 2026-07-20 - Milestone 0-1 source-job recovery (`Codex`)
+
+Completed the additive source-job recovery surface for Project Assets deep links.
+The SDK now exposes a strict project-scoped job-to-task lookup through
+`getIntelligenceTaskByJob`, `project(id).intelligence.tasks.byJob`, and
+`useIntelligenceTaskByJob`. Public task events may carry the bound `job_id`, and
+runtime/type surface snapshots contain additions only.
+
+**Final SDK gates**
+
+```
+pnpm.cmd --filter @kortix/sdk test -> 1136 pass, 0 fail, 5246 expect() calls, 84 files
+pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
+pnpm.cmd --filter @kortix/sdk run smoke:install -> Install smoke test passed
+runtime snapshot -> 4 additions, 0 removals
+type snapshot -> 6 additions, 0 removals
+```
+
+**Shippable to production: YES** for the additive SDK surface. Milestone 0-1
+remains **NOT YET**: browser acceptance is pending and the current full Web build
+was terminated by the Windows host with exit status `4294967295` under zero
+available physical memory, without a compiler diagnostic.

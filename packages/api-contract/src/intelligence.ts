@@ -38,6 +38,7 @@ export const IntelligenceErrorCodeSchema = z.enum([
   'INTELLIGENCE_TASK_EVENTS_UNAVAILABLE',
   'INTELLIGENCE_TASK_EXECUTION_FAILED',
   'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE',
+  'INTELLIGENCE_TASK_LOOKUP_UNAVAILABLE',
   'INTELLIGENCE_VALIDATION_ERROR',
   'INTELLIGENCE_WORKFLOW_CONFLICT',
   'INTELLIGENCE_WORKFLOW_UNAVAILABLE',
@@ -443,6 +444,15 @@ export const IntelligenceTaskResponseSchema = z
   })
   .strict();
 export type IntelligenceTaskResponse = z.infer<typeof IntelligenceTaskResponseSchema>;
+
+export const IntelligenceTaskLookupResponseSchema = z
+  .object({
+    protocol_version: ProtocolVersionSchema,
+    task_id: z.string().uuid(),
+    job_id: z.string().uuid(),
+  })
+  .strict();
+export type IntelligenceTaskLookupResponse = z.infer<typeof IntelligenceTaskLookupResponseSchema>;
 
 export const IntelligenceTaskEventsResponseSchema = z
   .object({

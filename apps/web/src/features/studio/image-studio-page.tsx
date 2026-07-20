@@ -16,6 +16,7 @@ import {
   useIntelligenceAgentCard,
   useIntelligenceAssetDownload,
   useIntelligenceCapabilityDiscovery,
+  useIntelligenceTaskByJob,
   useIntelligenceTaskEvents,
 } from '@kortix/sdk/react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
@@ -258,6 +259,11 @@ export function readImageStudioTaskId(searchParams: Pick<URLSearchParams, 'get'>
   return taskId && UUID_PATTERN.test(taskId) ? taskId : null;
 }
 
+export function readImageStudioJobId(searchParams: Pick<URLSearchParams, 'get'>): string | null {
+  const jobId = searchParams.get('job');
+  return jobId && UUID_PATTERN.test(jobId) ? jobId : null;
+}
+
 function readReferenceAssetId(searchParams: Pick<URLSearchParams, 'get'>): string | null {
   const assetId = searchParams.get('reference');
   return assetId && UUID_PATTERN.test(assetId) ? assetId : null;
@@ -457,6 +463,10 @@ export function ImageStudioPage({ projectId }: { projectId: string }) {
   const { mutateAsync: createDownloadUrl } = useIntelligenceAssetDownload(projectId);
 
   const initialTaskId = readImageStudioTaskId(searchParams);
+  const sourceJobId = readImageStudioJobId(searchParams);
+  const taskByJob = useIntelligenceTaskByJob(projectId, sourceJobId, {
+    enabled: sourceJobId !== null && initialTaskId === null,
+  });
   const [form, setForm] = useState<IntelligenceImageFormState>(initialForm);
   const [references, setReferences] = useState<ImageStudioReference[]>([]);
   const [estimateState, setEstimateState] = useState<ImageEstimateState | null>(null);
@@ -618,6 +628,9 @@ export function ImageStudioPage({ projectId }: { projectId: string }) {
       requestedPreviews.current.clear();
     }
 
+    const queryJobId = readImageStudioJobId(searchParams);
+    if (queryJobId && !queryTaskId) return;
+
     const referenceAssetId = readReferenceAssetId(searchParams);
     if (referenceAssetId) addReference(referenceAssetId);
 
@@ -628,6 +641,32 @@ export function ImageStudioPage({ projectId }: { projectId: string }) {
       router.replace(canonicalUrl, { scroll: false });
     }
   }, [addReference, pathname, router, searchParams]);
+
+  useEffect(() => {
+    if (!sourceJobId || initialTaskId || !taskByJob.data) return;
+    const lookup = taskByJob.data;
+    if (lookup.job_id !== sourceJobId) {
+      setOperationErrorCode('INTELLIGENCE_TASK_LOOKUP_FAILED');
+      return;
+    }
+    lastQueryTaskId.current = lookup.task_id;
+    activeTaskId.current = lookup.task_id;
+    setTaskId(lookup.task_id);
+    setJobId(lookup.job_id);
+    setEventCursor(null);
+    setTaskState(emptyImageTaskState(lookup.task_id));
+    setResultUrls({});
+    requestedPreviews.current.clear();
+    const storage = browserSessionStorage();
+    if (storage) rememberImageStudioJobId(storage, projectId, lookup.task_id, lookup.job_id);
+    setOperationErrorCode(null);
+    router.replace(taskOnlyUrl(pathname, lookup.task_id), { scroll: false });
+  }, [initialTaskId, pathname, projectId, router, sourceJobId, taskByJob.data]);
+
+  useEffect(() => {
+    if (!taskByJob.error) return;
+    setOperationErrorCode(imageStudioErrorCode(taskByJob.error));
+  }, [taskByJob.error]);
 
   useEffect(() => {
     if (!taskEvents.data || taskEvents.data.task_id !== taskId) return;
@@ -732,15 +771,16 @@ export function ImageStudioPage({ projectId }: { projectId: string }) {
   }, [controller, estimateState, fingerprint, form, projectId, requestEstimate]);
 
   const handleCancel = useCallback(async () => {
-    if (!jobId) return;
+    const activeJobId = jobId ?? taskState.jobId;
+    if (!activeJobId) return;
     setOperationErrorCode(null);
     try {
-      await controller.cancel(jobId);
+      await controller.cancel(activeJobId);
       setTaskState((current) => ({ ...current, status: 'cancelled', terminal: true }));
     } catch (error) {
       setOperationErrorCode(imageStudioErrorCode(error));
     }
-  }, [controller, jobId]);
+  }, [controller, jobId, taskState.jobId]);
 
   const handleDownload = useCallback(
     async (assetId: string) => {
@@ -796,6 +836,10 @@ export function ImageStudioPage({ projectId }: { projectId: string }) {
       void retryImageStudioDiscovery(discovery.refetch, agentCard.refetch);
       return;
     }
+    if (sourceJobId && taskByJob.isError) {
+      void taskByJob.refetch();
+      return;
+    }
     if (!estimateState && fingerprint) {
       void requestEstimate(form, fingerprint);
       return;
@@ -810,6 +854,8 @@ export function ImageStudioPage({ projectId }: { projectId: string }) {
     form,
     handleGenerate,
     requestEstimate,
+    sourceJobId,
+    taskByJob,
   ]);
 
   const labels: ImageStudioLabels = {
@@ -886,7 +932,7 @@ export function ImageStudioPage({ projectId }: { projectId: string }) {
         ...(resultUrls[assetId] ? { previewUrl: resultUrls[assetId] } : {}),
       }))}
       operationErrorCode={operationErrorCode ?? discoveryErrorCode}
-      canCancel={!!jobId && !taskState.terminal}
+      canCancel={!!(jobId ?? taskState.jobId) && !taskState.terminal}
       cancelling={cancelling}
       labels={labels}
       onPromptChange={(value) => updateForm('prompt', value)}

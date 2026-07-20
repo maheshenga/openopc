@@ -3,6 +3,7 @@ import type { TaskEvent } from '@kortix/sdk';
 import { emptyImageTaskState, reduceTaskEvents } from './task-state';
 
 const TASK_ID = '13000000-0000-4000-a000-000000000001';
+const JOB_ID = '14000000-0000-4000-a000-000000000001';
 const ASSET_ID = '27000000-0000-4000-a000-000000000001';
 
 function event(
@@ -15,6 +16,7 @@ function event(
     protocol_version: 'intelligence.v1',
     event_id: `25000000-0000-4000-a000-${String(sequence).padStart(12, '0')}`,
     task_id: TASK_ID,
+    job_id: JOB_ID,
     sequence,
     type,
     status,
@@ -34,6 +36,7 @@ test('reduces replayed events into one terminal result set', () => {
 
   expect(reduceTaskEvents([succeeded, asset, running, asset, created])).toMatchObject({
     taskId: TASK_ID,
+    jobId: JOB_ID,
     status: 'succeeded',
     progress: 1,
     assetIds: [ASSET_ID],

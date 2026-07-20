@@ -601,6 +601,7 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
         tasks: {
           create: (input: Parameters<typeof P.createIntelligenceTask>[1]) =>
             P.createIntelligenceTask(projectId, input),
+          byJob: (jobId: string) => P.getIntelligenceTaskByJob(projectId, jobId),
           events: (taskId: string, cursor?: string | null) =>
             P.getIntelligenceTaskEvents(projectId, taskId, cursor),
         },

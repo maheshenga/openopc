@@ -6,6 +6,7 @@ import {
   IntelligenceCreateTaskRequestSchema,
   type IntelligenceExecutionTarget,
   IntelligenceTaskEventsResponseSchema,
+  IntelligenceTaskLookupResponseSchema,
   IntelligenceTaskResponseSchema,
 } from '@kortix/api-contract';
 import type { AgentCard, CapabilityDescriptor, TaskEvent } from '@kortix/intelligence-contracts';
@@ -101,6 +102,11 @@ export interface StudioTaskExecutor {
 }
 
 export interface IntelligenceTaskEventReader {
+  findByJob?(input: {
+    accountId: string;
+    projectId: string;
+    jobId: string;
+  }): Promise<{ taskId: string; jobId: string | null } | null>;
   read(input: {
     accountId: string;
     projectId: string;
@@ -358,6 +364,48 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
       return unavailable(c, 'INTELLIGENCE_TASK_EXECUTION_FAILED');
     }
     return intelligenceTaskResponse(c, result);
+  });
+
+  app.get('/:projectId/intelligence/tasks/by-job/:jobId', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_READ,
+    );
+    const findByJob = deps.taskEventReader?.findByJob;
+    if (!findByJob) return unavailable(c, 'INTELLIGENCE_TASK_LOOKUP_UNAVAILABLE');
+
+    const jobId = c.req.param('jobId');
+    if (!z.string().uuid().safeParse(jobId).success) return badRequest(c);
+    let task: Awaited<ReturnType<NonNullable<IntelligenceTaskEventReader['findByJob']>>>;
+    try {
+      task = await findByJob({
+        accountId: loaded.row.accountId,
+        projectId,
+        jobId,
+      });
+    } catch (error) {
+      const typed = intelligenceTaskErrorResponse(c, error);
+      if (typed) return typed;
+      return unavailable(c, 'INTELLIGENCE_TASK_LOOKUP_UNAVAILABLE');
+    }
+    if (!task || task.jobId !== jobId) return c.json({ error: 'Not found' }, 404);
+    try {
+      return c.json(
+        IntelligenceTaskLookupResponseSchema.parse({
+          protocol_version: 'intelligence.v1',
+          task_id: task.taskId,
+          job_id: jobId,
+        }),
+      );
+    } catch {
+      return unavailable(c, 'INTELLIGENCE_TASK_LOOKUP_UNAVAILABLE');
+    }
   });
 
   app.get('/:projectId/intelligence/tasks/:taskId/events', async (c) => {

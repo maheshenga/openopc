@@ -21,6 +21,7 @@ const {
   intelligenceJobsKey,
   intelligenceJobsPrefix,
   intelligenceTaskEventsKey,
+  intelligenceTaskByJobKey,
   intelligenceWorkflowEventsKey,
   intelligenceWorkflowKey,
   intelligenceWorkflowsKey,
@@ -39,6 +40,7 @@ const {
   useIntelligenceAssetDownload,
   useIntelligenceJobs,
   useIntelligenceTaskEvents,
+  useIntelligenceTaskByJob,
   useIntelligenceWorkflow,
   useIntelligenceWorkflowEvents,
   useStartIntelligenceWorkflow,
@@ -69,6 +71,8 @@ describe('Intelligence React Query bindings', () => {
     expect(typeof barrel.useCreateIntelligenceUpload).toBe('function');
     expect(typeof barrel.useFinalizeIntelligenceUpload).toBe('function');
     expect(typeof barrel.useIntelligenceAssetDownload).toBe('function');
+    expect(typeof barrel.intelligenceTaskByJobKey).toBe('function');
+    expect(typeof barrel.useIntelligenceTaskByJob).toBe('function');
   });
 
   test('partitions Studio jobs and assets by project and cursor', () => {
@@ -95,8 +99,12 @@ describe('Intelligence React Query bindings', () => {
     expect(
       asMockQueryConfig(useIntelligenceTaskEvents('project-1', 'task-1', 'cursor-1')).queryKey,
     ).toEqual(intelligenceTaskEventsKey('project-1', 'task-1', 'cursor-1'));
+    expect(asMockQueryConfig(useIntelligenceTaskByJob('project-1', 'job-1')).queryKey).toEqual(
+      intelligenceTaskByJobKey('project-1', 'job-1'),
+    );
     expect(asMockQueryConfig(useIntelligenceCapabilities(null)).enabled).toBe(false);
     expect(asMockQueryConfig(useIntelligenceTaskEvents('project-1', '')).enabled).toBe(false);
+    expect(asMockQueryConfig(useIntelligenceTaskByJob('project-1', null)).enabled).toBe(false);
     expect(asMockQueryConfig(useIntelligenceWorkflow('project-1', 'run-1')).queryKey).toEqual([
       ...intelligenceWorkflowKey('project-1', 'run-1'),
     ]);

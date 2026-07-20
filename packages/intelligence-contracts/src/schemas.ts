@@ -102,6 +102,7 @@ export const TaskEventSchema = z
     protocol_version: ProtocolVersionSchema,
     event_id: UuidSchema,
     task_id: UuidSchema,
+    job_id: UuidSchema.optional(),
     sequence: z.number().int().positive(),
     type: z.enum([
       'created',

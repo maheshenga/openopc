@@ -16,6 +16,7 @@ import {
   type IntelligenceStudioJobList,
   type IntelligenceStudioUpload,
   type IntelligenceTaskEventsResponse,
+  type IntelligenceTaskLookupResponse,
   type IntelligenceTaskResponse,
   type IntelligenceWorkflowApprovalDecisionRequest,
   type IntelligenceWorkflowApprovalDecisionResponse,
@@ -34,6 +35,7 @@ import {
   estimateIntelligenceImage,
   finalizeIntelligenceUpload,
   getIntelligenceAgentCard,
+  getIntelligenceTaskByJob,
   getIntelligenceTaskEvents,
   getIntelligenceWorkflow,
   getIntelligenceWorkflowEvents,
@@ -74,6 +76,11 @@ export const intelligenceTaskEventsKey = (
   taskId: string | null | undefined,
   cursor?: string | null,
 ) => ['intelligence-task-events', projectId, taskId, cursor ?? null] as const;
+
+export const intelligenceTaskByJobKey = (
+  projectId: string | null | undefined,
+  jobId: string | null | undefined,
+) => ['intelligence-task-by-job', projectId, jobId] as const;
 
 export const intelligenceTaskEventsPrefix = (projectId: string | null | undefined) =>
   ['intelligence-task-events', projectId] as const;
@@ -176,6 +183,19 @@ export function useIntelligenceTaskEvents(
       : options.refetchInterval !== undefined
         ? { refetchInterval: options.refetchInterval }
         : {}),
+  });
+}
+
+export function useIntelligenceTaskByJob(
+  projectId: string | null | undefined,
+  jobId: string | null | undefined,
+  options: IntelligenceQueryOptions = {},
+) {
+  const queryKey = intelligenceTaskByJobKey(projectId, jobId);
+  return useQuery<IntelligenceTaskLookupResponse>({
+    queryKey,
+    queryFn: () => getIntelligenceTaskByJob(projectId as string, jobId as string),
+    enabled: !!projectId && !!jobId && (options.enabled ?? true),
   });
 }
 

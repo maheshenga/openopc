@@ -93,6 +93,12 @@ test('project(id).intelligence binds capability, task, and workflow endpoints', 
         limits: { concurrency: 1, max_task_seconds: 900 },
         card_hash: 'a'.repeat(64),
       };
+    } else if (requestUrl.includes('/intelligence/tasks/by-job/')) {
+      responseBody = {
+        protocol_version: 'intelligence.v1',
+        task_id: '13000000-0000-4000-a000-000000000001',
+        job_id: '15000000-0000-4000-a000-000000000001',
+      };
     } else if (requestUrl.endsWith('/intelligence/tasks')) {
       responseBody = {
         protocol_version: 'intelligence.v1',
@@ -119,6 +125,7 @@ test('project(id).intelligence binds capability, task, and workflow endpoints', 
   expect(typeof project.intelligence.capabilities.discover).toBe('function');
   expect(typeof project.intelligence.agentCard.get).toBe('function');
   expect(typeof project.intelligence.tasks.create).toBe('function');
+  expect(typeof project.intelligence.tasks.byJob).toBe('function');
   expect(typeof project.intelligence.tasks.events).toBe('function');
   expect(typeof project.intelligence.workflows.start).toBe('function');
   expect(typeof project.intelligence.workflows.get).toBe('function');
@@ -136,6 +143,8 @@ test('project(id).intelligence binds capability, task, and workflow endpoints', 
   expect(last().url).toContain('/projects/PID123/intelligence/agent-card');
   await project.intelligence.tasks.create({} as never);
   expect(last().url).toContain('/projects/PID123/intelligence/tasks');
+  await project.intelligence.tasks.byJob('JOB1');
+  expect(last().url).toContain('/projects/PID123/intelligence/tasks/by-job/JOB1');
   await project.intelligence.tasks.events('TASK1', 'cursor-1');
   expect(last().url).toContain('/projects/PID123/intelligence/tasks/TASK1/events?cursor=cursor-1');
 });

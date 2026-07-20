@@ -24,6 +24,7 @@ const PROVIDER_CONFIG_ID = '14000000-0000-4000-a000-000000000001';
 const TASK_ID = '15000000-0000-4000-a000-000000000001';
 const OTHER_TASK_ID = '15000000-0000-4000-a000-000000000002';
 const JOB_ID = '16000000-0000-4000-a000-000000000001';
+const OTHER_JOB_ID = '16000000-0000-4000-a000-000000000002';
 const EVENT_ID = '17000000-0000-4000-a000-000000000001';
 const IAM_TOKEN_ID = '18000000-0000-4000-a000-000000000001';
 
@@ -111,12 +112,18 @@ function createApp(options: TestOptions = {}) {
     protocol_version: 'intelligence.v1',
     event_id: EVENT_ID,
     task_id: TASK_ID,
+    job_id: JOB_ID,
     sequence: 1,
     type: 'created',
     status: 'queued',
     created_at: '2026-07-18T12:00:00.000Z',
   };
   const defaultEventReader: IntelligenceTaskEventReader = {
+    async findByJob(input) {
+      return input.projectId === PROJECT_ID && input.jobId === JOB_ID
+        ? { taskId: TASK_ID, jobId: JOB_ID }
+        : null;
+    },
     async read(input) {
       return input.projectId === PROJECT_ID && input.taskId === TASK_ID
         ? { items: [event], nextCursor: null }
@@ -693,6 +700,79 @@ describe('Intelligence project routes', () => {
     });
   });
 
+  test('resolves a project Intelligence task by its bound Studio job', async () => {
+    const { app, actions } = createApp();
+    const response = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/tasks/by-job/${JOB_ID}`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      protocol_version: 'intelligence.v1',
+      task_id: TASK_ID,
+      job_id: JOB_ID,
+    });
+    expect(actions).toEqual([PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_READ]);
+  });
+
+  test('keeps cross-project, missing, and legacy Studio jobs opaque', async () => {
+    const { app } = createApp();
+    const responses = await Promise.all([
+      app.request(`/v1/projects/${OTHER_PROJECT_ID}/intelligence/tasks/by-job/${JOB_ID}`),
+      app.request(`/v1/projects/${PROJECT_ID}/intelligence/tasks/by-job/${OTHER_JOB_ID}`),
+      createApp({
+        eventReader: {
+          async findByJob() {
+            return null;
+          },
+          async read() {
+            return null;
+          },
+        },
+      }).app.request(`/v1/projects/${PROJECT_ID}/intelligence/tasks/by-job/${JOB_ID}`),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([404, 404, 404]);
+    expect(await Promise.all(responses.map((response) => response.json()))).toEqual([
+      { error: 'Not found' },
+      { error: 'Not found' },
+      { error: 'Not found' },
+    ]);
+  });
+
+  test('rejects a malformed source job before task lookup', async () => {
+    let lookups = 0;
+    const { app } = createApp({
+      eventReader: {
+        async findByJob() {
+          lookups += 1;
+          return null;
+        },
+        async read() {
+          return null;
+        },
+      },
+    });
+
+    const response = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/tasks/by-job/not-a-uuid`,
+    );
+    expect(response.status).toBe(400);
+    expect(lookups).toBe(0);
+  });
+
+  test('returns lookup unavailable when the task binding reader is not installed', async () => {
+    const { app } = createApp({ eventReader: null });
+    const response = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/tasks/by-job/${JOB_ID}`,
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: 'INTELLIGENCE_TASK_LOOKUP_UNAVAILABLE',
+    });
+  });
+
   test('returns a redacted typed error when event reading fails', async () => {
     const eventReader: IntelligenceTaskEventReader = {
       async read() {
@@ -786,6 +866,7 @@ describe('Intelligence project routes', () => {
           protocol_version: 'intelligence.v1',
           event_id: EVENT_ID,
           task_id: TASK_ID,
+          job_id: JOB_ID,
           sequence: 1,
           type: 'created',
           status: 'queued',
@@ -821,6 +902,7 @@ describe('Intelligence project routes', () => {
             protocol_version: 'intelligence.v1',
             event_id: EVENT_ID,
             task_id: TASK_ID,
+            job_id: JOB_ID,
             sequence: 1,
             type: 'created',
             status: 'queued',

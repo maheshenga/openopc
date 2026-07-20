@@ -22,6 +22,7 @@ const ACCOUNT_ID = '11000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '12000000-0000-4000-a000-000000000001';
 const TASK_ID = '13000000-0000-4000-a000-000000000001';
 const EVENT_ID = '14000000-0000-4000-a000-000000000001';
+const JOB_ID = '14500000-0000-4000-a000-000000000001';
 const ACTOR_ID = '15000000-0000-4000-a000-000000000001';
 const RUN_ID = '16000000-0000-4000-a000-000000000001';
 const NODE_ID = '17000000-0000-4000-a000-000000000001';
@@ -80,6 +81,7 @@ const taskEvent = {
   protocol_version: 'intelligence.v1' as const,
   event_id: EVENT_ID,
   task_id: TASK_ID,
+  job_id: JOB_ID,
   sequence: 1,
   type: 'created' as const,
   status: 'queued' as const,
@@ -117,7 +119,7 @@ describe('intelligence contract schemas', () => {
   test('accepts a project Agent Card, task envelope, and task event', () => {
     expect(AgentCardSchema.parse(agentCard).card_hash).toBe(CARD_HASH);
     expect(TaskEnvelopeSchema.parse(taskEnvelope).project_id).toBe(PROJECT_ID);
-    expect(TaskEventSchema.parse(taskEvent).sequence).toBe(1);
+    expect(TaskEventSchema.parse(taskEvent)).toMatchObject({ sequence: 1, job_id: JOB_ID });
   });
 
   test('rejects malformed project identifiers', () => {

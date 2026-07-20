@@ -19,6 +19,7 @@ import {
 
 const PROJECT_ID = '12000000-0000-4000-a000-000000000001';
 const TASK_ID = '13000000-0000-4000-a000-000000000001';
+const JOB_ID = '13500000-0000-4000-a000-000000000001';
 const PROVIDER_CONFIG_ID = '14000000-0000-4000-a000-000000000001';
 const CARD_HASH = 'a'.repeat(64);
 const RUN_ID = '16000000-0000-4000-a000-000000000001';
@@ -240,19 +241,62 @@ test('forwards an event cursor only when supplied', async () => {
   nextBody = {
     protocol_version: 'intelligence.v1',
     task_id: TASK_ID,
-    items: [],
+    items: [
+      {
+        protocol_version: 'intelligence.v1',
+        event_id: '13600000-0000-4000-a000-000000000001',
+        task_id: TASK_ID,
+        job_id: JOB_ID,
+        sequence: 1,
+        type: 'created',
+        status: 'queued',
+        created_at: NOW,
+      },
+    ],
     next_cursor: 'next-2',
   };
 
-  await getIntelligenceTaskEvents(PROJECT_ID, TASK_ID, 'cursor-1');
+  const first = await getIntelligenceTaskEvents(PROJECT_ID, TASK_ID, 'cursor-1');
   await getIntelligenceTaskEvents(PROJECT_ID, TASK_ID);
 
+  expect(first.items[0]?.job_id).toBe(JOB_ID);
   expect(requests[0]?.url).toBe(
     `http://test.local/v1/projects/${PROJECT_ID}/intelligence/tasks/${TASK_ID}/events?cursor=cursor-1`,
   );
   expect(requests[1]?.url).toBe(
     `http://test.local/v1/projects/${PROJECT_ID}/intelligence/tasks/${TASK_ID}/events`,
   );
+});
+
+test('resolves a task by job through a strict project-scoped response', async () => {
+  const intelligenceModule = (await import('./intelligence')) as {
+    getIntelligenceTaskByJob?: (
+      projectId: string,
+      jobId: string,
+    ) => Promise<{ protocol_version: string; task_id: string; job_id: string }>;
+  };
+  const lookup = intelligenceModule.getIntelligenceTaskByJob;
+  expect(lookup).toBeFunction();
+  if (!lookup) throw new Error('missing task lookup');
+
+  const expectedLookup = { protocol_version: 'intelligence.v1', task_id: TASK_ID, job_id: JOB_ID };
+  nextBody = expectedLookup;
+  await expect(lookup(PROJECT_ID, JOB_ID)).resolves.toEqual(expectedLookup);
+  expect(requests[0]).toEqual({
+    url: `http://test.local/v1/projects/${PROJECT_ID}/intelligence/tasks/by-job/${JOB_ID}`,
+    method: 'GET',
+    body: undefined,
+  });
+
+  nextBody = {
+    protocol_version: 'intelligence.v1',
+    task_id: TASK_ID,
+    job_id: JOB_ID,
+    secret: true,
+  };
+  await expect(lookup(PROJECT_ID, JOB_ID)).rejects.toMatchObject({
+    code: 'INTELLIGENCE_PROTOCOL_ERROR',
+  });
 });
 
 test('binds project workflow start, read, cancel, events, and approval endpoints', async () => {

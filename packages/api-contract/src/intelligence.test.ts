@@ -37,6 +37,9 @@ describe('Intelligence API contract', () => {
     expect(IntelligenceErrorCodeSchema.parse('INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED')).toBe(
       'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED',
     );
+    expect(IntelligenceErrorCodeSchema.parse('INTELLIGENCE_TASK_LOOKUP_UNAVAILABLE')).toBe(
+      'INTELLIGENCE_TASK_LOOKUP_UNAVAILABLE',
+    );
   });
 
   test('accepts only redaction-safe execution options', () => {

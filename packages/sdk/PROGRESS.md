@@ -134,6 +134,9 @@ The current execution state lives in `docs/operations/studio-acceleration-progre
 - 2026-07-20: Milestone 0-1 Task 4 is **DONE** (`026eb2ea6`, `Codex`) on branch
   `studio-platform`: add image, job, upload, and asset projections under the
   canonical Intelligence facade without introducing `project().studio`.
+- 2026-07-20: Milestone 0-1 Task 5 is **IN PROGRESS** (`Codex`) on branch
+  `studio-platform`: add project-scoped React Query hooks over the Task 4
+  Intelligence Image Studio projections.
 
 ---
 

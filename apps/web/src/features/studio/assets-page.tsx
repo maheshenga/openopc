@@ -26,6 +26,7 @@ import { errorToast } from '@/components/ui/toast';
 import { EmptyState } from '@/features/layout/section/empty-state';
 import { ErrorState } from '@/features/layout/section/error-state';
 import CustomizeSectionWrapper from '@/features/workspace/customize/sections/component/section-wrapper';
+import { downloadAssetUrl } from '@/lib/desktop';
 
 import { AssetPreviewDialog, type AssetPreviewLabels } from './asset-preview-dialog';
 
@@ -124,18 +125,6 @@ function formatBytes(value: number): string {
   if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
   if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
   return `${(value / 1024 ** 3).toFixed(1)} GB`;
-}
-
-function openSignedUrl(url: string): void {
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.target = '_blank';
-  anchor.rel = 'noopener noreferrer';
-  anchor.referrerPolicy = 'no-referrer';
-  anchor.download = '';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
 }
 
 function AssetCard({
@@ -489,7 +478,7 @@ export function AssetsPage({ projectId }: { projectId: string }) {
     () =>
       createAssetDownloadController({
         createDownloadUrl: requestDownloadUrl,
-        openUrl: openSignedUrl,
+        openUrl: downloadAssetUrl,
       }),
     [requestDownloadUrl],
   );

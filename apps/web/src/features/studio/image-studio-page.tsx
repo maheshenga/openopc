@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import Loading from '@/components/ui/loading';
+import { downloadAssetUrl } from '@/lib/desktop';
 
 import {
   ImageGenerationForm,
@@ -117,7 +118,7 @@ export interface ImageStudioControllerDependencies {
   createTask(input: IntelligenceCreateTaskRequest): Promise<IntelligenceTaskResponse>;
   cancelJob(jobId: string): Promise<unknown>;
   createDownloadUrl(assetId: string): Promise<IntelligenceAssetDownload>;
-  openUrl(url: string): void;
+  openUrl(url: string): void | Promise<void>;
   setTaskQuery(taskId: string): void;
   addReference(assetId: string): void;
 }
@@ -300,7 +301,7 @@ export function createImageStudioController(
     },
     async download(assetId) {
       const response = await dependencies.createDownloadUrl(assetId);
-      dependencies.openUrl(response.signed_download_url);
+      await dependencies.openUrl(response.signed_download_url);
     },
     reuse(assetId) {
       dependencies.addReference(assetId);
@@ -430,15 +431,6 @@ function initialForm(): IntelligenceImageFormState {
   };
 }
 
-function openSignedDownload(url: string): void {
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.target = '_blank';
-  anchor.rel = 'noopener noreferrer';
-  anchor.download = '';
-  anchor.click();
-}
-
 function browserSessionStorage(): ImageStudioSessionStorage | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -556,7 +548,7 @@ export function ImageStudioPage({ projectId }: { projectId: string }) {
         createTask,
         cancelJob,
         createDownloadUrl,
-        openUrl: openSignedDownload,
+        openUrl: downloadAssetUrl,
         setTaskQuery,
         addReference: (assetId) => addReference(assetId, resultUrlsSnapshot.current[assetId]),
       }),

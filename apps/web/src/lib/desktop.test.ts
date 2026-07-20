@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
-import { desktopPlatform, desktopShellPlatform, isDesktop, openExternalRoute } from '@/lib/desktop';
+import {
+  desktopPlatform,
+  desktopShellPlatform,
+  downloadAssetUrl,
+  isDesktop,
+  openExternalRoute,
+} from '@/lib/desktop';
 
 const originalNavigator = globalThis.navigator;
 const originalDocument = globalThis.document;
@@ -70,6 +76,112 @@ describe('desktop external routes', () => {
   test('leaves legal navigation to Next.js in a regular browser', () => {
     setNavigator('Mozilla/5.0 Safari/605.1.15', 'MacIntel');
     expect(openExternalRoute('/legal?tab=terms')).toBe(false);
+  });
+});
+
+describe('asset downloads', () => {
+  test('hands signed URLs to the native bridge in the desktop shell', async () => {
+    setNavigator('Mozilla/5.0 KortixDesktop/0.1.0', 'Win32');
+    const invocations: Array<{ command: string; args: unknown }> = [];
+    Object.defineProperty(globalThis, 'window', {
+      value: {
+        __TAURI__: {
+          core: {
+            invoke: async (command: string, args: unknown) => {
+              invocations.push({ command, args });
+            },
+          },
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, 'document', {
+      value: {
+        createElement: () => {
+          throw new Error('desktop downloads must not create an external anchor');
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    const signedUrl = 'https://assets.example.test/object.png?signature=short-lived';
+    await downloadAssetUrl(signedUrl);
+
+    expect(invocations).toEqual([{ command: 'download_url', args: { url: signedUrl } }]);
+  });
+
+  test('does not fall back to an external anchor when the desktop bridge is unavailable', async () => {
+    setNavigator('Mozilla/5.0 KortixDesktop/0.1.0', 'Win32');
+    let anchorsCreated = 0;
+    Object.defineProperty(globalThis, 'window', {
+      value: {},
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, 'document', {
+      value: {
+        createElement: () => {
+          anchorsCreated += 1;
+          return {};
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    await expect(downloadAssetUrl('https://assets.example.test/private')).rejects.toThrow(
+      'Desktop download bridge unavailable',
+    );
+    expect(anchorsCreated).toBe(0);
+  });
+
+  test('uses a no-referrer download anchor in a regular browser', async () => {
+    setNavigator('Mozilla/5.0 Safari/605.1.15', 'MacIntel');
+    const clicks: Array<Record<string, unknown>> = [];
+    const anchor = {
+      href: '',
+      target: '',
+      rel: '',
+      referrerPolicy: '',
+      download: undefined as string | undefined,
+      click() {
+        clicks.push({
+          href: this.href,
+          target: this.target,
+          rel: this.rel,
+          referrerPolicy: this.referrerPolicy,
+          download: this.download,
+        });
+      },
+      remove() {},
+    };
+    Object.defineProperty(globalThis, 'window', {
+      value: {},
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(globalThis, 'document', {
+      value: {
+        createElement: () => anchor,
+        body: { appendChild() {} },
+      },
+      configurable: true,
+      writable: true,
+    });
+
+    await downloadAssetUrl('https://assets.example.test/object.png');
+
+    expect(clicks).toEqual([
+      {
+        href: 'https://assets.example.test/object.png',
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        referrerPolicy: 'no-referrer',
+        download: '',
+      },
+    ]);
   });
 });
 

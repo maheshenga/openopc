@@ -30,6 +30,11 @@ const {
   DESKTOP_CHROME_JS,
   configureNativeWindowControls,
 } = require('./window-chrome');
+const {
+  downloadFromWebContents,
+  isMainAppHost,
+  shouldLoadInApp,
+} = require('./app-policy');
 
 // Name comes from the bundle (productName): "Kortix" for prod, "Kortix Dev" for
 // dev builds. Per-name data dir so dev + prod coexist without sharing a session,
@@ -145,79 +150,8 @@ function writeMaximized(maximized) {
   }
 }
 
-/* ─── Navigation gate (port of lib.rs) ───────────────────────────────────── */
-
-// Sandbox previews / tunnels — user content, always in-app.
-function isPreviewHost(host) {
-  return (
-    host.endsWith('.localhost') ||
-    host === 'kortix.cloud' ||
-    host.endsWith('.kortix.cloud')
-  );
-}
-
-// App-shell hosts that serve BOTH product and marketing.
-function isMainAppHost(host) {
-  return (
-    host === 'localhost' ||
-    host === '127.0.0.1' ||
-    host === 'kortix.com' ||
-    host.endsWith('.kortix.com')
-  );
-}
-
-// Product + auth route prefixes allowed to render in the desktop window. MUST
-// stay in sync with DESKTOP_ALLOWED_ROUTES in apps/web/src/middleware.ts.
-const APP_PATH_PREFIXES = [
-  '/projects',
-  '/accounts',
-  '/invites',
-  '/admin',
-  '/setup',
-  '/connectors',
-  '/oauth',
-  '/checkout',
-  '/tunnel',
-  '/github',
-  '/cli',
-  '/templates',
-  '/maintenance',
-  '/countryerror',
-  '/debug',
-];
-
-function isAppPath(pathname) {
-  if (pathname === '/auth' || pathname.startsWith('/auth/')) return true;
-  return APP_PATH_PREFIXES.some(
-    (p) => pathname === p || pathname.startsWith(`${p}/`),
-  );
-}
-
-/**
- * Should `urlStr` render inside the desktop window? (Top-frame navigations
- * only — iframes are never gated, which is the whole point: the Pipedream
- * Connect overlay loads in-app instead of failing "Must be inside iframe".)
- */
-function shouldLoadInApp(urlStr) {
-  let u;
-  try {
-    u = new URL(urlStr);
-  } catch {
-    return false;
-  }
-  if (u.protocol === `${URL_SCHEME}:`) return true; // deep links
-  // Supabase GoTrue auth service (e.g. supa.kortix.com/auth/v1/authorize, or a
-  // *.supabase.co project): the OAuth hand-off, NOT one of our own /auth pages.
-  // It MUST open in the user's real browser — Google/GitHub reject embedded
-  // webviews, and the post-OAuth `kortix://auth/callback` bounce only works from
-  // a real browser tab. Our own pages (/auth/callback, /auth/login) live on the
-  // app host and still load in-app via isAppPath below.
-  if (u.pathname.startsWith('/auth/v1/')) return false;
-  const host = u.hostname;
-  if (isPreviewHost(host)) return true;
-  if (isMainAppHost(host) && isAppPath(u.pathname)) return true;
-  return false;
-}
+/* Navigation and privileged download policy lives in app-policy.js so it can
+   be tested without starting Electron's main-process lifecycle. */
 
 /* ─── Deep links (kortix://) ──────────────────────────────────────────────
    The OS hands us `kortix://auth/callback?code=…` after OAuth completes in the
@@ -617,6 +551,11 @@ function registerIpc() {
         // schemes, or crafted protocol URLs. (Sender is already origin-gated
         // above; this is defense in depth, matching setWindowOpenHandler.)
         if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+        return null;
+      }
+      case 'download_url': {
+        const wc = BrowserWindow.fromWebContents(event.sender)?.webContents;
+        downloadFromWebContents(wc, args.url);
         return null;
       }
       case 'get_frontend_url':

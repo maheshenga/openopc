@@ -17,8 +17,7 @@ export const DESKTOP_UA_TOKEN = 'KortixDesktop';
  * and 302s to it — same pattern as the CLI's `/install`. Override with
  * NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL if needed.
  */
-export const DESKTOP_DOWNLOAD_URL =
-  process.env.NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL || '/download';
+export const DESKTOP_DOWNLOAD_URL = process.env.NEXT_PUBLIC_DESKTOP_DOWNLOAD_URL || '/download';
 
 /** Build a per-platform download URL, e.g. desktopDownloadUrl('macos'). */
 export function desktopDownloadUrl(platform?: 'macos' | 'windows' | 'linux'): string {
@@ -51,6 +50,30 @@ function clickAnchor(href: string, newTab = false) {
 /** Trigger a desktop-installer download. Safe on web and in the desktop app. */
 export function startDownload(url: string = DESKTOP_DOWNLOAD_URL) {
   clickAnchor(url, false);
+}
+
+function clickDownloadAnchor(url: string): void {
+  if (typeof document === 'undefined') return;
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.target = '_blank';
+  anchor.rel = 'noopener noreferrer';
+  anchor.referrerPolicy = 'no-referrer';
+  anchor.download = '';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+/** Download a short-lived asset URL without exposing it to the system browser. */
+export async function downloadAssetUrl(url: string): Promise<void> {
+  if (isDesktop()) {
+    const invocation = tauriInvoke('download_url', { url });
+    if (!invocation) throw new Error('Desktop download bridge unavailable');
+    await invocation;
+    return;
+  }
+  clickDownloadAnchor(url);
 }
 
 export type DesktopPlatform = 'macos' | 'windows' | 'linux';
@@ -173,7 +196,11 @@ export function getDesktopZoom(): number {
 }
 
 async function invokeSetZoom(scale: number): Promise<void> {
-  const t = (window as unknown as { __TAURI__?: { core?: { invoke?: (cmd: string, args: unknown) => Promise<unknown> } } }).__TAURI__;
+  const t = (
+    window as unknown as {
+      __TAURI__?: { core?: { invoke?: (cmd: string, args: unknown) => Promise<unknown> } };
+    }
+  ).__TAURI__;
   if (!t?.core?.invoke) return;
   try {
     await t.core.invoke('set_zoom', { scale });
@@ -206,9 +233,11 @@ export const zoomReset = () => setDesktopZoom(1);
 
 function tauriInvoke<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> | null {
   if (typeof window === 'undefined') return null;
-  const t = (window as unknown as {
-    __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => Promise<unknown> } };
-  }).__TAURI__;
+  const t = (
+    window as unknown as {
+      __TAURI__?: { core?: { invoke?: (c: string, a?: unknown) => Promise<unknown> } };
+    }
+  ).__TAURI__;
   if (!t?.core?.invoke) return null;
   return t.core.invoke(cmd, args) as Promise<T>;
 }

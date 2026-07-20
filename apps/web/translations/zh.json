@@ -31,6 +31,15 @@
     "basic": "基础版",
     "tryFree": "开始"
   },
+  "studio": {
+    "imageStudio": "图像工作室",
+    "assets": "素材库",
+    "loading": "正在加载工作室...",
+    "unavailable": "此项目当前没有可用的图像生成能力。",
+    "navigation": "工作室导航",
+    "imageStudioLink": "打开图像工作室",
+    "assetsLink": "打开项目素材库"
+  },
   "settings": {
     "title": "设置",
     "tabs": {

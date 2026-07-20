@@ -31,6 +31,15 @@
     "basic": "Base",
     "tryFree": "Inizia"
   },
+  "studio": {
+    "imageStudio": "Image Studio",
+    "assets": "Assets",
+    "loading": "Loading Studio...",
+    "unavailable": "Image generation is unavailable for this project.",
+    "navigation": "Studio navigation",
+    "imageStudioLink": "Open Image Studio",
+    "assetsLink": "Open project assets"
+  },
   "settings": {
     "title": "Impostazioni",
     "tabs": {

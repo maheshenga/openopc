@@ -39,6 +39,7 @@ import {
 } from '@/features/workspace/project-sidebar/footer/project-customize-nav';
 import { ProjectManifestUpgradeAlert } from '@/features/workspace/project-sidebar/footer/project-manifest-upgrade-alert';
 import { ProjectSandboxAlert } from '@/features/workspace/project-sidebar/footer/project-sandbox-alert';
+import { ProjectStudioNavItem } from '@/features/workspace/project-sidebar/footer/project-studio-nav';
 import { ProjectSessionList } from '@/features/workspace/project-sidebar/project-session-list';
 import { ProjectSwitcher } from '@/features/workspace/project-sidebar/project-switcher';
 import { useAdminRole } from '@/hooks/admin';
@@ -287,6 +288,7 @@ export function ProjectSidebar({ projectId }: { projectId: string }) {
               {/* Files used to live on the collapsed icon rail; with the rail
                   gone (offcanvas + hover flyout) it needs a docked entry. Above
                   Customize — files aren't gated behind customize access. */}
+              <ProjectStudioNavItem projectId={projectId} />
               <ProjectFilesNavItem />
               <ProjectCustomizeNavItem />
               <ProjectChatGptConnectNavItem projectId={projectId} />

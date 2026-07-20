@@ -15,8 +15,9 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Studio backend foundation | implemented | contracts, schema, billing, IAM, API, worker commits | protected production acceptance |
 | Intelligence protocol | implemented | REST, SDK, MCP, A2A, task/event commits | retained regression gates |
 | Intelligence workflows | implemented, disabled | workflow, approval, routing, evaluation, Temporal commits | separately reviewed production rollout |
-| Milestone 0-1 | active (Task 10 complete; Task 11 partial) | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green | resolve/record Web full-build, full-suite, and i18n baseline gates before closing |
-| Mobile and Electron | active (mobile slice implemented; Electron pending) | mobile commit `ae7202a65`; focused contract/wiring tests green | native-device acceptance and Electron Web flow |
+| Milestone 0-1 (Web) | active (Task 10 complete; Task 11 partial) | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green | focused Web hardening without full-suite reruns |
+| Desktop/Electron | active | existing Electron Web wrapper; Web Image Studio flow implemented | Electron navigation, generation, preview, and download acceptance |
+| Mobile | deferred (implementation retained) | mobile commit `ae7202a65`; focused contract/wiring tests green | resume Android/iOS acceptance only after product reprioritization |
 | Developer Center | planned | acceleration design Milestone 4 | separate plan |
 
 ## Canonical Client Contract
@@ -122,3 +123,8 @@ mobile baseline cannot currently resolve `@expo/vector-icons`, contains a
 duplicate `ToolResultData` export, and ends with a missing `tsc` command
 diagnostic. Native Android/iOS interaction and the Electron Web flow remain
 separate Milestone 3 gates; this entry does not mark Milestone 3 complete.
+
+Android/iOS work is deferred by product priority as of 2026-07-20. The mobile
+implementation remains in the branch, but no additional native development or
+acceptance is scheduled. Current execution priority is Web first and
+Desktop/Electron second.

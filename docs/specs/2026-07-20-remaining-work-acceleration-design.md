@@ -21,6 +21,13 @@ The retained scope is:
 
 First-party video, voice, 3D, digital-human, and batch-remix products remain cancelled under `docs/specs/2026-07-20-multimedia-product-scope-cancellation.md`. Their removal is not counted as an acceleration technique.
 
+### 1.1 Current execution priority
+
+As of 2026-07-20, active delivery is Web first and Desktop/Electron second.
+The implemented Expo Image Studio route is retained, but additional Android/iOS
+development and native acceptance are deferred until product priority changes.
+This is a scheduling decision, not a removal of the long-term mobile capability.
+
 ## 2. Current baseline
 
 The repository already contains the expensive backend foundations:
@@ -30,7 +37,7 @@ The repository already contains the expensive backend foundations:
 - governed workflow contracts, PostgreSQL persistence, approvals, Agent roles, image leaves, evaluation snapshots, deterministic routing, SDK/MCP/A2A surfaces, and an optional Temporal adapter;
 - production feature flags that keep Studio and Intelligence workflows disabled until acceptance gates pass.
 
-The main remaining gap is product composition. There is no first-party Web Image Studio or Assets surface, no Studio mobile route, no completed Electron flow, no Studio worker deployment, and no Developer Center runtime.
+The Web Image Studio, Assets surface, and Expo Image Studio route are now implemented. The main remaining composition gaps are focused Web hardening, completed Electron acceptance, Studio worker deployment, and the Developer Center runtime.
 
 ## 3. Selected acceleration approach
 
@@ -101,9 +108,9 @@ Production values retain `STUDIO_ENABLED=false` and `INTELLIGENCE_WORKFLOWS_ENAB
 
 ### 5.3 Client workstream
 
-Expo mobile uses the same SDK with durable cursor polling. It supports prompt-only image task creation, job monitoring, suspension/resume, output preview, approval, and download. It does not reproduce a desktop editor.
+Electron is the active client priority and continues to wrap the web application. Its acceptance gate proves navigation, task creation, event updates, preview, and download through the same SDK path without Electron-only business logic.
 
-Electron continues to wrap the web application. Its acceptance gate proves navigation, task creation, event updates, preview, and download through the same SDK path without Electron-only business logic.
+Expo mobile uses the same SDK with durable cursor polling. Its prompt-only image route, job monitoring, suspension/resume, output preview, approval, and download implementation is retained, but Android/iOS acceptance and additional native work are deferred.
 
 ### 5.4 Platform workstream
 
@@ -128,7 +135,7 @@ The only blocking dependency shared by every workstream is the contract freeze i
 After that freeze:
 
 - Product and production work can progress independently because both consume existing service ports.
-- Mobile and Electron begin when the product-facing SDK methods and query keys are stable; they do not wait for production enablement.
+- Electron proceeds now that the product-facing SDK methods and query keys are stable; mobile implementation remains retained but native acceptance is deferred.
 - Developer Center manifest and trust contracts can progress without waiting for Image Studio UI, but publication and revenue settlement wait for sandbox, IAM, billing, and audit integration gates.
 - Integration occurs through small commits with focused tests; no workstream rewrites host-core ownership.
 
@@ -197,10 +204,10 @@ No feature is described as production-ready until its protected environment gate
 - ship metrics, ServiceMonitor, alerts, and billing-incident operation;
 - pass MinIO and protected provider/storage gates.
 
-### Milestone 3: Mobile and Electron parity
+### Milestone 3: Desktop/Electron priority; Mobile deferred
 
-- ship the Expo Studio route and durable polling;
-- pass Electron and mobile acceptance without client-specific backend logic.
+- pass Electron navigation, generation, event, preview, and download acceptance without client-specific backend logic;
+- retain the implemented Expo Studio route and durable polling until Android/iOS work is reprioritized.
 
 ### Milestone 4: Developer Center core
 

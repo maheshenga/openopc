@@ -10,15 +10,15 @@ This ledger is the authoritative status source for the retained Studio accelerat
 
 ## Current Status
 
-| Slice | State | Evidence | Next gate |
-| --- | --- | --- | --- |
-| Studio backend foundation | implemented | contracts, schema, billing, IAM, API, worker commits | protected production acceptance |
-| Intelligence protocol | implemented | REST, SDK, MCP, A2A, task/event commits | retained regression gates |
-| Intelligence workflows | implemented, disabled | workflow, approval, routing, evaluation, Temporal commits | separately reviewed production rollout |
-| Milestone 0-1 (Web) | active (Task 10 complete; Task 11 partial) | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green | focused Web hardening without full-suite reruns |
-| Desktop/Electron | active (native download bridge complete) | commit `285f7a2a6`; focused Electron/Web policy tests green; browser smoke green | real Electron navigation, generation, preview, and native download smoke |
-| Mobile | deferred (implementation retained) | mobile commit `ae7202a65`; focused contract/wiring tests green | resume Android/iOS acceptance only after product reprioritization |
-| Developer Center | planned | acceleration design Milestone 4 | separate plan |
+| Slice                     | State                                      | Evidence                                                                             | Next gate                                                         |
+| ------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| Studio backend foundation | implemented                                | contracts, schema, billing, IAM, API, worker commits                                 | protected production acceptance                                   |
+| Intelligence protocol     | implemented                                | REST, SDK, MCP, A2A, task/event commits                                              | retained regression gates                                         |
+| Intelligence workflows    | implemented, disabled                      | workflow, approval, routing, evaluation, Temporal commits                            | separately reviewed production rollout                            |
+| Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial) | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green     | focused Web hardening without full-suite reruns                   |
+| Desktop/Electron          | active (real shell smoke complete)         | commits `285f7a2a6` and `10ed33403`; focused tests plus browser/Electron smoke green | packaged multi-OS desktop acceptance                              |
+| Mobile                    | deferred (implementation retained)         | mobile commit `ae7202a65`; focused contract/wiring tests green                       | resume Android/iOS acceptance only after product reprioritization |
+| Developer Center          | planned                                    | acceleration design Milestone 4                                                      | separate plan                                                     |
 
 ## Canonical Client Contract
 
@@ -117,16 +117,33 @@ short-lived URL to the requesting `WebContents.downloadURL()` and never to
 The Electron policy accepts HTTPS and loopback HTTP only, rejects URL
 credentials and non-network schemes, and requires an existing trusted Kortix
 sender before the IPC command runs. The focused Electron suite passed `14/14`,
-the related Web suite passed `32/32`, Web ESLint and Prettier passed, Electron
-Biome and Node syntax checks passed, and `git diff --check` passed. The existing
-fake-provider browser smoke also exited `0` after covering generation,
-recovery, previews, Image Studio downloads, and Assets downloads.
+and the related Web suite passed `32/32` for the native bridge commit.
 
-A real Electron Playwright smoke remains open. Electron 39 launched and exposed
-both Inspector and CDP listeners on this Windows host, but connections to those
-Electron-owned loopback ports timed out from the automation process. No failing
-experimental harness was retained, and this ledger does not claim packaged or
-production desktop acceptance.
+Commit `10ed33403` adds repeatable real-shell acceptance without changing the
+Electron application boundary. Playwright launches Electron 39 through
+`chromium.launchPersistentContext()`, the supported `--app=<desktop-root>`
+switch, and Playwright's `--remote-debugging-pipe`; no Inspector or TCP debug
+port is opened. Electron first loads the same-origin static `robots.txt`, so
+request interception and console/error diagnostics are installed before the
+real Studio route can issue a request. Each run uses isolated temporary app
+data, a 60-second cold-start budget, and cleanup in both success and failure
+paths.
+
+The Electron smoke exited `0` after proving the preload and desktop user-agent
+markers, generation, idempotent recovery, cancellation, reference upload,
+credit and permission failures, Assets preview, and native downloads from both
+Image Studio and Assets. The browser smoke also exited `0` and retained its
+desktop/mobile layout and pixel checks. The Windows screenshot was inspected:
+window controls remain at the upper right, while the debug Image Studio and
+Assets controls remain visible and clickable.
+
+The title-bar regression fix keeps the Win/Linux flex spacer so controls stay
+right-aligned, but makes that spacer pointer-inert and `no-drag`; only the macOS
+6px top strip restores pointer handling and dragging. The debug harness also
+reserves the Win/Linux control width. The focused Electron suite passed
+`14/14`, the related Web suite passed `34/34`, Web ESLint and Prettier passed,
+Node syntax checks passed, and `git diff --check` passed. No full suite was run.
+Packaged Windows/macOS/Linux acceptance and production readiness remain open.
 
 ## Milestone 3 Mobile Slice
 

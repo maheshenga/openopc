@@ -15,7 +15,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Studio backend foundation | implemented | contracts, schema, billing, IAM, API, worker commits | protected production acceptance |
 | Intelligence protocol | implemented | REST, SDK, MCP, A2A, task/event commits | retained regression gates |
 | Intelligence workflows | implemented, disabled | workflow, approval, routing, evaluation, Temporal commits | separately reviewed production rollout |
-| Milestone 0-1 | active | canonical Intelligence SDK decision | Web Image Studio browser acceptance |
+| Milestone 0-1 | active | canonical Intelligence SDK decision; Task 2 commit `4a50cf771` | Web Image Studio browser acceptance |
 | Mobile and Electron | planned | acceleration design Milestone 3 | separate plan |
 | Developer Center | planned | acceleration design Milestone 4 | separate plan |
 
@@ -34,3 +34,7 @@ Web Image Studio and project Assets are retained. First-party video, voice, 3D, 
 ## Milestone 0-1 Gate
 
 The milestone closes only after all eleven tasks in the implementation plan have commit-backed evidence, package/type/public-surface gates pass, and desktop/mobile Playwright acceptance proves the Web Image Studio and Assets flow without exposing credentials, signed URLs, request bodies, or identifiers in logs or telemetry.
+
+## Task 2 Evidence
+
+Task 2 (`4a50cf771`) binds Intelligence tasks to signed estimates and workflow provenance. The focused API suite passed (`139/139`), API and package typechecks passed, API contract checks passed (`9/9`), database schema checks passed (`67/67`), workflow conformance passed (`24/24`), real PostgreSQL workflow checks passed (`57/57`), migration integration passed (`8/8`), and the SDK suite passed (`1124/1124`) with typecheck, build, packed-install smoke, and public-surface checks. The full database suite exceeded the local 304-second execution limit, so that gate remains explicitly unverified.

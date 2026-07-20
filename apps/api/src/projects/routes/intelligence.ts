@@ -23,6 +23,15 @@ projectsApp.route('/', createDefaultIntelligenceProjectRoutes());
 
 let workflowRuntime: IntelligenceWorkflowRuntime = { enabled: false };
 setDefaultWorkflowReviewAdapter(null);
+if (!config.INTELLIGENCE_WORKFLOWS_ENABLED) {
+  // Keep the additive stream path stable without initializing the workflow runtime.
+  projectsApp.get('/:projectId/intelligence/ag-ui/workflows/:runId/stream', (c) =>
+    c.json(
+      { error: 'Intelligence AG-UI stream is disabled', code: 'INTELLIGENCE_AG_UI_DISABLED' },
+      404,
+    ),
+  );
+}
 if (config.INTELLIGENCE_WORKFLOWS_ENABLED) {
   const [databaseModule, payloadModule, payloadRepositoryModule, storeModule, serviceModule] =
     await Promise.all([
@@ -77,6 +86,7 @@ if (config.INTELLIGENCE_WORKFLOWS_ENABLED) {
       service: workflowRuntime.service,
       loadProjectForUser,
       assertProjectCapability,
+      agUi: { enabled: config.INTELLIGENCE_AG_UI_ENABLED },
       // Task 8 binds installed project Agent/card sources. Until then graph
       // commands fail closed while user start/read/cancel routes remain usable.
       isAgentCardTrusted: async () => false,

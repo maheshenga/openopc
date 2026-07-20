@@ -204,6 +204,7 @@ describe('Intelligence workflow Phase 2 acceptance', () => {
           ? { row: { accountId: ACCOUNT_ID, projectId }, userId: PLANNER_ID }
           : null,
       assertProjectCapability: async () => {},
+      agUi: { enabled: true },
       isAgentCardTrusted: async ({ agentName, cardHash }) =>
         agentName === 'content-planner' && cardHash === PLANNER_HASH,
     });
@@ -498,6 +499,17 @@ describe('Intelligence workflow Phase 2 acceptance', () => {
       type: 'node_succeeded',
       evaluation_version: EVALUATION_VERSION,
     });
+
+    const agUiResponse = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/ag-ui/workflows/${RUN_ID}/stream?cursor=0`,
+      { headers: { accept: 'text/event-stream' } },
+    );
+    expect(agUiResponse.status).toBe(200);
+    const agUiText = await agUiResponse.text();
+    publicWire.push(agUiText);
+    expect(agUiText).toMatch(/id: \d+\nevent: RUN_STARTED\ndata:/);
+    expect(agUiText).toContain('event: RUN_FINISHED');
+    expect(agUiText).not.toMatch(/payload_ref|object_ref|provider_url/i);
 
     const foreign = await app.request(
       `/v1/projects/${OTHER_PROJECT_ID}/intelligence/workflows/${RUN_ID}`,

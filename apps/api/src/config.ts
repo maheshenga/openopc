@@ -110,6 +110,8 @@ const envSchema = z.object({
   // Durable Intelligence workflows remain extension-owned and inert until the
   // full route, scheduler, Studio, and acceptance gates are explicitly enabled.
   INTELLIGENCE_WORKFLOWS_ENABLED:   optBoolFalse,
+  // AG-UI SSE is an additive projection over durable workflow replay, off by default.
+  INTELLIGENCE_AG_UI_ENABLED:       optBoolFalse,
 
   // ── Search Providers (optional — features degrade gracefully) ────────────
   TAVILY_API_URL:              optUrl('https://api.tavily.com'),
@@ -612,6 +614,7 @@ export const config = {
   KORTIX_BILLING_INTERNAL_ENABLED: env.KORTIX_BILLING_INTERNAL_ENABLED,
   KORTIX_TEMPLATES_ENABLED: env.KORTIX_TEMPLATES_ENABLED,
   INTELLIGENCE_WORKFLOWS_ENABLED: env.INTELLIGENCE_WORKFLOWS_ENABLED,
+  INTELLIGENCE_AG_UI_ENABLED: env.INTELLIGENCE_AG_UI_ENABLED,
 
   // ─── Database ──────────────────────────────────────────────────────────────
   DATABASE_URL: env.DATABASE_URL,

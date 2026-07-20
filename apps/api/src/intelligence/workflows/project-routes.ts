@@ -1,10 +1,10 @@
 import {
-  IntelligenceWorkflowApprovalDecisionRequestSchema,
-  IntelligenceWorkflowApprovalDecisionResponseSchema,
   type IntelligenceWorkflowAddDependencyRequest,
   IntelligenceWorkflowAddDependencyRequestSchema,
   type IntelligenceWorkflowAppendNodeRequest,
   IntelligenceWorkflowAppendNodeRequestSchema,
+  IntelligenceWorkflowApprovalDecisionRequestSchema,
+  IntelligenceWorkflowApprovalDecisionResponseSchema,
   IntelligenceWorkflowCancelRequestSchema,
   IntelligenceWorkflowDependencyResponseSchema,
   IntelligenceWorkflowEventsResponseSchema,
@@ -21,6 +21,11 @@ import type { Context } from 'hono';
 import { z } from 'zod';
 import { PROJECT_ACTIONS } from '../../iam/actions';
 import type { AppEnv } from '../../types';
+import {
+  type IntelligenceAgUiStreamRuntime,
+  createIntelligenceAgUiConnectionPool,
+  createIntelligenceAgUiWorkflowStream,
+} from '../ag-ui/stream';
 import { WorkflowStoreError } from './errors';
 import { type WorkflowService, WorkflowServiceError } from './service';
 
@@ -35,6 +40,12 @@ const EventQuerySchema = z
     limit: z.coerce.number().int().min(1).max(100).optional(),
   })
   .strict();
+const AgUiStreamQuerySchema = z.object({ cursor: z.string().optional() }).strict();
+const AgUiCursorSchema = z
+  .string()
+  .regex(/^\d{1,16}$/)
+  .transform(Number)
+  .refine(Number.isSafeInteger);
 
 class WorkflowRequestTooLargeError extends Error {}
 
@@ -65,6 +76,7 @@ export type IntelligenceWorkflowProjectRouteDeps = {
   }): Promise<boolean>;
   now?: () => string;
   randomUUID?: () => string;
+  agUi?: { enabled: boolean } & IntelligenceAgUiStreamRuntime;
 };
 
 type LoadedProject = { row: { accountId: string; projectId: string }; userId: string };
@@ -75,6 +87,9 @@ export function createIntelligenceWorkflowProjectRoutes(
   const app = new Hono<AppEnv>();
   const now = deps.now ?? (() => new Date().toISOString());
   const randomUUID = deps.randomUUID ?? crypto.randomUUID.bind(crypto);
+  const agUiConnections = deps.agUi?.enabled
+    ? (deps.agUi.connections ?? createIntelligenceAgUiConnectionPool())
+    : null;
 
   app.post('/:projectId/intelligence/workflows', async (c) => {
     const loaded = await loadProjectOr404(c, deps, c.req.param('projectId'));
@@ -179,6 +194,29 @@ export function createIntelligenceWorkflowProjectRoutes(
     } catch (error) {
       return workflowError(c, error);
     }
+  });
+
+  app.get('/:projectId/intelligence/ag-ui/workflows/:runId/stream', async (c) => {
+    if (!deps.agUi?.enabled || !agUiConnections) return agUiDisabled(c);
+    const scope = await loadRunScope(c, deps, PROJECT_ACTIONS.PROJECT_STUDIO_JOBS_READ);
+    if (scope instanceof Response) return scope;
+    const cursor = parseAgUiStreamCursor(c);
+    if (!cursor.success) return invalid(c);
+    if (!(await deps.service.getRun(scope))) return notFound(c);
+    return (
+      createIntelligenceAgUiWorkflowStream({
+        scope,
+        afterSequence: cursor.data,
+        signal: c.req.raw.signal,
+        connections: agUiConnections,
+        readEvents: deps.service.readEvents.bind(deps.service),
+        pollIntervalMs: deps.agUi.pollIntervalMs,
+        keepAliveIntervalMs: deps.agUi.keepAliveIntervalMs,
+        sleep: deps.agUi.sleep,
+        setInterval: deps.agUi.setInterval,
+        clearInterval: deps.agUi.clearInterval,
+      }) ?? agUiUnavailable(c)
+    );
   });
 
   app.post(
@@ -487,6 +525,14 @@ function parseEventQuery(c: Context<AppEnv>) {
   return EventQuerySchema.safeParse(entries);
 }
 
+function parseAgUiStreamCursor(c: Context<AppEnv>) {
+  const query = AgUiStreamQuerySchema.safeParse(
+    Object.fromEntries(new URL(c.req.url).searchParams.entries()),
+  );
+  if (!query.success) return query;
+  return AgUiCursorSchema.safeParse(query.data.cursor ?? c.req.header('Last-Event-ID') ?? '0');
+}
+
 function workflowError(c: Context<AppEnv>, error: unknown) {
   if (error instanceof WorkflowStoreError) return conflict(c);
   if (error instanceof WorkflowServiceError) {
@@ -499,6 +545,20 @@ function workflowError(c: Context<AppEnv>, error: unknown) {
       error: 'Intelligence workflow unavailable',
       code: 'INTELLIGENCE_WORKFLOW_UNAVAILABLE',
     },
+    503,
+  );
+}
+
+function agUiDisabled(c: Context<AppEnv>) {
+  return c.json(
+    { error: 'Intelligence AG-UI stream is disabled', code: 'INTELLIGENCE_AG_UI_DISABLED' },
+    404,
+  );
+}
+
+function agUiUnavailable(c: Context<AppEnv>) {
+  return c.json(
+    { error: 'Intelligence AG-UI stream is unavailable', code: 'INTELLIGENCE_AG_UI_UNAVAILABLE' },
     503,
   );
 }

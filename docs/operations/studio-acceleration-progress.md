@@ -10,15 +10,15 @@ This ledger is the authoritative status source for the retained Studio accelerat
 
 ## Current Status
 
-| Slice                     | State                                      | Evidence                                                                             | Next gate                                                         |
-| ------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| Studio backend foundation | implemented                                | contracts, schema, billing, IAM, API, worker commits                                 | protected production acceptance                                   |
-| Intelligence protocol     | implemented                                | REST, SDK, MCP, A2A, task/event commits                                              | retained regression gates                                         |
-| Intelligence workflows    | implemented, disabled                      | workflow, approval, routing, evaluation, Temporal commits                            | separately reviewed production rollout                            |
-| Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial) | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green     | focused Web hardening without full-suite reruns                   |
-| Desktop/Electron          | active (real shell smoke complete)         | commits `285f7a2a6` and `10ed33403`; focused tests plus browser/Electron smoke green | packaged multi-OS desktop acceptance                              |
-| Mobile                    | deferred (implementation retained)         | mobile commit `ae7202a65`; focused contract/wiring tests green                       | resume Android/iOS acceptance only after product reprioritization |
-| Developer Center          | planned                                    | acceleration design Milestone 4                                                      | separate plan                                                     |
+| Slice                     | State                                          | Evidence                                                                                                           | Next gate                                                         |
+| ------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| Studio backend foundation | implemented                                    | contracts, schema, billing, IAM, API, worker commits                                                               | protected production acceptance                                   |
+| Intelligence protocol     | implemented                                    | REST, SDK, MCP, A2A, task/event commits                                                                            | retained regression gates                                         |
+| Intelligence workflows    | implemented, disabled                          | workflow, approval, routing, evaluation, Temporal commits                                                          | separately reviewed production rollout                            |
+| Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)     | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                   | focused Web hardening without full-suite reruns                   |
+| Desktop/Electron          | active (Windows directory acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke green | signed Windows installer and macOS/Linux acceptance               |
+| Mobile                    | deferred (implementation retained)             | mobile commit `ae7202a65`; focused contract/wiring tests green                                                     | resume Android/iOS acceptance only after product reprioritization |
+| Developer Center          | planned                                        | acceleration design Milestone 4                                                                                    | separate plan                                                     |
 
 ## Canonical Client Contract
 
@@ -129,6 +129,13 @@ real Studio route can issue a request. Each run uses isolated temporary app
 data, a 60-second cold-start budget, and cleanup in both success and failure
 paths.
 
+Commit `5255a05e4` extends the same smoke to a packaged executable. Source
+mode keeps the development `--app=<desktop-root>` switch; packaged mode takes
+`E2E_ELECTRON_EXECUTABLE` and passes no development switch. The packaged smoke
+sets `KORTIX_E2E_DISABLE_PROTOCOL_REGISTRATION=1`, an explicit test-only guard
+that leaves normal dev and production `kortix://` registration unchanged while
+preventing a local acceptance run from changing the user's protocol handler.
+
 The Electron smoke exited `0` after proving the preload and desktop user-agent
 markers, generation, idempotent recovery, cancellation, reference upload,
 credit and permission failures, Assets preview, and native downloads from both
@@ -141,9 +148,14 @@ The title-bar regression fix keeps the Win/Linux flex spacer so controls stay
 right-aligned, but makes that spacer pointer-inert and `no-drag`; only the macOS
 6px top strip restores pointer handling and dragging. The debug harness also
 reserves the Win/Linux control width. The focused Electron suite passed
-`14/14`, the related Web suite passed `34/34`, Web ESLint and Prettier passed,
-Node syntax checks passed, and `git diff --check` passed. No full suite was run.
-Packaged Windows/macOS/Linux acceptance and production readiness remain open.
+`15/15`, the related Web suite passed `35/35`, Web ESLint and Prettier passed,
+Node syntax checks passed, and `git diff --check` passed. A Windows x64
+directory package was built from the installed Electron 39.8.10 runtime with
+`--publish never`, `--dir`, and `signAndEditExecutable=false`; it contains
+`Kortix.exe` and `resources/app.asar`. The exact packaged executable passed the
+same Image Studio/Assets smoke, including native downloads. No full suite was
+run. Signed Windows installer, macOS/Linux package acceptance, and production
+readiness remain open.
 
 ## Milestone 3 Mobile Slice
 

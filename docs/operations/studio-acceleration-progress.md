@@ -16,7 +16,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence protocol | implemented | REST, SDK, MCP, A2A, task/event commits | retained regression gates |
 | Intelligence workflows | implemented, disabled | workflow, approval, routing, evaluation, Temporal commits | separately reviewed production rollout |
 | Milestone 0-1 | active (Task 10 complete; Task 11 partial) | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green | resolve/record Web full-build, full-suite, and i18n baseline gates before closing |
-| Mobile and Electron | planned | acceleration design Milestone 3 | separate plan |
+| Mobile and Electron | active (mobile slice implemented; Electron pending) | mobile commit `ae7202a65`; focused contract/wiring tests green | native-device acceptance and Electron Web flow |
 | Developer Center | planned | acceleration design Milestone 4 | separate plan |
 
 ## Canonical Client Contract
@@ -103,3 +103,22 @@ proven because the Windows host repeatedly exhausted commit memory during
 Next compilation and exited without compiler diagnostics. These gates remain
 open; this ledger does not claim Milestone 0-1 or production readiness is
 complete.
+
+## Milestone 3 Mobile Slice
+
+Commit `ae7202a65` adds the capability-gated Expo project route at
+`/projects/:id/studio`. The mobile page uses only `@kortix/sdk` and its React
+bindings for discovery, Agent Cards, signed estimates, idempotent task
+creation, durable event-cursor polling, job snapshot recovery, cancellation,
+asset listing, signed preview URLs, and download/share. Active task state is
+validated before project-scoped AsyncStorage recovery; signed URLs and
+estimate tokens are never persisted.
+
+The focused mobile contract and wiring suite passed (`8/8`), scoped Biome
+checks passed, the drawer lint passed, both raw-fetch and cancelled multimedia
+route scans returned no matches, and `git diff --check` passed. No full test
+suite was run. Mobile TypeScript acceptance remains open because the existing
+mobile baseline cannot currently resolve `@expo/vector-icons`, contains a
+duplicate `ToolResultData` export, and ends with a missing `tsc` command
+diagnostic. Native Android/iOS interaction and the Electron Web flow remain
+separate Milestone 3 gates; this entry does not mark Milestone 3 complete.

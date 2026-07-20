@@ -38,3 +38,14 @@ The milestone closes only after all eleven tasks in the implementation plan have
 ## Task 2 Evidence
 
 Task 2 (`4a50cf771`) binds Intelligence tasks to signed estimates and workflow provenance. The focused API suite passed (`139/139`), API and package typechecks passed, API contract checks passed (`9/9`), database schema checks passed (`67/67`), workflow conformance passed (`24/24`), real PostgreSQL workflow checks passed (`57/57`), migration integration passed (`8/8`), and the SDK suite passed (`1124/1124`) with typecheck, build, packed-install smoke, and public-surface checks. The full database suite exceeded the local 304-second execution limit, so that gate remains explicitly unverified.
+
+## Task 4 Evidence
+
+Task 4 (`026eb2ea6`) adds strict typed Image Studio estimate, job, upload, and
+asset projections under `kortix.project(projectId).intelligence`. It restores
+the projects-client barrel and facade methods without adding `project().studio`,
+and updates runtime/type snapshots with additive-only changes. The focused REST
+projection suite passed (`15/15`), the full facade test file passed (`63/63`),
+SDK typecheck passed, both public-surface tests passed, and scoped Biome checks
+passed. React hooks, Web pages, full SDK suite, and package smoke install remain
+later milestone gates.

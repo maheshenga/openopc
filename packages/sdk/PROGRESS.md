@@ -131,7 +131,7 @@ real output. `typecheck` is not evidence.
 Superseded by the Intelligence SDK implemented at `kortix.project(projectId).intelligence`.
 The current execution state lives in `docs/operations/studio-acceleration-progress.md`.
 
-- 2026-07-20: Milestone 0-1 Task 4 is **IN PROGRESS** (`Codex`) on branch
+- 2026-07-20: Milestone 0-1 Task 4 is **DONE** (`026eb2ea6`, `Codex`) on branch
   `studio-platform`: add image, job, upload, and asset projections under the
   canonical Intelligence facade without introducing `project().studio`.
 
@@ -944,3 +944,28 @@ tests and CLI typecheck are green.
 **Shippable to production: YES** for the additive SDK surface. The wider
 workflow feature remains disabled by default and the existing unrelated CLI
 baseline failures remain a repository-level release risk.
+
+### 2026-07-20 - Milestone 0-1 Task 4 (`Codex`)
+
+Completed commit `026eb2ea6`: typed Image Studio estimate, job, upload, and asset
+REST projections; the canonical `project(id).intelligence` facade; strict UUID,
+signed URL, upload-header, metadata, and Studio error-code parsing; and additive
+runtime/type surface snapshots. Web and React Task 5 changes remained outside
+the commit.
+
+**Verified**
+
+```
+pnpm.cmd --filter @kortix/sdk exec bun test src/core/rest/projects-client/intelligence-studio.test.ts -> 15 pass, 0 fail
+pnpm.cmd --filter @kortix/sdk exec bun test src/core/client/kortix.test.ts -> 63 pass, 0 fail
+pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
+pnpm.cmd --filter @kortix/sdk exec bun test src/public-surface.test.ts -> 1 pass, 0 fail
+pnpm.cmd --filter @kortix/sdk exec bun test src/public-type-surface.test.ts -> 1 pass, 0 fail
+pnpm.cmd exec biome check packages/sdk/src/core/rest/projects-client/intelligence-studio.ts packages/sdk/src/core/rest/projects-client/intelligence-studio.test.ts -> exit 0
+```
+
+**Unverified:** full SDK suite and package smoke install are deferred to the
+milestone gate after Task 5; no production flags were enabled or deployed.
+
+**Shippable to production: NOT YET** for the milestone; this task's additive SDK
+surface is regression-locked.

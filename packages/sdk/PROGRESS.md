@@ -131,6 +131,10 @@ real output. `typecheck` is not evidence.
 Superseded by the Intelligence SDK implemented at `kortix.project(projectId).intelligence`.
 The current execution state lives in `docs/operations/studio-acceleration-progress.md`.
 
+- 2026-07-20: Milestone 0-1 Task 4 is **IN PROGRESS** (`Codex`) on branch
+  `studio-platform`: add image, job, upload, and asset projections under the
+  canonical Intelligence facade without introducing `project().studio`.
+
 ---
 
 ## NOW — active plan: v2 structure & distribution

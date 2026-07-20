@@ -368,7 +368,58 @@ Deliver recruitment, local-information, content, image, video, audio, 3D,
 avatar, and other capabilities as reviewed modules. Do not add first-party
 media pages to the core navigation.
 
-## 14. Acceptance Criteria
+## 14. UX and Visual Language
+
+OpenOPC uses a restrained Material 3 / Google Workspace-inspired product
+language without copying Google's marks, names, or proprietary assets. The
+goal is task clarity and completion speed, not visual novelty.
+
+### 14.1 UX priorities
+
+1. Make the next useful action obvious.
+2. Minimize route changes and repeated configuration.
+3. Keep task, Agent, approval, and output context visible together.
+4. Make queued, running, waiting, failed, and completed states immediately
+   understandable.
+5. Make retry, undo, continue, and edit paths explicit after failure.
+6. Use progressive disclosure so simple work stays simple and advanced
+   settings appear only when needed.
+7. Use sensible defaults and capability-aware recommendations.
+8. Keep Web and Desktop business interactions identical; Desktop adds only
+   local-device actions.
+
+Search, shortcuts, and basic semantic interaction remain sufficient for the
+workflow, but they are not the primary investment of this phase. No separate
+Material UI dependency is introduced. Existing Tailwind tokens, Radix/shadcn-
+style primitives, and Lucide icons implement the visual language so upstream
+changes remain easier to absorb.
+
+### 14.2 Surface patterns
+
+- **Home:** recent projects, active tasks, and one clear primary task entry;
+- **Session:** conversation, execution state, approvals, and outputs in one
+  context;
+- **Studio/module:** smart defaults with advanced parameters collapsed;
+- **Tasks:** status, progress, approvals, and outputs visible without a maze
+  of dialogs;
+- **Admin:** dense filters, tables, and batch actions with detail drawers;
+- **Developer Center:** create, preview, validate, and publish as one
+  continuous workflow.
+
+### 14.3 Responsive behavior
+
+Wide screens use a collapsible project sidebar, full-height work area, and an
+optional context drawer. Medium screens move the drawer into a sheet. Narrow
+screens use an off-canvas sidebar and compact top actions. Layouts use stable
+grid and flex constraints so controls, labels, loading states, and result
+tiles do not shift surrounding content.
+
+The interface favors neutral surfaces, restrained shadows, small radii, clear
+primary/secondary action hierarchy, and semantic status colors. It avoids
+large marketing heroes, decorative gradients, nested cards, and dense modal
+stacks.
+
+## 15. Acceptance Criteria
 
 The foundation is accepted only when:
 
@@ -381,5 +432,5 @@ The foundation is accepted only when:
 - `/admin` supports role-gated operations without a second data layer;
 - modules are versioned, permissioned, sandboxed, reviewable, and rollbackable;
 - usage and developer settlement records are durable and replayable;
+- the approved UX priorities and responsive surface patterns are preserved;
 - focused verification gates pass without requiring the full test suite.
-

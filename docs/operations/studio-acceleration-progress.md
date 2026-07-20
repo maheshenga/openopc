@@ -16,7 +16,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence protocol | implemented | REST, SDK, MCP, A2A, task/event commits | retained regression gates |
 | Intelligence workflows | implemented, disabled | workflow, approval, routing, evaluation, Temporal commits | separately reviewed production rollout |
 | Milestone 0-1 (Web) | active (Task 10 complete; Task 11 partial) | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green | focused Web hardening without full-suite reruns |
-| Desktop/Electron | active | existing Electron Web wrapper; Web Image Studio flow implemented | Electron navigation, generation, preview, and download acceptance |
+| Desktop/Electron | active (native download bridge complete) | commit `285f7a2a6`; focused Electron/Web policy tests green; browser smoke green | real Electron navigation, generation, preview, and native download smoke |
 | Mobile | deferred (implementation retained) | mobile commit `ae7202a65`; focused contract/wiring tests green | resume Android/iOS acceptance only after product reprioritization |
 | Developer Center | planned | acceleration design Milestone 4 | separate plan |
 
@@ -34,7 +34,7 @@ Web Image Studio and project Assets are retained. First-party video, voice, 3D, 
 
 ## Milestone 0-1 Gate
 
-The milestone closes only after all eleven tasks in the implementation plan have commit-backed evidence, package/type/public-surface gates pass, and desktop/mobile Playwright acceptance proves the Web Image Studio and Assets flow without exposing credentials, signed URLs, request bodies, or identifiers in logs or telemetry.
+The milestone closes only after all eleven tasks in the implementation plan have commit-backed evidence, package/type/public-surface gates pass, and Electron acceptance proves the Web Image Studio and Assets flow without exposing credentials, signed URLs, request bodies, or identifiers in logs or telemetry. Android/iOS acceptance is deferred and is not a current milestone gate.
 
 ## Task 2 Evidence
 
@@ -104,6 +104,29 @@ proven because the Windows host repeatedly exhausted commit memory during
 Next compilation and exited without compiler diagnostics. These gates remain
 open; this ledger does not claim Milestone 0-1 or production readiness is
 complete.
+
+## Desktop/Electron Image Studio Slice
+
+Commit `285f7a2a6` keeps `/projects/:id/studio/image` inside the Electron app and
+adds one native `download_url` command to the existing `window.__TAURI__`
+bridge. Image Studio results and project Assets now share the same Web helper:
+regular browsers retain the no-referrer anchor flow, while Electron sends the
+short-lived URL to the requesting `WebContents.downloadURL()` and never to
+`shell.openExternal`.
+
+The Electron policy accepts HTTPS and loopback HTTP only, rejects URL
+credentials and non-network schemes, and requires an existing trusted Kortix
+sender before the IPC command runs. The focused Electron suite passed `14/14`,
+the related Web suite passed `32/32`, Web ESLint and Prettier passed, Electron
+Biome and Node syntax checks passed, and `git diff --check` passed. The existing
+fake-provider browser smoke also exited `0` after covering generation,
+recovery, previews, Image Studio downloads, and Assets downloads.
+
+A real Electron Playwright smoke remains open. Electron 39 launched and exposed
+both Inspector and CDP listeners on this Windows host, but connections to those
+Electron-owned loopback ports timed out from the automation process. No failing
+experimental harness was retained, and this ledger does not claim packaged or
+production desktop acceptance.
 
 ## Milestone 3 Mobile Slice
 

@@ -1,6 +1,20 @@
 const { describe, expect, test } = require('bun:test');
 
-const { downloadFromWebContents, normalizeDownloadUrl, shouldLoadInApp } = require('./app-policy');
+const {
+  downloadFromWebContents,
+  normalizeDownloadUrl,
+  shouldLoadInApp,
+  shouldRegisterProtocol,
+} = require('./app-policy');
+
+describe('desktop protocol registration policy', () => {
+  test('skips registration only for an explicit e2e smoke run', () => {
+    expect(typeof shouldRegisterProtocol).toBe('function');
+    expect(shouldRegisterProtocol({})).toBe(true);
+    expect(shouldRegisterProtocol({ KORTIX_E2E_DISABLE_PROTOCOL_REGISTRATION: '0' })).toBe(true);
+    expect(shouldRegisterProtocol({ KORTIX_E2E_DISABLE_PROTOCOL_REGISTRATION: '1' })).toBe(false);
+  });
+});
 
 describe('desktop app navigation policy', () => {
   test('keeps project Image Studio routes inside the Kortix window', () => {

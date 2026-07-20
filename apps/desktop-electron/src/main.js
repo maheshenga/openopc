@@ -34,6 +34,7 @@ const {
   downloadFromWebContents,
   isMainAppHost,
   shouldLoadInApp,
+  shouldRegisterProtocol,
 } = require('./app-policy');
 
 // Name comes from the bundle (productName): "Kortix" for prod, "Kortix Dev" for
@@ -652,12 +653,14 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     // Register kortix:// so the OS routes auth callbacks back to the app.
-    if (process.defaultApp && process.argv.length >= 2) {
-      app.setAsDefaultProtocolClient(URL_SCHEME, process.execPath, [
-        path.resolve(process.argv[1]),
-      ]);
-    } else {
-      app.setAsDefaultProtocolClient(URL_SCHEME);
+    if (shouldRegisterProtocol()) {
+      if (process.defaultApp && process.argv.length >= 2) {
+        app.setAsDefaultProtocolClient(URL_SCHEME, process.execPath, [
+          path.resolve(process.argv[1]),
+        ]);
+      } else {
+        app.setAsDefaultProtocolClient(URL_SCHEME);
+      }
     }
 
     applyUserAgent();

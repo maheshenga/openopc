@@ -1,6 +1,7 @@
 export interface ElectronSmokeLaunchInput {
   executablePath: string;
   desktopRoot: string;
+  appMode?: 'unpacked' | 'packaged';
   appDataDir: string;
   baseUrl: string;
   baseEnv: NodeJS.ProcessEnv;
@@ -21,6 +22,7 @@ function portablePath(value: string): string {
 export function createElectronSmokeLaunchOptions({
   executablePath,
   desktopRoot,
+  appMode = 'unpacked',
   appDataDir,
   baseUrl,
   baseEnv,
@@ -31,7 +33,7 @@ export function createElectronSmokeLaunchOptions({
 
   return {
     executablePath,
-    args: [`--app=${normalizedRoot}`],
+    args: appMode === 'packaged' ? [] : [`--app=${normalizedRoot}`],
     env: {
       ...baseEnv,
       APPDATA: normalizedAppData,

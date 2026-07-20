@@ -544,7 +544,9 @@ async function launchSmokeSurface(): Promise<SmokeSurface> {
   const desktopRequire = createRequire(
     new URL('../../../desktop-electron/package.json', import.meta.url),
   );
-  const executablePath = desktopRequire('electron') as string;
+  const packagedExecutablePath = process.env.E2E_ELECTRON_EXECUTABLE?.trim();
+  const executablePath = packagedExecutablePath || (desktopRequire('electron') as string);
+  const appMode = packagedExecutablePath ? 'packaged' : 'unpacked';
   const appDataDir = await mkdtemp(join(tmpdir(), 'kortix-electron-smoke-'));
   let context: BrowserContext | null = null;
 
@@ -554,6 +556,7 @@ async function launchSmokeSurface(): Promise<SmokeSurface> {
       createElectronSmokeLaunchOptions({
         executablePath,
         desktopRoot,
+        appMode,
         appDataDir,
         baseUrl,
         baseEnv: process.env,

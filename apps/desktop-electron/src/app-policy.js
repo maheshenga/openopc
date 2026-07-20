@@ -51,6 +51,10 @@ function shouldLoadInApp(urlStr) {
   return isMainAppHost(url.hostname) && isAppPath(url.pathname);
 }
 
+function shouldRegisterProtocol(env = process.env) {
+  return env.KORTIX_E2E_DISABLE_PROTOCOL_REGISTRATION !== '1';
+}
+
 function isLoopbackHost(hostname) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
 }
@@ -85,4 +89,5 @@ module.exports = {
   isMainAppHost,
   normalizeDownloadUrl,
   shouldLoadInApp,
+  shouldRegisterProtocol,
 };

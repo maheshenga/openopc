@@ -30,4 +30,19 @@ describe('Electron smoke launch options', () => {
     expect(options.args.join(' ')).not.toContain('remote-debugging-port');
     expect(options.args.join(' ')).not.toContain('inspect');
   });
+
+  test('launches a packaged executable without the development app switch', () => {
+    const options = createElectronSmokeLaunchOptions({
+      executablePath: 'E:/artifacts/Kortix.exe',
+      desktopRoot: 'E:/repo/apps/desktop-electron',
+      appMode: 'packaged',
+      appDataDir: 'E:/temp/electron-packaged-smoke',
+      baseUrl: 'http://localhost:3300',
+      baseEnv: { KORTIX_E2E_DISABLE_PROTOCOL_REGISTRATION: '1' },
+    });
+
+    expect(options.args).toEqual([]);
+    expect(options.env.KORTIX_DESKTOP_URL).toBe('http://localhost:3300/robots.txt');
+    expect(options.env.KORTIX_E2E_DISABLE_PROTOCOL_REGISTRATION).toBe('1');
+  });
 });

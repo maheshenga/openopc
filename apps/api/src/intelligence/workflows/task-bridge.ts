@@ -4,17 +4,25 @@ import {
   type IntelligenceExecutionTarget,
 } from '@kortix/api-contract';
 import type { TaskEvent, WorkflowNode, WorkflowRun } from '@kortix/intelligence-contracts';
+import type { WorkflowPort } from '@kortix/intelligence-orchestration';
 import type {
   IntelligenceTaskCreateInput,
   IntelligenceTaskCreateResult,
   IntelligenceTaskService,
 } from '../task-service';
+import {
+  IntelligenceTaskServiceError,
+  isIntelligenceTaskServiceError,
+} from '../task-service';
+import { WorkflowStoreError } from './errors';
 
 const MAX_TASK_EVENT_PAGES = 10;
 
 export type WorkflowTaskBridgeErrorCode =
   | 'WORKFLOW_TASK_REQUEST_INVALID'
-  | 'WORKFLOW_TASK_TARGET_UNAVAILABLE';
+  | 'WORKFLOW_TASK_TARGET_UNAVAILABLE'
+  | 'WORKFLOW_BUDGET_EXCEEDED'
+  | 'WORKFLOW_TASK_EXECUTION_FAILED';
 
 export class WorkflowTaskBridgeError extends Error {
   constructor(readonly code: WorkflowTaskBridgeErrorCode) {
@@ -36,6 +44,8 @@ export type WorkflowImageTaskBridge = {
     parentTaskId: string | null;
     actingTokenId: string | null;
     sessionId: string | null;
+    workerId: string;
+    now: string;
   }): Promise<IntelligenceTaskCreateResult>;
   reconcile(input: {
     run: WorkflowRun;
@@ -51,6 +61,7 @@ export function createWorkflowImageTaskBridge(input: {
     projectId: string;
     capabilityId: 'studio.image.generate';
   }): Promise<readonly IntelligenceExecutionTarget[]>;
+  reserveNodeBudget: WorkflowPort['reserveNodeBudget'];
 }): WorkflowImageTaskBridge {
   return {
     async createOrReplay(command) {
@@ -60,6 +71,22 @@ export function createWorkflowImageTaskBridge(input: {
         throw new WorkflowTaskBridgeError('WORKFLOW_TASK_REQUEST_INVALID');
       }
       const request = normalizeRequest(command, parsed.data);
+      const scope = {
+        accountId: command.run.account_id,
+        projectId: command.run.project_id,
+        actorUserId: command.run.actor_id,
+        actorType: command.run.actor_type,
+        agentName: command.node.agent_name,
+        executionOrigin: 'workflow' as const,
+        request,
+      };
+      let replay: IntelligenceTaskCreateResult | null;
+      try {
+        replay = await input.taskService.replay(scope);
+      } catch (error) {
+        throw mapTaskServiceError(error);
+      }
+      if (replay) return replay;
       const targets = await input.listExecutionTargets({
         accountId: command.run.account_id,
         projectId: command.run.project_id,
@@ -76,14 +103,13 @@ export function createWorkflowImageTaskBridge(input: {
         throw new WorkflowTaskBridgeError('WORKFLOW_TASK_TARGET_UNAVAILABLE');
       }
 
-      const scope = {
-        accountId: command.run.account_id,
-        projectId: command.run.project_id,
-        request,
-      };
-      const replay = await input.taskService.replay(scope);
-      if (replay) return replay;
-      return input.taskService.create(taskInput(command, request));
+      try {
+        return await input.taskService.create(
+          taskInput(command, request, input.reserveNodeBudget),
+        );
+      } catch (error) {
+        throw mapTaskServiceError(error);
+      }
     },
 
     async reconcile(command) {
@@ -175,6 +201,7 @@ function normalizeRequest(
 function taskInput(
   command: Parameters<WorkflowImageTaskBridge['createOrReplay']>[0],
   request: IntelligenceCreateTaskRequest,
+  reserveNodeBudget: WorkflowPort['reserveNodeBudget'],
 ): IntelligenceTaskCreateInput {
   return {
     accountId: command.run.account_id,
@@ -184,8 +211,58 @@ function taskInput(
     actingTokenId: command.actingTokenId,
     agentName: command.node.agent_name,
     sessionId: command.sessionId,
+    executionOrigin: 'workflow',
+    estimateMode: 'trusted_internal',
+    trustedMaxApprovedCredits: command.run.max_approved_credits,
+    reserveTrustedCredits: (maxApprovedCredits) =>
+      reserveWorkflowCredits({ command, reserveNodeBudget, maxApprovedCredits }),
     request,
   };
+}
+
+async function reserveWorkflowCredits(input: {
+  command: Parameters<WorkflowImageTaskBridge['createOrReplay']>[0];
+  reserveNodeBudget: WorkflowPort['reserveNodeBudget'];
+  maxApprovedCredits: number;
+}): Promise<boolean> {
+  try {
+    return Boolean(
+      await input.reserveNodeBudget({
+        accountId: input.command.run.account_id,
+        projectId: input.command.run.project_id,
+        runId: input.command.run.run_id,
+        nodeId: input.command.node.node_id,
+        workerId: input.command.workerId,
+        now: input.command.now,
+        maxApprovedCredits: input.maxApprovedCredits,
+      }),
+    );
+  } catch (error) {
+    if (
+      error instanceof WorkflowStoreError &&
+      error.code === 'WORKFLOW_BUDGET_RESERVATION_CONFLICT'
+    ) {
+      throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED', 409);
+    }
+    throw new IntelligenceTaskServiceError('INTELLIGENCE_TASK_EXECUTION_FAILED', 503);
+  }
+}
+
+function mapTaskServiceError(error: unknown): WorkflowTaskBridgeError {
+  if (error instanceof WorkflowTaskBridgeError) return error;
+  if (isIntelligenceTaskServiceError(error)) {
+    if (error.code === 'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED') {
+      return new WorkflowTaskBridgeError('WORKFLOW_BUDGET_EXCEEDED');
+    }
+    if (
+      error.code === 'INTELLIGENCE_IDEMPOTENCY_MISMATCH' ||
+      error.code === 'INTELLIGENCE_ESTIMATE_INVALID' ||
+      error.code === 'INTELLIGENCE_VALIDATION_ERROR'
+    ) {
+      return new WorkflowTaskBridgeError('WORKFLOW_TASK_REQUEST_INVALID');
+    }
+  }
+  return new WorkflowTaskBridgeError('WORKFLOW_TASK_EXECUTION_FAILED');
 }
 
 function earliestDeadline(...values: Array<string | null>): string | null {

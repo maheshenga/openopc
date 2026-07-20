@@ -19,6 +19,12 @@ export type WorkflowNodeRef = WorkflowRunRef & {
   nodeId: string;
 };
 
+export type WorkflowNodeBudgetReservationResult = {
+  status: 'reserved' | 'replayed';
+  reservedCredits: number;
+  remainingCredits: number;
+};
+
 export interface WorkflowPort {
   startRun(input: { run: WorkflowRun }): Promise<{ run: WorkflowRun; created: boolean }>;
   appendNode(
@@ -48,6 +54,13 @@ export interface WorkflowPort {
   heartbeatNode(
     input: WorkflowNodeRef & { workerId: string; now: string; leaseMs: number },
   ): Promise<boolean>;
+  reserveNodeBudget(
+    input: WorkflowNodeRef & {
+      workerId: string;
+      now: string;
+      maxApprovedCredits: number;
+    },
+  ): Promise<WorkflowNodeBudgetReservationResult | null>;
   attachTask(
     input: WorkflowNodeRef & { workerId: string; taskId: string; updatedAt: string },
   ): Promise<WorkflowNode | null>;
@@ -96,6 +109,7 @@ export const WORKFLOW_PORT_METHODS = [
   'sealGraph',
   'claimReadyNode',
   'heartbeatNode',
+  'reserveNodeBudget',
   'attachTask',
   'completeNode',
   'failNode',

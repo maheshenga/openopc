@@ -3,6 +3,12 @@ import type { IntelligenceCreateTaskRequest } from '@kortix/api-contract';
 import type { StudioJobEvent } from '@kortix/api-contract';
 import type { StudioJob } from '@kortix/api-contract';
 import { canonicalStudioRequestHash } from '@kortix/studio-runtime';
+import { issueStudioEstimateToken } from '../studio/estimate-token';
+import {
+  FAKE_STUDIO_PRICING_CATALOG_ID,
+  FAKE_STUDIO_PRICING_VERSION,
+  FAKE_STUDIO_PROVIDER_CONFIG_VERSION,
+} from '../studio/providers';
 import { createMemoryStudioRepository } from '../studio/repositories/memory';
 import {
   type IntelligenceTaskCreateInput,
@@ -20,10 +26,29 @@ const OTHER_ACCOUNT_ID = '11000000-0000-4000-a000-000000000002';
 const PROJECT_ID = '12000000-0000-4000-a000-000000000001';
 const OTHER_PROJECT_ID = '12000000-0000-4000-a000-000000000002';
 const USER_ID = '13000000-0000-4000-a000-000000000001';
+const OTHER_USER_ID = '13000000-0000-4000-a000-000000000002';
 const PROVIDER_ID = '14000000-0000-4000-a000-000000000001';
 const JOB_ID = '16000000-0000-4000-a000-000000000001';
 const OTHER_JOB_ID = '16000000-0000-4000-a000-000000000002';
 const TASK_ID = '15000000-0000-4000-a000-000000000001';
+const ESTIMATE_ID = '17000000-0000-4000-a000-000000000001';
+const ESTIMATE_SECRET = 'intelligence-estimate-test-secret';
+const NOW = new Date('2026-07-18T12:00:00.000Z');
+
+const fakeProvider = {
+  provider_config_id: PROVIDER_ID,
+  account_id: ACCOUNT_ID,
+  project_id: PROJECT_ID,
+  provider: 'fake' as const,
+  display_name: 'Intelligence test images',
+  base_url: null,
+  region: null,
+  credential_binding: { kind: 'none' as const },
+  capabilities: ['image.generate' as const],
+  enabled: true,
+  created_at: '2026-07-18T00:00:00.000Z',
+  updated_at: '2026-07-18T00:00:00.000Z',
+};
 
 const request = (overrides: Partial<IntelligenceCreateTaskRequest> = {}) =>
   ({
@@ -48,6 +73,55 @@ const request = (overrides: Partial<IntelligenceCreateTaskRequest> = {}) =>
     ...overrides,
   }) satisfies IntelligenceCreateTaskRequest;
 
+function requestWithSignedEstimate(
+  taskRequest: IntelligenceCreateTaskRequest = request(),
+  overrides: {
+    accountId?: string;
+    projectId?: string;
+    actorUserId?: string;
+    estimateId?: string;
+    inputHash?: string;
+    expiresAt?: string;
+    providerConfigVersion?: string;
+    pricingCatalogId?: string;
+    pricingVersion?: number;
+    signedMaxCredits?: number;
+    approvedMaxCredits?: number;
+  } = {},
+): IntelligenceCreateTaskRequest {
+  const estimate = {
+    estimate_id: overrides.estimateId ?? ESTIMATE_ID,
+    expires_at: overrides.expiresAt ?? new Date(NOW.getTime() + 15 * 60_000).toISOString(),
+    currency: 'credits' as const,
+    input_hash: overrides.inputHash ?? studioRequestHash(taskRequest),
+    provider_cost_credits: 7,
+    platform_cost_credits: 0,
+    max_approved_credits: overrides.signedMaxCredits ?? 7,
+    line_items: [{ label: 'Signed image generation', credits: 7 }],
+  };
+  const estimateToken = issueStudioEstimateToken({
+    secret: ESTIMATE_SECRET,
+    accountId: overrides.accountId ?? ACCOUNT_ID,
+    projectId: overrides.projectId ?? PROJECT_ID,
+    actorUserId: overrides.actorUserId ?? USER_ID,
+    estimate,
+    nowMs: NOW.getTime(),
+    versionBinding: {
+      providerConfigVersion: overrides.providerConfigVersion ?? FAKE_STUDIO_PROVIDER_CONFIG_VERSION,
+      pricingCatalogId: overrides.pricingCatalogId ?? FAKE_STUDIO_PRICING_CATALOG_ID,
+      pricingVersion: overrides.pricingVersion ?? FAKE_STUDIO_PRICING_VERSION,
+    },
+  });
+  return {
+    ...taskRequest,
+    estimate_approval: {
+      estimate_id: estimate.estimate_id,
+      estimate_token: estimateToken,
+      max_approved_credits: overrides.approvedMaxCredits ?? estimate.max_approved_credits,
+    },
+  };
+}
+
 function createInput(
   projectId = PROJECT_ID,
   taskRequest: IntelligenceCreateTaskRequest = request(),
@@ -60,6 +134,7 @@ function createInput(
     actingTokenId: null,
     agentName: null,
     sessionId: null,
+    estimateMode: 'external_signed',
     request: taskRequest,
   };
 }
@@ -102,6 +177,8 @@ describe('IntelligenceTaskService', () => {
       replay(input: {
         accountId: string;
         projectId: string;
+        actorUserId: string | null;
+        actorType: 'user' | 'agent' | 'system';
         request: IntelligenceCreateTaskRequest;
       }): Promise<{ taskId: string; jobId: string; created: boolean } | null>;
     };
@@ -110,6 +187,8 @@ describe('IntelligenceTaskService', () => {
       replayService.replay({
         accountId: ACCOUNT_ID,
         projectId: PROJECT_ID,
+        actorUserId: USER_ID,
+        actorType: 'user',
         request: request(),
       }),
     ).resolves.toEqual({ taskId: TASK_ID, jobId: JOB_ID, created: false });
@@ -132,6 +211,54 @@ describe('IntelligenceTaskService', () => {
 
     await expect(
       service.create({ ...createInput(), accountId: OTHER_ACCOUNT_ID }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH', status: 409 });
+    expect(createCalls).toHaveLength(1);
+  });
+
+  test('rejects a bound task replay from a different user in the same project', async () => {
+    const { service, createCalls } = createService();
+    await service.create(createInput());
+
+    await expect(
+      service.replay({
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        actorUserId: OTHER_USER_ID,
+        actorType: 'user',
+        request: request(),
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH', status: 409 });
+    expect(createCalls).toHaveLength(1);
+  });
+
+  test('rejects a bound task replay across user and trusted execution modes', async () => {
+    const { service, createCalls } = createService();
+    await service.create(createInput());
+
+    await expect(
+      service.replay({
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        actorUserId: USER_ID,
+        actorType: 'agent',
+        request: request(),
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH', status: 409 });
+    expect(createCalls).toHaveLength(1);
+  });
+
+  test('rejects a bound agent task replay from a different agent identity', async () => {
+    const { service, createCalls } = createService();
+    const first = {
+      ...createInput(),
+      actorType: 'agent' as const,
+      agentName: 'content-planner',
+      estimateMode: 'trusted_internal' as const,
+    };
+    await service.create(first);
+
+    await expect(
+      service.create({ ...first, agentName: 'research-agent' }),
     ).rejects.toMatchObject({ code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH', status: 409 });
     expect(createCalls).toHaveLength(1);
   });
@@ -195,6 +322,19 @@ describe('IntelligenceTaskService', () => {
         deadline_at: '2026-07-18T13:00:00.000Z',
       }),
     );
+    const approved = requestWithSignedEstimate(base);
+    expect(intelligenceTaskRequestHash(approved)).toBe(intelligenceTaskRequestHash(base));
+    expect(
+      intelligenceTaskRequestHash({
+        ...approved,
+        estimate_approval: {
+          ...(approved.estimate_approval as NonNullable<
+            IntelligenceCreateTaskRequest['estimate_approval']
+          >),
+          max_approved_credits: 999,
+        },
+      }),
+    ).toBe(intelligenceTaskRequestHash(base));
   });
 
   test('uses a project-scoped Intelligence Studio key and keeps the Studio hash separate', async () => {
@@ -227,6 +367,8 @@ describe('IntelligenceTaskService', () => {
       job_id: JOB_ID,
       account_id: ACCOUNT_ID,
       project_id: PROJECT_ID,
+      actor_user_id: USER_ID,
+      actor_type: 'user',
       idempotency_key: studioKey,
       request_hash: studioHash,
     } as StudioJob;
@@ -254,6 +396,457 @@ describe('IntelligenceTaskService', () => {
       }),
     ).resolves.toEqual({ jobId: JOB_ID, created: false });
     expect(readinessChecks).toBe(0);
+  });
+
+  test('does not replay an existing Studio job for a different actor', async () => {
+    const taskRequest = request();
+    const studioKey = intelligenceStudioIdempotencyKey(PROJECT_ID, taskRequest.idempotency_key);
+    const studioHash = studioRequestHash(taskRequest);
+    const repository = createMemoryStudioRepository();
+    repository.findJobByIdempotency = async () =>
+      ({
+        job_id: JOB_ID,
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        actor_user_id: USER_ID,
+        actor_type: 'user',
+        idempotency_key: studioKey,
+        request_hash: studioHash,
+      }) as StudioJob;
+    const bridge = createStudioJobBridge({
+      repository,
+      assertReadyBeforeReservation: async () => {},
+    });
+
+    await expect(
+      bridge({
+        ...createInput(PROJECT_ID, taskRequest),
+        actorUserId: OTHER_USER_ID,
+        requestHash: intelligenceTaskRequestHash(taskRequest),
+        studioRequestHash: studioHash,
+        studioIdempotencyKey: studioKey,
+        parentJobId: null,
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH', status: 409 });
+  });
+
+  test('validates the server-owned estimate mode before replaying a Studio job', async () => {
+    const taskRequest = request();
+    const studioKey = intelligenceStudioIdempotencyKey(PROJECT_ID, taskRequest.idempotency_key);
+    const studioHash = studioRequestHash(taskRequest);
+    const repository = createMemoryStudioRepository();
+    repository.findJobByIdempotency = async () =>
+      ({
+        job_id: JOB_ID,
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        actor_user_id: USER_ID,
+        actor_type: 'user',
+        idempotency_key: studioKey,
+        request_hash: studioHash,
+      }) as StudioJob;
+    const bridge = createStudioJobBridge({
+      repository,
+      assertReadyBeforeReservation: async () => {},
+    });
+
+    await expect(
+      bridge({
+        ...createInput(PROJECT_ID, taskRequest),
+        estimateMode: undefined,
+        requestHash: intelligenceTaskRequestHash(taskRequest),
+        studioRequestHash: studioHash,
+        studioIdempotencyKey: studioKey,
+        parentJobId: null,
+      } as unknown as Parameters<typeof bridge>[0]),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_ESTIMATE_INVALID', status: 409 });
+  });
+
+  test('rejects an external task that has no signed estimate approval', async () => {
+    const taskRequest = request();
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const bridge = createStudioJobBridge({
+      repository,
+      estimateSigningSecret: 'intelligence-estimate-test-secret',
+      assertReadyBeforeReservation: async () => {},
+    });
+
+    await expect(
+      bridge({
+        ...createInput(PROJECT_ID, taskRequest),
+        estimateMode: 'external_signed',
+        requestHash: intelligenceTaskRequestHash(taskRequest),
+        studioRequestHash: studioRequestHash(taskRequest),
+        studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+          PROJECT_ID,
+          taskRequest.idempotency_key,
+        ),
+        parentJobId: null,
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_ESTIMATE_INVALID', status: 409 });
+  });
+
+  test('fails closed when an untyped caller omits the server-owned estimate mode', async () => {
+    const taskRequest = request();
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const bridge = createStudioJobBridge({
+      repository,
+      estimateSigningSecret: ESTIMATE_SECRET,
+      assertReadyBeforeReservation: async () => {},
+      now: () => NOW,
+    });
+    const untypedInput = {
+      ...createInput(PROJECT_ID, taskRequest),
+      estimateMode: undefined,
+      requestHash: intelligenceTaskRequestHash(taskRequest),
+      studioRequestHash: studioRequestHash(taskRequest),
+      studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+        PROJECT_ID,
+        taskRequest.idempotency_key,
+      ),
+      parentJobId: null,
+    } as unknown as Parameters<typeof bridge>[0];
+
+    await expect(bridge(untypedInput)).rejects.toMatchObject({
+      code: 'INTELLIGENCE_ESTIMATE_INVALID',
+      status: 409,
+    });
+  });
+
+  test('fails closed when an untyped caller supplies an unknown execution origin', async () => {
+    const taskRequest = request();
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const bridge = createStudioJobBridge({
+      repository,
+      estimateSigningSecret: ESTIMATE_SECRET,
+      assertReadyBeforeReservation: async () => {},
+      now: () => NOW,
+    });
+
+    await expect(
+      bridge({
+        ...createInput(PROJECT_ID, taskRequest),
+        executionOrigin: 'unknown' as never,
+        estimateMode: 'trusted_internal',
+        requestHash: intelligenceTaskRequestHash(taskRequest),
+        studioRequestHash: studioRequestHash(taskRequest),
+        studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+          PROJECT_ID,
+          taskRequest.idempotency_key,
+        ),
+        parentJobId: null,
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_ESTIMATE_INVALID', status: 409 });
+  });
+
+  test('creates an external task from the signed estimate instead of recalculating its cost', async () => {
+    const taskRequest = requestWithSignedEstimate();
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const createJob = repository.createJob.bind(repository);
+    let persistedEstimate: unknown;
+    repository.createJob = async (...args) => {
+      persistedEstimate = args[2];
+      return createJob(...args);
+    };
+    const bridge = createStudioJobBridge({
+      repository,
+      estimateSigningSecret: ESTIMATE_SECRET,
+      assertReadyBeforeReservation: async () => {},
+      now: () => NOW,
+    });
+
+    await bridge({
+      ...createInput(PROJECT_ID, taskRequest),
+      requestHash: intelligenceTaskRequestHash(taskRequest),
+      studioRequestHash: studioRequestHash(taskRequest),
+      studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+        PROJECT_ID,
+        taskRequest.idempotency_key,
+      ),
+      parentJobId: null,
+    });
+
+    expect(persistedEstimate).toMatchObject({
+      estimate_id: ESTIMATE_ID,
+      max_approved_credits: 7,
+      estimate_token: taskRequest.estimate_approval?.estimate_token,
+    });
+  });
+
+  test('fails closed for invalid, cross-scope, expired, and stale signed estimates', async () => {
+    const tampered = requestWithSignedEstimate();
+    const tamperedToken = tampered.estimate_approval?.estimate_token ?? '';
+    const wrongEstimateId = requestWithSignedEstimate();
+    const cases: Array<[string, IntelligenceCreateTaskRequest]> = [
+      ['expired', requestWithSignedEstimate(request(), { expiresAt: NOW.toISOString() })],
+      ['cross-account', requestWithSignedEstimate(request(), { accountId: OTHER_ACCOUNT_ID })],
+      ['cross-project', requestWithSignedEstimate(request(), { projectId: OTHER_PROJECT_ID })],
+      [
+        'cross-user',
+        requestWithSignedEstimate(request(), {
+          actorUserId: '13000000-0000-4000-a000-000000000002',
+        }),
+      ],
+      [
+        'wrong-input-hash',
+        requestWithSignedEstimate(request(), {
+          inputHash: canonicalStudioRequestHash({ different: true }),
+        }),
+      ],
+      [
+        'wrong-estimate-id',
+        {
+          ...wrongEstimateId,
+          estimate_approval: {
+            ...(wrongEstimateId.estimate_approval as NonNullable<
+              IntelligenceCreateTaskRequest['estimate_approval']
+            >),
+            estimate_id: '17000000-0000-4000-a000-000000000002',
+          },
+        },
+      ],
+      [
+        'tampered',
+        {
+          ...tampered,
+          estimate_approval: {
+            ...(tampered.estimate_approval as NonNullable<
+              IntelligenceCreateTaskRequest['estimate_approval']
+            >),
+            estimate_token: `${tamperedToken.slice(0, -1)}${tamperedToken.endsWith('a') ? 'b' : 'a'}`,
+          },
+        },
+      ],
+      [
+        'stale-provider',
+        requestWithSignedEstimate(request(), { providerConfigVersion: 'stale-provider-v0' }),
+      ],
+      [
+        'stale-pricing',
+        requestWithSignedEstimate(request(), {
+          pricingCatalogId: '76000000-0000-4000-a000-000000000002',
+          pricingVersion: 2,
+        }),
+      ],
+    ];
+
+    for (const [name, taskRequest] of cases) {
+      const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+      const bridge = createStudioJobBridge({
+        repository,
+        estimateSigningSecret: ESTIMATE_SECRET,
+        assertReadyBeforeReservation: async () => {},
+        now: () => NOW,
+      });
+      let thrown: unknown;
+      try {
+        await bridge({
+          ...createInput(PROJECT_ID, taskRequest),
+          requestHash: intelligenceTaskRequestHash(taskRequest),
+          studioRequestHash: studioRequestHash(taskRequest),
+          studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+            PROJECT_ID,
+            `${taskRequest.idempotency_key}-${name}`,
+          ),
+          parentJobId: null,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown, name).toMatchObject({ code: 'INTELLIGENCE_ESTIMATE_INVALID', status: 409 });
+      expect(JSON.stringify(thrown), name).not.toContain(
+        taskRequest.estimate_approval?.estimate_token ?? 'studio-estimate-v2.',
+      );
+    }
+  });
+
+  test('enforces the caller credit ceiling without increasing the signed estimate', async () => {
+    const belowLimit = requestWithSignedEstimate(request(), { approvedMaxCredits: 6 });
+    const belowRepository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const belowBridge = createStudioJobBridge({
+      repository: belowRepository,
+      estimateSigningSecret: ESTIMATE_SECRET,
+      assertReadyBeforeReservation: async () => {},
+      now: () => NOW,
+    });
+    await expect(
+      belowBridge({
+        ...createInput(PROJECT_ID, belowLimit),
+        requestHash: intelligenceTaskRequestHash(belowLimit),
+        studioRequestHash: studioRequestHash(belowLimit),
+        studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+          PROJECT_ID,
+          belowLimit.idempotency_key,
+        ),
+        parentJobId: null,
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED', status: 409 });
+
+    const higherLimit = requestWithSignedEstimate(
+      request({ idempotency_key: 'intelligence-higher-limit-key' }),
+      { approvedMaxCredits: 100 },
+    );
+    const higherRepository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const createJob = higherRepository.createJob.bind(higherRepository);
+    let persistedEstimate: unknown;
+    higherRepository.createJob = async (...args) => {
+      persistedEstimate = args[2];
+      return createJob(...args);
+    };
+    const higherBridge = createStudioJobBridge({
+      repository: higherRepository,
+      estimateSigningSecret: ESTIMATE_SECRET,
+      assertReadyBeforeReservation: async () => {},
+      now: () => NOW,
+    });
+    await higherBridge({
+      ...createInput(PROJECT_ID, higherLimit),
+      requestHash: intelligenceTaskRequestHash(higherLimit),
+      studioRequestHash: studioRequestHash(higherLimit),
+      studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+        PROJECT_ID,
+        higherLimit.idempotency_key,
+      ),
+      parentJobId: null,
+    });
+    expect(persistedEstimate).toMatchObject({ max_approved_credits: 7 });
+  });
+
+  test('replays a bound job after its estimate token expires without creating a second job', async () => {
+    const taskRequest = requestWithSignedEstimate();
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const createJob = repository.createJob.bind(repository);
+    let createJobCalls = 0;
+    repository.createJob = async (...args) => {
+      createJobCalls += 1;
+      return createJob(...args);
+    };
+    let currentTime = NOW;
+    const bridge = createStudioJobBridge({
+      repository,
+      estimateSigningSecret: ESTIMATE_SECRET,
+      assertReadyBeforeReservation: async () => {},
+      now: () => currentTime,
+    });
+    const input = {
+      ...createInput(PROJECT_ID, taskRequest),
+      requestHash: intelligenceTaskRequestHash(taskRequest),
+      studioRequestHash: studioRequestHash(taskRequest),
+      studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+        PROJECT_ID,
+        taskRequest.idempotency_key,
+      ),
+      parentJobId: null,
+    };
+
+    const first = await bridge(input);
+    currentTime = new Date(NOW.getTime() + 20 * 60_000);
+    const replay = await bridge(input);
+
+    expect(first.created).toBe(true);
+    expect(replay).toEqual({ jobId: first.jobId, created: false });
+    expect(createJobCalls).toBe(1);
+  });
+
+  test('uses only the server-resolved estimate in trusted internal mode', async () => {
+    const taskRequest = requestWithSignedEstimate(request(), { approvedMaxCredits: 999 });
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const createJob = repository.createJob.bind(repository);
+    let persistedEstimate: unknown;
+    repository.createJob = async (...args) => {
+      persistedEstimate = args[2];
+      return createJob(...args);
+    };
+    const bridge = createStudioJobBridge({
+      repository,
+      assertReadyBeforeReservation: async () => {},
+      now: () => NOW,
+    });
+
+    await bridge({
+      ...createInput(PROJECT_ID, taskRequest),
+      executionOrigin: 'workflow',
+      estimateMode: 'trusted_internal',
+      requestHash: intelligenceTaskRequestHash(taskRequest),
+      studioRequestHash: studioRequestHash(taskRequest),
+      studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+        PROJECT_ID,
+        taskRequest.idempotency_key,
+      ),
+      parentJobId: null,
+    });
+
+    expect(persistedEstimate).toMatchObject({
+      estimate_token: 'intelligence-internal',
+      max_approved_credits: 1,
+    });
+  });
+
+  test('keeps a trusted internal task within its server-owned workflow credit limit', async () => {
+    const taskRequest = request();
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const bridge = createStudioJobBridge({
+      repository,
+      assertReadyBeforeReservation: async () => {},
+      now: () => NOW,
+    });
+
+    await expect(
+      bridge({
+        ...createInput(PROJECT_ID, taskRequest),
+        actorType: 'agent',
+        agentName: 'workflow-executor',
+        estimateMode: 'trusted_internal',
+        trustedMaxApprovedCredits: 0,
+        requestHash: intelligenceTaskRequestHash(taskRequest),
+        studioRequestHash: studioRequestHash(taskRequest),
+        studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+          PROJECT_ID,
+          taskRequest.idempotency_key,
+        ),
+        parentJobId: null,
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED', status: 409 });
+  });
+
+  test('reserves trusted workflow credits before creating the Studio job', async () => {
+    const taskRequest = request();
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const createJob = repository.createJob.bind(repository);
+    let createJobCalls = 0;
+    repository.createJob = async (...args) => {
+      createJobCalls += 1;
+      return createJob(...args);
+    };
+    const reserved: number[] = [];
+    const bridge = createStudioJobBridge({
+      repository,
+      assertReadyBeforeReservation: async () => {},
+      now: () => NOW,
+    });
+
+    await expect(
+      bridge({
+        ...createInput(PROJECT_ID, taskRequest),
+        actorType: 'agent',
+        agentName: 'workflow-executor',
+        estimateMode: 'trusted_internal',
+        trustedMaxApprovedCredits: 10,
+        reserveTrustedCredits: async (credits) => {
+          reserved.push(credits);
+          return false;
+        },
+        requestHash: intelligenceTaskRequestHash(taskRequest),
+        studioRequestHash: studioRequestHash(taskRequest),
+        studioIdempotencyKey: intelligenceStudioIdempotencyKey(
+          PROJECT_ID,
+          taskRequest.idempotency_key,
+        ),
+        parentJobId: null,
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED', status: 409 });
+    expect(reserved).toEqual([1]);
+    expect(createJobCalls).toBe(0);
   });
 
   test('serializes concurrent service instances to one task and one Studio job', async () => {
@@ -306,6 +899,80 @@ describe('IntelligenceTaskService', () => {
     expect(attempts).toBe(2);
   });
 
+  test('does not let a request-origin retry recover a workflow-origin reservation', async () => {
+    let attempts = 0;
+    const service = new IntelligenceTaskService({
+      store: createInMemoryIntelligenceTaskStore({ taskId: TASK_ID }),
+      createStudioJob: async (input) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('workflow provider unavailable');
+        expect(input.executionOrigin).toBe('request');
+        return { jobId: JOB_ID, created: true };
+      },
+      readStudioEvents: async () => ({ items: [], next_cursor: null }),
+    });
+
+    await expect(
+      service.create({
+        ...createInput(),
+        executionOrigin: 'workflow',
+        estimateMode: 'trusted_internal',
+      }),
+    ).rejects.toThrow('workflow provider unavailable');
+    await expect(
+      service.create({
+        ...createInput(),
+        executionOrigin: 'request',
+        estimateMode: 'external_signed',
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH', status: 409 });
+    expect(attempts).toBe(1);
+  });
+
+  test('does not replay a bound workflow task through a request-origin caller', async () => {
+    const service = new IntelligenceTaskService({
+      store: createInMemoryIntelligenceTaskStore({ taskId: TASK_ID }),
+      createStudioJob: async () => ({ jobId: JOB_ID, created: true }),
+      readStudioEvents: async () => ({ items: [], next_cursor: null }),
+    });
+    const workflowInput = {
+      ...createInput(),
+      executionOrigin: 'workflow' as const,
+      estimateMode: 'trusted_internal' as const,
+    };
+    await service.create(workflowInput);
+
+    await expect(
+      service.replay({
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        actorUserId: USER_ID,
+        actorType: 'user',
+        executionOrigin: 'request',
+        request: request(),
+      }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH', status: 409 });
+  });
+
+  test('does not let a different actor recover an unbound task', async () => {
+    const store = createInMemoryIntelligenceTaskStore({ taskId: TASK_ID });
+    let attempts = 0;
+    const service = new IntelligenceTaskService({
+      store,
+      createStudioJob: async () => {
+        attempts += 1;
+        throw new Error('temporary Studio failure');
+      },
+      readStudioEvents: async () => ({ items: [], next_cursor: null }),
+    });
+
+    await expect(service.create(createInput())).rejects.toThrow('temporary Studio failure');
+    await expect(
+      service.create({ ...createInput(), actorUserId: OTHER_USER_ID }),
+    ).rejects.toMatchObject({ code: 'INTELLIGENCE_IDEMPOTENCY_MISMATCH', status: 409 });
+    expect(attempts).toBe(1);
+  });
+
   test('keeps unbound replay side-effect free and recovers only through create', async () => {
     const store = createInMemoryIntelligenceTaskStore({ taskId: TASK_ID });
     let attempts = 0;
@@ -324,6 +991,8 @@ describe('IntelligenceTaskService', () => {
       service.replay({
         accountId: ACCOUNT_ID,
         projectId: PROJECT_ID,
+        actorUserId: USER_ID,
+        actorType: 'user',
         request: request(),
       }),
     ).resolves.toBeNull();

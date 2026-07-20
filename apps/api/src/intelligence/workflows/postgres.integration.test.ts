@@ -34,6 +34,8 @@ const migrationPaths = [
   '20260718150000000_intelligence_workflows.sql',
   '20260718151000000_intelligence_workflow_node_idempotency.sql',
   '20260719100000000_intelligence_workflow_payload_identity.sql',
+  '20260720120000000_intelligence_workflow_node_budget_reservations.sql',
+  '20260720130000000_intelligence_task_execution_origin.sql',
 ].map((name) => resolve(import.meta.dir, '../../../../../packages/db/migrations', name));
 
 const ACCOUNT_ID = '63000000-0000-4000-a000-000000000001';
@@ -142,7 +144,10 @@ async function startPostgres(): Promise<void> {
     );
     CREATE TABLE kortix.account_tokens(token_id uuid PRIMARY KEY);
     CREATE TABLE kortix.project_sessions(session_id text PRIMARY KEY);
-    CREATE TABLE kortix.studio_jobs(job_id uuid PRIMARY KEY);
+    CREATE TABLE kortix.studio_jobs(
+      job_id uuid PRIMARY KEY,
+      reserved_credits numeric(12, 4) NOT NULL DEFAULT 0
+    );
     CREATE TABLE kortix.intelligence_tasks(
       task_id uuid PRIMARY KEY,
       account_id uuid NOT NULL,
@@ -484,6 +489,102 @@ if (enabled) {
     } finally {
       await Promise.all([closeDatabase(databaseA), closeDatabase(databaseB)]);
     }
+  });
+
+  test('serializes cumulative budget reservations across independent database clients', async () => {
+    if (!database) throw new Error('PostgreSQL workflow fixture is not ready');
+
+    async function runScenario(leftCredits: number, rightCredits: number) {
+      await resetWorkflowTables();
+      const [databaseA, databaseB] = createIndependentDatabases();
+      try {
+        const storeA = createPostgresWorkflowStore(databaseA);
+        const storeB = createPostgresWorkflowStore(databaseB);
+        const run = workflowRunFixture({ max_approved_credits: 10 });
+        const alpha = workflowNodeFixture({
+          run_id: run.run_id,
+          node_id: '62000000-0000-4000-a000-000000000011',
+          node_key: 'render-alpha',
+        });
+        const beta = workflowNodeFixture({
+          run_id: run.run_id,
+          node_id: '62000000-0000-4000-a000-000000000012',
+          node_key: 'render-beta',
+        });
+        await storeA.startRun({ run });
+        await storeA.appendNode({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          expectedGraphVersion: 0,
+          idempotencyKey: 'workflow-node-render-alpha-budget-0001',
+          requestHash: alpha.input_hash,
+          node: alpha,
+        });
+        await storeA.appendNode({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          expectedGraphVersion: 1,
+          idempotencyKey: 'workflow-node-render-beta-budget-0001',
+          requestHash: beta.input_hash,
+          node: beta,
+        });
+        await storeA.sealGraph({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          expectedGraphVersion: 2,
+          updatedAt: '2026-07-18T10:01:00.000Z',
+        });
+        await storeA.claimReadyNode({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          workerId: 'workflow-worker-a',
+          now: '2026-07-18T10:02:00.000Z',
+          leaseMs: 60_000,
+        });
+        await storeA.claimReadyNode({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          workerId: 'workflow-worker-b',
+          now: '2026-07-18T10:02:00.000Z',
+          leaseMs: 60_000,
+        });
+
+        return await Promise.all([
+          storeA.reserveNodeBudget({
+            accountId: run.account_id,
+            projectId: run.project_id,
+            runId: run.run_id,
+            nodeId: alpha.node_id,
+            workerId: 'workflow-worker-a',
+            now: '2026-07-18T10:02:30.000Z',
+            maxApprovedCredits: leftCredits,
+          }),
+          storeB.reserveNodeBudget({
+            accountId: run.account_id,
+            projectId: run.project_id,
+            runId: run.run_id,
+            nodeId: beta.node_id,
+            workerId: 'workflow-worker-b',
+            now: '2026-07-18T10:02:30.000Z',
+            maxApprovedCredits: rightCredits,
+          }),
+        ]);
+      } finally {
+        await Promise.all([closeDatabase(databaseA), closeDatabase(databaseB)]);
+      }
+    }
+
+    const overCeiling = await runScenario(6, 6);
+    expect(overCeiling.filter(Boolean)).toHaveLength(1);
+    expect(overCeiling.filter((result) => result === null)).toHaveLength(1);
+
+    const exactCeiling = await runScenario(6, 4);
+    expect(exactCeiling.every(Boolean)).toBe(true);
+    expect(exactCeiling.map((result) => result?.reservedCredits).sort()).toEqual([4, 6]);
+    expect(exactCeiling.map((result) => result?.remainingCredits).sort()).toEqual([0, 4]);
   });
 
   test('keeps concurrent task attachment immutable across database clients', async () => {

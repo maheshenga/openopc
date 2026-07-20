@@ -29,6 +29,8 @@ export const IntelligenceErrorCodeSchema = z.enum([
   'INTELLIGENCE_DISCOVERY_TOO_LARGE',
   'INTELLIGENCE_DISCOVERY_UNAVAILABLE',
   'INTELLIGENCE_EXECUTION_TARGET_UNAVAILABLE',
+  'INTELLIGENCE_ESTIMATE_INVALID',
+  'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED',
   'INTELLIGENCE_IDEMPOTENCY_MISMATCH',
   'INTELLIGENCE_PROTOCOL_ERROR',
   'INTELLIGENCE_PROTOCOL_UNSUPPORTED',
@@ -127,6 +129,15 @@ export type IntelligenceCapabilityDiscoveryResponse = z.infer<
 export const IntelligenceAgentCardResponseSchema = AgentCardSchema;
 export type IntelligenceAgentCardResponse = z.infer<typeof IntelligenceAgentCardResponseSchema>;
 
+export const IntelligenceEstimateApprovalSchema = z
+  .object({
+    estimate_id: z.string().uuid(),
+    estimate_token: z.string().trim().min(1).max(8192),
+    max_approved_credits: z.number().finite().nonnegative().max(1_000_000),
+  })
+  .strict();
+export type IntelligenceEstimateApproval = z.infer<typeof IntelligenceEstimateApprovalSchema>;
+
 export const IntelligenceCreateTaskRequestSchema = z
   .object({
     protocol_version: ProtocolVersionSchema,
@@ -138,6 +149,7 @@ export const IntelligenceCreateTaskRequestSchema = z
     idempotency_key: z.string().trim().min(16).max(255),
     parent_task_id: z.string().uuid().nullable().optional(),
     deadline_at: z.string().datetime({ offset: true }).nullable().optional(),
+    estimate_approval: IntelligenceEstimateApprovalSchema.optional(),
   })
   .strict();
 export type IntelligenceCreateTaskRequest = z.infer<typeof IntelligenceCreateTaskRequestSchema>;

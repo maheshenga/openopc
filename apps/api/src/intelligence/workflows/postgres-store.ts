@@ -31,6 +31,12 @@ type DependencyRow = typeof intelligenceWorkflowDependencies.$inferSelect;
 type ApprovalRow = typeof intelligenceWorkflowApprovals.$inferSelect;
 type EventRow = typeof intelligenceWorkflowEvents.$inferSelect;
 type WorkflowTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+const WORKFLOW_CREDIT_SCALE = 1_000_000;
+
+function creditMicros(value: number): number | null {
+  if (!Number.isFinite(value) || value < 0 || value > 1_000_000) return null;
+  return Math.round(value * WORKFLOW_CREDIT_SCALE);
+}
 
 function toTimestamp(value: string): string {
   return new Date(value).toISOString();
@@ -681,6 +687,94 @@ export function createPostgresWorkflowStore(database: Database): WorkflowPort {
           )
           .returning({ nodeId: intelligenceWorkflowNodes.nodeId });
         return Boolean(node);
+      });
+    },
+    async reserveNodeBudget(input) {
+      const nowMs = Date.parse(input.now);
+      const requestedMicros = creditMicros(input.maxApprovedCredits);
+      if (!Number.isFinite(nowMs) || input.workerId.trim() === '' || requestedMicros === null) {
+        return null;
+      }
+      return runWorkflowTransaction(database, async (tx) => {
+        const run = await lockRun(tx, input);
+        if (
+          !run ||
+          run.status !== 'running' ||
+          (run.deadlineAt !== null && Date.parse(run.deadlineAt) <= nowMs)
+        ) {
+          return null;
+        }
+        const [node] = await tx
+          .select()
+          .from(intelligenceWorkflowNodes)
+          .where(
+            and(
+              eq(intelligenceWorkflowNodes.runId, input.runId),
+              eq(intelligenceWorkflowNodes.nodeId, input.nodeId),
+            ),
+          )
+          .for('update')
+          .limit(1);
+        if (
+          !node ||
+          node.kind !== 'capability' ||
+          node.status !== 'running' ||
+          node.leaseOwner !== input.workerId ||
+          node.leaseExpiresAt === null ||
+          Date.parse(node.leaseExpiresAt) <= nowMs ||
+          (node.deadlineAt !== null && Date.parse(node.deadlineAt) <= nowMs)
+        ) {
+          return null;
+        }
+
+        const [reservationTotal] = await tx
+          .select({
+            value: sql<string>`COALESCE(SUM(${intelligenceWorkflowNodes.budgetReservedCredits}), 0)`,
+          })
+          .from(intelligenceWorkflowNodes)
+          .where(eq(intelligenceWorkflowNodes.runId, input.runId));
+        const totalReservedMicros = Math.round(
+          Number(reservationTotal?.value ?? 0) * WORKFLOW_CREDIT_SCALE,
+        );
+        const runMaximumMicros = creditMicros(Number(run.maxApprovedCredits));
+        if (runMaximumMicros === null) return null;
+
+        if (node.budgetReservedCredits !== null) {
+          const existingMicros = creditMicros(Number(node.budgetReservedCredits));
+          if (existingMicros === null) return null;
+          if (existingMicros !== requestedMicros) {
+            throw new WorkflowStoreError('WORKFLOW_BUDGET_RESERVATION_CONFLICT');
+          }
+          return {
+            status: 'replayed' as const,
+            reservedCredits: existingMicros / WORKFLOW_CREDIT_SCALE,
+            remainingCredits:
+              Math.max(0, runMaximumMicros - totalReservedMicros) / WORKFLOW_CREDIT_SCALE,
+          };
+        }
+        if (totalReservedMicros + requestedMicros > runMaximumMicros) return null;
+
+        const [reserved] = await tx
+          .update(intelligenceWorkflowNodes)
+          .set({ budgetReservedCredits: (requestedMicros / WORKFLOW_CREDIT_SCALE).toFixed(6) })
+          .where(
+            and(
+              eq(intelligenceWorkflowNodes.runId, input.runId),
+              eq(intelligenceWorkflowNodes.nodeId, input.nodeId),
+              eq(intelligenceWorkflowNodes.status, 'running'),
+              eq(intelligenceWorkflowNodes.leaseOwner, input.workerId),
+              isNull(intelligenceWorkflowNodes.budgetReservedCredits),
+              sql`${intelligenceWorkflowNodes.leaseExpiresAt} > ${input.now}::timestamptz`,
+            ),
+          )
+          .returning({ budgetReservedCredits: intelligenceWorkflowNodes.budgetReservedCredits });
+        if (!reserved || reserved.budgetReservedCredits === null) return null;
+        return {
+          status: 'reserved' as const,
+          reservedCredits: requestedMicros / WORKFLOW_CREDIT_SCALE,
+          remainingCredits:
+            (runMaximumMicros - totalReservedMicros - requestedMicros) / WORKFLOW_CREDIT_SCALE,
+        };
       });
     },
     async attachTask(input) {

@@ -82,6 +82,9 @@ export interface StudioTaskExecutor {
   replay?(input: {
     accountId: string;
     projectId: string;
+    actorUserId: string | null;
+    actorType: 'user' | 'agent' | 'system';
+    agentName?: string | null;
     request: IntelligenceCreateTaskRequest;
   }): Promise<{ taskId: string; jobId: string; created: boolean } | null>;
   create(input: {
@@ -92,6 +95,7 @@ export interface StudioTaskExecutor {
     actingTokenId: string | null;
     agentName: string | null;
     sessionId: string | null;
+    estimateMode: 'external_signed' | 'trusted_internal';
     request: IntelligenceCreateTaskRequest;
   }): Promise<{ taskId: string; jobId: string; created: boolean }>;
 }
@@ -229,11 +233,16 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
       return unavailable(c, 'INTELLIGENCE_TASK_EXECUTOR_UNAVAILABLE', isA2A);
     }
 
+    const actor = actorContext(c, loaded);
+
     if (!isA2A && taskExecutor.replay) {
       try {
         const replay = await taskExecutor.replay({
           accountId: loaded.row.accountId,
           projectId,
+          actorUserId: actor.actorUserId,
+          actorType: actor.actorType,
+          agentName: actor.agentName,
           request,
         });
         if (replay) return intelligenceTaskResponse(c, replay);
@@ -244,7 +253,6 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
       }
     }
 
-    const actor = actorContext(c, loaded);
     const discovery = await discoverCapabilities(deps, projectId, actor);
     const capabilities = discovery.capabilities;
     if (!capabilities.some((capability) => capability.id === request.capability_id)) {
@@ -322,6 +330,7 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
           actingTokenId: actor.actingTokenId,
           agentName: actor.agentName,
           sessionId: actor.sessionId,
+          estimateMode: estimateModeForActor(actor.actorType),
           body,
         });
         return a2aJsonResponse(response);
@@ -340,6 +349,7 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
         actingTokenId: actor.actingTokenId,
         agentName: actor.agentName,
         sessionId: actor.sessionId,
+        estimateMode: estimateModeForActor(actor.actorType),
         request,
       });
     } catch (error) {
@@ -416,6 +426,12 @@ export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDe
   });
 
   return app;
+}
+
+function estimateModeForActor(
+  actorType: 'user' | 'agent' | 'system',
+): 'external_signed' | 'trusted_internal' {
+  return actorType === 'user' ? 'external_signed' : 'trusted_internal';
 }
 
 async function loadProjectOr404(
@@ -555,6 +571,12 @@ function intelligenceTaskErrorResponse(c: Context<AppEnv>, error: unknown): Resp
   }
   if (error.code === 'INTELLIGENCE_VALIDATION_ERROR') {
     return c.json({ error: 'Invalid Intelligence request', code: error.code }, error.status);
+  }
+  if (error.code === 'INTELLIGENCE_ESTIMATE_INVALID') {
+    return c.json({ error: 'Invalid Intelligence estimate approval', code: error.code }, 409);
+  }
+  if (error.code === 'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED') {
+    return c.json({ error: 'Intelligence estimate credit limit exceeded', code: error.code }, 409);
   }
   return unavailable(c, error.code);
 }

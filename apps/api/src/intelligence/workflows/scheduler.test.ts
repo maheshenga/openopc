@@ -28,6 +28,7 @@ function workflowPort(overrides: Partial<WorkflowPort> = {}): WorkflowPort {
     sealGraph: async () => null,
     claimReadyNode: async () => null,
     heartbeatNode: async () => false,
+    reserveNodeBudget: async () => null,
     attachTask: async () => null,
     completeNode: async () => null,
     failNode: async () => null,
@@ -224,6 +225,7 @@ describe('workflow scheduler', () => {
     const node = workflowNodeFixture({ status: 'running', attempt_count: 1 });
     const order: string[] = [];
     const attachCalls: unknown[] = [];
+    const createCalls: unknown[] = [];
     let claims = 0;
     const scheduler = createWorkflowScheduler({
       workflow: workflowPort({
@@ -242,8 +244,9 @@ describe('workflow scheduler', () => {
         },
       }),
       bridge: taskBridge({
-        createOrReplay: async () => {
+        createOrReplay: async (input) => {
           order.push('create');
+          createCalls.push(input);
           return { taskId: TASK_ID, jobId: JOB_ID, created: true };
         },
         reconcile: async () => {
@@ -293,6 +296,18 @@ describe('workflow scheduler', () => {
         workerId: 'workflow-worker-a',
         taskId: TASK_ID,
         updatedAt: NOW,
+      },
+    ]);
+    expect(createCalls).toEqual([
+      {
+        run,
+        node,
+        request: { capability: 'image.generate' },
+        parentTaskId: null,
+        actingTokenId: null,
+        sessionId: null,
+        workerId: 'workflow-worker-a',
+        now: NOW,
       },
     ]);
   });
@@ -719,6 +734,57 @@ describe('workflow scheduler', () => {
         workerId: 'workflow-worker-a',
         reasonCode: 'WORKFLOW_TASK_TARGET_UNAVAILABLE',
         retryable: false,
+        failedAt: NOW,
+      },
+    ]);
+  });
+
+  test('fails a claimed node when task execution returns a stable bridge error', async () => {
+    const run = workflowRunFixture({ status: 'running' });
+    const node = workflowNodeFixture({ status: 'running', attempt_count: 1 });
+    const failCalls: unknown[] = [];
+    let claims = 0;
+    const scheduler = createWorkflowScheduler({
+      workflow: workflowPort({
+        claimReadyNode: async () => {
+          claims += 1;
+          return claims === 1 ? { run, node } : null;
+        },
+        heartbeatNode: async () => true,
+        failNode: async (input) => {
+          failCalls.push(input);
+          return { run: { ...run, status: 'failed' }, node: { ...node, status: 'failed' } };
+        },
+      }),
+      bridge: taskBridge({
+        createOrReplay: async () => {
+          throw new WorkflowTaskBridgeError('WORKFLOW_TASK_EXECUTION_FAILED');
+        },
+      }),
+      isReady: async () => true,
+      listScopes: async () => [{ accountId: ACCOUNT_ID, projectId: PROJECT_ID }],
+      authorizeNode: async () => ({
+        actingTokenId: null,
+        sessionId: null,
+        parentTaskId: null,
+      }),
+      readNodeRequest: async () => ({ capability: 'image.generate' }),
+      workerId: 'workflow-worker-a',
+      now: () => NOW,
+      leaseMs: 30_000,
+      maxClaimsPerRun: 4,
+    });
+
+    await expect(scheduler.runOnce()).resolves.toMatchObject({ claimed: 1, failed: 1 });
+    expect(failCalls).toEqual([
+      {
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        runId: run.run_id,
+        nodeId: node.node_id,
+        workerId: 'workflow-worker-a',
+        reasonCode: 'WORKFLOW_TASK_EXECUTION_FAILED',
+        retryable: true,
         failedAt: NOW,
       },
     ]);

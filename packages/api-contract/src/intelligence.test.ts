@@ -31,6 +31,12 @@ describe('Intelligence API contract', () => {
     expect(
       IntelligenceErrorCodeSchema.safeParse('provider=https://secret.example.test').success,
     ).toBe(false);
+    expect(IntelligenceErrorCodeSchema.parse('INTELLIGENCE_ESTIMATE_INVALID')).toBe(
+      'INTELLIGENCE_ESTIMATE_INVALID',
+    );
+    expect(IntelligenceErrorCodeSchema.parse('INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED')).toBe(
+      'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED',
+    );
   });
 
   test('accepts only redaction-safe execution options', () => {
@@ -189,6 +195,82 @@ describe('Intelligence API contract', () => {
         ...valid,
         model: 'https://secret.example.test/v1?api_key=raw',
       }).success,
+    ).toBe(false);
+  });
+
+  test('accepts a bounded signed estimate approval on task creation', () => {
+    const request = {
+      protocol_version: 'intelligence.v1' as const,
+      capability_id: 'studio.image.generate' as const,
+      agent_card_hash: 'a'.repeat(64),
+      provider_config_id: PROVIDER_CONFIG_ID,
+      model: 'fake/image-v1',
+      input: {
+        capability: 'image.generate' as const,
+        image: {
+          prompt: 'safe prompt',
+          reference_asset_ids: [],
+          aspect_ratio: '1:1' as const,
+          quality: 'standard' as const,
+          output_count: 1,
+        },
+      },
+      idempotency_key: 'intelligence-contract-task-0001',
+      estimate_approval: {
+        estimate_id: '15000000-0000-4000-a000-000000000001',
+        estimate_token: 'studio-estimate-v2.signed-token',
+        max_approved_credits: 10,
+      },
+    };
+
+    expect(IntelligenceCreateTaskRequestSchema.parse(request)).toEqual(request);
+  });
+
+  test('rejects malformed or unbounded estimate approvals without relaxing task strictness', () => {
+    const request = {
+      protocol_version: 'intelligence.v1' as const,
+      capability_id: 'studio.image.generate' as const,
+      agent_card_hash: 'a'.repeat(64),
+      provider_config_id: PROVIDER_CONFIG_ID,
+      model: 'fake/image-v1',
+      input: {
+        capability: 'image.generate' as const,
+        image: {
+          prompt: 'safe prompt',
+          reference_asset_ids: [],
+          aspect_ratio: '1:1' as const,
+          quality: 'standard' as const,
+          output_count: 1,
+        },
+      },
+      idempotency_key: 'intelligence-contract-task-0001',
+      estimate_approval: {
+        estimate_id: '15000000-0000-4000-a000-000000000001',
+        estimate_token: 'studio-estimate-v2.signed-token',
+        max_approved_credits: 10,
+      },
+    };
+
+    expect(
+      IntelligenceCreateTaskRequestSchema.safeParse({
+        ...request,
+        estimate_approval: { ...request.estimate_approval, unexpected: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      IntelligenceCreateTaskRequestSchema.safeParse({
+        ...request,
+        estimate_approval: { ...request.estimate_approval, max_approved_credits: Number.NaN },
+      }).success,
+    ).toBe(false);
+    expect(
+      IntelligenceCreateTaskRequestSchema.safeParse({
+        ...request,
+        estimate_approval: { ...request.estimate_approval, estimate_token: 'x'.repeat(8193) },
+      }).success,
+    ).toBe(false);
+    expect(
+      IntelligenceCreateTaskRequestSchema.safeParse({ ...request, unexpected: true }).success,
     ).toBe(false);
   });
 

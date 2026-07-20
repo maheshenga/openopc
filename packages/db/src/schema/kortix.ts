@@ -2506,6 +2506,7 @@ export const intelligenceTasks = kortixSchema.table(
     jobId: uuid('job_id').references(() => studioJobs.jobId, { onDelete: 'restrict' }),
     actorUserId: uuid('actor_user_id'),
     actorType: text('actor_type').notNull(),
+    executionOrigin: text('execution_origin').default('request').notNull(),
     actingTokenId: uuid('acting_token_id').references(() => accountTokens.tokenId, {
       onDelete: 'set null',
     }),
@@ -2552,6 +2553,10 @@ export const intelligenceTasks = kortixSchema.table(
     check(
       'intelligence_tasks_actor_type_check',
       sql`${table.actorType} IN ('user', 'agent', 'system')`,
+    ),
+    check(
+      'intelligence_tasks_execution_origin_check',
+      sql`${table.executionOrigin} IN ('request', 'workflow')`,
     ),
     check(
       'intelligence_tasks_status_check',
@@ -2741,6 +2746,7 @@ export const intelligenceWorkflowNodes = kortixSchema.table(
     policySnapshotHash: text('policy_snapshot_hash'),
     evaluationVersion: text('evaluation_version'),
     taskId: uuid('task_id').references(() => intelligenceTasks.taskId, { onDelete: 'restrict' }),
+    budgetReservedCredits: numeric('budget_reserved_credits', { precision: 18, scale: 6 }),
     status: text('status').default('pending').notNull(),
     leaseOwner: text('lease_owner'),
     leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true, mode: 'string' }),
@@ -2833,6 +2839,11 @@ export const intelligenceWorkflowNodes = kortixSchema.table(
     check(
       'intelligence_workflow_nodes_task_kind_check',
       sql`${table.taskId} IS NULL OR ${table.kind} = 'capability'`,
+    ),
+    check(
+      'intelligence_workflow_nodes_budget_reserved_credits_check',
+      sql`${table.budgetReservedCredits} IS NULL
+        OR ${table.budgetReservedCredits} BETWEEN 0 AND 1000000`,
     ),
     check(
       'intelligence_workflow_nodes_lease_check',

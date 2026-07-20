@@ -259,6 +259,7 @@ export function createDefaultIntelligenceProjectRoutes(
         repository,
         assertReadyBeforeReservation: runtime.assertReadyBeforeReservation,
         credentialBindingExists,
+        estimateSigningSecret: config.API_KEY_SECRET,
       }),
       readStudioEvents: async ({ projectId, jobId, cursor }) =>
         repository.listEvents(projectId, jobId, cursor),

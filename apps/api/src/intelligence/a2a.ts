@@ -37,6 +37,9 @@ export interface A2ATaskService {
   replay?(input: {
     accountId: string;
     projectId: string;
+    actorUserId: string | null;
+    actorType: 'user' | 'agent' | 'system';
+    agentName?: string | null;
     request: IntelligenceCreateTaskRequest;
   }): Promise<IntelligenceTaskCreateResult | null>;
   create(input: IntelligenceTaskCreateInput): Promise<IntelligenceTaskCreateResult>;
@@ -144,6 +147,9 @@ export function createA2ATaskAdapter(service: A2ATaskService) {
         const replay = await service.replay({
           accountId: input.accountId,
           projectId: input.projectId,
+          actorUserId: input.actorUserId,
+          actorType: input.actorType,
+          agentName: input.agentName,
           request: parsed.request,
         });
         if (replay) return taskResponse(input.projectId, replay);

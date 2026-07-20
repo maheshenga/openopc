@@ -10,6 +10,7 @@ import { type TaskEvent, TaskEventSchema } from '@kortix/intelligence-contracts'
 import { canonicalStudioRequestHash } from '@kortix/studio-runtime';
 import { and, asc, eq, gt, max, sql } from 'drizzle-orm';
 import type { StudioCredentialBindingExists } from '../studio';
+import { verifyStudioEstimateToken } from '../studio/estimate-token';
 import { resolveStudioEstimate } from '../studio/estimates';
 import type { StudioRepository } from '../studio/types';
 
@@ -18,6 +19,12 @@ const MAX_STUDIO_SYNC_PAGES = 10;
 const CAPABILITY_VERSION = '1.0.0';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sharedStoreCreateLocks = new WeakMap<object, Map<string, Promise<void>>>();
+
+function normalizeExecutionOrigin(value: unknown): IntelligenceTaskExecutionOrigin {
+  if (value === undefined || value === 'request') return 'request';
+  if (value === 'workflow') return 'workflow';
+  throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_INVALID', 409);
+}
 
 function sharedCreateLocks(object: object): Map<string, Promise<void>> {
   const existing = sharedStoreCreateLocks.get(object);
@@ -50,6 +57,7 @@ async function withObjectCreateLock<T>(
 }
 
 type IntelligenceTaskStatus = TaskEvent['status'];
+export type IntelligenceTaskExecutionOrigin = 'request' | 'workflow';
 
 export type IntelligenceTaskCreateInput = {
   accountId: string;
@@ -59,6 +67,11 @@ export type IntelligenceTaskCreateInput = {
   actingTokenId: string | null;
   agentName: string | null;
   sessionId: string | null;
+  /** Server-only provenance for execution policy; never accepted from the wire request. */
+  executionOrigin?: IntelligenceTaskExecutionOrigin;
+  estimateMode: 'external_signed' | 'trusted_internal';
+  trustedMaxApprovedCredits?: number;
+  reserveTrustedCredits?: (credits: number) => Promise<boolean>;
   request: IntelligenceCreateTaskRequest;
 };
 
@@ -75,6 +88,7 @@ export type IntelligenceTaskRecord = {
   jobId: string | null;
   actorUserId: string | null;
   actorType: 'user' | 'agent' | 'system';
+  executionOrigin: IntelligenceTaskExecutionOrigin;
   actingTokenId: string | null;
   agentName: string | null;
   sessionId: string | null;
@@ -167,6 +181,8 @@ export class IntelligenceTaskServiceError extends Error {
   constructor(
     readonly code:
       | 'INTELLIGENCE_IDEMPOTENCY_MISMATCH'
+      | 'INTELLIGENCE_ESTIMATE_INVALID'
+      | 'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED'
       | 'INTELLIGENCE_TASK_EXECUTION_FAILED'
       | 'INTELLIGENCE_TASK_EVENTS_UNAVAILABLE'
       | 'INTELLIGENCE_VALIDATION_ERROR',
@@ -184,6 +200,8 @@ export function isIntelligenceTaskServiceError(
   const candidate = error as Record<string, unknown>;
   return (
     (candidate.code === 'INTELLIGENCE_IDEMPOTENCY_MISMATCH' && candidate.status === 409) ||
+    (candidate.code === 'INTELLIGENCE_ESTIMATE_INVALID' && candidate.status === 409) ||
+    (candidate.code === 'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED' && candidate.status === 409) ||
     (candidate.code === 'INTELLIGENCE_VALIDATION_ERROR' && candidate.status === 400) ||
     ((candidate.code === 'INTELLIGENCE_TASK_EXECUTION_FAILED' ||
       candidate.code === 'INTELLIGENCE_TASK_EVENTS_UNAVAILABLE') &&
@@ -221,7 +239,11 @@ export class IntelligenceTaskService {
     if (!parsed.success) {
       throw new IntelligenceTaskServiceError('INTELLIGENCE_VALIDATION_ERROR', 400);
     }
-    const normalized = { ...input, request: parsed.data };
+    const normalized = {
+      ...input,
+      executionOrigin: normalizeExecutionOrigin(input.executionOrigin),
+      request: parsed.data,
+    };
     return this.withCreateLock(
       `${normalized.projectId}\u0000${normalized.request.idempotency_key}`,
       () => this.createLocked(normalized),
@@ -229,7 +251,13 @@ export class IntelligenceTaskService {
   }
 
   async replay(
-    input: Pick<IntelligenceTaskCreateInput, 'accountId' | 'projectId' | 'request'>,
+    input: Pick<
+      IntelligenceTaskCreateInput,
+      'accountId' | 'projectId' | 'actorUserId' | 'actorType' | 'request'
+    > & {
+      executionOrigin?: IntelligenceTaskExecutionOrigin;
+      agentName?: string | null;
+    },
   ): Promise<IntelligenceTaskCreateResult | null> {
     const parsed = IntelligenceCreateTaskRequestSchema.safeParse(input.request);
     if (!parsed.success) {
@@ -241,9 +269,16 @@ export class IntelligenceTaskService {
       idempotencyKey: parsed.data.idempotency_key,
     });
     if (!task) return null;
+    // Agent name is the stable execution identity; token authorization is
+    // re-evaluated at the route boundary so credential rotation can recover a
+    // task without changing its actor binding.
     if (
       task.accountId !== input.accountId ||
       task.projectId !== input.projectId ||
+      task.actorUserId !== input.actorUserId ||
+      task.actorType !== input.actorType ||
+      task.agentName !== (input.agentName ?? null) ||
+      task.executionOrigin !== normalizeExecutionOrigin(input.executionOrigin) ||
       task.requestHash !== intelligenceTaskRequestHash(parsed.data)
     ) {
       throw new IntelligenceTaskServiceError('INTELLIGENCE_IDEMPOTENCY_MISMATCH', 409);
@@ -293,6 +328,7 @@ export class IntelligenceTaskService {
   ): Promise<IntelligenceTaskCreateResult> {
     const now = this.now().toISOString();
     const requestHash = intelligenceTaskRequestHash(input.request);
+    const executionOrigin = normalizeExecutionOrigin(input.executionOrigin);
     const result = await this.input.store.createWithJob(
       {
         accountId: input.accountId,
@@ -300,6 +336,7 @@ export class IntelligenceTaskService {
         jobId: null,
         actorUserId: input.actorUserId,
         actorType: input.actorType,
+        executionOrigin,
         actingTokenId: input.actingTokenId,
         agentName: input.agentName,
         sessionId: input.sessionId,
@@ -321,6 +358,10 @@ export class IntelligenceTaskService {
         if (
           task.accountId !== input.accountId ||
           task.projectId !== input.projectId ||
+          task.actorUserId !== input.actorUserId ||
+          task.actorType !== input.actorType ||
+          task.agentName !== input.agentName ||
+          task.executionOrigin !== executionOrigin ||
           task.requestHash !== requestHash
         ) {
           throw new IntelligenceTaskServiceError('INTELLIGENCE_IDEMPOTENCY_MISMATCH', 409);
@@ -343,6 +384,10 @@ export class IntelligenceTaskService {
     if (
       result.task.accountId !== input.accountId ||
       result.task.projectId !== input.projectId ||
+      result.task.actorUserId !== input.actorUserId ||
+      result.task.actorType !== input.actorType ||
+      result.task.agentName !== input.agentName ||
+      result.task.executionOrigin !== executionOrigin ||
       result.task.requestHash !== requestHash
     ) {
       throw new IntelligenceTaskServiceError('INTELLIGENCE_IDEMPOTENCY_MISMATCH', 409);
@@ -445,9 +490,13 @@ export class IntelligenceTaskService {
 }
 
 export function intelligenceTaskRequestHash(request: IntelligenceCreateTaskRequest): string {
-  const { idempotency_key: _idempotencyKey, ...requestWithoutIdempotency } = request;
+  const {
+    idempotency_key: _idempotencyKey,
+    estimate_approval: _estimateApproval,
+    ...requestWithoutAuthorization
+  } = request;
   return canonicalStudioRequestHash({
-    ...requestWithoutIdempotency,
+    ...requestWithoutAuthorization,
     parent_task_id: request.parent_task_id ?? null,
     deadline_at: request.deadline_at ?? null,
   });
@@ -472,11 +521,22 @@ export function intelligenceStudioIdempotencyKey(
 export function createStudioJobBridge(input: {
   repository: StudioRepository;
   credentialBindingExists?: StudioCredentialBindingExists;
+  estimateSigningSecret?: string;
   assertReadyBeforeReservation: () => Promise<void>;
   now?: () => Date;
 }): StudioJobCreator {
   return async (task) => {
     try {
+      const executionOrigin = task.executionOrigin ?? 'request';
+      if (
+        (executionOrigin !== 'request' && executionOrigin !== 'workflow') ||
+        (executionOrigin === 'workflow' && task.estimateMode !== 'trusted_internal') ||
+        (executionOrigin === 'request' &&
+          ((task.actorType === 'user' && task.estimateMode !== 'external_signed') ||
+            (task.actorType !== 'user' && task.estimateMode !== 'trusted_internal')))
+      ) {
+        throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_INVALID', 409);
+      }
       const existing = await input.repository.findJobByIdempotency(
         task.accountId,
         task.studioIdempotencyKey,
@@ -485,6 +545,8 @@ export function createStudioJobBridge(input: {
         if (
           existing.account_id !== task.accountId ||
           existing.project_id !== task.projectId ||
+          existing.actor_user_id !== task.actorUserId ||
+          existing.actor_type !== task.actorType ||
           existing.idempotency_key !== task.studioIdempotencyKey ||
           existing.request_hash !== task.studioRequestHash
         ) {
@@ -492,31 +554,106 @@ export function createStudioJobBridge(input: {
         }
         return { jobId: existing.job_id, created: false };
       }
-      await input.assertReadyBeforeReservation();
-      const resolution = await resolveStudioEstimate({
-        repository: input.repository,
-        accountId: task.accountId,
-        projectId: task.projectId,
-        request: {
-          capability: task.request.input.capability,
-          provider_config_id: task.request.provider_config_id,
-          model: task.request.model,
-          input: task.request.input,
-        },
-        credentialBindingExists: input.credentialBindingExists,
-      });
-      if (!resolution.ok) {
-        throw new IntelligenceTaskServiceError('INTELLIGENCE_TASK_EXECUTION_FAILED', 503);
-      }
       const createdAt = (input.now ?? (() => new Date()))();
-      const estimate: StudioEstimateResponse = {
-        estimate_id: crypto.randomUUID(),
-        expires_at: new Date(createdAt.getTime() + 15 * 60_000).toISOString(),
-        currency: 'credits',
-        input_hash: task.studioRequestHash,
-        estimate_token: 'intelligence-internal',
-        ...resolution.value.costs,
-      };
+      const studioEstimateRequest = {
+        capability: task.request.input.capability,
+        provider_config_id: task.request.provider_config_id,
+        model: task.request.model,
+        input: task.request.input,
+      } as const;
+      let resolution: Awaited<ReturnType<typeof resolveStudioEstimate>>;
+      let estimate: StudioEstimateResponse;
+
+      if (task.estimateMode === 'external_signed') {
+        const approval = task.request.estimate_approval;
+        if (!approval || !input.estimateSigningSecret || !task.actorUserId) {
+          throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_INVALID', 409);
+        }
+        const initialVerification = verifyStudioEstimateToken({
+          token: approval.estimate_token,
+          secret: input.estimateSigningSecret,
+          nowMs: createdAt.getTime(),
+        });
+        if (
+          !initialVerification.valid ||
+          initialVerification.claims.version !== 2 ||
+          initialVerification.claims.account_id !== task.accountId ||
+          initialVerification.claims.project_id !== task.projectId ||
+          initialVerification.claims.actor_user_id !== task.actorUserId ||
+          initialVerification.claims.estimate.estimate_id !== approval.estimate_id ||
+          initialVerification.claims.estimate.input_hash !== task.studioRequestHash
+        ) {
+          throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_INVALID', 409);
+        }
+        const expectedVersionBinding = {
+          providerConfigVersion: initialVerification.claims.provider_config_version,
+          pricingCatalogId: initialVerification.claims.pricing_catalog_id,
+          pricingVersion: initialVerification.claims.pricing_version,
+        };
+        await input.assertReadyBeforeReservation();
+        resolution = await resolveStudioEstimate({
+          repository: input.repository,
+          accountId: task.accountId,
+          projectId: task.projectId,
+          request: studioEstimateRequest,
+          expectedVersionBinding,
+          credentialBindingExists: input.credentialBindingExists,
+        });
+        if (!resolution.ok) {
+          throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_INVALID', 409);
+        }
+        const verified = verifyStudioEstimateToken({
+          token: approval.estimate_token,
+          secret: input.estimateSigningSecret,
+          nowMs: createdAt.getTime(),
+          expectedVersionBinding: resolution.value.versionBinding,
+        });
+        if (!verified.valid || verified.claims.version !== 2) {
+          throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_INVALID', 409);
+        }
+        if (approval.max_approved_credits < verified.claims.estimate.max_approved_credits) {
+          throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED', 409);
+        }
+        estimate = {
+          ...verified.claims.estimate,
+          estimate_token: approval.estimate_token,
+        };
+      } else if (task.estimateMode === 'trusted_internal') {
+        await input.assertReadyBeforeReservation();
+        resolution = await resolveStudioEstimate({
+          repository: input.repository,
+          accountId: task.accountId,
+          projectId: task.projectId,
+          request: studioEstimateRequest,
+          credentialBindingExists: input.credentialBindingExists,
+        });
+        if (!resolution.ok) {
+          throw new IntelligenceTaskServiceError('INTELLIGENCE_TASK_EXECUTION_FAILED', 503);
+        }
+        if (
+          task.trustedMaxApprovedCredits !== undefined &&
+          (!Number.isFinite(task.trustedMaxApprovedCredits) ||
+            task.trustedMaxApprovedCredits < resolution.value.costs.max_approved_credits)
+        ) {
+          throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED', 409);
+        }
+        if (
+          task.reserveTrustedCredits &&
+          !(await task.reserveTrustedCredits(resolution.value.costs.max_approved_credits))
+        ) {
+          throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED', 409);
+        }
+        estimate = {
+          estimate_id: crypto.randomUUID(),
+          expires_at: new Date(createdAt.getTime() + 15 * 60_000).toISOString(),
+          currency: 'credits',
+          input_hash: task.studioRequestHash,
+          estimate_token: 'intelligence-internal',
+          ...resolution.value.costs,
+        };
+      } else {
+        throw new IntelligenceTaskServiceError('INTELLIGENCE_ESTIMATE_INVALID', 409);
+      }
       const result = await input.repository.createJob(
         {
           capability: task.request.input.capability,
@@ -602,6 +739,7 @@ export function createDrizzleIntelligenceTaskStore(database: Database): Intellig
               jobId: input.jobId,
               actorUserId: input.actorUserId,
               actorType: input.actorType,
+              executionOrigin: input.executionOrigin,
               actingTokenId: input.actingTokenId,
               agentName: input.agentName,
               sessionId: input.sessionId,
@@ -644,6 +782,7 @@ export function createDrizzleIntelligenceTaskStore(database: Database): Intellig
           if (
             row.accountId !== input.accountId ||
             row.projectId !== input.projectId ||
+            row.executionOrigin !== input.executionOrigin ||
             row.requestHash !== input.requestHash
           ) {
             throw new IntelligenceTaskServiceError('INTELLIGENCE_IDEMPOTENCY_MISMATCH', 409);
@@ -754,6 +893,7 @@ export function createDrizzleIntelligenceTaskStore(database: Database): Intellig
             jobId: input.jobId,
             actorUserId: input.actorUserId,
             actorType: input.actorType,
+            executionOrigin: input.executionOrigin,
             actingTokenId: input.actingTokenId,
             agentName: input.agentName,
             sessionId: input.sessionId,
@@ -1229,6 +1369,7 @@ function serializeTask(row: typeof intelligenceTasks.$inferSelect): Intelligence
     jobId: row.jobId ?? null,
     actorUserId: row.actorUserId ?? null,
     actorType: row.actorType as IntelligenceTaskRecord['actorType'],
+    executionOrigin: row.executionOrigin as IntelligenceTaskExecutionOrigin,
     actingTokenId: row.actingTokenId ?? null,
     agentName: row.agentName ?? null,
     sessionId: row.sessionId ?? null,

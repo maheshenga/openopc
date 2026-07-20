@@ -19,6 +19,18 @@ const payloadIdentityMigrationPath = resolve(
   'migrations',
   '20260719100000000_intelligence_workflow_payload_identity.sql',
 );
+const budgetReservationMigrationPath = resolve(
+  import.meta.dir,
+  '..',
+  'migrations',
+  '20260720120000000_intelligence_workflow_node_budget_reservations.sql',
+);
+const taskExecutionOriginMigrationPath = resolve(
+  import.meta.dir,
+  '..',
+  'migrations',
+  '20260720130000000_intelligence_task_execution_origin.sql',
+);
 
 const dockerAvailable =
   Bun.spawnSync(['docker', 'version'], { stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
@@ -71,11 +83,15 @@ const PRE_SCHEMA = `
   CREATE TABLE kortix.project_sessions(session_id text PRIMARY KEY);
   CREATE TABLE kortix.studio_jobs(
     job_id uuid PRIMARY KEY,
+    reserved_credits numeric(18,6) NOT NULL DEFAULT 0,
     marker text NOT NULL
   );
   CREATE TABLE kortix.intelligence_tasks(
     task_id uuid PRIMARY KEY,
     job_id uuid REFERENCES kortix.studio_jobs(job_id),
+    account_id uuid,
+    project_id uuid,
+    idempotency_key text,
     marker text NOT NULL
   );
   CREATE TABLE kortix.review_items(review_item_id uuid PRIMARY KEY);
@@ -83,8 +99,15 @@ const PRE_SCHEMA = `
   INSERT INTO kortix.projects(project_id, account_id)
     VALUES ('${PROJECT_ID}', '${ACCOUNT_ID}'), ('${PROJECT_B_ID}', '${ACCOUNT_B_ID}');
   INSERT INTO kortix.studio_jobs(job_id, marker) VALUES ('${JOB_ID}', 'studio-before-workflows');
-  INSERT INTO kortix.intelligence_tasks(task_id, job_id, marker)
-    VALUES ('${TASK_ID}', '${JOB_ID}', 'task-before-workflows');
+  INSERT INTO kortix.intelligence_tasks(task_id, job_id, account_id, project_id, idempotency_key, marker)
+    VALUES (
+      '${TASK_ID}',
+      '${JOB_ID}',
+      '${ACCOUNT_ID}',
+      '${PROJECT_ID}',
+      'legacy-task-key',
+      'task-before-workflows'
+    );
 `;
 
 describe.skipIf(!dockerAvailable)('Intelligence workflow migration - real PostgreSQL', () => {
@@ -121,8 +144,12 @@ describe.skipIf(!dockerAvailable)('Intelligence workflow migration - real Postgr
         const migration = await Bun.file(migrationPath).text();
         const nodeIdempotencyMigration = await Bun.file(nodeIdempotencyMigrationPath).text();
         const payloadIdentityMigration = await Bun.file(payloadIdentityMigrationPath).text();
+        const budgetReservationMigration = await Bun.file(budgetReservationMigrationPath).text();
+        const taskExecutionOriginMigration = await Bun.file(
+          taskExecutionOriginMigrationPath,
+        ).text();
         dockerPsql(
-          `BEGIN;\n${PRE_SCHEMA}\n${migration}\n${nodeIdempotencyMigration}\n${payloadIdentityMigration}\nCOMMIT;`,
+          `BEGIN;\n${PRE_SCHEMA}\n${migration}\n${nodeIdempotencyMigration}\n${payloadIdentityMigration}\n${budgetReservationMigration}\n${taskExecutionOriginMigration}\nCOMMIT;`,
         );
         return;
       }

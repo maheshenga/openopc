@@ -70,6 +70,11 @@ const taskRequest: IntelligenceCreateTaskRequest = {
   idempotency_key: 'sdk-intelligence-task-key',
   parent_task_id: null,
   deadline_at: null,
+  estimate_approval: {
+    estimate_id: '15000000-0000-4000-a000-000000000002',
+    estimate_token: 'studio-estimate-v2.sdk-signed-token',
+    max_approved_credits: 10,
+  },
 };
 
 const workflowRun = {

@@ -65,9 +65,13 @@ async function createSealedTwoNodeGraph(store: WorkflowPort) {
   return graph;
 }
 
-async function createClaimedCapabilityNode(store: WorkflowPort) {
-  const run = workflowRunFixture();
-  const node = workflowNodeFixture({ run_id: run.run_id });
+async function createClaimedCapabilityNode(
+  store: WorkflowPort,
+  nodeOverrides: Partial<ReturnType<typeof workflowNodeFixture>> = {},
+  runOverrides: Partial<ReturnType<typeof workflowRunFixture>> = {},
+) {
+  const run = workflowRunFixture(runOverrides);
+  const node = workflowNodeFixture({ run_id: run.run_id, ...nodeOverrides });
   await store.startRun({ run });
   await store.appendNode({
     accountId: run.account_id,
@@ -93,6 +97,61 @@ async function createClaimedCapabilityNode(store: WorkflowPort) {
     leaseMs: 60_000,
   });
   return { run, node };
+}
+
+async function createClaimedBudgetNodes(store: WorkflowPort, maxApprovedCredits = 10) {
+  const run = workflowRunFixture({ max_approved_credits: maxApprovedCredits });
+  const alpha = workflowNodeFixture({
+    run_id: run.run_id,
+    node_id: '62000000-0000-4000-a000-000000000011',
+    node_key: 'render-alpha',
+  });
+  const beta = workflowNodeFixture({
+    run_id: run.run_id,
+    node_id: '62000000-0000-4000-a000-000000000012',
+    node_key: 'render-beta',
+  });
+  await store.startRun({ run });
+  await store.appendNode({
+    accountId: run.account_id,
+    projectId: run.project_id,
+    runId: run.run_id,
+    expectedGraphVersion: 0,
+    idempotencyKey: 'workflow-node-render-alpha-budget-0001',
+    requestHash: alpha.input_hash,
+    node: alpha,
+  });
+  await store.appendNode({
+    accountId: run.account_id,
+    projectId: run.project_id,
+    runId: run.run_id,
+    expectedGraphVersion: 1,
+    idempotencyKey: 'workflow-node-render-beta-budget-0001',
+    requestHash: beta.input_hash,
+    node: beta,
+  });
+  await store.sealGraph({
+    accountId: run.account_id,
+    projectId: run.project_id,
+    runId: run.run_id,
+    expectedGraphVersion: 2,
+    updatedAt: '2026-07-18T10:01:00.000Z',
+  });
+  await store.claimReadyNode({
+    accountId: run.account_id,
+    projectId: run.project_id,
+    workerId: 'workflow-worker-a',
+    now: '2026-07-18T10:02:00.000Z',
+    leaseMs: 60_000,
+  });
+  await store.claimReadyNode({
+    accountId: run.account_id,
+    projectId: run.project_id,
+    workerId: 'workflow-worker-b',
+    now: '2026-07-18T10:02:00.000Z',
+    leaseMs: 60_000,
+  });
+  return { run, alpha, beta };
 }
 
 async function createPausedCapabilityNode(store: WorkflowPort) {
@@ -321,7 +380,7 @@ export function runWorkflowStoreConformance(
           accountId: run.account_id,
           projectId: run.project_id,
           workerId: 'workflow-worker-b',
-          now: '2026-07-18T10:03:00.000Z',
+          now: '2026-07-18T10:03:01.000Z',
           leaseMs: 60_000,
         }),
       ).resolves.toMatchObject({
@@ -379,6 +438,176 @@ export function runWorkflowStoreConformance(
           now: '2026-07-18T10:04:00.000Z',
         }),
       ).resolves.toBe(false);
+    });
+
+    test('reserves zero credits and replays the same node amount idempotently', async () => {
+      const store = await createStore();
+      const { run, node } = await createClaimedCapabilityNode(store);
+      const input = {
+        accountId: run.account_id,
+        projectId: run.project_id,
+        runId: run.run_id,
+        nodeId: node.node_id,
+        workerId: 'workflow-worker-a',
+        now: '2026-07-18T10:02:30.000Z',
+        maxApprovedCredits: 0,
+      };
+
+      await expect(store.reserveNodeBudget(input)).resolves.toEqual({
+        status: 'reserved',
+        reservedCredits: 0,
+        remainingCredits: 5,
+      });
+      await expect(store.reserveNodeBudget(input)).resolves.toEqual({
+        status: 'replayed',
+        reservedCredits: 0,
+        remainingCredits: 5,
+      });
+      await expect(
+        store.reserveNodeBudget({ ...input, maxApprovedCredits: 1 }),
+      ).rejects.toMatchObject({ code: 'WORKFLOW_BUDGET_RESERVATION_CONFLICT' });
+    });
+
+    test('enforces the cumulative run ceiling across claimed capability nodes', async () => {
+      const store = await createStore();
+      const { run, alpha, beta } = await createClaimedBudgetNodes(store);
+
+      await expect(
+        store.reserveNodeBudget({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          nodeId: alpha.node_id,
+          workerId: 'workflow-worker-a',
+          now: '2026-07-18T10:02:30.000Z',
+          maxApprovedCredits: 6,
+        }),
+      ).resolves.toEqual({ status: 'reserved', reservedCredits: 6, remainingCredits: 4 });
+      await expect(
+        store.reserveNodeBudget({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          nodeId: beta.node_id,
+          workerId: 'workflow-worker-b',
+          now: '2026-07-18T10:02:30.000Z',
+          maxApprovedCredits: 5,
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        store.reserveNodeBudget({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          nodeId: beta.node_id,
+          workerId: 'workflow-worker-b',
+          now: '2026-07-18T10:02:30.000Z',
+          maxApprovedCredits: 4,
+        }),
+      ).resolves.toEqual({ status: 'reserved', reservedCredits: 4, remainingCredits: 0 });
+    });
+
+    test('compares six-decimal credit amounts without floating-point drift', async () => {
+      const store = await createStore();
+      const { run, alpha, beta } = await createClaimedBudgetNodes(store, 0.3);
+
+      await expect(
+        store.reserveNodeBudget({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          nodeId: alpha.node_id,
+          workerId: 'workflow-worker-a',
+          now: '2026-07-18T10:02:30.000Z',
+          maxApprovedCredits: 0.1,
+        }),
+      ).resolves.toEqual({ status: 'reserved', reservedCredits: 0.1, remainingCredits: 0.2 });
+      await expect(
+        store.reserveNodeBudget({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          nodeId: beta.node_id,
+          workerId: 'workflow-worker-b',
+          now: '2026-07-18T10:02:30.000Z',
+          maxApprovedCredits: 0.2,
+        }),
+      ).resolves.toEqual({ status: 'reserved', reservedCredits: 0.2, remainingCredits: 0 });
+    });
+
+    test('rejects budget reservation after scope, lease, or run validity is lost', async () => {
+      const store = await createStore();
+      const { run, node } = await createClaimedCapabilityNode(store);
+      const input = {
+        accountId: run.account_id,
+        projectId: run.project_id,
+        runId: run.run_id,
+        nodeId: node.node_id,
+        workerId: 'workflow-worker-a',
+        now: '2026-07-18T10:02:30.000Z',
+        maxApprovedCredits: 1,
+      };
+
+      await expect(
+        store.reserveNodeBudget({
+          ...input,
+          projectId: '64000000-0000-4000-a000-000000000099',
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        store.reserveNodeBudget({ ...input, workerId: 'workflow-worker-b' }),
+      ).resolves.toBeNull();
+      await expect(
+        store.reserveNodeBudget({ ...input, now: '2026-07-18T10:04:00.000Z' }),
+      ).resolves.toBeNull();
+      await store.cancelRun({
+        accountId: run.account_id,
+        projectId: run.project_id,
+        runId: run.run_id,
+        reasonCode: 'WORKFLOW_CANCELLED_BY_USER',
+        cancelledAt: '2026-07-18T10:02:40.000Z',
+      });
+      await expect(store.reserveNodeBudget(input)).resolves.toBeNull();
+    });
+
+    test('rejects budget reservation after the node deadline passes', async () => {
+      const store = await createStore();
+      const { run, node } = await createClaimedCapabilityNode(store, {
+        deadline_at: '2026-07-18T10:02:30.000Z',
+      });
+
+      await expect(
+        store.reserveNodeBudget({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          nodeId: node.node_id,
+          workerId: 'workflow-worker-a',
+          now: '2026-07-18T10:02:45.000Z',
+          maxApprovedCredits: 1,
+        }),
+      ).resolves.toBeNull();
+    });
+
+    test('rejects budget reservation after the workflow deadline passes', async () => {
+      const store = await createStore();
+      const { run, node } = await createClaimedCapabilityNode(
+        store,
+        {},
+        { deadline_at: '2026-07-18T10:02:30.000Z' },
+      );
+
+      await expect(
+        store.reserveNodeBudget({
+          accountId: run.account_id,
+          projectId: run.project_id,
+          runId: run.run_id,
+          nodeId: node.node_id,
+          workerId: 'workflow-worker-a',
+          now: '2026-07-18T10:02:45.000Z',
+          maxApprovedCredits: 1,
+        }),
+      ).resolves.toBeNull();
     });
 
     test('attaches exactly one immutable task to a leased capability node', async () => {

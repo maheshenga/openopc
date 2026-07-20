@@ -14,6 +14,7 @@ import {
   type StudioTaskExecutor,
   createIntelligenceProjectRoutes,
 } from './project-routes';
+import { IntelligenceTaskServiceError } from './task-service';
 
 const ACCOUNT_ID = '11000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '12000000-0000-4000-a000-000000000001';
@@ -352,10 +353,25 @@ describe('Intelligence project routes', () => {
       actingTokenId: IAM_TOKEN_ID,
       agentName: 'content-planner',
       sessionId: 'session-1',
+      estimateMode: 'trusted_internal',
     });
     expect(JSON.stringify(await createTask(app).then((response) => response.json()))).not.toContain(
       'private prompt',
     );
+  });
+
+  test('requires signed estimates for users and reserves trusted estimates for server identities', async () => {
+    const user = createApp({ agentGrant: null });
+    const agent = createApp();
+    const system = createApp({ authType: 'service_account', agentGrant: null });
+
+    expect((await createTask(user.app)).status).toBe(201);
+    expect((await createTask(agent.app)).status).toBe(201);
+    expect((await createTask(system.app)).status).toBe(201);
+
+    expect(user.createCalls[0]?.estimateMode).toBe('external_signed');
+    expect(agent.createCalls[0]?.estimateMode).toBe('trusted_internal');
+    expect(system.createCalls[0]?.estimateMode).toBe('trusted_internal');
   });
 
   test('runs an A2A message/send task through the governed project executor', async () => {
@@ -378,6 +394,7 @@ describe('Intelligence project routes', () => {
       actorUserId: USER_ID,
       actorType: 'agent',
       actingTokenId: IAM_TOKEN_ID,
+      estimateMode: 'trusted_internal',
       request: taskRequest(),
     });
     expect(JSON.stringify(body)).not.toMatch(/private prompt|provider_url|credential|signed_url/i);
@@ -567,6 +584,29 @@ describe('Intelligence project routes', () => {
     const body = await response.text();
     expect(body).not.toContain('https://secret.example.test');
     expect(JSON.parse(body)).toMatchObject({ code: 'INTELLIGENCE_TASK_EXECUTION_FAILED' });
+  });
+
+  test('returns stable redacted estimate errors from the task executor', async () => {
+    const leakedToken = 'studio-estimate-v2.private-token-claims';
+    for (const code of [
+      'INTELLIGENCE_ESTIMATE_INVALID',
+      'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED',
+    ] as const) {
+      const executor: StudioTaskExecutor = {
+        async create() {
+          const error = new IntelligenceTaskServiceError(code, 409);
+          Object.assign(error, { estimate_token: leakedToken });
+          throw error;
+        },
+      };
+      const { app } = createApp({ executor, agentGrant: null });
+      const response = await createTask(app);
+      const body = await response.text();
+
+      expect(response.status, code).toBe(409);
+      expect(JSON.parse(body), code).toMatchObject({ code });
+      expect(body, code).not.toContain(leakedToken);
+    }
   });
 
   test('returns a redacted A2A error when the governed executor fails', async () => {

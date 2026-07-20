@@ -68,6 +68,10 @@ function uniqueConstraintNames(table: any): string[] {
   return getTableConfig(table).uniqueConstraints.map((constraint: any) => constraint.name);
 }
 
+function checkConstraintNames(table: any): string[] {
+  return getTableConfig(table).checks.map((constraint: any) => constraint.name);
+}
+
 describe('kortix pgSchema', () => {
   test('declares the kortix schema namespace', () => {
     expect(kortixSchema.schemaName).toBe('kortix');
@@ -484,6 +488,7 @@ describe('intelligence durable task schema', () => {
         'parent_task_id',
         'request_hash',
         'idempotency_key',
+        'execution_origin',
         'studio_source_cursor',
       ]),
     );
@@ -568,6 +573,7 @@ describe('intelligence durable workflow schema', () => {
         'policy_snapshot_hash',
         'evaluation_version',
         'task_id',
+        'budget_reserved_credits',
         'status',
         'lease_owner',
         'lease_expires_at',
@@ -589,6 +595,9 @@ describe('intelligence durable workflow schema', () => {
         'intelligence_workflow_nodes_run_idempotency_unique',
         'intelligence_workflow_nodes_run_node_key_unique',
       ]),
+    );
+    expect(checkConstraintNames(intelligenceWorkflowNodes)).toContain(
+      'intelligence_workflow_nodes_budget_reserved_credits_check',
     );
   });
 

@@ -48,6 +48,8 @@ const SAFE_INTELLIGENCE_CODES = [
   'INTELLIGENCE_DISCOVERY_TOO_LARGE',
   'INTELLIGENCE_DISCOVERY_UNAVAILABLE',
   'INTELLIGENCE_EXECUTION_TARGET_UNAVAILABLE',
+  'INTELLIGENCE_ESTIMATE_INVALID',
+  'INTELLIGENCE_ESTIMATE_LIMIT_EXCEEDED',
   'INTELLIGENCE_IDEMPOTENCY_MISMATCH',
   'INTELLIGENCE_PROTOCOL_ERROR',
   'INTELLIGENCE_PROTOCOL_UNSUPPORTED',
@@ -115,6 +117,12 @@ export interface IntelligenceStudioJobInput {
   image: IntelligenceImageGenerateInput;
 }
 
+export interface IntelligenceEstimateApproval {
+  estimate_id: string;
+  estimate_token: string;
+  max_approved_credits: number;
+}
+
 export interface IntelligenceCreateTaskRequest {
   protocol_version: ProtocolVersion;
   capability_id: 'studio.image.generate';
@@ -125,6 +133,7 @@ export interface IntelligenceCreateTaskRequest {
   idempotency_key: string;
   parent_task_id?: string | null;
   deadline_at?: string | null;
+  estimate_approval?: IntelligenceEstimateApproval;
 }
 
 export interface IntelligenceTaskResponse {
@@ -594,16 +603,19 @@ export async function getIntelligenceWorkflowEvents(
   cursor?: string | null,
   limit?: number,
 ): Promise<IntelligenceWorkflowEventsResponse> {
-  return requestIntelligence(() => {
-    const query: string[] = [];
-    if (cursor != null) query.push(`cursor=${encodeURIComponent(cursor)}`);
-    if (limit !== undefined) query.push(`limit=${encodeURIComponent(String(limit))}`);
-    const suffix = query.length === 0 ? '' : `?${query.join('&')}`;
-    return backendApi.get<unknown>(
-      `/projects/${encodeURIComponent(projectId)}/intelligence/workflows/${encodeURIComponent(runId)}/events${suffix}`,
-      { showErrors: false },
-    );
-  }, (value) => parseWorkflowEventsResponse(value, runId));
+  return requestIntelligence(
+    () => {
+      const query: string[] = [];
+      if (cursor != null) query.push(`cursor=${encodeURIComponent(cursor)}`);
+      if (limit !== undefined) query.push(`limit=${encodeURIComponent(String(limit))}`);
+      const suffix = query.length === 0 ? '' : `?${query.join('&')}`;
+      return backendApi.get<unknown>(
+        `/projects/${encodeURIComponent(projectId)}/intelligence/workflows/${encodeURIComponent(runId)}/events${suffix}`,
+        { showErrors: false },
+      );
+    },
+    (value) => parseWorkflowEventsResponse(value, runId),
+  );
 }
 
 export async function decideIntelligenceWorkflowApproval(
@@ -619,7 +631,6 @@ export async function decideIntelligenceWorkflowApproval(
         input,
         { showErrors: false },
       ),
-    (value) =>
-      parseWorkflowApprovalDecisionResponse(value, projectId, runId, approvalId),
+    (value) => parseWorkflowApprovalDecisionResponse(value, projectId, runId, approvalId),
   );
 }

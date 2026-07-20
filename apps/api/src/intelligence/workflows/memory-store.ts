@@ -19,6 +19,13 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+const WORKFLOW_CREDIT_SCALE = 1_000_000;
+
+function creditMicros(value: number): number | null {
+  if (!Number.isFinite(value) || value < 0 || value > 1_000_000) return null;
+  return Math.round(value * WORKFLOW_CREDIT_SCALE);
+}
+
 export function createMemoryWorkflowStore(): WorkflowPort {
   const runs = new Map<string, WorkflowRun>();
   const runIdsByIdempotency = new Map<string, string>();
@@ -28,6 +35,8 @@ export function createMemoryWorkflowStore(): WorkflowPort {
   const approvalsByRun = new Map<string, Map<string, WorkflowApproval>>();
   const eventsByRun = new Map<string, WorkflowEvent[]>();
   const leases = new Map<string, { owner: string; expiresAtMs: number }>();
+  const budgetReservations = new Map<string, number>();
+  const budgetKey = (runId: string, nodeId: string) => `${runId}\u0000${nodeId}`;
 
   function appendEvent(
     run: WorkflowRun,
@@ -362,6 +371,60 @@ export function createMemoryWorkflowStore(): WorkflowPort {
       lease.expiresAtMs = nowMs + input.leaseMs;
       node.updated_at = input.now;
       return true;
+    },
+    async reserveNodeBudget(input) {
+      const nowMs = Date.parse(input.now);
+      const requestedMicros = creditMicros(input.maxApprovedCredits);
+      if (!Number.isFinite(nowMs) || input.workerId.trim() === '' || requestedMicros === null) {
+        return null;
+      }
+      const run = runs.get(input.runId);
+      const node = nodesByRun.get(input.runId)?.get(input.nodeId);
+      const lease = leases.get(input.nodeId);
+      if (
+        !run ||
+        run.account_id !== input.accountId ||
+        run.project_id !== input.projectId ||
+        run.status !== 'running' ||
+        (run.deadline_at !== null && Date.parse(run.deadline_at) <= nowMs) ||
+        !node ||
+        node.kind !== 'capability' ||
+        node.status !== 'running' ||
+        (node.deadline_at !== null && Date.parse(node.deadline_at) <= nowMs) ||
+        !lease ||
+        lease.owner !== input.workerId ||
+        lease.expiresAtMs <= nowMs
+      ) {
+        return null;
+      }
+
+      const reservedCredits = [...(nodesByRun.get(input.runId)?.keys() ?? [])].reduce(
+        (total, nodeId) => total + (budgetReservations.get(budgetKey(input.runId, nodeId)) ?? 0),
+        0,
+      );
+      const runMaximumMicros = creditMicros(run.max_approved_credits);
+      if (runMaximumMicros === null) return null;
+      const reservationKey = budgetKey(input.runId, input.nodeId);
+      if (budgetReservations.has(reservationKey)) {
+        const existingMicros = budgetReservations.get(reservationKey) as number;
+        if (existingMicros !== requestedMicros) {
+          throw new WorkflowStoreError('WORKFLOW_BUDGET_RESERVATION_CONFLICT');
+        }
+        return {
+          status: 'replayed',
+          reservedCredits: existingMicros / WORKFLOW_CREDIT_SCALE,
+          remainingCredits: Math.max(0, runMaximumMicros - reservedCredits) / WORKFLOW_CREDIT_SCALE,
+        };
+      }
+      if (reservedCredits + requestedMicros > runMaximumMicros) return null;
+
+      budgetReservations.set(reservationKey, requestedMicros);
+      return {
+        status: 'reserved',
+        reservedCredits: requestedMicros / WORKFLOW_CREDIT_SCALE,
+        remainingCredits:
+          (runMaximumMicros - reservedCredits - requestedMicros) / WORKFLOW_CREDIT_SCALE,
+      };
     },
     async attachTask(input) {
       const run = runs.get(input.runId);

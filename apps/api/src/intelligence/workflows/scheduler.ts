@@ -195,6 +195,8 @@ export function createWorkflowScheduler(input: {
                 parentTaskId: authorization.parentTaskId,
                 actingTokenId: authorization.actingTokenId,
                 sessionId: authorization.sessionId,
+                workerId: input.workerId,
+                now: input.now(),
               });
             } catch (error) {
               if (!(error instanceof WorkflowTaskBridgeError)) throw error;
@@ -204,7 +206,7 @@ export function createWorkflowScheduler(input: {
                 nodeId: claimed.node.node_id,
                 workerId: input.workerId,
                 reasonCode: error.code,
-                retryable: false,
+                retryable: error.code === 'WORKFLOW_TASK_EXECUTION_FAILED',
                 failedAt: input.now(),
               });
               if (failed) stats.failed += 1;

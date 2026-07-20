@@ -160,6 +160,7 @@ describe('Intelligence workflow Phase 2 acceptance', () => {
           model: 'fake/image-v1',
         },
       ],
+      reserveNodeBudget: workflowService.reserveNodeBudget,
     });
     const telemetry = createWorkflowTelemetry({
       counter: (emission) => telemetryEmissions.push(emission),

@@ -10,6 +10,7 @@ describe('WorkflowPort contract', () => {
       'sealGraph',
       'claimReadyNode',
       'heartbeatNode',
+      'reserveNodeBudget',
       'attachTask',
       'completeNode',
       'failNode',

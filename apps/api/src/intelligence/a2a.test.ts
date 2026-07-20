@@ -149,6 +149,7 @@ describe('A2A adapter', () => {
       actingTokenId: '18000000-0000-4000-a000-000000000001',
       agentName: 'content-planner',
       sessionId: 'session-1',
+      estimateMode: 'trusted_internal',
       body: a2aEnvelope(),
     });
 
@@ -162,6 +163,7 @@ describe('A2A adapter', () => {
     expect(calls[0]).toMatchObject({
       accountId: '11000000-0000-4000-a000-000000000001',
       projectId: '12000000-0000-4000-a000-000000000001',
+      estimateMode: 'trusted_internal',
       request: taskRequest,
     });
     expect(JSON.stringify(response)).not.toMatch(/provider|secret|signed_url|raw_body/i);
@@ -242,6 +244,7 @@ describe('A2A adapter', () => {
       actingTokenId: '18000000-0000-4000-a000-000000000001',
       agentName: 'content-planner',
       sessionId: 'session-1',
+      estimateMode: 'trusted_internal' as const,
       body: a2aEnvelope(),
     };
 

@@ -9,12 +9,10 @@ import {
 } from '../../../apps/api/src/intelligence/task-service';
 import { createDb } from '../src/client';
 
-const migrationPath = resolve(
-  import.meta.dir,
-  '..',
-  'migrations',
+const migrationPaths = [
   '20260718140000000_intelligence_task_bridge.sql',
-);
+  '20260720130000000_intelligence_task_execution_origin.sql',
+].map((name) => resolve(import.meta.dir, '..', 'migrations', name));
 
 const dockerAvailable =
   Bun.spawnSync(['docker', 'version'], { stdout: 'ignore', stderr: 'ignore' }).exitCode === 0;
@@ -152,8 +150,8 @@ describe.skipIf(!dockerAvailable)('Intelligence task bridge migration - real Pos
           throw new Error(`Could not resolve mapped PostgreSQL port: ${mappedPort.stdout}`);
         }
         mappedPostgresPort = mappedPortValue;
-        const migration = await Bun.file(migrationPath).text();
-        dockerPsql(`BEGIN;\n${PRE_SCHEMA}\n${migration}\nCOMMIT;`);
+        const migrations = await Promise.all(migrationPaths.map((path) => Bun.file(path).text()));
+        dockerPsql(`BEGIN;\n${PRE_SCHEMA}\n${migrations.join('\n')}\nCOMMIT;`);
         return;
       }
       await Bun.sleep(250);
@@ -569,7 +567,7 @@ describe.skipIf(!dockerAvailable)('Intelligence task bridge migration - real Pos
 
 describe('Intelligence task bridge migration static checks', () => {
   test('defines project-scoped task idempotency and durable event cursor constraints', async () => {
-    const sql = await Bun.file(migrationPath).text();
+    const sql = await Bun.file(migrationPaths[0]).text();
     expect(sql).toMatch(/create\s+table\s+(?:if\s+not\s+exists\s+)?kortix\.intelligence_tasks/i);
     expect(sql).toMatch(
       /create\s+table\s+(?:if\s+not\s+exists\s+)?kortix\.intelligence_task_events/i,
@@ -592,5 +590,10 @@ describe('Intelligence task bridge migration static checks', () => {
       expect(sql.toLowerCase()).toContain(`constraint ${constraint}`);
     }
     expect(sql).not.toMatch(/drop\s+(table|column)/i);
+
+    const originSql = await Bun.file(migrationPaths[1]).text();
+    expect(originSql).toMatch(/execution_origin\s+text\s+not\s+null/i);
+    expect(originSql).toMatch(/workflow-node-/i);
+    expect(originSql).toMatch(/to_regclass\(/i);
   });
 });

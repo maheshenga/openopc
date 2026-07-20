@@ -10,15 +10,15 @@ This ledger is the authoritative status source for the retained Studio accelerat
 
 ## Current Status
 
-| Slice                     | State                                          | Evidence                                                                                                           | Next gate                                                         |
-| ------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| Studio backend foundation | implemented                                    | contracts, schema, billing, IAM, API, worker commits                                                               | protected production acceptance                                   |
-| Intelligence protocol     | implemented                                    | REST, SDK, MCP, A2A, task/event commits                                                                            | retained regression gates                                         |
-| Intelligence workflows    | implemented, disabled                          | workflow, approval, routing, evaluation, Temporal commits                                                          | separately reviewed production rollout                            |
-| Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)     | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                   | focused Web hardening without full-suite reruns                   |
-| Desktop/Electron          | active (Windows directory acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke green | signed Windows installer and macOS/Linux acceptance               |
-| Mobile                    | deferred (implementation retained)             | mobile commit `ae7202a65`; focused contract/wiring tests green                                                     | resume Android/iOS acceptance only after product reprioritization |
-| Developer Center          | planned                                        | acceleration design Milestone 4                                                                                    | separate plan                                                     |
+| Slice                     | State                                                   | Evidence                                                                                                                                    | Next gate                                                         |
+| ------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Studio backend foundation | implemented                                             | contracts, schema, billing, IAM, API, worker commits                                                                                        | protected production acceptance                                   |
+| Intelligence protocol     | implemented                                             | REST, SDK, MCP, A2A, task/event commits                                                                                                     | retained regression gates                                         |
+| Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
+| Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                                            | focused Web hardening without full-suite reruns                   |
+| Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
+| Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
+| Developer Center          | planned                                                 | acceleration design Milestone 4                                                                                                             | separate plan                                                     |
 
 ## Canonical Client Contract
 
@@ -154,8 +154,11 @@ directory package was built from the installed Electron 39.8.10 runtime with
 `--publish never`, `--dir`, and `signAndEditExecutable=false`; it contains
 `Kortix.exe` and `resources/app.asar`. The exact packaged executable passed the
 same Image Studio/Assets smoke, including native downloads. No full suite was
-run. Signed Windows installer, macOS/Linux package acceptance, and production
-readiness remain open.
+run. The same unsigned configuration produced `Kortix-Setup-0.1.0.exe`, its
+`.blockmap`, and `latest.yml` with `--publish never`; the installer PE metadata,
+SHA-256, version `0.1.0`, and referenced files were checked, but the installer
+was not executed. Signed Windows installer, macOS/Linux package acceptance, and
+production readiness remain open.
 
 ## Milestone 3 Mobile Slice
 

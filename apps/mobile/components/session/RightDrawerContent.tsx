@@ -12,20 +12,24 @@
  * pages incrementally.
  */
 
-import React from 'react';
-import { View, TouchableOpacity, ScrollView, Text as RNText } from 'react-native';
-import { useColorScheme } from 'nativewind';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { useTabStore } from '@/stores/tab-store';
-import { useThemeColors } from '@/lib/theme-colors';
-import { useChangeRequests } from '@/lib/projects/hooks';
 import { haptics } from '@/lib/haptics';
+import { useChangeRequests } from '@/lib/projects/hooks';
+import { hasMobileImageTarget } from '@/lib/studio/mobile-image-studio';
+import { useThemeColors } from '@/lib/theme-colors';
+import { useTabStore } from '@/stores/tab-store';
+import { Ionicons } from '@expo/vector-icons';
+import { useIntelligenceCapabilityDiscovery } from '@kortix/sdk/react';
+import { useRouter } from 'expo-router';
+import { useColorScheme } from 'nativewind';
+import type React from 'react';
+import { Text as RNText, ScrollView, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface MenuItem {
-  icon: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
   label: string;
   pageId: string;
+  route?: string;
 }
 
 interface MenuSection {
@@ -78,10 +82,16 @@ const bottomItems: MenuItem[] = [
 ];
 
 export function RightDrawerContent({ onClose, projectId }: RightDrawerContentProps) {
+  const router = useRouter();
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === 'dark';
   const insets = useSafeAreaInsets();
   const theme = useThemeColors();
+  const studioDiscovery = useIntelligenceCapabilityDiscovery(projectId, {
+    enabled: !!projectId,
+    pollingEnabled: false,
+  });
+  const studioAvailable = hasMobileImageTarget(studioDiscovery.data?.execution_targets ?? []);
 
   // Open change-request count → a "review" nudge badge on the Changes item.
   const openCrCount = useChangeRequests(projectId ?? null, 'open').data?.change_requests.length ?? 0;
@@ -93,16 +103,34 @@ export function RightDrawerContent({ onClose, projectId }: RightDrawerContentPro
   const bgColor = isDark ? '#090909' : '#F5F5F5'; // matches --chrome-background
   const dividerColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
 
-  const handleItemPress = (pageId: string) => {
+  const sections = studioAvailable && projectId
+    ? [
+        {
+          title: 'CREATE',
+          items: [
+            {
+              icon: 'image-outline',
+              label: 'Image Studio',
+              pageId: 'route:image-studio',
+              route: `/projects/${projectId}/studio`,
+            },
+          ],
+        },
+        ...topSections,
+      ]
+    : topSections;
+
+  const handleItemPress = (item: MenuItem) => {
     haptics.tap();
-    useTabStore.getState().navigateToPage(pageId);
+    if (item.route) router.push(item.route);
+    else useTabStore.getState().navigateToPage(item.pageId);
     onClose();
   };
 
   const renderItem = (item: MenuItem) => (
     <TouchableOpacity
       key={item.pageId}
-      onPress={() => handleItemPress(item.pageId)}
+      onPress={() => handleItemPress(item)}
       activeOpacity={0.6}
       style={{
         flexDirection: 'row',
@@ -112,7 +140,7 @@ export function RightDrawerContent({ onClose, projectId }: RightDrawerContentPro
         gap: 12,
       }}
     >
-      <Ionicons name={item.icon as any} size={18} color={mutedColor} />
+      <Ionicons name={item.icon} size={18} color={mutedColor} />
       <RNText style={{ fontSize: 15, fontFamily: 'Roobert', color: fgColor }}>
         {item.label}
       </RNText>
@@ -130,7 +158,7 @@ export function RightDrawerContent({ onClose, projectId }: RightDrawerContentPro
   return (
     <View style={{ flex: 1,  paddingTop: insets.top }} className='bg-chrome-background'>
       <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
-        {topSections.map((section) => (
+        {sections.map((section) => (
           <View key={section.title} style={{ marginBottom: 8 }}>
             <RNText
               style={{

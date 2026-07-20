@@ -134,7 +134,7 @@ The current execution state lives in `docs/operations/studio-acceleration-progre
 - 2026-07-20: Milestone 0-1 Task 4 is **DONE** (`026eb2ea6`, `Codex`) on branch
   `studio-platform`: add image, job, upload, and asset projections under the
   canonical Intelligence facade without introducing `project().studio`.
-- 2026-07-20: Milestone 0-1 Task 5 is **IN PROGRESS** (`Codex`) on branch
+- 2026-07-20: Milestone 0-1 Task 5 is **DONE** (`019c512d9`, `Codex`) on branch
   `studio-platform`: add project-scoped React Query hooks over the Task 4
   Intelligence Image Studio projections.
 
@@ -972,3 +972,21 @@ milestone gate after Task 5; no production flags were enabled or deployed.
 
 **Shippable to production: NOT YET** for the milestone; this task's additive SDK
 surface is regression-locked.
+
+### 2026-07-20 - Milestone 0-1 Task 5 (`Codex`)
+
+Completed commit `019c512d9`: project-scoped jobs/assets queries, estimate,
+cancel, upload, finalize, and download mutations, scoped invalidation, existing
+React-barrel exports, and additive public snapshots. Download URLs remain
+one-shot mutation results and are not written into Query cache.
+
+**Verified**
+
+```
+pnpm.cmd --filter @kortix/sdk test -> 1135 pass, 0 fail, 5235 expect() calls, 84 files
+pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
+pnpm.cmd --filter @kortix/sdk run smoke:install -> Install smoke test passed
+```
+
+**Shippable to production: NOT YET** for the milestone; the Task 5 SDK package
+surface itself passed its release-level gates.

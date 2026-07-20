@@ -49,3 +49,20 @@ projection suite passed (`15/15`), the full facade test file passed (`63/63`),
 SDK typecheck passed, both public-surface tests passed, and scoped Biome checks
 passed. React hooks, Web pages, full SDK suite, and package smoke install remain
 later milestone gates.
+
+## Task 2 Scheduler Follow-up
+
+Follow-up `0c932761a` prevents retryable workflow execution failures from being
+reclaimed repeatedly within the same scheduler tick. The regression proves one
+attempt per tick and a retry on the next tick; scheduler and task-bridge tests
+passed (`30/30`) and API typecheck passed.
+
+## Task 5 Evidence
+
+Task 5 (`019c512d9`) adds project-scoped React Query hooks for Image Studio jobs,
+assets, estimates, cancellation, uploads, finalization, and signed-download URL
+creation through the existing `@kortix/sdk/react` barrel. Query invalidation is
+limited to durable Intelligence project data, and signed URLs remain one-shot
+mutation results. The complete SDK suite passed (`1135/1135`), SDK typecheck
+passed, packed-install smoke passed, and runtime/type snapshots contain only
+additive `./react` exports.

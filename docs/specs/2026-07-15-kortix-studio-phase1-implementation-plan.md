@@ -1,6 +1,6 @@
 # Kortix Studio Phase 1 Implementation Plan
 
-**Status:** In progress; Tasks 1-8 complete, Task 9 amended 2026-07-16
+**Status:** Historical procedure; current implementation and acceptance status is tracked in `docs/operations/studio-acceleration-progress.md`.
 
 **Date:** 2026-07-15
 

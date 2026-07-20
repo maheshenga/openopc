@@ -122,7 +122,7 @@ real output. `typecheck` is not evidence.
 ## 2026-07-15 Studio Phase 1 SDK Claim
 
 - Owner: Codex
-- Scope: Add `kortix.project(projectId).studio` plus `@kortix/sdk/react` Studio hooks.
+- Scope: Add the historical dedicated Studio facade plus `@kortix/sdk/react` Studio hooks.
 - Public surface: additive only; no new SDK subpath.
 - Required gates: typecheck, test, public-surface snapshot, smoke install.
 - Plan: `docs/specs/2026-07-15-kortix-studio-phase1-implementation-plan.md`
@@ -133,7 +133,8 @@ The current execution state lives in `docs/operations/studio-acceleration-progre
 
 - 2026-07-20: Milestone 0-1 Task 4 is **DONE** (`026eb2ea6`, `Codex`) on branch
   `studio-platform`: add image, job, upload, and asset projections under the
-  canonical Intelligence facade without introducing `project().studio`.
+  canonical Intelligence facade without introducing a second project-scoped
+  Studio facade.
 - 2026-07-20: Milestone 0-1 Task 5 is **DONE** (`019c512d9`, `Codex`) on branch
   `studio-platform`: add project-scoped React Query hooks over the Task 4
   Intelligence Image Studio projections.

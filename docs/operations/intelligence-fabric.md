@@ -31,6 +31,31 @@ The API acceptance fixture performs this sequence:
 
 The CLI acceptance fixture starts the real `kortix executor mcp` stdio process, negotiates MCP revision `2025-11-25`, discovers the same strict wire contracts over HTTP, creates and replays a task, and confirms a revoked Agent does not create another row, job, or provider submission.
 
+## Web Image Studio acceptance
+
+The debug-only Web harness mounts the real Studio shell, Image Studio, and
+Assets views with a fixed project and a test-only bootstrap token. Run it with
+a local webpack server on an unused port:
+
+```powershell
+$env:E2E_BASE_URL='http://localhost:3300'; pnpm.cmd --filter Kortix-Computer-Frontend test:e2e:image-studio
+```
+
+The fake provider is intercepted in the browser and never performs external
+provider or object-storage I/O. The smoke requires project-scoped
+`Authorization` headers, exact signed upload headers and bytes, estimate to
+task provider/model/input equality, idempotent retry, event pagination, task
+URL reload recovery, cancellation, 402/403 states, source/reuse links,
+preview/download, desktop/mobile non-overlap and pixel checks, and redaction
+of test tokens, estimate tokens, and signed URLs. It also fails on unexpected
+`/v1/projects/*` scope requests and checks rendered cancelled multimedia
+navigation entries. The accepted run on 2026-07-20 exited `0` and produced
+inspected desktop/mobile screenshots under the ignored Web test-results directory.
+
+This browser gate is evidence for the Web slice only. It does not enable
+`STUDIO_ENABLED`, deploy a worker, prove a protected live provider, or prove
+Alibaba OSS compatibility.
+
 Run the focused acceptance fixtures:
 
 ```bash

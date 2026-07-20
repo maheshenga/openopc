@@ -15,7 +15,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Studio backend foundation | implemented | contracts, schema, billing, IAM, API, worker commits | protected production acceptance |
 | Intelligence protocol | implemented | REST, SDK, MCP, A2A, task/event commits | retained regression gates |
 | Intelligence workflows | implemented, disabled | workflow, approval, routing, evaluation, Temporal commits | separately reviewed production rollout |
-| Milestone 0-1 | active | canonical Intelligence SDK decision; Task 2 commit `4a50cf771` | Web Image Studio browser acceptance |
+| Milestone 0-1 | active (Task 10 complete; Task 11 partial) | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green | resolve/record Web full-build, full-suite, and i18n baseline gates before closing |
 | Mobile and Electron | planned | acceleration design Milestone 3 | separate plan |
 | Developer Center | planned | acceleration design Milestone 4 | separate plan |
 
@@ -66,3 +66,40 @@ limited to durable Intelligence project data, and signed URLs remain one-shot
 mutation results. The complete SDK suite passed (`1135/1135`), SDK typecheck
 passed, packed-install smoke passed, and runtime/type snapshots contain only
 additive `./react` exports.
+
+## Task 10 Evidence
+
+Task 10 (`8dea9258c`) adds the debug-only Web Image Studio harness and repeatable
+Playwright smoke at `apps/web/scripts/e2e/image-studio-smoke.ts`. The accepted
+fake-provider run used a local webpack server on port `3300` and exited `0`.
+It covered capability and Agent Card discovery, signed estimate approval,
+provider/model/input binding, one `503` followed by idempotent task replay,
+event pagination, signed reference upload/finalization, desktop/mobile layout
+and pixel checks, durable task URL and reload recovery, cancellation,
+insufficient-credit and permission errors, Assets source/reuse links, preview,
+download, and redaction checks. The desktop and mobile screenshots were
+inspected and remain ignored test artifacts.
+
+The focused Web Studio suite passed (`33/33`), Web noEmit typecheck passed, and
+Web ESLint exited `0` with the repository's existing warnings. The browser
+smoke also passed after the browser-safe default UUID fix in
+`createImageIdempotencyKey` and strict SDK-compatible fake job fixtures.
+
+## Task 11 Acceptance Status
+
+The shared package gates passed: API contract (`56/56`), Studio runtime
+(`30/30`), Studio adapters (`127/127`), SDK (`1136/1136`), SDK typecheck, and
+SDK bundle build. The Web full test ran `1057` passing and `6` failing; the
+failures are outside this diff (public Markdown MDX syntax, three
+ProjectManifest alert tests only when run in the full suite, and two
+system-locale-sensitive timeline expectations). The same three files were
+re-run independently: the alert file passed; the Markdown and timeline
+failures remain reproducible baseline failures.
+
+`i18n:audit` remains a baseline failure: English has `0` missing keys, the
+other seven locales each have `70` missing `hardcodedUi.appHomePage` keys, and
+the hardcoded UI audit reports `1291` findings. A full Web build was not
+proven because the Windows host repeatedly exhausted commit memory during
+Next compilation and exited without compiler diagnostics. These gates remain
+open; this ledger does not claim Milestone 0-1 or production readiness is
+complete.

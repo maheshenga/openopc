@@ -480,6 +480,47 @@ describe('Studio API runtime assembly', () => {
     expect(providerReads).toBe(0);
   });
 
+  test('wires governed Executor and MCP entries into the default capability catalog', async () => {
+    let receivedContext: unknown;
+    let receivedActor: unknown;
+    const app = mountDefaultIntelligenceRoutes({
+      runtime: { enabled: false },
+      capabilityRegistry: { list: async () => [] },
+      executorCatalogSource: {
+        async list(_projectId: string, actor: unknown, requestContext: unknown) {
+          receivedActor = actor;
+          receivedContext = requestContext;
+          return [
+            {
+              projectId: PROJECT_ID,
+              connectorSlug: 'slack',
+              source: 'mcp',
+              action: {
+                path: 'messages.search',
+                name: 'Search messages',
+                inputSchema: { type: 'object' },
+                risk: 'read',
+              },
+            },
+          ];
+        },
+      },
+      loadProjectForUser: async (_context: unknown, projectId: string) => ({
+        row: { accountId: ACCOUNT_ID, projectId },
+        userId: USER_ID,
+      }),
+      assertProjectCapability: async () => {},
+    });
+
+    const response = await app.request(`/v1/projects/${PROJECT_ID}/intelligence/catalog`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      items: [{ ref: { kind: 'tool', id: 'slack.messages.search', version: '1.0.0' } }],
+    });
+    expect(receivedActor).toMatchObject({ accountId: ACCOUNT_ID, userId: USER_ID });
+    expect(receivedContext).toBeDefined();
+  });
+
   test('keeps unready intelligence discovery empty without reading providers', async () => {
     const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
     let providerReads = 0;

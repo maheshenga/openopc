@@ -9,6 +9,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { PROJECT_ACTIONS } from '../iam/actions';
 import { buildProjectAgentCard } from './agent-cards';
+import type { ProjectCapabilityCatalogPort } from './capability-catalog';
 import {
   type IntelligenceTaskEventReader,
   type StudioTaskExecutor,
@@ -91,6 +92,7 @@ type TestOptions = {
   agentGrant?: string | null;
   projectMissing?: boolean;
   authType?: string;
+  catalog?: ProjectCapabilityCatalogPort | null;
 };
 
 function createApp(options: TestOptions = {}) {
@@ -145,6 +147,27 @@ function createApp(options: TestOptions = {}) {
           ],
         }),
       };
+  const catalogItem = {
+    ref: { kind: 'capability' as const, id: 'studio.image.generate', version: '1.0.0' },
+    title: 'Image generation',
+    summary: 'Generate an image.',
+    risk: 'write' as const,
+    availability: 'available' as const,
+    capability_id: 'studio.image.generate',
+    executable: true,
+    source: 'studio' as const,
+  };
+  const defaultCatalog: ProjectCapabilityCatalogPort = {
+    async search() {
+      return { items: [catalogItem], next_cursor: null };
+    },
+    async describe(input) {
+      return input.ref.kind === catalogItem.ref.kind && input.ref.id === catalogItem.ref.id
+        ? { type: 'object' }
+        : null;
+    },
+  };
+  const catalog = options.catalog === null ? undefined : (options.catalog ?? defaultCatalog);
   const routes = createIntelligenceProjectRoutes({
     loadProjectForUser: async (_context, projectId) =>
       options.projectMissing || (projectId !== PROJECT_ID && projectId !== OTHER_PROJECT_ID)
@@ -155,6 +178,7 @@ function createApp(options: TestOptions = {}) {
       if (options.denyAction) throw new HTTPException(403, { message: 'Forbidden' });
     },
     capabilityRegistry,
+    ...(catalog ? { capabilityCatalog: catalog } : {}),
     getAgentCard: async () => localCard,
     taskExecutor: options.executor === null ? undefined : (options.executor ?? defaultExecutor),
     taskEventReader:
@@ -209,6 +233,82 @@ async function createA2ATask(app: Hono, request: IntelligenceCreateTaskRequest =
 }
 
 describe('Intelligence project routes', () => {
+  test('exposes a project-scoped read-only capability catalog without changing discovery', async () => {
+    const { app, actions } = createApp();
+    const response = await app.request(
+      `/v1/projects/${PROJECT_ID}/intelligence/catalog?query=image&limit=1`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      protocol_version: 'intelligence.v1',
+      items: [
+        {
+          ref: { kind: 'capability', id: 'studio.image.generate', version: '1.0.0' },
+          title: 'Image generation',
+          summary: 'Generate an image.',
+          risk: 'write',
+          availability: 'available',
+          capability_id: 'studio.image.generate',
+          executable: true,
+          source: 'studio',
+        },
+      ],
+      next_cursor: null,
+    });
+    expect(actions).toEqual([PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_USE]);
+    expect(
+      (await app.request(`/v1/projects/${PROJECT_ID}/intelligence/capabilities`)).status,
+    ).toBe(200);
+  });
+
+  test('sanitizes IdP sessions while retaining project PAT session grants for the catalog', async () => {
+    const actors: unknown[] = [];
+    const catalog: ProjectCapabilityCatalogPort = {
+      async search(input) {
+        actors.push(input.actor);
+        return { items: [], next_cursor: null };
+      },
+      async describe() {
+        return null;
+      },
+    };
+
+    const supabase = createApp({ authType: 'supabase', catalog });
+    expect(
+      (await supabase.app.request(`/v1/projects/${PROJECT_ID}/intelligence/catalog`)).status,
+    ).toBe(200);
+    expect(actors[0]).toMatchObject({
+      actorType: 'user',
+      sessionId: null,
+      agentGrant: null,
+    });
+
+    const pat = createApp({ authType: 'pat', agentGrant: 'content-planner', catalog });
+    expect(
+      (await pat.app.request(`/v1/projects/${PROJECT_ID}/intelligence/catalog`)).status,
+    ).toBe(200);
+    expect(actors[1]).toMatchObject({
+      actorType: 'agent',
+      sessionId: 'session-1',
+      agentGrant: { agent: 'content-planner' },
+    });
+  });
+
+  test('validates catalog query values and hides missing descriptions', async () => {
+    const { app } = createApp();
+    expect(
+      (await app.request(`/v1/projects/${PROJECT_ID}/intelligence/catalog?limit=0`)).status,
+    ).toBe(400);
+    expect(
+      (
+        await app.request(
+          `/v1/projects/${PROJECT_ID}/intelligence/catalog/describe?kind=tool&id=foreign.read&version=1.0.0`,
+        )
+      ).status,
+    ).toBe(404);
+  });
+
   test('keeps the request contract strict and rejects unsupported protocol revisions', async () => {
     expect(IntelligenceCreateTaskRequestSchema.safeParse(taskRequest()).success).toBe(true);
     expect(

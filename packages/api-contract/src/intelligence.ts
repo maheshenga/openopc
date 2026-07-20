@@ -1,6 +1,10 @@
 import {
   AgentCardSchema,
+  CapabilityCatalogRefSchema,
+  CapabilityCatalogSearchResponseSchema,
   CapabilityDescriptorSchema,
+  hasUnsafeCatalogCredentialLiteral,
+  isPublicCatalogInputSchema,
   ProtocolVersionSchema,
   TaskEventSchema,
   WORKFLOW_MAX_DEPENDENCIES,
@@ -24,6 +28,7 @@ export const IntelligenceErrorCodeSchema = z.enum([
   'INTELLIGENCE_AGENT_CARD_UNAVAILABLE',
   'INTELLIGENCE_AGENT_CARD_UNTRUSTED',
   'INTELLIGENCE_CAPABILITIES_UNAVAILABLE',
+  'INTELLIGENCE_CATALOG_UNAVAILABLE',
   'INTELLIGENCE_CAPABILITY_UNAVAILABLE',
   'INTELLIGENCE_DISCOVERY_INVALID',
   'INTELLIGENCE_DISCOVERY_TOO_LARGE',
@@ -63,7 +68,7 @@ const IntelligenceModelIdentifierSchema = z
     'model must be a non-sensitive identifier',
   );
 const SENSITIVE_PUBLIC_KEY_PATTERN =
-  /(^|[._-])(api[_-]?key|secret|token|access[_-]?token|password|credential|authorization|cookie|signed[_-]?url|provider[_-]?url|base[_-]?url|signature|x[_-]?amz)([._-]|$)/i;
+  /(^|[._-])(?:api[_-]?key|secret|token|access[_-]?token|password|credential|authorization|cookie|signed[_-]?url|provider[_-]?url|base[_-]?url|signature|x[_-]?amz|(?:raw(?:[_-](?:provider|request|response))*|provider(?:[_-](?:request|response))?)[_-](?:body|payload)|headers?)([._-]|$)/i;
 const UNSAFE_PUBLIC_URL_PATTERN = /(?:[a-z][a-z\d+.-]*:\/\/|\/\/)/i;
 const UNSAFE_PUBLIC_SCHEME_PATTERN = /(?:^|[\s"'=(:,])(data|file|mailto|javascript|blob|urn):/i;
 const UNSAFE_WORKFLOW_SECRET_TEXT_PATTERN =
@@ -108,6 +113,34 @@ export const IntelligenceCapabilitiesResponseSchema = z
   .strict();
 export type IntelligenceCapabilitiesResponse = z.infer<
   typeof IntelligenceCapabilitiesResponseSchema
+>;
+
+export const IntelligenceCapabilityCatalogSearchResponseSchema =
+  CapabilityCatalogSearchResponseSchema;
+export type IntelligenceCapabilityCatalogSearchResponse = z.infer<
+  typeof IntelligenceCapabilityCatalogSearchResponseSchema
+>;
+
+const IntelligenceCapabilityCatalogDetailSchema = z
+  .record(z.string().min(1).max(128), z.unknown())
+  .superRefine((value, context) => {
+    if (hasUnsafePublicPayload(value) || !isPublicCatalogInputSchema(value)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'catalog input schema must be a redaction-safe public projection',
+      });
+    }
+  });
+
+export const IntelligenceCapabilityCatalogDescribeResponseSchema = z
+  .object({
+    protocol_version: ProtocolVersionSchema,
+    ref: CapabilityCatalogRefSchema,
+    input_schema: IntelligenceCapabilityCatalogDetailSchema,
+  })
+  .strict();
+export type IntelligenceCapabilityCatalogDescribeResponse = z.infer<
+  typeof IntelligenceCapabilityCatalogDescribeResponseSchema
 >;
 
 export const IntelligenceExecutionTargetSchema = z
@@ -519,12 +552,32 @@ export type IntelligenceA2ATaskResponse = z.infer<typeof IntelligenceA2ATaskResp
 
 function hasUnsafePublicPayload(value: unknown): boolean {
   if (typeof value === 'string') {
-    return UNSAFE_PUBLIC_URL_PATTERN.test(value) || UNSAFE_PUBLIC_SCHEME_PATTERN.test(value);
+    return (
+      UNSAFE_PUBLIC_URL_PATTERN.test(value) ||
+      UNSAFE_PUBLIC_SCHEME_PATTERN.test(value) ||
+      hasUnsafeCatalogCredentialLiteral(value)
+    );
   }
   if (Array.isArray(value)) return value.some(hasUnsafePublicPayload);
   if (!value || typeof value !== 'object') return false;
   return Object.entries(value).some(
-    ([key, nested]) => SENSITIVE_PUBLIC_KEY_PATTERN.test(key) || hasUnsafePublicPayload(nested),
+    ([key, nested]) => isSensitivePublicKey(key) || hasUnsafePublicPayload(nested),
+  );
+}
+
+function isSensitivePublicKey(key: string): boolean {
+  const separated = key.replace(/([a-z\d])([A-Z])/g, '$1_$2');
+  if (SENSITIVE_PUBLIC_KEY_PATTERN.test(separated)) return true;
+  return isRawProviderMetadataKey(separated.replace(/[^a-z\d]/gi, '').toLowerCase());
+}
+
+function isRawProviderMetadataKey(normalized: string): boolean {
+  return (
+    normalized === 'raw' ||
+    normalized === 'rawdata' ||
+    /^raw(?:provider|request|response)?(?:body|payload|request|response)$/.test(normalized) ||
+    /^provider(?:request|response)(?:body|payload)?$/.test(normalized) ||
+    /^(?:request|response)(?:body|payload)$/.test(normalized)
   );
 }
 

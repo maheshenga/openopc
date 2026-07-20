@@ -98,8 +98,10 @@ export { useGatewayRoutingPolicy, gatewayRoutingPolicyKey } from './use-gateway-
 // the governed task mutation. This remains part of the existing React export;
 // no new SDK subpath is required.
 export {
+  type IntelligenceCatalogQueryOptions,
   intelligenceAgentCardKey,
   intelligenceCapabilityDiscoveryKey,
+  intelligenceCatalogKey,
   intelligenceCapabilitiesKey,
   intelligenceAssetsKey,
   intelligenceAssetsPrefix,
@@ -121,6 +123,7 @@ export {
   useIntelligence,
   useIntelligenceAgentCard,
   useIntelligenceCapabilityDiscovery,
+  useIntelligenceCatalog,
   useIntelligenceCapabilities,
   useIntelligenceAssetDownload,
   useIntelligenceAssets,

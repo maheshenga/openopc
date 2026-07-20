@@ -81,6 +81,29 @@ test('project(id).intelligence binds capability, task, and workflow endpoints', 
         items: [capability],
         next_cursor: null,
       };
+    } else if (requestUrl.includes('/intelligence/catalog/describe')) {
+      responseBody = {
+        protocol_version: 'intelligence.v1',
+        ref: { kind: 'capability', id: 'studio.image.generate', version: '1.0.0' },
+        input_schema: { type: 'object' },
+      };
+    } else if (requestUrl.includes('/intelligence/catalog')) {
+      responseBody = {
+        protocol_version: 'intelligence.v1',
+        items: [
+          {
+            ref: { kind: 'capability', id: 'studio.image.generate', version: '1.0.0' },
+            title: 'Image generation',
+            summary: 'Generate an image.',
+            risk: 'write',
+            availability: 'available',
+            capability_id: 'studio.image.generate',
+            executable: true,
+            source: 'studio',
+          },
+        ],
+        next_cursor: null,
+      };
     } else if (requestUrl.endsWith('/intelligence/agent-card')) {
       responseBody = {
         id: 'content-planner',
@@ -123,6 +146,8 @@ test('project(id).intelligence binds capability, task, and workflow endpoints', 
   const project = kortix.project('PID123');
   expect(typeof project.intelligence.capabilities.list).toBe('function');
   expect(typeof project.intelligence.capabilities.discover).toBe('function');
+  expect(typeof project.intelligence.catalog.search).toBe('function');
+  expect(typeof project.intelligence.catalog.describe).toBe('function');
   expect(typeof project.intelligence.agentCard.get).toBe('function');
   expect(typeof project.intelligence.tasks.create).toBe('function');
   expect(typeof project.intelligence.tasks.byJob).toBe('function');
@@ -138,6 +163,16 @@ test('project(id).intelligence binds capability, task, and workflow endpoints', 
   await project.intelligence.capabilities.discover();
   expect(last().url).toContain(
     '/projects/PID123/intelligence/capabilities?include=execution_targets',
+  );
+  await project.intelligence.catalog.search({ query: 'image', limit: 20, cursor: null });
+  expect(last().url).toContain('/projects/PID123/intelligence/catalog?query=image&limit=20');
+  await project.intelligence.catalog.describe({
+    kind: 'capability',
+    id: 'studio.image.generate',
+    version: '1.0.0',
+  });
+  expect(last().url).toContain(
+    '/projects/PID123/intelligence/catalog/describe?kind=capability&id=studio.image.generate&version=1.0.0',
   );
   await project.intelligence.agentCard.get();
   expect(last().url).toContain('/projects/PID123/intelligence/agent-card');

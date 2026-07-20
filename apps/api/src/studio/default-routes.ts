@@ -7,9 +7,16 @@ import {
 } from '@kortix/studio-adapters';
 import { InMemoryStudioObjectStore, type StudioObjectStore } from '@kortix/studio-runtime';
 import { config } from '../config';
+import type { ExecutorPrincipal } from '../executor/router';
 import { deriveRequestContext } from '../iam/cache';
 import { assertAuthorized } from '../iam/dispatcher';
 import { buildProjectAgentCard } from '../intelligence/agent-cards';
+import {
+  type CatalogExecutorSource,
+  createExecutorCatalogSource,
+  type ProjectCapabilityCatalogPort,
+  createProjectCapabilityCatalog,
+} from '../intelligence/capability-catalog';
 import { createProjectCapabilityRegistry } from '../intelligence/capability-registry';
 import {
   type AgentTrustSource,
@@ -134,6 +141,8 @@ export type DefaultIntelligenceProjectRoutesInput = {
   loadProjectForUser?: IntelligenceProjectRouteDeps['loadProjectForUser'];
   assertProjectCapability?: IntelligenceProjectRouteDeps['assertProjectCapability'];
   capabilityRegistry?: IntelligenceCapabilityRegistry;
+  executorCatalogSource?: CatalogExecutorSource;
+  capabilityCatalog?: ProjectCapabilityCatalogPort;
   getAgentCard?: IntelligenceProjectRouteDeps['getAgentCard'];
   taskExecutor?: StudioTaskExecutor;
   taskEventReader?: IntelligenceTaskEventReader;
@@ -237,6 +246,9 @@ export function createDefaultIntelligenceProjectRoutes(
       },
       credentialBindingExists,
     });
+  const executorCatalogSource = input.executorCatalogSource ?? createDefaultExecutorCatalogSource();
+  const capabilityCatalog =
+    input.capabilityCatalog ?? createProjectCapabilityCatalog({ capabilityRegistry, executorSource: executorCatalogSource });
 
   let taskExecutor = input.taskExecutor;
   let taskEventReader = input.taskEventReader;
@@ -279,6 +291,7 @@ export function createDefaultIntelligenceProjectRoutes(
 
   return createIntelligenceProjectRoutes({
     capabilityRegistry,
+    capabilityCatalog,
     getAgentCard:
       input.getAgentCard ??
       (async ({ projectId, capabilities }) =>
@@ -297,6 +310,37 @@ export function createDefaultIntelligenceProjectRoutes(
     ...(taskEventReader ? { taskEventReader } : {}),
     ...(input.agentTrustSource ? { agentTrustSource: input.agentTrustSource } : {}),
   });
+}
+
+function createDefaultExecutorCatalogSource(): CatalogExecutorSource {
+  let source: CatalogExecutorSource | null = null;
+  return {
+    async list(projectId, actor, _requestContext) {
+      if (!source) {
+        const [{ dbExecutorRouterDeps }, { resolveShareSubject }] = await Promise.all([
+          import('../executor/db-deps'),
+          import('../executor/share'),
+        ]);
+        source = createExecutorCatalogSource<ExecutorPrincipal>({
+          // The intelligence project route already resolved the project and IAM scope.
+          // Passing raw Hono context here would confuse an IdP login session with an
+          // Executor project session and hide otherwise usable connectors.
+          async resolveProjectPrincipal(catalogActor, scopedProjectId) {
+            return {
+              accountId: catalogActor.accountId,
+              userId: catalogActor.userId,
+              projectId: scopedProjectId,
+              sessionId: catalogActor.sessionId ?? null,
+              subject: await resolveShareSubject(catalogActor.userId),
+              agentGrant: catalogActor.agentGrant ?? null,
+            };
+          },
+          listCatalog: dbExecutorRouterDeps.listCatalog,
+        });
+      }
+      return source.list(projectId, actor);
+    },
+  };
 }
 
 function isDatabaseLike(value: unknown): value is Database {

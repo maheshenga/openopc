@@ -1,6 +1,7 @@
 import { beforeEach, expect, mock, test } from 'bun:test';
 import { configureKortix } from '../../http/config';
 import {
+  describeIntelligenceCatalog,
   type IntelligenceCreateTaskRequest,
   type IntelligenceWorkflowApprovalDecisionRequest,
   type IntelligenceWorkflowCancelRequest,
@@ -14,6 +15,7 @@ import {
   getIntelligenceWorkflow,
   getIntelligenceWorkflowEvents,
   listIntelligenceCapabilities,
+  searchIntelligenceCatalog,
   startIntelligenceWorkflow,
 } from './intelligence';
 
@@ -183,6 +185,132 @@ test('lists project intelligence capabilities through the typed endpoint', async
       body: undefined,
     },
   ]);
+});
+
+test('searches and describes a project capability catalog through strict endpoints', async () => {
+  const item = {
+    ref: { kind: 'capability' as const, id: 'studio.image.generate', version: '1.0.0' },
+    title: 'Image generation',
+    summary: 'Generate an image.',
+    risk: 'write' as const,
+    availability: 'available' as const,
+    capability_id: 'studio.image.generate',
+    executable: true,
+    source: 'studio' as const,
+  };
+  nextBody = { protocol_version: 'intelligence.v1', items: [item], next_cursor: 1 };
+  await expect(
+    searchIntelligenceCatalog(PROJECT_ID, { query: 'image & tool', limit: 20, cursor: null }),
+  ).resolves.toMatchObject({ items: [item], next_cursor: 1 });
+  expect(requests[0]?.url).toBe(
+    `http://test.local/v1/projects/${PROJECT_ID}/intelligence/catalog?query=image+%26+tool&limit=20`,
+  );
+
+  nextBody = {
+    protocol_version: 'intelligence.v1',
+    ref: item.ref,
+    input_schema: {
+      type: 'object',
+      properties: { query: { type: 'string', 'x-in': 'query' } },
+      required: ['query'],
+    },
+  };
+  await expect(describeIntelligenceCatalog(PROJECT_ID, item.ref)).resolves.toMatchObject({
+    input_schema: { properties: { query: { 'x-in': 'query' } } },
+  });
+  expect(requests[1]?.url).toBe(
+    `http://test.local/v1/projects/${PROJECT_ID}/intelligence/catalog/describe?kind=capability&id=studio.image.generate&version=1.0.0`,
+  );
+});
+
+test('rejects catalog responses with an unbound reference or unreplayable cursor', async () => {
+  const ref = { kind: 'capability' as const, id: 'studio.image.generate', version: '1.0.0' };
+  nextBody = {
+    protocol_version: 'intelligence.v1',
+    ref: { kind: 'tool', id: 'storage.upload', version: '1.0.0' },
+    input_schema: { type: 'object' },
+  };
+
+  let thrown: unknown;
+  try {
+    await describeIntelligenceCatalog(PROJECT_ID, ref);
+  } catch (error) {
+    thrown = error;
+  }
+  expect((thrown as { code?: string } | undefined)?.code).toBe('INTELLIGENCE_PROTOCOL_ERROR');
+
+  nextBody = {
+    protocol_version: 'intelligence.v1',
+    items: [],
+    next_cursor: 1_000_001,
+  };
+  thrown = undefined;
+  try {
+    await searchIntelligenceCatalog(PROJECT_ID, { query: '', limit: 20, cursor: null });
+  } catch (error) {
+    thrown = error;
+  }
+  expect((thrown as { code?: string } | undefined)?.code).toBe('INTELLIGENCE_PROTOCOL_ERROR');
+});
+
+test('rejects a catalog description whose schema keys exceed the wire contract', async () => {
+  const ref = { kind: 'capability' as const, id: 'studio.image.generate', version: '1.0.0' };
+  nextBody = {
+    protocol_version: 'intelligence.v1',
+    ref,
+    input_schema: { ['x'.repeat(129)]: { type: 'string' } },
+  };
+
+  let thrown: unknown;
+  try {
+    await describeIntelligenceCatalog(PROJECT_ID, ref);
+  } catch (error) {
+    thrown = error;
+  }
+  expect((thrown as { code?: string } | undefined)?.code).toBe('INTELLIGENCE_PROTOCOL_ERROR');
+});
+
+test('rejects a catalog description with bare credential-like literals', async () => {
+  const ref = { kind: 'tool' as const, id: 'storage.upload', version: '1.0.0' };
+  nextBody = {
+    protocol_version: 'intelligence.v1',
+    ref,
+    input_schema: {
+      type: 'object',
+      examples: [
+        'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789',
+        'AIzaabcdefghijklmnopqrstuvwxyz012345678',
+        'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+        'AKIA1234567890ABCDEF',
+        'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature',
+      ],
+    },
+  };
+
+  let thrown: unknown;
+  try {
+    await describeIntelligenceCatalog(PROJECT_ID, ref);
+  } catch (error) {
+    thrown = error;
+  }
+  expect((thrown as { code?: string } | undefined)?.code).toBe('INTELLIGENCE_PROTOCOL_ERROR');
+});
+
+test('rejects a catalog description with unprojected schema annotations', async () => {
+  const ref = { kind: 'tool' as const, id: 'storage.upload', version: '1.0.0' };
+  nextBody = {
+    protocol_version: 'intelligence.v1',
+    ref,
+    input_schema: { type: 'object', description: 'opaque external metadata' },
+  };
+
+  let thrown: unknown;
+  try {
+    await describeIntelligenceCatalog(PROJECT_ID, ref);
+  } catch (error) {
+    thrown = error;
+  }
+  expect((thrown as { code?: string } | undefined)?.code).toBe('INTELLIGENCE_PROTOCOL_ERROR');
 });
 
 test('discovers project execution targets only through the explicit opt-in view', async () => {
@@ -513,6 +641,10 @@ test('rejects raw provider bodies in otherwise successful intelligence responses
 test('rejects nested camel-case raw provider fields in successful intelligence responses', async () => {
   const unsafeKeys = [
     'rawProviderBody',
+    'rawProviderResponse',
+    'providerResponse',
+    'rawData',
+    'responseBody',
     'rawResponseBody',
     'rawRequestPayload',
     'providerResponseBody',

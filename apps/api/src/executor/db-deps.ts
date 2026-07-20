@@ -88,6 +88,7 @@ import type {
 } from './router';
 import { resolveShareSubject } from './share';
 import { syncProjectConnectors } from './sync';
+import { projectExecutionSessionId } from './project-session';
 import type { ActionBinding, Risk } from './types';
 
 const DEFAULT_AUTH: ExecutorAuth = { type: 'none', in: 'header', name: null, prefix: null };
@@ -663,7 +664,7 @@ async function resolveProjectPrincipal(
   }
   if (!accountId) return null;
   const sessionIdentity = resolveTokenBoundSessionId(
-    (c.get('sessionId') as string | undefined) ?? null,
+    projectExecutionSessionId(c.get('authType'), c.get('sessionId')),
     c.req.header('X-Kortix-Session-Id') ?? null,
   );
   if (!sessionIdentity.ok) return null;
@@ -674,7 +675,10 @@ async function resolveProjectPrincipal(
     projectId,
     sessionId: sessionIdentity.sessionId,
     subject: await resolveShareSubject(userId),
-    agentGrant: (c.get('agentGrant') as ExecutorPrincipal['agentGrant']) ?? null,
+    agentGrant:
+      c.get('authType') === 'pat'
+        ? ((c.get('agentGrant') as ExecutorPrincipal['agentGrant']) ?? null)
+        : null,
   };
 }
 

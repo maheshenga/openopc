@@ -5,6 +5,7 @@ import {
   type IntelligenceAgentCardResponse,
   type IntelligenceAssetDownload,
   type IntelligenceCapabilitiesResponse,
+  type IntelligenceCatalogSearchResponse,
   type IntelligenceCapabilityDiscoveryResponse,
   type IntelligenceCreateTaskRequest,
   type IntelligenceCreateUploadRequest,
@@ -41,6 +42,7 @@ import {
   getIntelligenceWorkflowEvents,
   listIntelligenceAssets,
   listIntelligenceCapabilities,
+  searchIntelligenceCatalog,
   listIntelligenceJobs,
   startIntelligenceWorkflow,
 } from '../core/rest/projects-client';
@@ -50,6 +52,12 @@ export const intelligenceCapabilitiesKey = (projectId: string | null | undefined
 
 export const intelligenceCapabilityDiscoveryKey = (projectId: string | null | undefined) =>
   ['intelligence-capability-discovery', projectId] as const;
+
+export const intelligenceCatalogKey = (
+  projectId: string | null | undefined,
+  query: string,
+  cursor?: number | null,
+) => ['intelligence-catalog', projectId, query, cursor ?? null] as const;
 
 export const intelligenceAgentCardKey = (projectId: string | null | undefined) =>
   ['intelligence-agent-card', projectId] as const;
@@ -115,6 +123,10 @@ export interface IntelligenceQueryOptions {
   refetchInterval?: number;
 }
 
+export interface IntelligenceCatalogQueryOptions extends IntelligenceQueryOptions {
+  cursor?: number | null;
+}
+
 export function useIntelligenceCapabilities(
   projectId: string | null | undefined,
   options: IntelligenceQueryOptions = {},
@@ -141,6 +153,29 @@ export function useIntelligenceCapabilityDiscovery(
   return useQuery<IntelligenceCapabilityDiscoveryResponse>({
     queryKey,
     queryFn: () => discoverIntelligenceCapabilities(projectId as string),
+    enabled: !!projectId && (options.enabled ?? true),
+    ...(options.pollingEnabled === false
+      ? { refetchInterval: false }
+      : options.refetchInterval !== undefined
+        ? { refetchInterval: options.refetchInterval }
+        : {}),
+  });
+}
+
+export function useIntelligenceCatalog(
+  projectId: string | null | undefined,
+  query: string,
+  options: IntelligenceCatalogQueryOptions = {},
+) {
+  const cursor = options.cursor ?? null;
+  return useQuery<IntelligenceCatalogSearchResponse>({
+    queryKey: intelligenceCatalogKey(projectId, query, cursor),
+    queryFn: () =>
+      searchIntelligenceCatalog(projectId as string, {
+        query,
+        limit: 20,
+        cursor,
+      }),
     enabled: !!projectId && (options.enabled ?? true),
     ...(options.pollingEnabled === false
       ? { refetchInterval: false }

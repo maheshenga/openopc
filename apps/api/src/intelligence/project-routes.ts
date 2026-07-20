@@ -1,5 +1,7 @@
 import {
   IntelligenceAgentCardResponseSchema,
+  IntelligenceCapabilityCatalogDescribeResponseSchema,
+  IntelligenceCapabilityCatalogSearchResponseSchema,
   IntelligenceCapabilitiesResponseSchema,
   IntelligenceCapabilityDiscoveryResponseSchema,
   type IntelligenceCreateTaskRequest,
@@ -9,7 +11,13 @@ import {
   IntelligenceTaskLookupResponseSchema,
   IntelligenceTaskResponseSchema,
 } from '@kortix/api-contract';
-import type { AgentCard, CapabilityDescriptor, TaskEvent } from '@kortix/intelligence-contracts';
+import {
+  CapabilityCatalogRefSchema,
+  CapabilityCatalogSearchInputSchema,
+  type AgentCard,
+  type CapabilityDescriptor,
+  type TaskEvent,
+} from '@kortix/intelligence-contracts';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { z } from 'zod';
@@ -22,6 +30,7 @@ import {
   serializeAgentCard,
 } from './a2a';
 import { isIntelligenceTaskServiceError } from './task-service';
+import type { CatalogActor, ProjectCapabilityCatalogPort } from './capability-catalog';
 
 type LoadProjectForUser = (
   c: Context<AppEnv>,
@@ -117,6 +126,7 @@ export interface IntelligenceTaskEventReader {
 
 export interface IntelligenceProjectRouteDeps {
   capabilityRegistry: IntelligenceCapabilityRegistry;
+  capabilityCatalog?: ProjectCapabilityCatalogPort;
   getAgentCard: IntelligenceAgentCardSource['get'];
   loadProjectForUser: LoadProjectForUser;
   assertProjectCapability: AssertProjectCapability;
@@ -129,6 +139,76 @@ type LoadedProject = { row: { accountId: string; projectId: string }; userId: st
 
 export function createIntelligenceProjectRoutes(deps: IntelligenceProjectRouteDeps) {
   const app = new Hono<AppEnv>();
+
+  app.get('/:projectId/intelligence/catalog', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_USE,
+    );
+    if (!deps.capabilityCatalog) return unavailable(c, 'INTELLIGENCE_CATALOG_UNAVAILABLE');
+    const input = parseCatalogSearchInput(c, projectId);
+    if (!input) return badRequest(c);
+    try {
+      const result = await deps.capabilityCatalog.search({
+        ...input,
+        actor: catalogActor(actorContext(c, loaded), loaded),
+        requestContext: c,
+      });
+      return c.json(
+        IntelligenceCapabilityCatalogSearchResponseSchema.parse({
+          protocol_version: 'intelligence.v1',
+          items: result.items,
+          next_cursor: result.next_cursor,
+        }),
+      );
+    } catch {
+      return unavailable(c, 'INTELLIGENCE_CATALOG_UNAVAILABLE');
+    }
+  });
+
+  app.get('/:projectId/intelligence/catalog/describe', async (c) => {
+    const projectId = c.req.param('projectId');
+    const loaded = await loadProjectOr404(c, deps, projectId);
+    if (loaded instanceof Response) return loaded;
+    await deps.assertProjectCapability(
+      c,
+      loaded.userId,
+      loaded.row.accountId,
+      projectId,
+      PROJECT_ACTIONS.PROJECT_STUDIO_PROVIDERS_USE,
+    );
+    if (!deps.capabilityCatalog) return unavailable(c, 'INTELLIGENCE_CATALOG_UNAVAILABLE');
+    const ref = CapabilityCatalogRefSchema.safeParse({
+      kind: c.req.query('kind'),
+      id: c.req.query('id'),
+      version: c.req.query('version'),
+    });
+    if (!ref.success) return badRequest(c);
+    try {
+      const inputSchema = await deps.capabilityCatalog.describe({
+        projectId,
+        ref: ref.data,
+        actor: catalogActor(actorContext(c, loaded), loaded),
+        requestContext: c,
+      });
+      if (inputSchema === null) return c.json({ error: 'Not found' }, 404);
+      return c.json(
+        IntelligenceCapabilityCatalogDescribeResponseSchema.parse({
+          protocol_version: 'intelligence.v1',
+          ref: ref.data,
+          input_schema: inputSchema,
+        }),
+      );
+    } catch {
+      return unavailable(c, 'INTELLIGENCE_CATALOG_UNAVAILABLE');
+    }
+  });
 
   app.get('/:projectId/intelligence/capabilities', async (c) => {
     const projectId = c.req.param('projectId');
@@ -551,10 +631,11 @@ function actorContext(c: Context<AppEnv>, loaded: LoadedProject) {
       actingTokenId: null,
       agentName: null,
       sessionId: null,
+      agentGrant: null,
     };
   }
   if (authType === 'pat') {
-    const grant = c.get('agentGrant') as { agent?: string } | null | undefined;
+    const grant = c.get('agentGrant') ?? null;
     return {
       accountId: loaded.row.accountId,
       actorUserId: loaded.userId,
@@ -562,6 +643,7 @@ function actorContext(c: Context<AppEnv>, loaded: LoadedProject) {
       actingTokenId: c.get('iamTokenId') ?? null,
       agentName: grant?.agent ?? null,
       sessionId: c.get('sessionId') ?? null,
+      agentGrant: grant,
     };
   }
   return {
@@ -571,7 +653,40 @@ function actorContext(c: Context<AppEnv>, loaded: LoadedProject) {
     actingTokenId: null,
     agentName: null,
     sessionId: null,
+    agentGrant: null,
   };
+}
+
+function catalogActor(
+  actor: ReturnType<typeof actorContext>,
+  loaded: LoadedProject,
+): CatalogActor {
+  return {
+    accountId: loaded.row.accountId,
+    userId: actor.actorUserId ?? loaded.userId,
+    actorType: actor.actorType,
+    actingTokenId: actor.actingTokenId,
+    sessionId: actor.sessionId,
+    agentGrant: actor.agentGrant,
+  };
+}
+
+function parseCatalogSearchInput(c: Context<AppEnv>, projectId: string) {
+  const rawLimit = c.req.query('limit');
+  const rawCursor = c.req.query('cursor');
+  if (
+    (rawLimit !== undefined && !/^\d+$/.test(rawLimit)) ||
+    (rawCursor !== undefined && !/^\d+$/.test(rawCursor))
+  ) {
+    return null;
+  }
+  const parsed = CapabilityCatalogSearchInputSchema.safeParse({
+    projectId,
+    query: c.req.query('query') ?? '',
+    limit: rawLimit === undefined ? 20 : Number(rawLimit),
+    cursor: rawCursor === undefined ? null : Number(rawCursor),
+  });
+  return parsed.success ? parsed.data : null;
 }
 
 function badRequest(c: Context<AppEnv>) {

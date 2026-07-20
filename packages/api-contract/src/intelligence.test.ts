@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  IntelligenceCapabilityCatalogDescribeResponseSchema,
+  IntelligenceCapabilityCatalogSearchResponseSchema,
   IntelligenceCapabilitiesResponseSchema,
   IntelligenceCapabilityDiscoveryResponseSchema,
   IntelligenceCreateTaskRequestSchema,
@@ -24,6 +26,128 @@ const SHA256_HASH = `sha256:${'a'.repeat(64)}`;
 const CARD_HASH = 'b'.repeat(64);
 
 describe('Intelligence API contract', () => {
+  test('keeps catalog search and describe responses strict and redaction-safe', () => {
+    const search = IntelligenceCapabilityCatalogSearchResponseSchema.parse({
+      protocol_version: 'intelligence.v1',
+      items: [
+        {
+          ref: { kind: 'capability', id: 'studio.image.generate', version: '1.0.0' },
+          title: 'Image generation',
+          summary: 'Generate an image.',
+          risk: 'write',
+          availability: 'available',
+          capability_id: 'studio.image.generate',
+          executable: true,
+          source: 'studio',
+        },
+      ],
+      next_cursor: null,
+    });
+    expect(search.items).toHaveLength(1);
+    expect(
+      IntelligenceCapabilityCatalogDescribeResponseSchema.safeParse({
+        protocol_version: 'intelligence.v1',
+        ref: search.items[0]!.ref,
+        input_schema: { type: 'object', name: 'Studio-Image.Input' },
+      }).success,
+    ).toBe(true);
+    expect(
+      IntelligenceCapabilityCatalogDescribeResponseSchema.safeParse({
+        protocol_version: 'intelligence.v1',
+        ref: search.items[0]!.ref,
+        input_schema: {
+          type: 'object',
+          properties: { query: { type: 'string', 'x-in': 'query' } },
+          required: ['query'],
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      IntelligenceCapabilityCatalogDescribeResponseSchema.safeParse({
+        protocol_version: 'intelligence.v1',
+        ref: search.items[0]!.ref,
+        input_schema: { type: 'object', properties: { token: { type: 'string' } } },
+      }).success,
+    ).toBe(false);
+    expect(
+      IntelligenceCapabilityCatalogDescribeResponseSchema.safeParse({
+        protocol_version: 'intelligence.v1',
+        ref: search.items[0]!.ref,
+        input_schema: {
+          type: 'object',
+          properties: { query: { type: 'string', 'x-in': 'body' } },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  test('rejects camelCase credential metadata from catalog details', () => {
+    expect(
+      IntelligenceCapabilityCatalogDescribeResponseSchema.safeParse({
+        protocol_version: 'intelligence.v1',
+        ref: { kind: 'tool', id: 'storage.upload', version: '1.0.0' },
+        input_schema: {
+          type: 'object',
+          credentialBinding: { identifier: 'IMAGE_API_KEY' },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  test('rejects camelCase raw provider bodies from catalog details', () => {
+    expect(
+      IntelligenceCapabilityCatalogDescribeResponseSchema.safeParse({
+        protocol_version: 'intelligence.v1',
+        ref: { kind: 'tool', id: 'storage.upload', version: '1.0.0' },
+        input_schema: {
+          type: 'object',
+          rawProviderBody: { opaque: 'provider trace' },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  test('rejects alternate raw provider response metadata from catalog details', () => {
+    expect(
+      IntelligenceCapabilityCatalogDescribeResponseSchema.safeParse({
+        protocol_version: 'intelligence.v1',
+        ref: { kind: 'tool', id: 'storage.upload', version: '1.0.0' },
+        input_schema: {
+          type: 'object',
+          rawProviderResponse: { opaque: 'provider trace' },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  test('rejects bare credential-like literals from catalog details', () => {
+    for (const literal of [
+      'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789',
+      'AIzaabcdefghijklmnopqrstuvwxyz012345678',
+      'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      'AKIA1234567890ABCDEF',
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature',
+    ]) {
+      expect(
+        IntelligenceCapabilityCatalogDescribeResponseSchema.safeParse({
+          protocol_version: 'intelligence.v1',
+          ref: { kind: 'tool', id: 'storage.upload', version: '1.0.0' },
+          input_schema: { type: 'object', examples: [literal] },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  test('rejects unprojected catalog schema annotations', () => {
+    expect(
+      IntelligenceCapabilityCatalogDescribeResponseSchema.safeParse({
+        protocol_version: 'intelligence.v1',
+        ref: { kind: 'tool', id: 'storage.upload', version: '1.0.0' },
+        input_schema: { type: 'object', description: 'opaque external metadata' },
+      }).success,
+    ).toBe(false);
+  });
+
   test('exposes only stable Intelligence error codes', () => {
     expect(IntelligenceErrorCodeSchema.parse('INTELLIGENCE_IDEMPOTENCY_MISMATCH')).toBe(
       'INTELLIGENCE_IDEMPOTENCY_MISMATCH',

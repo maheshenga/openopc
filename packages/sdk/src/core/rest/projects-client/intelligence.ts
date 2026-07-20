@@ -6,8 +6,15 @@
 // closed before they reach a host application.
 
 import {
+  CAPABILITY_CATALOG_MAX_CURSOR,
   type AgentCard,
   AgentCardSchema,
+  type CapabilityCatalogItem,
+  CapabilityCatalogItemSchema,
+  type CapabilityCatalogRef,
+  CapabilityCatalogRefSchema,
+  hasUnsafeCatalogCredentialLiteral,
+  isPublicCatalogInputSchema,
   type CapabilityDescriptor,
   CapabilityDescriptorSchema,
   type ProtocolVersion,
@@ -29,6 +36,8 @@ import { unwrap } from './shared';
 
 export type {
   AgentCard,
+  CapabilityCatalogItem,
+  CapabilityCatalogRef,
   CapabilityDescriptor,
   ProtocolVersion,
   TaskEvent,
@@ -43,6 +52,7 @@ const SAFE_INTELLIGENCE_CODES = [
   'INTELLIGENCE_AGENT_CARD_UNAVAILABLE',
   'INTELLIGENCE_AGENT_CARD_UNTRUSTED',
   'INTELLIGENCE_CAPABILITIES_UNAVAILABLE',
+  'INTELLIGENCE_CATALOG_UNAVAILABLE',
   'INTELLIGENCE_CAPABILITY_UNAVAILABLE',
   'INTELLIGENCE_DISCOVERY_INVALID',
   'INTELLIGENCE_DISCOVERY_TOO_LARGE',
@@ -96,6 +106,24 @@ export interface IntelligenceExecutionTarget {
 
 export interface IntelligenceCapabilityDiscoveryResponse extends IntelligenceCapabilitiesResponse {
   execution_targets: IntelligenceExecutionTarget[];
+}
+
+export interface IntelligenceCatalogSearchInput {
+  query: string;
+  limit?: number;
+  cursor?: number | null;
+}
+
+export interface IntelligenceCatalogSearchResponse {
+  protocol_version: ProtocolVersion;
+  items: CapabilityCatalogItem[];
+  next_cursor: number | null;
+}
+
+export interface IntelligenceCatalogDescribeResponse {
+  protocol_version: ProtocolVersion;
+  ref: CapabilityCatalogRef;
+  input_schema: Record<string, unknown>;
 }
 
 export type IntelligenceAgentCardResponse = AgentCard;
@@ -251,7 +279,7 @@ function assertSafeIntelligencePayload(value: unknown, seen = new WeakSet<object
     if (
       UNSAFE_PUBLIC_URL_PATTERN.test(value) ||
       UNSAFE_PUBLIC_SCHEME_PATTERN.test(value) ||
-      UNSAFE_PUBLIC_CREDENTIAL_TEXT_PATTERN.test(value)
+      UNSAFE_PUBLIC_CREDENTIAL_TEXT_PATTERN.test(value) || hasUnsafeCatalogCredentialLiteral(value)
     ) {
       throw new ApiError('Intelligence response rejected', {
         code: 'INTELLIGENCE_PROTOCOL_ERROR',
@@ -281,10 +309,16 @@ function assertSafeIntelligencePayload(value: unknown, seen = new WeakSet<object
 function isUnsafePublicKey(key: string): boolean {
   if (UNSAFE_PUBLIC_KEY_PATTERN.test(key)) return true;
   const normalized = key.replace(/[^a-z\d]/gi, '').toLowerCase();
+  return isRawProviderMetadataKey(normalized);
+}
+
+function isRawProviderMetadataKey(normalized: string): boolean {
   return (
     normalized === 'raw' ||
-    /^raw(?:provider|request|response)?(?:body|payload)$/.test(normalized) ||
-    /^provider(?:request|response)?(?:body|payload)$/.test(normalized)
+    normalized === 'rawdata' ||
+    /^raw(?:provider|request|response)?(?:body|payload|request|response)$/.test(normalized) ||
+    /^provider(?:request|response)(?:body|payload)?$/.test(normalized) ||
+    /^(?:request|response)(?:body|payload)$/.test(normalized)
   );
 }
 
@@ -355,6 +389,57 @@ function parseCapabilityDiscoveryResponse(value: unknown): IntelligenceCapabilit
     items: record.items.map((item) => CapabilityDescriptorSchema.parse(item)),
     execution_targets: record.execution_targets.map(parseExecutionTarget),
     next_cursor: parseCursor(record.next_cursor),
+  };
+}
+
+function parseCatalogSearchResponse(value: unknown): IntelligenceCatalogSearchResponse {
+  const record = asStrictRecord(value, ['protocol_version', 'items', 'next_cursor']);
+  if (!Array.isArray(record.items) || record.items.length > 50) {
+    throw new Error('invalid catalog');
+  }
+  if (
+    record.next_cursor !== null &&
+    (typeof record.next_cursor !== 'number' ||
+      !Number.isSafeInteger(record.next_cursor) ||
+      record.next_cursor < 0 ||
+      record.next_cursor > CAPABILITY_CATALOG_MAX_CURSOR)
+  ) {
+    throw new Error('invalid catalog cursor');
+  }
+  return {
+    protocol_version: parseProtocolVersion(record.protocol_version),
+    items: record.items.map((item) => CapabilityCatalogItemSchema.parse(item)),
+    next_cursor: record.next_cursor,
+  };
+}
+
+function parseCatalogDescribeResponse(
+  value: unknown,
+  expectedRef: CapabilityCatalogRef,
+): IntelligenceCatalogDescribeResponse {
+  const record = asStrictRecord(value, ['protocol_version', 'ref', 'input_schema']);
+  if (!record.input_schema || typeof record.input_schema !== 'object' || Array.isArray(record.input_schema)) {
+    throw new Error('invalid catalog description');
+  }
+  const inputSchema = record.input_schema as Record<string, unknown>;
+  if (
+    Object.keys(inputSchema).some((key) => key.length < 1 || key.length > 128) ||
+    !isPublicCatalogInputSchema(inputSchema)
+  ) {
+    throw new Error('invalid catalog description');
+  }
+  const ref = CapabilityCatalogRefSchema.parse(record.ref);
+  if (
+    ref.kind !== expectedRef.kind ||
+    ref.id !== expectedRef.id ||
+    ref.version !== expectedRef.version
+  ) {
+    throw new Error('invalid catalog scope');
+  }
+  return {
+    protocol_version: parseProtocolVersion(record.protocol_version),
+    ref,
+    input_schema: inputSchema,
   };
 }
 
@@ -524,6 +609,41 @@ export async function discoverIntelligenceCapabilities(
       ),
     parseCapabilityDiscoveryResponse,
   );
+}
+
+export async function searchIntelligenceCatalog(
+  projectId: string,
+  input: IntelligenceCatalogSearchInput,
+): Promise<IntelligenceCatalogSearchResponse> {
+  return requestIntelligence(() => {
+    const query = new URLSearchParams();
+    if (input.query) query.set('query', input.query);
+    query.set('limit', String(input.limit ?? 20));
+    if (input.cursor != null) query.set('cursor', String(input.cursor));
+    return backendApi.get<unknown>(
+      `/projects/${encodeURIComponent(projectId)}/intelligence/catalog?${query.toString()}`,
+      { showErrors: false },
+    );
+  }, parseCatalogSearchResponse);
+}
+
+export async function describeIntelligenceCatalog(
+  projectId: string,
+  ref: CapabilityCatalogRef,
+): Promise<IntelligenceCatalogDescribeResponse> {
+  let expectedRef: CapabilityCatalogRef | null = null;
+  return requestIntelligence(() => {
+    expectedRef = CapabilityCatalogRefSchema.parse(ref);
+    const query = new URLSearchParams({
+      kind: expectedRef.kind,
+      id: expectedRef.id,
+      version: expectedRef.version,
+    });
+    return backendApi.get<unknown>(
+      `/projects/${encodeURIComponent(projectId)}/intelligence/catalog/describe?${query.toString()}`,
+      { showErrors: false },
+    );
+  }, (value) => parseCatalogDescribeResponse(value, expectedRef!));
 }
 
 export async function getIntelligenceAgentCard(

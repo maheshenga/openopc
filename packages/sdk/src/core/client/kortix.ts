@@ -595,6 +595,12 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
           list: () => P.listIntelligenceCapabilities(projectId),
           discover: () => P.discoverIntelligenceCapabilities(projectId),
         },
+        catalog: {
+          search: (input: Parameters<typeof P.searchIntelligenceCatalog>[1]) =>
+            P.searchIntelligenceCatalog(projectId, input),
+          describe: (ref: Parameters<typeof P.describeIntelligenceCatalog>[1]) =>
+            P.describeIntelligenceCatalog(projectId, ref),
+        },
         agentCard: {
           get: () => P.getIntelligenceAgentCard(projectId),
         },

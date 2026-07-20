@@ -21,6 +21,7 @@ import {
   CapabilityCatalogItemSchema,
   CapabilityCatalogRefSchema,
   CapabilityCatalogSearchInputSchema,
+  CapabilityCatalogSearchResponseSchema,
   formatCapabilityCatalogRef,
 } from './capability-catalog';
 
@@ -173,6 +174,12 @@ describe('intelligence contract schemas', () => {
       'password=private-value',
       'Authorization=Bearer private-value',
       '{"token":"private-value"}',
+      'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789',
+      'sk_live_abcdefghijklmnopqrstuvwxyz012345',
+      'AIzaabcdefghijklmnopqrstuvwxyz012345678',
+      'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      'AKIA1234567890ABCDEF',
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature',
     ]) {
       expect(
         CapabilityCatalogItemSchema.safeParse({
@@ -185,6 +192,42 @@ describe('intelligence contract schemas', () => {
           executable: true,
           source: 'executor',
         }).success,
+      ).toBe(false);
+    }
+  });
+
+  test('rejects credential-bearing catalog reference identifiers', () => {
+    expect(
+      CapabilityCatalogRefSchema.safeParse({
+        kind: 'tool',
+        id: 'api_key_private-value',
+        version: '1.0.0',
+      }).success,
+    ).toBe(false);
+    expect(
+      CapabilityCatalogRefSchema.safeParse({
+        kind: 'tool',
+        id: 'bearer_private-value',
+        version: '1.0.0',
+      }).success,
+    ).toBe(false);
+    expect(
+      CapabilityCatalogRefSchema.safeParse({
+        kind: 'tool',
+        id: 'rawProviderResponse.private-value',
+        version: '1.0.0',
+      }).success,
+    ).toBe(false);
+    for (const id of [
+      'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789',
+      'sk_live_abcdefghijklmnopqrstuvwxyz012345',
+      'AIzaabcdefghijklmnopqrstuvwxyz012345678',
+      'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      'AKIA1234567890ABCDEF',
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.signature',
+    ]) {
+      expect(
+        CapabilityCatalogRefSchema.safeParse({ kind: 'tool', id, version: '1.0.0' }).success,
       ).toBe(false);
     }
   });
@@ -467,6 +510,16 @@ describe('intelligence contract schemas', () => {
       status: 'published',
       minimum_sample_count: 30,
     });
+  });
+
+  test('rejects catalog continuation cursors that callers cannot replay', () => {
+    expect(
+      CapabilityCatalogSearchResponseSchema.safeParse({
+        protocol_version: 'intelligence.v1',
+        items: [],
+        next_cursor: 1_000_001,
+      }).success,
+    ).toBe(false);
   });
 
   test('accepts an isolated evaluation run with explicit sample and credit budgets', () => {

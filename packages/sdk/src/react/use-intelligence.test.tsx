@@ -15,6 +15,7 @@ mock.module('@tanstack/react-query', () => ({
 const {
   intelligenceAgentCardKey,
   intelligenceCapabilityDiscoveryKey,
+  intelligenceCatalogKey,
   intelligenceCapabilitiesKey,
   intelligenceAssetsKey,
   intelligenceAssetsPrefix,
@@ -33,6 +34,7 @@ const {
   useIntelligence,
   useIntelligenceAgentCard,
   useIntelligenceCapabilityDiscovery,
+  useIntelligenceCatalog,
   useIntelligenceCapabilities,
   useIntelligenceAssets,
   useEstimateIntelligenceImage,
@@ -72,6 +74,7 @@ describe('Intelligence React Query bindings', () => {
     expect(typeof barrel.useFinalizeIntelligenceUpload).toBe('function');
     expect(typeof barrel.useIntelligenceAssetDownload).toBe('function');
     expect(typeof barrel.intelligenceTaskByJobKey).toBe('function');
+    expect(typeof barrel.useIntelligenceCatalog).toBe('function');
     expect(typeof barrel.useIntelligenceTaskByJob).toBe('function');
   });
 
@@ -93,6 +96,11 @@ describe('Intelligence React Query bindings', () => {
     expect(asMockQueryConfig(useIntelligenceCapabilityDiscovery('project-1')).queryKey).toEqual([
       ...intelligenceCapabilityDiscoveryKey('project-1'),
     ]);
+    const catalogQuery = asMockQueryConfig(
+      useIntelligenceCatalog('project-1', 'image', { cursor: 2, enabled: false }),
+    );
+    expect(catalogQuery.queryKey).toEqual(intelligenceCatalogKey('project-1', 'image', 2));
+    expect(catalogQuery.enabled).toBe(false);
     expect(asMockQueryConfig(useIntelligenceAgentCard('project-1')).queryKey).toEqual([
       ...intelligenceAgentCardKey('project-1'),
     ]);
@@ -103,6 +111,7 @@ describe('Intelligence React Query bindings', () => {
       intelligenceTaskByJobKey('project-1', 'job-1'),
     );
     expect(asMockQueryConfig(useIntelligenceCapabilities(null)).enabled).toBe(false);
+    expect(asMockQueryConfig(useIntelligenceCatalog(null, '')).enabled).toBe(false);
     expect(asMockQueryConfig(useIntelligenceTaskEvents('project-1', '')).enabled).toBe(false);
     expect(asMockQueryConfig(useIntelligenceTaskByJob('project-1', null)).enabled).toBe(false);
     expect(asMockQueryConfig(useIntelligenceWorkflow('project-1', 'run-1')).queryKey).toEqual([

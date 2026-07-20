@@ -3,7 +3,12 @@ import { hasUnsafeCatalogCredentialLiteral } from './capability-catalog.js';
 import { TaskEventSchema, WorkflowRunStatusSchema } from './schemas.js';
 
 const OpenOpcAgUiIdSchema = z.string().uuid();
-const OpenOpcAgUiCodeSchema = z.string().regex(/^[A-Z][A-Z0-9_.-]{0,127}$/);
+export const OpenOpcAgUiCodeSchema = z
+  .string()
+  .regex(/^[A-Z][A-Z0-9_.-]{0,127}$/)
+  .refine((value) => !hasUnsafeCatalogCredentialLiteral(value), {
+    message: 'AG-UI code contains a credential literal',
+  });
 const UnsafeAgUiTextPattern =
   /(?:https?:\/\/|["']?\s*(?:prompt|payload(?:[_-]?ref)?|api[_-]?key|secret|token|access[_-]?token|password|credential|authorization|cookie|signed[_-]?url|provider[_-]?url|base[_-]?url|signature|x[_-]?amz|(?:raw(?:[_-](?:provider|request|response))*|provider(?:[_-](?:request|response))?)[_-](?:body|payload)|headers?)\s*["']?\s*[:=]|\b(?:chain[- ]?of[- ]?thought|reasoning)\b)/i;
 
@@ -52,7 +57,6 @@ export const OpenOpcAgUiEventSchema = z.discriminatedUnion('type', [
       type: z.literal('RUN_STARTED'),
       threadId: OpenOpcAgUiIdSchema,
       runId: OpenOpcAgUiIdSchema,
-      input: OpenOpcAgUiStateSnapshotSchema.optional(),
     })
     .strict(),
   z.object({ type: z.literal('STEP_STARTED'), stepName: publicAgUiText(256) }).strict(),
@@ -68,6 +72,7 @@ export const OpenOpcAgUiEventSchema = z.discriminatedUnion('type', [
     .object({
       type: z.literal('TOOL_CALL_RESULT'),
       toolCallId: OpenOpcAgUiIdSchema,
+      messageId: OpenOpcAgUiIdSchema,
       content: publicAgUiText(4096),
     })
     .strict(),
@@ -75,7 +80,12 @@ export const OpenOpcAgUiEventSchema = z.discriminatedUnion('type', [
     .object({ type: z.literal('STATE_SNAPSHOT'), snapshot: OpenOpcAgUiStateSnapshotSchema })
     .strict(),
   z
-    .object({ type: z.literal('RUN_FINISHED'), result: OpenOpcAgUiResultSchema.optional() })
+    .object({
+      type: z.literal('RUN_FINISHED'),
+      threadId: OpenOpcAgUiIdSchema,
+      runId: OpenOpcAgUiIdSchema,
+      result: OpenOpcAgUiResultSchema.optional(),
+    })
     .strict(),
   z
     .object({

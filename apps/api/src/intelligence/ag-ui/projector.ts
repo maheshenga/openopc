@@ -1,4 +1,5 @@
 import {
+  OpenOpcAgUiCodeSchema,
   type OpenOpcAgUiEvent,
   OpenOpcAgUiEventSchema,
   type TaskEvent,
@@ -34,7 +35,8 @@ export function projectWorkflowEvent(event: WorkflowEvent): OpenOpcAgUiEvent[] {
         {
           type: 'TOOL_CALL_RESULT',
           toolCallId: value.event_id,
-          content: JSON.stringify({ route_reason_codes: value.route_reason_codes }),
+          messageId: value.event_id,
+          content: JSON.stringify({ route_reason_codes: publicCodes(value.route_reason_codes) }),
         },
       ]);
     case 'node_succeeded':
@@ -60,6 +62,8 @@ export function projectWorkflowEvent(event: WorkflowEvent): OpenOpcAgUiEvent[] {
       return safeEvents([
         {
           type: 'RUN_FINISHED',
+          threadId: value.run_id,
+          runId: value.run_id,
           ...(value.asset_ids.length > 0 ? { result: { asset_ids: value.asset_ids } } : {}),
         },
       ]);
@@ -68,7 +72,7 @@ export function projectWorkflowEvent(event: WorkflowEvent): OpenOpcAgUiEvent[] {
         {
           type: 'RUN_ERROR',
           message: 'Workflow failed',
-          code: value.reason_code ?? 'WORKFLOW_RUN_FAILED',
+          code: publicCode(value.reason_code) ?? 'WORKFLOW_RUN_FAILED',
         },
       ]);
     case 'run_cancelled':
@@ -76,7 +80,7 @@ export function projectWorkflowEvent(event: WorkflowEvent): OpenOpcAgUiEvent[] {
         {
           type: 'RUN_ERROR',
           message: 'Workflow cancelled',
-          code: value.reason_code ?? 'WORKFLOW_RUN_CANCELLED',
+          code: publicCode(value.reason_code) ?? 'WORKFLOW_RUN_CANCELLED',
         },
       ]);
     default:
@@ -122,10 +126,12 @@ export function projectTaskEvent(event: TaskEvent): OpenOpcAgUiEvent[] {
         {
           type: 'TOOL_CALL_RESULT',
           toolCallId: value.task_id,
+          messageId: value.event_id,
           content: JSON.stringify({ asset_ids: value.asset_ids ?? [] }),
         },
       ]);
-    case 'approval_required':
+    case 'approval_required': {
+      const reasonCode = publicCode(value.error_code);
       return safeEvents([
         {
           type: 'STATE_SNAPSHOT',
@@ -134,15 +140,18 @@ export function projectTaskEvent(event: TaskEvent): OpenOpcAgUiEvent[] {
             task_id: value.task_id,
             status: value.status,
             approval: 'required',
-            ...(value.error_code === undefined ? {} : { reason_code: value.error_code }),
+            ...(reasonCode === undefined ? {} : { reason_code: reasonCode }),
           },
         },
       ]);
+    }
     case 'succeeded':
       return safeEvents([
         { type: 'STEP_FINISHED', stepName },
         {
           type: 'RUN_FINISHED',
+          threadId: value.task_id,
+          runId: value.task_id,
           ...(value.asset_ids?.length ? { result: { asset_ids: value.asset_ids } } : {}),
         },
       ]);
@@ -152,7 +161,7 @@ export function projectTaskEvent(event: TaskEvent): OpenOpcAgUiEvent[] {
         {
           type: 'RUN_ERROR',
           message: 'Task failed',
-          code: value.error_code ?? 'INTELLIGENCE_TASK_FAILED',
+          code: publicCode(value.error_code) ?? 'INTELLIGENCE_TASK_FAILED',
         },
       ]);
     case 'cancelled':
@@ -161,7 +170,7 @@ export function projectTaskEvent(event: TaskEvent): OpenOpcAgUiEvent[] {
         {
           type: 'RUN_ERROR',
           message: 'Task cancelled',
-          code: value.error_code ?? 'INTELLIGENCE_TASK_CANCELLED',
+          code: publicCode(value.error_code) ?? 'INTELLIGENCE_TASK_CANCELLED',
         },
       ]);
   }
@@ -177,6 +186,7 @@ function projectWorkflowNodeFinished(
     events.push({
       type: 'TOOL_CALL_RESULT',
       toolCallId: event.task_id,
+      messageId: event.event_id,
       content: JSON.stringify({ asset_ids: event.asset_ids }),
     });
   }
@@ -189,6 +199,7 @@ function workflowSnapshot(
   stage: 'workflow.approval.required' | 'workflow.approval.resolved',
   approval: 'required' | 'resolved',
 ) {
+  const reasonCode = publicCode(event.reason_code);
   return {
     stage,
     run_id: event.run_id,
@@ -196,8 +207,20 @@ function workflowSnapshot(
     ...(event.task_id ? { task_id: event.task_id } : {}),
     status: event.status,
     approval,
-    ...(event.reason_code ? { reason_code: event.reason_code } : {}),
+    ...(reasonCode === undefined ? {} : { reason_code: reasonCode }),
   };
+}
+
+function publicCode(value: string | null | undefined): string | undefined {
+  const parsed = OpenOpcAgUiCodeSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function publicCodes(values: readonly string[]): string[] {
+  return values.flatMap((value) => {
+    const code = publicCode(value);
+    return code === undefined ? [] : [code];
+  });
 }
 
 function safeEvents(events: unknown[]): OpenOpcAgUiEvent[] {

@@ -73,6 +73,7 @@ describe('AG-UI projector', () => {
       {
         type: 'TOOL_CALL_RESULT',
         toolCallId: TASK_ID,
+        messageId: EVENT_ID,
         content: JSON.stringify({ asset_ids: [ASSET_ID] }),
       },
       { type: 'STEP_FINISHED', stepName: NODE_ID },
@@ -104,6 +105,7 @@ describe('AG-UI projector', () => {
       {
         type: 'TOOL_CALL_RESULT',
         toolCallId: EVENT_ID,
+        messageId: EVENT_ID,
         content: JSON.stringify({ route_reason_codes: ['WORKFLOW_ROUTE_SELECTED'] }),
       },
     ]);
@@ -139,7 +141,14 @@ describe('AG-UI projector', () => {
       projectWorkflowEvent(
         workflowEvent({ type: 'run_succeeded', status: 'succeeded', asset_ids: [ASSET_ID] }),
       ),
-    ).toEqual([{ type: 'RUN_FINISHED', result: { asset_ids: [ASSET_ID] } }]);
+    ).toEqual([
+      {
+        type: 'RUN_FINISHED',
+        threadId: RUN_ID,
+        runId: RUN_ID,
+        result: { asset_ids: [ASSET_ID] },
+      },
+    ]);
 
     expect(
       projectWorkflowEvent(
@@ -174,6 +183,59 @@ describe('AG-UI projector', () => {
     ]);
   });
 
+  test('drops credential-shaped source codes while preserving a generic terminal state', () => {
+    const unsafeCode = 'AKIA0123456789ABCDEF';
+
+    expect(
+      projectWorkflowEvent(
+        workflowEvent({ type: 'run_failed', status: 'failed', reason_code: unsafeCode }),
+      ),
+    ).toEqual([{ type: 'RUN_ERROR', message: 'Workflow failed', code: 'WORKFLOW_RUN_FAILED' }]);
+
+    expect(
+      projectWorkflowEvent(
+        workflowEvent({
+          type: 'node_waiting_approval',
+          status: 'waiting_approval',
+          node_id: NODE_ID,
+          reason_code: unsafeCode,
+        }),
+      ),
+    ).toEqual([
+      {
+        type: 'STATE_SNAPSHOT',
+        snapshot: {
+          stage: 'workflow.approval.required',
+          run_id: RUN_ID,
+          node_id: NODE_ID,
+          status: 'waiting_approval',
+          approval: 'required',
+        },
+      },
+    ]);
+
+    expect(
+      projectWorkflowEvent(
+        workflowEvent({ type: 'route_selected', route_reason_codes: [unsafeCode] }),
+      ),
+    ).toEqual([
+      { type: 'TOOL_CALL_START', toolCallId: EVENT_ID, toolCallName: 'route-selection' },
+      {
+        type: 'TOOL_CALL_RESULT',
+        toolCallId: EVENT_ID,
+        messageId: EVENT_ID,
+        content: JSON.stringify({ route_reason_codes: [] }),
+      },
+    ]);
+
+    expect(
+      projectTaskEvent(taskEvent({ type: 'failed', status: 'failed', error_code: unsafeCode })),
+    ).toEqual([
+      { type: 'STEP_FINISHED', stepName: `task:${TASK_ID}` },
+      { type: 'RUN_ERROR', message: 'Task failed', code: 'INTELLIGENCE_TASK_FAILED' },
+    ]);
+  });
+
   test('projects task progress, assets, and terminal states', () => {
     expect(projectTaskEvent(taskEvent())).toEqual([
       { type: 'RUN_STARTED', threadId: TASK_ID, runId: TASK_ID },
@@ -201,6 +263,7 @@ describe('AG-UI projector', () => {
       {
         type: 'TOOL_CALL_RESULT',
         toolCallId: TASK_ID,
+        messageId: EVENT_ID,
         content: JSON.stringify({ asset_ids: [ASSET_ID] }),
       },
     ]);
@@ -211,7 +274,12 @@ describe('AG-UI projector', () => {
       ),
     ).toEqual([
       { type: 'STEP_FINISHED', stepName: `task:${TASK_ID}` },
-      { type: 'RUN_FINISHED', result: { asset_ids: [ASSET_ID] } },
+      {
+        type: 'RUN_FINISHED',
+        threadId: TASK_ID,
+        runId: TASK_ID,
+        result: { asset_ids: [ASSET_ID] },
+      },
     ]);
 
     expect(
@@ -241,7 +309,7 @@ describe('AG-UI projector', () => {
     ]);
   });
 
-  test('ignores internal graph events and rejects unsafe or non-monotonic source shapes', () => {
+  test('ignores internal graph events and rejects unsafe or invalid source shapes', () => {
     expect(projectWorkflowEvent(workflowEvent({ type: 'graph_sealed' }))).toEqual([]);
 
     const unsafe = {

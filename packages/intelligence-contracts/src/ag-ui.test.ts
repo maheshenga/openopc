@@ -15,6 +15,7 @@ describe('OpenOPC AG-UI wire contract', () => {
       {
         type: 'TOOL_CALL_RESULT',
         toolCallId: TASK_ID,
+        messageId: RUN_ID,
         content: JSON.stringify({ asset_ids: [ASSET_ID] }),
       },
       {
@@ -26,7 +27,12 @@ describe('OpenOPC AG-UI wire contract', () => {
           progress: 0.5,
         },
       },
-      { type: 'RUN_FINISHED', result: { asset_ids: [ASSET_ID] } },
+      {
+        type: 'RUN_FINISHED',
+        threadId: RUN_ID,
+        runId: RUN_ID,
+        result: { asset_ids: [ASSET_ID] },
+      },
       { type: 'RUN_ERROR', message: 'Task failed', code: 'INTELLIGENCE_TASK_FAILED' },
     ];
 
@@ -79,6 +85,7 @@ describe('OpenOPC AG-UI wire contract', () => {
         toolCallId: TASK_ID,
         content: 'AKIA0123456789ABCDEF',
       },
+      { type: 'RUN_ERROR', message: 'Task failed', code: 'AKIA0123456789ABCDEF' },
       {
         type: 'TOOL_CALL_RESULT',
         toolCallId: TASK_ID,
@@ -91,5 +98,16 @@ describe('OpenOPC AG-UI wire contract', () => {
     for (const event of unsafeEvents) {
       expect(OpenOpcAgUiEventSchema.safeParse(event).success).toBeFalse();
     }
+  });
+
+  test('requires the fields mandatory in the current published AG-UI schemas', () => {
+    expect(OpenOpcAgUiEventSchema.safeParse({ type: 'RUN_FINISHED' }).success).toBeFalse();
+    expect(
+      OpenOpcAgUiEventSchema.safeParse({
+        type: 'TOOL_CALL_RESULT',
+        toolCallId: TASK_ID,
+        content: JSON.stringify({ asset_ids: [ASSET_ID] }),
+      }).success,
+    ).toBeFalse();
   });
 });

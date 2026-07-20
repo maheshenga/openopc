@@ -17,6 +17,12 @@ import {
   WorkflowReviewerVerdictSchema,
   WorkflowRunSchema,
 } from './schemas';
+import {
+  CapabilityCatalogItemSchema,
+  CapabilityCatalogRefSchema,
+  CapabilityCatalogSearchInputSchema,
+  formatCapabilityCatalogRef,
+} from './capability-catalog';
 
 const ACCOUNT_ID = '11000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '12000000-0000-4000-a000-000000000001';
@@ -112,6 +118,77 @@ const workflowNode = {
 };
 
 describe('intelligence contract schemas', () => {
+  test('accepts a bounded redaction-safe capability catalog query and stable reference', () => {
+    const ref = CapabilityCatalogRefSchema.parse({
+      kind: 'capability',
+      id: 'studio.image.generate',
+      version: '1.0.0',
+    });
+    expect(formatCapabilityCatalogRef(ref)).toBe('capability:studio.image.generate@1.0.0');
+    expect(
+      CapabilityCatalogSearchInputSchema.parse({
+        projectId: PROJECT_ID,
+        query: 'generate image',
+        limit: 20,
+        cursor: null,
+      }),
+    ).toMatchObject({ limit: 20, cursor: null });
+    expect(
+      CapabilityCatalogItemSchema.parse({
+        ref,
+        title: 'Image generation',
+        summary: 'Generate an image from a text prompt.',
+        risk: 'write',
+        availability: 'available',
+        capability_id: 'studio.image.generate',
+        executable: true,
+        source: 'studio',
+      }).ref,
+    ).toEqual(ref);
+  });
+
+  test('rejects unbounded catalog input and unsafe public summaries', () => {
+    expect(() =>
+      CapabilityCatalogSearchInputSchema.parse({
+        projectId: PROJECT_ID,
+        query: 'x'.repeat(513),
+        limit: 51,
+        cursor: -1,
+      }),
+    ).toThrow();
+    expect(() =>
+      CapabilityCatalogItemSchema.parse({
+        ref: { kind: 'tool', id: 'payments.charge', version: '1.0.0' },
+        title: 'Charge customer',
+        summary: 'Call https://private.example.test with api_key=private.',
+        risk: 'write',
+        availability: 'available',
+        capability_id: null,
+        executable: true,
+        source: 'executor',
+      }),
+    ).toThrow();
+    for (const summary of [
+      'access_token=private-value',
+      'password=private-value',
+      'Authorization=Bearer private-value',
+      '{"token":"private-value"}',
+    ]) {
+      expect(
+        CapabilityCatalogItemSchema.safeParse({
+          ref: { kind: 'tool', id: 'payments.charge', version: '1.0.0' },
+          title: 'Charge customer',
+          summary,
+          risk: 'write',
+          availability: 'available',
+          capability_id: null,
+          executable: true,
+          source: 'executor',
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   test('accepts the first image capability descriptor', () => {
     expect(CapabilityDescriptorSchema.parse(imageCapability).id).toBe('studio.image.generate');
   });

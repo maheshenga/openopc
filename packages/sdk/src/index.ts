@@ -284,6 +284,21 @@ export type {
   // Auth validate helper
   AccountIdentity,
   ValidateTokenResult,
+  // Intelligence Image Studio projections
+  IntelligenceImageEstimateRequest,
+  IntelligenceImageEstimateLineItem,
+  IntelligenceImageEstimate,
+  IntelligenceStudioJobStatus,
+  IntelligenceStudioErrorCode,
+  IntelligenceStudioJob,
+  IntelligenceStudioJobList,
+  IntelligenceStudioJobEvent,
+  IntelligenceStudioJobEvents,
+  IntelligenceCreateUploadRequest,
+  IntelligenceStudioUpload,
+  IntelligenceStudioAsset,
+  IntelligenceStudioAssetList,
+  IntelligenceAssetDownload,
 } from './core/rest/projects-client';
 
 /**

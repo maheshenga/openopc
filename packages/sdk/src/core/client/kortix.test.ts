@@ -140,6 +140,178 @@ test('project(id).intelligence binds capability, task, and workflow endpoints', 
   expect(last().url).toContain('/projects/PID123/intelligence/tasks/TASK1/events?cursor=cursor-1');
 });
 
+test('project(id).intelligence binds every Image Studio projection to the project route', async () => {
+  const projectId = '12000000-0000-4000-a000-000000000001';
+  const providerConfigId = '14000000-0000-4000-a000-000000000001';
+  const estimateId = '21000000-0000-4000-a000-000000000001';
+  const jobId = '22000000-0000-4000-a000-000000000001';
+  const accountId = '23000000-0000-4000-a000-000000000001';
+  const uploadId = '26000000-0000-4000-a000-000000000001';
+  const assetId = '27000000-0000-4000-a000-000000000001';
+  const input = {
+    capability: 'image.generate' as const,
+    image: {
+      prompt: 'studio facade',
+      reference_asset_ids: [],
+      aspect_ratio: '1:1' as const,
+      quality: 'standard' as const,
+      output_count: 1,
+    },
+  };
+  const job = {
+    job_id: jobId,
+    account_id: accountId,
+    project_id: projectId,
+    actor_user_id: null,
+    actor_type: 'system',
+    capability: 'image.generate',
+    provider_config_id: providerConfigId,
+    provider: 'fake',
+    model: 'fake/image-v1',
+    input,
+    status: 'queued',
+    idempotency_key: 'facade-key',
+    request_hash: `sha256:${'a'.repeat(64)}`,
+    attempt_count: 0,
+    reserved_credits: 1,
+    actual_credits: null,
+    error_code: null,
+    error_message: null,
+    created_at: '2026-07-20T12:00:00.000Z',
+    updated_at: '2026-07-20T12:00:00.000Z',
+    started_at: null,
+    completed_at: null,
+  };
+  const asset = {
+    asset_id: assetId,
+    account_id: accountId,
+    project_id: projectId,
+    source_job_id: jobId,
+    kind: 'image',
+    mime_type: 'image/png',
+    bucket: 'private-studio',
+    object_key: 'assets/result.png',
+    checksum_sha256: 'b'.repeat(64),
+    size_bytes: 1,
+    width: 1,
+    height: 1,
+    metadata: {},
+    created_at: '2026-07-20T12:00:00.000Z',
+  };
+  const upload = {
+    upload_id: uploadId,
+    project_id: projectId,
+    asset_id: null,
+    object_key: 'uploads/source.png',
+    declared_mime_type: 'image/png',
+    expected_size_bytes: 1,
+    expected_checksum_sha256: 'c'.repeat(64),
+    signed_upload_url: 'https://objects.example.test/upload',
+    signed_upload_headers: { 'content-type': 'image/png' },
+    expires_at: '2026-07-20T12:15:00.000Z',
+    status: 'pending',
+  };
+  globalThis.fetch = mock(async (url: unknown, options: RequestInit = {}) => {
+    const requestUrl = String(url);
+    calls.push({
+      url: requestUrl,
+      method: options.method ?? 'GET',
+      body: typeof options.body === 'string' ? JSON.parse(options.body) : options.body,
+    });
+    const path = new URL(requestUrl).pathname;
+    let responseBody: unknown = {};
+    if (path.endsWith('/studio/estimates')) {
+      responseBody = {
+        estimate_id: estimateId,
+        estimate_token: 'studio-estimate-v2.payload.signature',
+        expires_at: '2026-07-20T12:15:00.000Z',
+        currency: 'credits',
+        provider_cost_credits: 1,
+        platform_cost_credits: 0,
+        max_approved_credits: 1,
+        input_hash: `sha256:${'d'.repeat(64)}`,
+        line_items: [{ label: 'image', credits: 1 }],
+      };
+    } else if (path.endsWith(`/studio/jobs/${jobId}/events`)) {
+      responseBody = {
+        items: [
+          {
+            event_id: '25000000-0000-4000-a000-000000000001',
+            job_id: jobId,
+            cursor: '1',
+            type: 'queued',
+            payload: {},
+            created_at: '2026-07-20T12:00:00.000Z',
+          },
+        ],
+        next_cursor: null,
+      };
+    } else if (path.endsWith('/studio/jobs')) {
+      responseBody = { items: [job], next_cursor: null };
+    } else if (path.includes('/studio/jobs/')) {
+      responseBody = job;
+    } else if (path.endsWith('/studio/uploads')) {
+      responseBody = upload;
+    } else if (path.endsWith('/studio/uploads/' + uploadId + '/finalize')) {
+      responseBody = asset;
+    } else if (path.endsWith('/studio/assets')) {
+      responseBody = { items: [asset], next_cursor: null };
+    } else if (path.endsWith('/download-url')) {
+      responseBody = {
+        asset_id: assetId,
+        signed_download_url: 'https://objects.example.test/download',
+        expires_at: '2026-07-20T12:15:00.000Z',
+      };
+    } else if (path.includes('/studio/assets/')) {
+      responseBody = asset;
+    }
+    return new Response(JSON.stringify(responseBody), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+
+  const handle = kortix.project(projectId);
+  expect(handle.intelligence).not.toHaveProperty('studio');
+  expect(typeof handle.intelligence.image.estimate).toBe('function');
+  expect(typeof handle.intelligence.jobs.list).toBe('function');
+  expect(typeof handle.intelligence.jobs.get).toBe('function');
+  expect(typeof handle.intelligence.jobs.events).toBe('function');
+  expect(typeof handle.intelligence.jobs.cancel).toBe('function');
+  expect(typeof handle.intelligence.uploads.create).toBe('function');
+  expect(typeof handle.intelligence.uploads.finalize).toBe('function');
+  expect(typeof handle.intelligence.assets.list).toBe('function');
+  expect(typeof handle.intelligence.assets.get).toBe('function');
+  expect(typeof handle.intelligence.assets.downloadUrl).toBe('function');
+
+  await handle.intelligence.image.estimate({
+    capability: 'image.generate',
+    provider_config_id: providerConfigId,
+    model: 'fake/image-v1',
+    input,
+  });
+  await handle.intelligence.jobs.list();
+  await handle.intelligence.jobs.get(jobId);
+  await handle.intelligence.jobs.events(jobId);
+  await handle.intelligence.jobs.cancel(jobId);
+  await handle.intelligence.uploads.create({
+    declared_mime_type: 'image/png',
+    expected_size_bytes: 1,
+    expected_checksum_sha256: 'c'.repeat(64),
+  });
+  await handle.intelligence.uploads.finalize(uploadId);
+  await handle.intelligence.assets.list();
+  await handle.intelligence.assets.get(assetId);
+  await handle.intelligence.assets.downloadUrl(assetId);
+
+  expect(calls).toHaveLength(10);
+  expect(
+    calls.every((call) =>
+      new URL(call.url).pathname.startsWith(`/projects/${projectId}/studio/`),
+    ),
+  ).toBe(true);
+});
+
 test('session(projectId, sessionId) binds both ids', async () => {
   await kortix.session('PID123', 'SID456').previews();
   expect(last().url).toContain('/projects/PID123/sessions/SID456/previews');

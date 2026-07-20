@@ -604,6 +604,28 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
           events: (taskId: string, cursor?: string | null) =>
             P.getIntelligenceTaskEvents(projectId, taskId, cursor),
         },
+        image: {
+          estimate: (input: Parameters<typeof P.estimateIntelligenceImage>[1]) =>
+            P.estimateIntelligenceImage(projectId, input),
+        },
+        jobs: {
+          list: (cursor?: string | null) => P.listIntelligenceJobs(projectId, cursor),
+          get: (jobId: string) => P.getIntelligenceJob(projectId, jobId),
+          events: (jobId: string, cursor?: string | null) =>
+            P.getIntelligenceJobEvents(projectId, jobId, cursor),
+          cancel: (jobId: string) => P.cancelIntelligenceJob(projectId, jobId),
+        },
+        uploads: {
+          create: (input: Parameters<typeof P.createIntelligenceUpload>[1]) =>
+            P.createIntelligenceUpload(projectId, input),
+          finalize: (uploadId: string) => P.finalizeIntelligenceUpload(projectId, uploadId),
+        },
+        assets: {
+          list: (cursor?: string | null) => P.listIntelligenceAssets(projectId, cursor),
+          get: (assetId: string) => P.getIntelligenceAsset(projectId, assetId),
+          downloadUrl: (assetId: string) =>
+            P.createIntelligenceAssetDownloadUrl(projectId, assetId),
+        },
         workflows: {
           start: (input: Parameters<typeof P.startIntelligenceWorkflow>[1]) =>
             P.startIntelligenceWorkflow(projectId, input),

@@ -1,11 +1,11 @@
+import type { GatewayCapabilityRequirements } from './capabilities';
+
 export type ModelFallbackCondition = 'transient' | 'any-error';
 
 /** Minimal request traits a control plane can use without receiving prompt content. */
 export interface ModelRouteInput {
   requestedModel: string;
-  requires: {
-    imageInput: boolean;
-  };
+  requires: GatewayCapabilityRequirements;
 }
 
 /**

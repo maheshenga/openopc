@@ -40,8 +40,13 @@ export type { ExtractedUsage } from './usage';
 export { buildUpstreamRequest } from './transports';
 export type { UpstreamRequest } from './transports';
 
-export { createModelFallbackPolicyEngine } from './routing';
-export type { ModelFallbackPolicyEngine } from './routing';
+export {
+  capabilityRequirementsFromChat,
+  createModelFallbackPolicyEngine,
+  evaluateUpstreamCapabilities,
+  requiredCapabilityNames,
+} from './routing';
+export type { CapabilityEvaluation, ModelFallbackPolicyEngine } from './routing';
 
 export { OPENAI_COMPATIBLE_NPM, providerKindForNpm } from './catalog';
 
@@ -49,7 +54,10 @@ export type {
   AuthedPrincipal,
   AuthorizeResult,
   BillingMode,
+  CapabilityExclusionReason,
   GatewayConfig,
+  GatewayCapabilityName,
+  GatewayCapabilityRequirements,
   GatewayHooks,
   GatewayLogger,
   GatewayTrace,
@@ -62,6 +70,8 @@ export type {
   ModelInfo,
   ProviderKind,
   TokenCounts,
+  UpstreamCapabilityProfile,
+  UpstreamCapabilityTransport,
   UpstreamDescriptor,
   UsageEvent,
 } from './domain';

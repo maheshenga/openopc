@@ -1,3 +1,4 @@
+import type { UpstreamCapabilityProfile } from './capabilities';
 import type { BillingMode } from './principal';
 
 export type ProviderKind =
@@ -30,4 +31,5 @@ export interface UpstreamDescriptor {
   // any same-named client fields (e.g. OpenRouter's `provider` routing
   // preferences pinning managed models to reliable hosts). openai-compat only.
   bodyExtras?: Record<string, unknown>;
+  capabilities?: UpstreamCapabilityProfile;
 }

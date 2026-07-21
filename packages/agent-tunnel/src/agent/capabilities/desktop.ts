@@ -1,5 +1,5 @@
+import { CuaDriver, type CuaInstallApproval } from './desktop/cua-driver';
 import type { Capability, RpcHandler } from './index';
-import { CuaDriver } from './desktop/cua-driver';
 
 const CUA_TOOLS = [
   'bring_to_front',
@@ -40,20 +40,12 @@ const CUA_TOOLS = [
   'zoom',
 ];
 
-export function createDesktopCapability(): Capability {
-  const cua = new CuaDriver();
+export function createDesktopCapability(cua: CuaDriver = new CuaDriver()): Capability {
   const methods = new Map<string, RpcHandler>();
 
-  void (async () => {
-    await cua.ensureInstalled();
-    await cua.startDaemon();
-  })().catch((err) => {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[agent-tunnel] CUA driver background bootstrap skipped: ${message}`);
-  });
-
-  methods.set('desktop.cua.ensure', async () => {
-    const binary = await cua.ensureInstalled();
+  methods.set('desktop.cua.ensure', async (params) => {
+    const approval = params.approval as CuaInstallApproval | undefined;
+    const binary = await cua.ensureInstalled(approval);
     const version = await cua.version().catch(() => undefined);
     return { ok: true, binary, version };
   });
@@ -89,6 +81,15 @@ export function createDesktopCapability(): Capability {
       return cua.call(tool, params);
     });
   }
+
+  methods.set('desktop.cua.end_session', async (params) => {
+    const reason = typeof params.reason === 'string' ? params.reason : 'remote_end_session';
+    return cua.stopInput(reason);
+  });
+
+  methods.set('desktop.cua.start_session', async (params) => {
+    return cua.startInputSession(params);
+  });
 
   return {
     name: 'desktop',

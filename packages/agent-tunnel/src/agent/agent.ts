@@ -3,6 +3,7 @@ import { trustedCredential, trustedHttpUrl, type TunnelConfig } from './config';
 import { CapabilityRegistry } from './capabilities/index';
 import { PermissionGuard } from './security/permission-guard';
 import type { LocalPermission } from './security/permission-guard';
+import { capabilityForMethod } from './security/automation-action-policy';
 import { signMessage, verifyMessageSignature } from '../shared/crypto';
 
 interface JsonRpcRequest {
@@ -103,7 +104,7 @@ export class TunnelAgent {
       this.ws = null;
     }
 
-    this.permissionGuard.clear();
+    void this.enterStoppedState('client_disconnect');
     log(`${c.gray}○${c.reset}`, `Disconnected`);
   }
 
@@ -130,6 +131,7 @@ export class TunnelAgent {
     });
 
     this.ws.addEventListener('close', (event) => {
+      void this.enterStoppedState('connection_closed');
       if (this.uptimeInterval) {
         clearInterval(this.uptimeInterval);
         this.uptimeInterval = null;
@@ -190,6 +192,13 @@ export class TunnelAgent {
     // ── Heartbeat ping (signature verified above) ────────────────────
     if ('method' in msg && msg.method === 'tunnel.ping') {
       this.sendPong();
+      return;
+    }
+
+    // ── Automation kill switch (signature verified above) ──────────
+    if ('method' in msg && msg.method === 'automation.kill_switch') {
+      await this.enterStoppedState('automation_kill_switch', msg.params?.generation);
+      log(`${c.red}■${c.reset}`, 'Automation stopped locally');
       return;
     }
 
@@ -267,9 +276,23 @@ export class TunnelAgent {
     const { id, method, params = {} } = request;
 
     const permissionId = params.permissionId as string | undefined;
-    const permission = this.permissionGuard.getPermission(permissionId);
-    if (!permission) {
-      this.sendSignedError(id, -32000, `Permission denied: ${permissionId ? 'invalid or expired permission' : 'no permissionId provided'}`);
+    const capability = capabilityForMethod(method);
+    if (!capability) {
+      this.sendSignedError(id, -32000, `Permission denied: unknown capability for method ${method}`);
+      return;
+    }
+
+    let permission: LocalPermission;
+    try {
+      permission = this.permissionGuard.checkRequest({
+        permissionId,
+        capability,
+        method,
+        params,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.sendSignedError(id, -32000, message);
       return;
     }
 
@@ -288,6 +311,19 @@ export class TunnelAgent {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.sendSignedError(id, -32003, message);
+    }
+  }
+
+  private async enterStoppedState(reason: string, generation?: unknown): Promise<void> {
+    this.permissionGuard.activateKillSwitch(generation);
+    const endSession = this.registry.getHandler('desktop.cua.end_session');
+    if (!endSession) return;
+
+    try {
+      await endSession({ reason });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`${c.yellow}!${c.reset}`, `Local input stop was best-effort: ${message}`);
     }
   }
 

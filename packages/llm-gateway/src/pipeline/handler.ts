@@ -1,6 +1,7 @@
 import type {
   AuthedPrincipal,
   AuthorizeResult,
+  GatewayCapabilityName,
   GatewayConfig,
   GatewayHooks,
   GatewayLogger,
@@ -11,6 +12,11 @@ import type {
 } from '../domain';
 import type { FetchImpl } from '../http';
 import { type CircuitBreaker, backoffDelay, realSleep } from '../resilience';
+import {
+  capabilityRequirementsFromChat,
+  evaluateUpstreamCapabilities,
+  requiredCapabilityNames,
+} from '../routing';
 import {
   type ExtractedUsage,
   type SseErrorFrame,
@@ -62,20 +68,6 @@ function newRequestId(): string {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-function requestHasImage(body: Record<string, unknown>): boolean {
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  return messages.some((message) => {
-    if (!message || typeof message !== 'object') return false;
-    const content = (message as { content?: unknown }).content;
-    if (!Array.isArray(content)) return false;
-    return content.some((part) => {
-      if (!part || typeof part !== 'object') return false;
-      const type = (part as { type?: unknown }).type;
-      return type === 'image_url' || type === 'input_image' || type === 'image';
-    });
-  });
 }
 
 // An empty completion is often a transient upstream hiccup on one specific
@@ -263,6 +255,7 @@ export async function handleChatCompletions(
   }
 
   const requestedModel = typeof body.model === 'string' ? body.model : '';
+  const requirements = capabilityRequirementsFromChat(body);
   // Model names, defaults, catalog availability, and fallback policy belong to
   // the host/control plane. The gateway sends only the requested id and minimal
   // capability traits, then executes the returned finite route generically.
@@ -270,7 +263,7 @@ export async function handleChatCompletions(
   try {
     route = await hooks.resolveRoute?.(principal, {
       requestedModel,
-      requires: { imageInput: requestHasImage(body) },
+      requires: requirements,
     }) ?? null;
   } catch (err) {
     const message = errorMessage(err);
@@ -325,22 +318,59 @@ export async function handleChatCompletions(
     .filter((model, index, all) => all.indexOf(model) === index)
     .slice(0, maxFallbackModels + 1);
   const fallbackOn = route?.fallbackOn ?? 'transient';
-  const routingMetadata = (selected: string | null): Record<string, unknown> =>
-    routeModels.length > 1
-      ? {
-          ...metadata,
-          gatewayRouting: {
-            policy: route?.policyId || 'control-plane',
-            models: routeModels,
-            selected,
-          },
-        }
-      : metadata;
+  const capabilityExclusions: Array<{
+    model: string;
+    reason: 'CAPABILITY_UNSUPPORTED' | 'PROFILE_INVALID';
+    capabilities: GatewayCapabilityName[];
+  }> = [];
+  const routingMetadata = (
+    selected: string | null,
+    selectedDescriptor?: UpstreamDescriptor,
+  ): Record<string, unknown> => {
+    const requiredCapabilities = requiredCapabilityNames(requirements);
+    const selectedDecision = selectedDescriptor
+      ? evaluateUpstreamCapabilities(selectedDescriptor, requirements)
+      : null;
+    const selectedProfile = selectedDecision?.eligible ? selectedDecision.profile : null;
+    const hasCapabilityData =
+      requiredCapabilities.length > 0 ||
+      capabilityExclusions.length > 0 ||
+      selectedProfile !== null;
+    if (routeModels.length === 1 && !hasCapabilityData) return metadata;
+    return {
+      ...metadata,
+      gatewayRouting: {
+        ...(routeModels.length > 1
+          ? {
+              policy: route?.policyId || 'control-plane',
+              models: routeModels,
+              selected,
+            }
+          : {}),
+        ...(requiredCapabilities.length > 0 ? { requiredCapabilities } : {}),
+        ...(selectedProfile ? { selectedProfile } : {}),
+        ...(capabilityExclusions.length > 0 ? { exclusions: capabilityExclusions } : {}),
+      },
+    };
+  };
   const candidates: RoutedUpstreamCandidate[] = [];
+  let resolvedCandidateCount = 0;
   for (const routeModel of routeModels) {
     try {
       const resolved = await hooks.resolveUpstream(principal, routeModel);
-      candidates.push(...resolved.map((descriptor) => ({ descriptor, routeModel })));
+      resolvedCandidateCount += resolved.length;
+      for (const descriptor of resolved) {
+        const decision = evaluateUpstreamCapabilities(descriptor, requirements);
+        if (decision.eligible) {
+          candidates.push({ descriptor, routeModel });
+        } else {
+          capabilityExclusions.push({
+            model: routeModel,
+            reason: decision.reason,
+            capabilities: decision.capabilities,
+          });
+        }
+      }
     } catch (err) {
       // Resolution can itself fail (for example, an expired Codex credential
       // that cannot refresh). A configured model policy treats that like an
@@ -352,6 +382,7 @@ export async function handleChatCompletions(
   step('resolved_candidates', {
     ms: lap(),
     count: candidates.length,
+    resolvedCount: resolvedCandidateCount,
     routeModels,
     fallbackOn,
     candidates: candidates.map(({ descriptor, routeModel }) => ({
@@ -362,6 +393,52 @@ export async function handleChatCompletions(
       billingMode: descriptor.billingMode,
     })),
   });
+  if (
+    resolvedCandidateCount > 0 &&
+    candidates.length === 0 &&
+    capabilityExclusions.every((item) => item.reason === 'PROFILE_INVALID')
+  ) {
+    emit({
+      ...id,
+      requestedModel,
+      resolvedModel: routedModel,
+      status: 502,
+      ok: false,
+      errorCode: 'routing_unavailable',
+      request: capture(body),
+      metadata: routingMetadata(null),
+    });
+    return gatewayErrorResponse(502, {
+      message: 'Model routing policy is unavailable',
+      code: 'routing_unavailable',
+      provider: '',
+      requestedModel,
+      resolvedModel: routedModel,
+      requestId,
+      suggestion: 'Retry the request. If the error continues, check the gateway control plane.',
+    });
+  }
+  if (resolvedCandidateCount > 0 && candidates.length === 0) {
+    emit({
+      ...id,
+      requestedModel,
+      resolvedModel: routedModel,
+      status: 400,
+      ok: false,
+      errorCode: 'capability_unavailable',
+      request: capture(body),
+      metadata: routingMetadata(null),
+    });
+    return gatewayErrorResponse(400, {
+      message: 'No configured upstream supports the requested capabilities',
+      code: 'capability_unavailable',
+      provider: '',
+      requestedModel,
+      resolvedModel: routedModel,
+      requestId,
+      suggestion: 'Choose a compatible model or remove the unsupported request capability.',
+    });
+  }
   if (!candidates.length) {
     step('model_unavailable', { model: requestedModel, routedModel });
     emit({
@@ -620,7 +697,7 @@ export async function handleChatCompletions(
     selectedRouteModel,
   });
 
-  const traceMetadata = routingMetadata(selectedRouteModel);
+  const traceMetadata = routingMetadata(selectedRouteModel, finalDescriptor);
 
   const settle = async (
     usage: ExtractedUsage | null,

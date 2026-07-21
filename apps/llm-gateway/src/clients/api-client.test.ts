@@ -61,15 +61,20 @@ describe('ApiClient', () => {
       });
     });
 
-    const route = await c.resolveRoute(principal, {
-      requestedModel: 'auto',
-      requires: { imageInput: false },
-    });
+    const requires = {
+      imageInput: false,
+      streaming: true,
+      functionTools: true,
+      reasoning: false,
+      stateContinuation: false,
+      background: false,
+    };
+    const route = await c.resolveRoute(principal, { requestedModel: 'auto', requires });
 
     expect(seenPath).toBe('/internal/gateway/resolve-route');
     expect(seenBody).toEqual({
       principal,
-      input: { requestedModel: 'auto', requires: { imageInput: false } },
+      input: { requestedModel: 'auto', requires },
     });
     expect(route).toMatchObject({
       policyId: 'platform-default',

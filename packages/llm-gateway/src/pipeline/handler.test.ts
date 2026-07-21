@@ -60,6 +60,7 @@ function okFetch(data: unknown): FetchImpl {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 5));
 
+// biome-ignore lint/suspicious/noExplicitAny: Provider error bodies are intentionally dynamic JSON.
 function expectErrorContract(body: any, code: string): void {
   expect(typeof body.message).toBe("string");
   expect(body.message === "").toBe(false);
@@ -812,6 +813,174 @@ describe("gateway.chatCompletions — combined authorize hook", () => {
     expect(res.status).toBe(200);
   });
 
+  test("skips an explicitly incompatible candidate before provider I/O", async () => {
+    const incompatible: UpstreamDescriptor = {
+      ...managed,
+      provider: "no-tools",
+      baseUrl: "https://no-tools.test/v1",
+      capabilities: {
+        transport: "chat-completions",
+        functionTools: false,
+      },
+    };
+    const compatible: UpstreamDescriptor = {
+      ...managed,
+      provider: "tools",
+      baseUrl: "https://tools.test/v1",
+      capabilities: {
+        transport: "chat-completions",
+        functionTools: true,
+      },
+    };
+    const calls: string[] = [];
+    const { hooks, traces } = makeHooks({
+      resolveUpstream: async () => [incompatible, compatible],
+    });
+    const response = await createGateway(
+      hooks,
+      { retry: fastRetry },
+      {
+        fetchImpl: async (url, init) => {
+          calls.push(new URL(url).hostname);
+          return okFetch({ choices: [{ message: { content: "ok" } }] })(url, init);
+        },
+      },
+    ).chatCompletions({
+      authorization: "Bearer good",
+      rawBody: JSON.stringify({
+        model: "x",
+        tools: [{ type: "function", function: { name: "lookup", parameters: {} } }],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(calls).toEqual(["tools.test"]);
+    await flush();
+    expect(traces[0].candidatesTried).toEqual(["tools"]);
+    expect(traces[0].metadata.gatewayRouting).toMatchObject({
+      requiredCapabilities: ["function_tools"],
+      selectedProfile: { transport: "chat-completions", functionTools: true },
+      exclusions: [
+        {
+          model: "x",
+          reason: "CAPABILITY_UNSUPPORTED",
+          capabilities: ["function_tools"],
+        },
+      ],
+    });
+  });
+
+  test("returns capability_unavailable without provider I/O when every valid profile is incompatible", async () => {
+    let calls = 0;
+    const { hooks, traces } = makeHooks({
+      resolveUpstream: async () => [
+        {
+          ...managed,
+          capabilities: { transport: "chat-completions", imageInput: false },
+        },
+      ],
+    });
+    const response = await createGateway(
+      hooks,
+      { retry: fastRetry },
+      {
+        fetchImpl: async () => {
+          calls += 1;
+          throw new Error("must not dispatch");
+        },
+      },
+    ).chatCompletions({
+      authorization: "Bearer good",
+      rawBody: JSON.stringify({
+        model: "x",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).code).toBe("capability_unavailable");
+    expect(calls).toBe(0);
+    await flush();
+    expect(traces[0].errorCode).toBe("capability_unavailable");
+  });
+
+  test("returns routing_unavailable without leaking a malformed profile", async () => {
+    const privateUrl = "https://private-provider.invalid";
+    let calls = 0;
+    const { hooks, traces } = makeHooks({
+      resolveUpstream: async () => [
+        {
+          ...managed,
+          capabilities: {
+            transport: "chat-completions",
+            provider_url: privateUrl,
+          } as never,
+        },
+      ],
+    });
+    const response = await createGateway(
+      hooks,
+      { retry: fastRetry },
+      {
+        fetchImpl: async (_url, init) => {
+          calls += 1;
+          return okFetch({ choices: [{ message: { content: "must not dispatch" } }] })(
+            "https://unused.invalid",
+            init,
+          );
+        },
+      },
+    ).chatCompletions({
+      authorization: "Bearer good",
+      rawBody: '{"model":"x"}',
+    });
+
+    expect(response.status).toBe(502);
+    expect((await response.json()).code).toBe("routing_unavailable");
+    expect(calls).toBe(0);
+    await flush();
+    expect(JSON.stringify(traces)).not.toContain(privateUrl);
+  });
+
+  test("passes all bounded requirements to the control plane and ignores metadata escalation", async () => {
+    let seen: unknown;
+    const { hooks } = makeHooks({
+      resolveRoute: async (_principal, input) => {
+        seen = input.requires;
+        return null;
+      },
+    });
+    await createGateway(
+      hooks,
+      { retry: fastRetry },
+      {
+        fetchImpl: okFetch({ choices: [{ message: { content: "ok" } }] }),
+      },
+    ).chatCompletions({
+      authorization: "Bearer good",
+      rawBody: JSON.stringify({
+        model: "x",
+        stream: false,
+        metadata: { background: true, stateContinuation: true },
+      }),
+    });
+    expect(seen).toEqual({
+      imageInput: false,
+      streaming: false,
+      functionTools: false,
+      reasoning: false,
+      stateContinuation: false,
+      background: false,
+    });
+  });
+
   test("authorize denies with 402 and the trace stays attributed to the principal", async () => {
     const { hooks, traces } = makeHooks({
       authorize: async () => ({
@@ -1222,7 +1391,8 @@ describe("gateway error envelope contract", () => {
     const output = await new Response(res.body).text();
     const errorLine = output.split("\n").find((line) => line.startsWith("data: {") && line.includes('"error"'));
     expect(errorLine).toBeDefined();
-    const body = JSON.parse(errorLine!.slice(6));
+    if (!errorLine) throw new Error("expected an SSE error frame");
+    const body = JSON.parse(errorLine.slice(6));
     expect(body.message).toBe("provider stream disconnected");
     expectErrorContract(body, "upstream_stream_error");
     await flush();

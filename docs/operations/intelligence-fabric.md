@@ -63,6 +63,64 @@ pnpm --filter kortix-api exec bun test src/__tests__/e2e-intelligence-protocol.t
 pnpm --filter @kortix/cli exec bun test src/__tests__/e2e-intelligence-mcp.test.ts
 ```
 
+## Additive AG-UI workflow replay
+
+`INTELLIGENCE_AG_UI_ENABLED=false` is the default. When it remains disabled,
+the AG-UI endpoint returns the stable
+`INTELLIGENCE_AG_UI_DISABLED` response; existing workflow REST polling is
+unchanged.
+
+When explicitly enabled, the project-scoped endpoint is:
+
+```text
+GET /v1/projects/:projectId/intelligence/ag-ui/workflows/:runId/stream?cursor=:sequence
+```
+
+The stream requires the same project read authorization as workflow events. It
+replays the durable workflow event sequence as SSE frames whose `id` values are
+numeric sequences and whose `event` values are AG-UI event types. `cursor`
+takes precedence; when it is absent, `Last-Event-ID` is accepted as the
+numeric resume cursor. The bridge polls the existing workflow reader every
+500ms, sends a `: keep-alive` comment every 15 seconds, and closes after a
+terminal event receives one final flush.
+
+The authenticated SDK stream reconnects from the most recently received event
+ID. Consumers must retain REST cursor polling at
+`/intelligence/workflows/:runId/events?cursor=:sequence` as the authoritative
+fallback for disabled or unavailable streaming.
+
+AG-UI is a one-way projection only: it is not stored as a workflow event or
+used for orchestration. Public frames may contain stage summaries, approved
+status/progress, stable codes, task/tool IDs, and asset IDs. They must not
+contain prompts, payload references, credentials, provider or signed URLs, raw
+provider bodies, headers, cookies, or reasoning text. Catalog search remains
+read-only; for example:
+
+```text
+GET /v1/projects/:projectId/intelligence/catalog?query=image&limit=20
+```
+
+The MCP `tools/list` response remains a fixed meta-tool set. Catalog entries
+are discovered through the existing capability tools and do not become dynamic
+MCP tool definitions.
+
+Run the focused AG-UI record before accepting this additive protocol slice:
+
+```powershell
+pnpm.cmd --filter @kortix/intelligence-contracts exec bun test src/ag-ui.test.ts src/schemas.test.ts
+pnpm.cmd --filter @kortix/api-contract exec bun test src/intelligence.test.ts
+pnpm.cmd --filter kortix-api exec bun test src/intelligence/capability-catalog.test.ts src/intelligence/ag-ui src/intelligence/project-routes.test.ts src/__tests__/e2e-intelligence-ag-ui.test.ts
+pnpm.cmd --filter @kortix/sdk exec bun test src/core/rest/projects-client/intelligence.test.ts src/core/stream/intelligence-ag-ui.test.ts src/react/use-intelligence.test.tsx
+pnpm.cmd --filter @kortix/sdk typecheck
+pnpm.cmd --filter kortix-api typecheck
+pnpm.cmd --filter @kortix/cli exec bun test src/__tests__/e2e-intelligence-mcp.test.ts
+git diff --check
+```
+
+This record is not a production-readiness claim. It does not enable a
+workflow runtime, provider, deployment, or any cancelled first-party video,
+voice, 3D, digital-human, or batch-remix product.
+
 ## Redaction invariants
 
 Public discovery exposes capability descriptors, provider configuration IDs, and non-sensitive model identifiers only. Agent Cards never contain credentials or provider connection details. Task responses contain task/job IDs and public state only. Events contain status, progress, stable error codes, and asset IDs; internal Studio cursors, object keys, raw provider bodies, credential material, billing reservation identifiers, and downloadable locations remain private.

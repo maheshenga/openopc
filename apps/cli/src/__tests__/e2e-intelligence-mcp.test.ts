@@ -315,9 +315,17 @@ describe('Intelligence MCP acceptance', () => {
         result: { protocolVersion: '2025-11-25' },
       });
       const toolNames = listed.result.tools?.map((tool) => tool.name) ?? [];
-      expect(toolNames).toContain('studio_capabilities');
-      expect(toolNames).toContain('studio_create_task');
-      expect(toolNames.slice(-3)).toEqual([
+      expect(toolNames).toEqual([
+        'connectors',
+        'discover',
+        'describe',
+        'call',
+        'connect',
+        'request_secret',
+        'add_connector',
+        'remove_connector',
+        'studio_capabilities',
+        'studio_create_task',
         'workflow_capabilities',
         'workflow_start',
         'workflow_status',

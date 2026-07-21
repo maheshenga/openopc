@@ -1,6 +1,6 @@
 # Studio Acceleration Progress
 
-**Updated:** 2026-07-20
+**Updated:** 2026-07-21
 
 **Branch:** `studio-platform`
 
@@ -15,6 +15,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Studio backend foundation | implemented                                             | contracts, schema, billing, IAM, API, worker commits                                                                                        | protected production acceptance                                   |
 | Intelligence protocol     | implemented                                             | REST, SDK, MCP, A2A, task/event commits                                                                                                     | retained regression gates                                         |
 | Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
+| OpenOPC Milestone A       | implemented, disabled by default                        | catalog, project SSE projection, SDK subscription, and focused contract/API/SDK/CLI gates verified locally                                  | production rollout and later milestones                           |
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                                            | focused Web hardening without full-suite reruns                   |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
@@ -31,6 +32,21 @@ Web Image Studio and project Assets are retained. First-party video, voice, 3D, 
 ## Production Boundary
 
 `STUDIO_ENABLED=false` and `INTELLIGENCE_WORKFLOWS_ENABLED=false` remain production defaults. This milestone does not deploy or enable Studio workers, protected providers, or object storage, and it does not claim production readiness.
+
+`INTELLIGENCE_AG_UI_ENABLED=false` is also the default. Its optional SSE
+endpoint is a project-scoped projection over existing durable workflow events;
+it has numeric cursor replay, `Last-Event-ID` resume, a 500ms poll cadence,
+15-second keepalive comments, and existing REST cursor polling as the fallback.
+It does not alter workflow persistence, scheduling, or the existing OpenCode
+event stream.
+
+The AG-UI public boundary is redaction constrained: prompts, payload
+references, secrets, provider URLs, signed URLs, raw provider bodies, headers,
+cookies, and reasoning text are prohibited. The capability catalog stays
+read-only, while MCP `tools/list` remains a fixed meta-tool surface rather than
+expanding with catalog items. These statements record a focused protocol slice,
+not production readiness and not delivery of cancelled video, voice, 3D,
+digital-human, or batch-remix pages.
 
 ## Milestone 0-1 Gate
 

@@ -48,6 +48,12 @@ expanding with catalog items. These statements record a focused protocol slice,
 not production readiness and not delivery of cancelled video, voice, 3D,
 digital-human, or batch-remix pages.
 
+The Responses provider-profile slice adds bounded capability-aware routing to
+the existing LLM Gateway. Default clients continue to use Chat Completions;
+native `/v1/responses`, state continuation, background jobs, and Computer Use
+remain separate later plans. This slice adds no provider credentials, database
+state, Web route, Desktop route, or production-readiness claim.
+
 ## Milestone 0-1 Gate
 
 The milestone closes only after all eleven tasks in the implementation plan have commit-backed evidence, package/type/public-surface gates pass, and Electron acceptance proves the Web Image Studio and Assets flow without exposing credentials, signed URLs, request bodies, or identifiers in logs or telemetry. Android/iOS acceptance is deferred and is not a current milestone gate.

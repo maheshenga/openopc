@@ -24,6 +24,40 @@ describe('chatToResponses — vision', () => {
     expect(payload.stream).toBe(true);
   });
 
+  test('maps function tools and explicit reasoning without enabling persistence', () => {
+    const payload = chatToResponses(
+      {
+        model: 'codex/gpt-5.6-sol',
+        messages: [{ role: 'user', content: 'Use the tool' }],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'lookup',
+              description: 'Lookup a value',
+              parameters: { type: 'object', properties: {} },
+            },
+          },
+        ],
+        reasoning_effort: 'medium',
+      },
+      descriptor,
+    ) as AnyJson;
+
+    expect(payload.tools).toEqual([
+      {
+        type: 'function',
+        name: 'lookup',
+        description: 'Lookup a value',
+        parameters: { type: 'object', properties: {} },
+      },
+    ]);
+    expect(payload.reasoning).toEqual({ effort: 'medium' });
+    expect(payload.store).toBe(false);
+    expect(payload.background).toBeUndefined();
+    expect(payload.previous_response_id).toBeUndefined();
+  });
+
   test('preserves image_url parts as Responses input_image', () => {
     const payload = chatToResponses(
       {

@@ -121,6 +121,18 @@ This record is not a production-readiness claim. It does not enable a
 workflow runtime, provider, deployment, or any cancelled first-party video,
 voice, 3D, digital-human, or batch-remix product.
 
+## Responses provider profile
+
+The public product surface remains Chat Completions. The Gateway may use its
+existing Responses transport only when an internal upstream descriptor selects
+it. Provider profiles are additive, omit all credentials and connection data,
+and filter only capabilities explicitly declared unsupported.
+
+The current Codex profile records streaming, image input, function tools, and
+reasoning as supported by the existing request adapter. State continuation and
+background jobs remain disabled. This is not a public `/v1/responses`,
+Computer Use, background execution, or production-readiness claim.
+
 ## Redaction invariants
 
 Public discovery exposes capability descriptors, provider configuration IDs, and non-sensitive model identifiers only. Agent Cards never contain credentials or provider connection details. Task responses contain task/job IDs and public state only. Events contain status, progress, stable error codes, and asset IDs; internal Studio cursors, object keys, raw provider bodies, credential material, billing reservation identifiers, and downloadable locations remain private.

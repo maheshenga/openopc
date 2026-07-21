@@ -1,5 +1,4 @@
 import type { UpstreamDescriptor } from '@kortix/llm-gateway';
-import type { ManagedModel } from '../models/managed-models';
 import { llmPriceMarkup } from '../../billing/services/tiers';
 import { config } from '../../config';
 import { OPENROUTER_APP_REFERER, OPENROUTER_APP_TITLE } from '../../openrouter-attribution';
@@ -9,6 +8,7 @@ import {
   CODEX_USER_AGENT,
   type CodexCredential,
 } from '../credentials/codex';
+import type { ManagedModel } from '../models/managed-models';
 
 export function bedrockBaseUrl(): string {
   return `https://bedrock-runtime.${config.AWS_BEDROCK_REGION || 'us-west-2'}.amazonaws.com`;
@@ -89,5 +89,14 @@ export function codexDescriptor(credential: CodexCredential, model: string): Ups
     markup: 0,
     resolvedModel: model.replace(/^codex\//, ''),
     headers,
+    capabilities: {
+      transport: 'responses',
+      streaming: true,
+      imageInput: true,
+      functionTools: true,
+      reasoning: true,
+      stateContinuation: false,
+      background: false,
+    },
   };
 }

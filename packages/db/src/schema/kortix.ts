@@ -5420,3 +5420,562 @@ export const executorProjectSettingsRelations = relations(executorProjectSetting
     references: [projects.projectId],
   }),
 }));
+
+// ─── OpenOPC Automation Control ─────────────────────────────────────────────
+// Extension-owned durable state for browser and desktop automation. Keeping
+// this block isolated from the existing executor/tunnel models reduces merge
+// conflicts when the Kortix base is upgraded.
+
+export const automationExecutionDomainEnum = kortixSchema.enum('automation_execution_domain', [
+  'browser',
+  'desktop',
+]);
+
+export const automationRiskEnum = kortixSchema.enum('automation_risk', [
+  'observe',
+  'operate',
+  'external_effect',
+]);
+
+export const automationJobStatusEnum = kortixSchema.enum('automation_job_status', [
+  'queued',
+  'awaiting_approval',
+  'dispatched',
+  'running',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'expired',
+  'retryable',
+]);
+
+export const automationStepStatusEnum = kortixSchema.enum('automation_step_status', [
+  'pending',
+  'awaiting_approval',
+  'running',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'skipped',
+]);
+
+export const automationApprovalStatusEnum = kortixSchema.enum('automation_approval_status', [
+  'pending',
+  'approved',
+  'rejected',
+  'expired',
+  'consumed',
+]);
+
+export const automationApprovalPolicyEnum = kortixSchema.enum('automation_approval_policy', [
+  'project-default',
+  'full-access',
+]);
+
+export const automationBrowserProfileStatusEnum = kortixSchema.enum(
+  'automation_browser_profile_status',
+  ['active', 'revoked', 'expired'],
+);
+
+export const automationKillSwitchScopeEnum = kortixSchema.enum('automation_kill_switch_scope', [
+  'account',
+  'project',
+  'device',
+]);
+
+export const automationPolicies = kortixSchema.table(
+  'automation_policies',
+  {
+    projectId: uuid('project_id')
+      .primaryKey()
+      .references(() => projects.projectId, { onDelete: 'cascade' }),
+    allowedOrigins: jsonb('allowed_origins').default([]).notNull().$type<string[]>(),
+    openNetworkAllowed: boolean('open_network_allowed').default(false).notNull(),
+    persistentProfilesAllowed: boolean('persistent_profiles_allowed').default(false).notNull(),
+    fullAccessAllowed: boolean('full_access_allowed').default(false).notNull(),
+    defaultApprovalPolicy: automationApprovalPolicyEnum('default_approval_policy')
+      .default('project-default')
+      .notNull(),
+    policyVersion: varchar('policy_version', { length: 128 }).default('1').notNull(),
+    updatedBy: uuid('updated_by'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('idx_automation_policies_updated').on(table.updatedAt),
+    check(
+      'automation_policies_allowed_origins_check',
+      sql`jsonb_typeof(${table.allowedOrigins}) = 'array'
+        AND jsonb_array_length(${table.allowedOrigins}) <= 64
+        AND pg_column_size(${table.allowedOrigins}) <= 131072`,
+    ),
+    check(
+      'automation_policies_version_check',
+      sql`length(BTRIM(${table.policyVersion})) BETWEEN 1 AND 128`,
+    ),
+  ],
+);
+
+export const automationBrowserProfiles = kortixSchema.table(
+  'automation_browser_profiles',
+  {
+    profileId: uuid('profile_id').defaultRandom().primaryKey(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.projectId, { onDelete: 'cascade' }),
+    encryptedStateRef: text('encrypted_state_ref').notNull(),
+    stateHash: varchar('state_hash', { length: 71 }).notNull(),
+    status: automationBrowserProfileStatusEnum('status').default('active').notNull(),
+    createdBy: uuid('created_by').notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true, mode: 'string' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('automation_browser_profiles_project_profile_unique').on(
+      table.projectId,
+      table.profileId,
+    ),
+    index('idx_automation_browser_profiles_project_status').on(
+      table.projectId,
+      table.status,
+      table.updatedAt,
+    ),
+    index('idx_automation_browser_profiles_expiry')
+      .on(table.expiresAt)
+      .where(sql`${table.expiresAt} IS NOT NULL AND ${table.status} = 'active'`),
+    check(
+      'automation_browser_profiles_state_check',
+      sql`${table.encryptedStateRef} ~ '^sealed:[A-Za-z0-9][A-Za-z0-9._:/-]*$'
+        AND length(${table.encryptedStateRef}) <= 2048
+        AND ${table.stateHash} ~ '^sha256:[0-9a-f]{64}$'
+        AND (
+          (${table.status} = 'active' AND ${table.revokedAt} IS NULL)
+          OR (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL)
+          OR (
+            ${table.status} = 'expired'
+            AND ${table.revokedAt} IS NULL
+            AND ${table.expiresAt} IS NOT NULL
+          )
+        )
+        AND (${table.expiresAt} IS NULL OR ${table.expiresAt} > ${table.createdAt})`,
+    ),
+  ],
+);
+
+export const automationJobs = kortixSchema.table(
+  'automation_jobs',
+  {
+    jobId: uuid('job_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.projectId, { onDelete: 'cascade' }),
+    actorUserId: uuid('actor_user_id').notNull(),
+    sourceRunId: uuid('source_run_id'),
+    protocolVersion: varchar('protocol_version', { length: 64 })
+      .default('automation.v1')
+      .notNull(),
+    executionDomain: automationExecutionDomainEnum('execution_domain').notNull(),
+    requestEnvelope: jsonb('request_envelope').notNull().$type<Record<string, unknown>>(),
+    requestHash: varchar('request_hash', { length: 71 }).notNull(),
+    idempotencyKey: varchar('idempotency_key', { length: 255 }).notNull(),
+    status: automationJobStatusEnum('status').default('queued').notNull(),
+    approvalPolicy: automationApprovalPolicyEnum('approval_policy')
+      .default('project-default')
+      .notNull(),
+    policySnapshotHash: varchar('policy_snapshot_hash', { length: 71 }).notNull(),
+    browserProfileId: uuid('browser_profile_id'),
+    targetDeviceId: uuid('target_device_id'),
+    leaseOwner: varchar('lease_owner', { length: 128 }),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true, mode: 'string' }),
+    cancelRequestedAt: timestamp('cancel_requested_at', { withTimezone: true, mode: 'string' }),
+    killSwitchGeneration: bigint('kill_switch_generation', { mode: 'number' })
+      .default(0)
+      .notNull(),
+    deadlineAt: timestamp('deadline_at', { withTimezone: true, mode: 'string' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    terminalAt: timestamp('terminal_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'automation_jobs_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.projectId, table.browserProfileId],
+      foreignColumns: [automationBrowserProfiles.projectId, automationBrowserProfiles.profileId],
+      name: 'automation_jobs_project_profile_fk',
+    }).onDelete('restrict'),
+    unique('automation_jobs_project_idempotency_unique').on(
+      table.projectId,
+      table.idempotencyKey,
+    ),
+    index('idx_automation_jobs_account_created').on(table.accountId, table.createdAt),
+    index('idx_automation_jobs_project_created').on(table.projectId, table.createdAt),
+    index('idx_automation_jobs_claimable')
+      .on(table.status, table.leaseExpiresAt, table.deadlineAt, table.createdAt)
+      .where(sql`${table.status} IN ('queued', 'retryable', 'dispatched', 'running')`),
+    index('idx_automation_jobs_browser_profile')
+      .on(table.projectId, table.browserProfileId)
+      .where(sql`${table.browserProfileId} IS NOT NULL`),
+    index('idx_automation_jobs_target_device')
+      .on(table.targetDeviceId, table.status, table.createdAt)
+      .where(sql`${table.targetDeviceId} IS NOT NULL`),
+    check('automation_jobs_protocol_version_check', sql`${table.protocolVersion} = 'automation.v1'`),
+    check(
+      'automation_jobs_request_envelope_check',
+      sql`jsonb_typeof(${table.requestEnvelope}) = 'object'
+        AND pg_column_size(${table.requestEnvelope}) <= 1048576`,
+    ),
+    check(
+      'automation_jobs_request_hash_check',
+      sql`${table.requestHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'automation_jobs_policy_snapshot_hash_check',
+      sql`${table.policySnapshotHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'automation_jobs_idempotency_key_check',
+      sql`length(BTRIM(${table.idempotencyKey})) BETWEEN 16 AND 255`,
+    ),
+    check(
+      'automation_jobs_lease_pair_check',
+      sql`(${table.leaseOwner} IS NULL AND ${table.leaseExpiresAt} IS NULL)
+        OR (
+          ${table.leaseOwner} IS NOT NULL
+          AND BTRIM(${table.leaseOwner}) <> ''
+          AND ${table.leaseExpiresAt} IS NOT NULL
+        )`,
+    ),
+    check(
+      'automation_jobs_target_check',
+      sql`(
+          ${table.executionDomain} = 'browser'
+          AND ${table.targetDeviceId} IS NULL
+        ) OR (
+          ${table.executionDomain} = 'desktop'
+          AND ${table.browserProfileId} IS NULL
+          AND ${table.targetDeviceId} IS NOT NULL
+        )`,
+    ),
+    check(
+      'automation_jobs_kill_switch_generation_check',
+      sql`${table.killSwitchGeneration} >= 0`,
+    ),
+    check(
+      'automation_jobs_terminal_check',
+      sql`(${table.status} IN ('succeeded', 'failed', 'cancelled', 'expired'))
+        = (${table.terminalAt} IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const automationJobSteps = kortixSchema.table(
+  'automation_job_steps',
+  {
+    stepId: uuid('step_id').defaultRandom().primaryKey(),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => automationJobs.jobId, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    action: varchar('action', { length: 128 }).notNull(),
+    args: jsonb('args').default({}).notNull().$type<Record<string, unknown>>(),
+    risk: automationRiskEnum('risk').notNull(),
+    actionHash: varchar('action_hash', { length: 71 }).notNull(),
+    status: automationStepStatusEnum('status').default('pending').notNull(),
+    approvalId: uuid('approval_id'),
+    startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+    endedAt: timestamp('ended_at', { withTimezone: true, mode: 'string' }),
+    resultRef: text('result_ref'),
+    errorCode: varchar('error_code', { length: 128 }),
+  },
+  (table) => [
+    unique('automation_job_steps_job_step_unique').on(table.jobId, table.stepId),
+    unique('automation_job_steps_job_sequence_unique').on(table.jobId, table.sequence),
+    index('idx_automation_job_steps_job_status').on(table.jobId, table.status, table.sequence),
+    index('idx_automation_job_steps_approval')
+      .on(table.approvalId)
+      .where(sql`${table.approvalId} IS NOT NULL`),
+    check('automation_job_steps_sequence_positive_check', sql`${table.sequence} > 0`),
+    check(
+      'automation_job_steps_action_check',
+      sql`${table.action} ~ '^[A-Za-z][A-Za-z0-9]*(?:[._:-][A-Za-z0-9]+)*$'`,
+    ),
+    check(
+      'automation_job_steps_args_check',
+      sql`jsonb_typeof(${table.args}) = 'object' AND pg_column_size(${table.args}) <= 262144`,
+    ),
+    check(
+      'automation_job_steps_action_hash_check',
+      sql`${table.actionHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'automation_job_steps_timing_check',
+      sql`${table.endedAt} IS NULL OR ${table.startedAt} IS NULL OR ${table.endedAt} >= ${table.startedAt}`,
+    ),
+  ],
+);
+
+export const automationApprovals = kortixSchema.table(
+  'automation_approvals',
+  {
+    approvalId: uuid('approval_id').defaultRandom().primaryKey(),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => automationJobs.jobId, { onDelete: 'cascade' }),
+    stepId: uuid('step_id').notNull(),
+    actionHash: varchar('action_hash', { length: 71 }).notNull(),
+    status: automationApprovalStatusEnum('status').default('pending').notNull(),
+    actingUserId: uuid('acting_user_id'),
+    tokenHash: varchar('token_hash', { length: 71 }),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.jobId, table.stepId],
+      foreignColumns: [automationJobSteps.jobId, automationJobSteps.stepId],
+      name: 'automation_approvals_job_step_fk',
+    }).onDelete('cascade'),
+    index('idx_automation_approvals_job_status').on(table.jobId, table.status, table.createdAt),
+    index('idx_automation_approvals_job_step').on(table.jobId, table.stepId),
+    index('idx_automation_approvals_expiry')
+      .on(table.expiresAt)
+      .where(sql`${table.status} = 'pending'`),
+    check(
+      'automation_approvals_action_hash_check',
+      sql`${table.actionHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'automation_approvals_token_hash_check',
+      sql`${table.tokenHash} IS NULL OR ${table.tokenHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'automation_approvals_resolution_check',
+      sql`(
+          ${table.status} = 'pending'
+          AND ${table.actingUserId} IS NULL
+          AND ${table.tokenHash} IS NULL
+          AND ${table.resolvedAt} IS NULL
+        ) OR (
+          ${table.status} IN ('approved', 'consumed')
+          AND ${table.actingUserId} IS NOT NULL
+          AND ${table.tokenHash} IS NOT NULL
+          AND ${table.resolvedAt} IS NOT NULL
+        ) OR (
+          ${table.status} = 'rejected'
+          AND ${table.actingUserId} IS NOT NULL
+          AND ${table.tokenHash} IS NULL
+          AND ${table.resolvedAt} IS NOT NULL
+        ) OR (
+          ${table.status} = 'expired'
+          AND ${table.actingUserId} IS NULL
+          AND ${table.tokenHash} IS NULL
+          AND ${table.resolvedAt} IS NOT NULL
+        )`,
+    ),
+  ],
+);
+
+export const automationJobEvents = kortixSchema.table(
+  'automation_job_events',
+  {
+    eventId: uuid('event_id').defaultRandom().primaryKey(),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => automationJobs.jobId, { onDelete: 'cascade' }),
+    sequence: bigint('sequence', { mode: 'number' }).notNull(),
+    type: varchar('type', { length: 64 }).notNull(),
+    status: automationJobStatusEnum('status'),
+    payload: jsonb('payload').default({}).notNull().$type<Record<string, unknown>>(),
+    traceId: varchar('trace_id', { length: 32 }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('automation_job_events_job_sequence_unique').on(table.jobId, table.sequence),
+    index('idx_automation_job_events_job_created').on(table.jobId, table.createdAt),
+    check('automation_job_events_sequence_positive_check', sql`${table.sequence} > 0`),
+    check(
+      'automation_job_events_type_check',
+      sql`${table.type} IN (
+        'job_queued', 'approval_required', 'job_dispatched', 'job_started',
+        'step_started', 'step_completed', 'job_succeeded', 'job_failed',
+        'job_cancelled', 'job_expired', 'kill_switch_activated', 'heartbeat'
+      )`,
+    ),
+    check(
+      'automation_job_events_payload_check',
+      sql`jsonb_typeof(${table.payload}) = 'object' AND pg_column_size(${table.payload}) <= 262144`,
+    ),
+    check(
+      'automation_job_events_trace_id_check',
+      sql`${table.traceId} IS NULL OR ${table.traceId} ~ '^[0-9a-f]{32}$'`,
+    ),
+  ],
+);
+
+export const automationKillSwitches = kortixSchema.table(
+  'automation_kill_switches',
+  {
+    killSwitchId: uuid('kill_switch_id').defaultRandom().primaryKey(),
+    protocolVersion: varchar('protocol_version', { length: 64 })
+      .default('automation.v1')
+      .notNull(),
+    scope: automationKillSwitchScopeEnum('scope').notNull(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').references(() => projects.projectId, { onDelete: 'cascade' }),
+    deviceId: uuid('device_id'),
+    generation: bigint('generation', { mode: 'number' }).notNull(),
+    active: boolean('active').default(true).notNull(),
+    actorUserId: uuid('actor_user_id').notNull(),
+    auditEventId: uuid('audit_event_id').notNull(),
+    activatedAt: timestamp('activated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    releasedAt: timestamp('released_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'automation_kill_switches_project_account_fk',
+    }).onDelete('cascade'),
+    uniqueIndex('idx_automation_kill_switches_account_active')
+      .on(table.accountId)
+      .where(sql`${table.scope} = 'account' AND ${table.active}`),
+    uniqueIndex('idx_automation_kill_switches_project_active')
+      .on(table.projectId)
+      .where(sql`${table.scope} = 'project' AND ${table.active}`),
+    uniqueIndex('idx_automation_kill_switches_device_active')
+      .on(table.deviceId)
+      .where(sql`${table.scope} = 'device' AND ${table.active}`),
+    check('automation_kill_switches_protocol_version_check', sql`${table.protocolVersion} = 'automation.v1'`),
+    check(
+      'automation_kill_switches_scope_check',
+      sql`(
+          ${table.scope} = 'account'
+          AND ${table.projectId} IS NULL
+          AND ${table.deviceId} IS NULL
+        ) OR (
+          ${table.scope} = 'project'
+          AND ${table.projectId} IS NOT NULL
+          AND ${table.deviceId} IS NULL
+        ) OR (
+          ${table.scope} = 'device'
+          AND ${table.projectId} IS NOT NULL
+          AND ${table.deviceId} IS NOT NULL
+        )`,
+    ),
+    check('automation_kill_switches_generation_check', sql`${table.generation} >= 0`),
+    check(
+      'automation_kill_switches_release_check',
+      sql`${table.active} = (${table.releasedAt} IS NULL)`,
+    ),
+  ],
+);
+
+export const automationPoliciesRelations = relations(automationPolicies, ({ one }) => ({
+  project: one(projects, {
+    fields: [automationPolicies.projectId],
+    references: [projects.projectId],
+  }),
+}));
+
+export const automationBrowserProfilesRelations = relations(
+  automationBrowserProfiles,
+  ({ one, many }) => ({
+    project: one(projects, {
+      fields: [automationBrowserProfiles.projectId],
+      references: [projects.projectId],
+    }),
+    jobs: many(automationJobs),
+  }),
+);
+
+export const automationJobsRelations = relations(automationJobs, ({ one, many }) => ({
+  account: one(accounts, {
+    fields: [automationJobs.accountId],
+    references: [accounts.accountId],
+  }),
+  project: one(projects, {
+    fields: [automationJobs.projectId],
+    references: [projects.projectId],
+  }),
+  browserProfile: one(automationBrowserProfiles, {
+    fields: [automationJobs.projectId, automationJobs.browserProfileId],
+    references: [automationBrowserProfiles.projectId, automationBrowserProfiles.profileId],
+  }),
+  steps: many(automationJobSteps),
+  events: many(automationJobEvents),
+  approvals: many(automationApprovals),
+}));
+
+export const automationJobStepsRelations = relations(
+  automationJobSteps,
+  ({ one, many }) => ({
+    job: one(automationJobs, {
+      fields: [automationJobSteps.jobId],
+      references: [automationJobs.jobId],
+    }),
+    approvals: many(automationApprovals),
+  }),
+);
+
+export const automationJobEventsRelations = relations(automationJobEvents, ({ one }) => ({
+  job: one(automationJobs, {
+    fields: [automationJobEvents.jobId],
+    references: [automationJobs.jobId],
+  }),
+}));
+
+export const automationApprovalsRelations = relations(automationApprovals, ({ one }) => ({
+  job: one(automationJobs, {
+    fields: [automationApprovals.jobId],
+    references: [automationJobs.jobId],
+  }),
+  step: one(automationJobSteps, {
+    fields: [automationApprovals.jobId, automationApprovals.stepId],
+    references: [automationJobSteps.jobId, automationJobSteps.stepId],
+  }),
+}));
+
+export const automationKillSwitchesRelations = relations(automationKillSwitches, ({ one }) => ({
+  account: one(accounts, {
+    fields: [automationKillSwitches.accountId],
+    references: [accounts.accountId],
+  }),
+  project: one(projects, {
+    fields: [automationKillSwitches.projectId],
+    references: [projects.projectId],
+  }),
+}));

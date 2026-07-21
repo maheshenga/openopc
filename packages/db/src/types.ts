@@ -1,5 +1,42 @@
-import { sandboxes, kortixApiKeys, accounts, accountMembers, accountInvitations, accountGithubInstallations, auditEvents, usageEvents, gatewayRequestLogs, gatewayApiKeys, gatewayBudgets, projects, projectGitConnections, projectGitCredentials, projectMembers, projectSecrets, projectSessions, projectSnapshotBuilds, sandboxTemplates, sessionSandboxes, legacySandboxMigrations, creditAccounts, tunnelConnections, tunnelPermissions, tunnelPermissionRequests, tunnelAuditLogs, chatChannelBindings, chatInstalls, chatThreads } from './schema/kortix';
-import { apiKeys } from './schema/public';
+import type {
+  accountGithubInstallations,
+  accountInvitations,
+  accountMembers,
+  accounts,
+  auditEvents,
+  automationApprovals,
+  automationBrowserProfiles,
+  automationJobEvents,
+  automationJobSteps,
+  automationJobs,
+  automationKillSwitches,
+  automationPolicies,
+  chatChannelBindings,
+  chatInstalls,
+  chatThreads,
+  creditAccounts,
+  gatewayApiKeys,
+  gatewayBudgets,
+  gatewayRequestLogs,
+  kortixApiKeys,
+  legacySandboxMigrations,
+  projectGitConnections,
+  projectGitCredentials,
+  projectMembers,
+  projectSecrets,
+  projectSessions,
+  projectSnapshotBuilds,
+  projects,
+  sandboxTemplates,
+  sandboxes,
+  sessionSandboxes,
+  tunnelAuditLogs,
+  tunnelConnections,
+  tunnelPermissionRequests,
+  tunnelPermissions,
+  usageEvents,
+} from './schema/kortix';
+import type { apiKeys } from './schema/public';
 
 // Select types (what you get back from queries)
 export type Account = typeof accounts.$inferSelect;
@@ -65,6 +102,22 @@ export type TunnelPermissionRequest = typeof tunnelPermissionRequests.$inferSele
 export type NewTunnelPermissionRequest = typeof tunnelPermissionRequests.$inferInsert;
 export type TunnelAuditLog = typeof tunnelAuditLogs.$inferSelect;
 export type NewTunnelAuditLog = typeof tunnelAuditLogs.$inferInsert;
+
+// OpenOPC automation control
+export type AutomationJob = typeof automationJobs.$inferSelect;
+export type NewAutomationJob = typeof automationJobs.$inferInsert;
+export type AutomationJobStep = typeof automationJobSteps.$inferSelect;
+export type NewAutomationJobStep = typeof automationJobSteps.$inferInsert;
+export type AutomationJobEvent = typeof automationJobEvents.$inferSelect;
+export type NewAutomationJobEvent = typeof automationJobEvents.$inferInsert;
+export type AutomationApproval = typeof automationApprovals.$inferSelect;
+export type NewAutomationApproval = typeof automationApprovals.$inferInsert;
+export type AutomationPolicy = typeof automationPolicies.$inferSelect;
+export type NewAutomationPolicy = typeof automationPolicies.$inferInsert;
+export type AutomationBrowserProfile = typeof automationBrowserProfiles.$inferSelect;
+export type NewAutomationBrowserProfile = typeof automationBrowserProfiles.$inferInsert;
+export type AutomationKillSwitch = typeof automationKillSwitches.$inferSelect;
+export type NewAutomationKillSwitch = typeof automationKillSwitches.$inferInsert;
 
 // Aliases
 export type SandboxSelect = Sandbox;

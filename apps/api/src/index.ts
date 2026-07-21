@@ -76,6 +76,7 @@ import { auditStateChangingRequest } from './shared/audit';
 import { opsApp } from './ops';
 import { adminApp } from './admin';
 import { closeDefaultStudioApiRuntime } from './studio/default-routes';
+import { automationApp } from './automation/runtime';
 import {
   startDefaultIntelligenceWorkflowRuntime,
   stopDefaultIntelligenceWorkflowRuntime,
@@ -695,6 +696,7 @@ app.route('/v1/platform', platformApp); // /v1/platform, /v1/platform/sandbox/ve
 registerSunaMigrationRoutes(projectsApp); // /v1/projects/suna-migration/* (OG Suna → opencode, user-triggered)
 app.route('/v1/projects', projectsApp); // /v1/projects — Git-backed Kortix projects
 app.route('/v1/marketplace', marketplaceApp); // /v1/marketplace — browse the registry catalog
+app.route('/v1/automation', automationApp); // OpenOPC project-scoped browser/desktop automation
 
 // Universal git smart-HTTP proxy — every git-backed project's client origin.
 // Auth is handled inside (git sends Basic/Bearer, not combinedAuth's Bearer),

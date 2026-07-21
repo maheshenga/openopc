@@ -41,6 +41,9 @@ const optInt = (def: number) =>
     return Number.isNaN(n) ? def : n;
   });
 
+const optBoundedInt = (def: number, minimum: number, maximum: number) =>
+  z.coerce.number().int().min(minimum).max(maximum).optional().default(def);
+
 /** Optional boolean. optBoolFalse accepts the common truthy spellings
  * (case-insensitive) so a "1" / "yes" / "on" from a k8s env or secret bundle
  * isn't silently dropped. optBoolTrue keeps its original 'anything but false'
@@ -112,6 +115,13 @@ const envSchema = z.object({
   INTELLIGENCE_WORKFLOWS_ENABLED:   optBoolFalse,
   // AG-UI SSE is an additive projection over durable workflow replay, off by default.
   INTELLIGENCE_AG_UI_ENABLED:       optBoolFalse,
+  // Independent automation control plane. Inert unless explicitly enabled.
+  AUTOMATION_CONTROL_ENABLED:       optBoolFalse,
+  AUTOMATION_CONTROL_URL:           optUrl('http://localhost:4011'),
+  AUTOMATION_CONTROL_SHARED_SECRET: optStr,
+  AUTOMATION_CONTROL_MTLS_CA:       optStr,
+  AUTOMATION_CONTROL_TIMEOUT_MS:    optBoundedInt(10_000, 100, 60_000),
+  AUTOMATION_CONTROL_STREAM_TIMEOUT_MS: optBoundedInt(60_000, 1_000, 120_000),
 
   // ── Search Providers (optional — features degrade gracefully) ────────────
   TAVILY_API_URL:              optUrl('https://api.tavily.com'),
@@ -518,6 +528,17 @@ function validateEnv(): z.infer<typeof envSchema> {
     if (!raw.STRIPE_WEBHOOK_SECRET) issues.push({ var: 'STRIPE_WEBHOOK_SECRET', message: 'Required when KORTIX_BILLING_INTERNAL_ENABLED=true', level: 'error' });
   }
 
+  const automationControlEnabled = ['true', '1', 'yes', 'on'].includes(
+    String(raw.AUTOMATION_CONTROL_ENABLED ?? '').trim().toLowerCase(),
+  );
+  if (automationControlEnabled && (raw.AUTOMATION_CONTROL_SHARED_SECRET?.length ?? 0) < 32) {
+    issues.push({
+      var: 'AUTOMATION_CONTROL_SHARED_SECRET',
+      message: 'Must contain at least 32 characters when automation control is enabled',
+      level: 'error',
+    });
+  }
+
   // ── Conditional: Tunnel enabled → need signing secret ──────────────────
   const tunnelEnabled = (raw as any).TUNNEL_ENABLED !== 'false' && (raw as any).TUNNEL_ENABLED !== false;
   if (tunnelEnabled && !raw.TUNNEL_SIGNING_SECRET) {
@@ -615,6 +636,12 @@ export const config = {
   KORTIX_TEMPLATES_ENABLED: env.KORTIX_TEMPLATES_ENABLED,
   INTELLIGENCE_WORKFLOWS_ENABLED: env.INTELLIGENCE_WORKFLOWS_ENABLED,
   INTELLIGENCE_AG_UI_ENABLED: env.INTELLIGENCE_AG_UI_ENABLED,
+  AUTOMATION_CONTROL_ENABLED: env.AUTOMATION_CONTROL_ENABLED,
+  AUTOMATION_CONTROL_URL: env.AUTOMATION_CONTROL_URL,
+  AUTOMATION_CONTROL_SHARED_SECRET: env.AUTOMATION_CONTROL_SHARED_SECRET,
+  AUTOMATION_CONTROL_MTLS_CA: env.AUTOMATION_CONTROL_MTLS_CA,
+  AUTOMATION_CONTROL_TIMEOUT_MS: env.AUTOMATION_CONTROL_TIMEOUT_MS,
+  AUTOMATION_CONTROL_STREAM_TIMEOUT_MS: env.AUTOMATION_CONTROL_STREAM_TIMEOUT_MS,
 
   // ─── Database ──────────────────────────────────────────────────────────────
   DATABASE_URL: env.DATABASE_URL,

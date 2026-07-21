@@ -1,6 +1,7 @@
 import { AUTOMATION_PROTOCOL_VERSION } from '@kortix/intelligence-contracts';
 import { Hono } from 'hono';
 import type { AutomationControlConfig } from './config';
+import type { InternalAutomationEnv } from './internal-auth';
 
 type DependencyStatus = 'available' | 'unavailable' | 'skipped';
 
@@ -8,6 +9,7 @@ export type AutomationControlServerDependencies = Readonly<{
   config: AutomationControlConfig;
   checkDatabase: () => Promise<boolean>;
   checkRedis: () => Promise<boolean>;
+  routes?: Hono<InternalAutomationEnv>;
 }>;
 
 async function probe(check: () => Promise<boolean>): Promise<DependencyStatus> {
@@ -41,8 +43,8 @@ async function dependencySnapshot(dependencies: AutomationControlServerDependenc
 
 export function createAutomationControlApp(
   dependencies: AutomationControlServerDependencies,
-): Hono {
-  const app = new Hono();
+): Hono<InternalAutomationEnv> {
+  const app = new Hono<InternalAutomationEnv>();
 
   app.get('/health', async (context) => {
     if (!dependencies.config.enabled) {
@@ -78,6 +80,10 @@ export function createAutomationControlApp(
       ready ? 200 : 503,
     );
   });
+
+  if (dependencies.config.enabled && dependencies.routes) {
+    app.route('/', dependencies.routes);
+  }
 
   return app;
 }

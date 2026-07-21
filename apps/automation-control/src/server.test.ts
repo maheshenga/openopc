@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { Hono } from 'hono';
 import { type AutomationControlConfig, loadAutomationControlConfig } from './config';
+import type { InternalAutomationEnv } from './internal-auth';
 import { createAutomationControlApp } from './server';
 
 const ENABLED_CONFIG: AutomationControlConfig = {
@@ -115,5 +117,25 @@ describe('automation control health endpoints', () => {
       status: 'degraded',
       dependencies: { database: 'unavailable', redis: 'unavailable' },
     });
+  });
+
+  test('mounts internal automation routes only while the service is enabled', async () => {
+    const routes = new Hono<InternalAutomationEnv>();
+    routes.get('/v1/automation/jobs', (context) => context.json({ ok: true }));
+    const enabled = createAutomationControlApp({
+      config: ENABLED_CONFIG,
+      checkDatabase: async () => true,
+      checkRedis: async () => true,
+      routes,
+    });
+    const disabled = createAutomationControlApp({
+      config: { ...ENABLED_CONFIG, enabled: false },
+      checkDatabase: async () => false,
+      checkRedis: async () => false,
+      routes,
+    });
+
+    expect((await enabled.request('/v1/automation/jobs')).status).toBe(200);
+    expect((await disabled.request('/v1/automation/jobs')).status).toBe(404);
   });
 });

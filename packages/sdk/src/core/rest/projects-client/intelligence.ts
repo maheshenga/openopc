@@ -32,6 +32,7 @@ import {
 } from '@kortix/intelligence-contracts';
 import { ApiError, type ApiResponse } from '../../http/api-client';
 import { backendApi } from '../../http/api-client';
+import { platformConfig } from '../../http/config';
 import { unwrap } from './shared';
 
 export type {
@@ -578,6 +579,16 @@ function assertWorkflowRunScope(run: WorkflowRun, projectId: string, runId?: str
   if (run.project_id !== projectId || (runId !== undefined && run.run_id !== runId)) {
     throw new Error('invalid workflow scope');
   }
+}
+
+/** Build the authenticated API URL used by the SDK-owned AG-UI stream client. */
+export function getIntelligenceAgUiWorkflowStreamUrl(
+  projectId: string,
+  runId: string,
+  baseUrl = platformConfig().backendUrl,
+): string {
+  const base = baseUrl.replace(/\/+$/, '');
+  return `${base}/projects/${encodeURIComponent(projectId)}/intelligence/ag-ui/workflows/${encodeURIComponent(runId)}/stream`;
 }
 
 export async function listIntelligenceCapabilities(

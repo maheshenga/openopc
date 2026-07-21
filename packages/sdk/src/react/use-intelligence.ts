@@ -1,12 +1,14 @@
 'use client';
 
+import type { OpenOpcAgUiEvent } from '@kortix/intelligence-contracts';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
 import {
   type IntelligenceAgentCardResponse,
   type IntelligenceAssetDownload,
   type IntelligenceCapabilitiesResponse,
-  type IntelligenceCatalogSearchResponse,
   type IntelligenceCapabilityDiscoveryResponse,
+  type IntelligenceCatalogSearchResponse,
   type IntelligenceCreateTaskRequest,
   type IntelligenceCreateUploadRequest,
   type IntelligenceImageEstimate,
@@ -42,10 +44,15 @@ import {
   getIntelligenceWorkflowEvents,
   listIntelligenceAssets,
   listIntelligenceCapabilities,
-  searchIntelligenceCatalog,
   listIntelligenceJobs,
+  searchIntelligenceCatalog,
   startIntelligenceWorkflow,
 } from '../core/rest/projects-client';
+import {
+  type IntelligenceAgUiUnavailableError,
+  isIntelligenceAgUiUnavailableError,
+  subscribeIntelligenceAgUi,
+} from '../core/stream/intelligence-ag-ui';
 
 export const intelligenceCapabilitiesKey = (projectId: string | null | undefined) =>
   ['intelligence-capabilities', projectId] as const;
@@ -125,6 +132,20 @@ export interface IntelligenceQueryOptions {
 
 export interface IntelligenceCatalogQueryOptions extends IntelligenceQueryOptions {
   cursor?: number | null;
+}
+
+export interface IntelligenceAgUiWorkflowOptions extends IntelligenceQueryOptions {
+  cursor?: number | null;
+  fallbackRefetchInterval?: number;
+  onEvent?(event: OpenOpcAgUiEvent): void;
+  onError?(error: Error): void;
+  onFallback?(error: IntelligenceAgUiUnavailableError): void;
+}
+
+export interface IntelligenceAgUiWorkflowResult {
+  mode: 'idle' | 'stream' | 'polling';
+  error: Error | null;
+  fallback: ReturnType<typeof useIntelligenceWorkflowEvents>;
 }
 
 export function useIntelligenceCapabilities(
@@ -302,6 +323,83 @@ export function useIntelligenceWorkflowEvents(
         ? { refetchInterval: options.refetchInterval }
         : {}),
   });
+}
+
+/**
+ * Subscribes to the additive AG-UI projection and switches to the existing
+ * durable workflow cursor only when that optional server capability is absent.
+ */
+export function useIntelligenceAgUiWorkflow(
+  projectId: string | null | undefined,
+  runId: string | null | undefined,
+  options: IntelligenceAgUiWorkflowOptions = {},
+): IntelligenceAgUiWorkflowResult {
+  const cursor = options.cursor ?? null;
+  const scope = projectId && runId ? `${projectId}:${runId}:${cursor ?? 0}` : '';
+  const [streamState, setStreamState] = useState<{
+    scope: string;
+    unavailable: boolean;
+    error: Error | null;
+  }>({ scope: '', unavailable: false, error: null });
+  const callbacks = useRef({
+    onEvent: options.onEvent,
+    onError: options.onError,
+    onFallback: options.onFallback,
+  });
+  callbacks.current = {
+    onEvent: options.onEvent,
+    onError: options.onError,
+    onFallback: options.onFallback,
+  };
+  const currentState =
+    streamState.scope === scope ? streamState : { unavailable: false, error: null };
+  const streamEnabled = !!projectId && !!runId && (options.enabled ?? true);
+  const fallback = useIntelligenceWorkflowEvents(
+    projectId,
+    runId,
+    cursor == null ? undefined : String(cursor),
+    {
+      enabled: streamEnabled && currentState.unavailable,
+      pollingEnabled: currentState.unavailable,
+      refetchInterval: currentState.unavailable
+        ? (options.fallbackRefetchInterval ?? options.refetchInterval ?? 500)
+        : undefined,
+    },
+  );
+
+  useEffect(() => {
+    if (!streamEnabled || currentState.unavailable || !projectId || !runId) return;
+    const subscription = subscribeIntelligenceAgUi({
+      projectId,
+      runId,
+      cursor,
+      onEvent: (event) => {
+        try {
+          callbacks.current.onEvent?.(event);
+        } catch {}
+      },
+      onError: (error) => {
+        if (isIntelligenceAgUiUnavailableError(error)) {
+          setStreamState({ scope, unavailable: true, error });
+          try {
+            callbacks.current.onFallback?.(error);
+          } catch {}
+        } else {
+          setStreamState({ scope, unavailable: false, error });
+        }
+        try {
+          callbacks.current.onError?.(error);
+        } catch {}
+      },
+    });
+    return subscription.close;
+  }, [cursor, currentState.unavailable, projectId, runId, scope, streamEnabled]);
+
+  return {
+    mode: streamEnabled ? (currentState.unavailable ? 'polling' : 'stream') : 'idle',
+    error: currentState.error,
+    fallback,
+  };
 }
 
 export function useCreateIntelligenceTask(projectId: string | null | undefined) {

@@ -362,5 +362,13 @@ export * from './core/runtime/client';
 export * from './core/session';
 export * from './core/session/url';
 export * from './core/stream/event-stream';
+export {
+  IntelligenceAgUiProtocolError,
+  IntelligenceAgUiUnavailableError,
+  isIntelligenceAgUiUnavailableError,
+  subscribeIntelligenceAgUi,
+  type IntelligenceAgUiSubscription,
+  type SubscribeIntelligenceAgUiInput,
+} from './core/stream/intelligence-ag-ui';
 export * from './core/turns';
 export * from './transcript';

@@ -1,6 +1,7 @@
 // ─── Observability (must be first — instruments before other imports) ────────
 import './lib/sentry';
 import { captureException, flushSentry, addBreadcrumb } from './lib/sentry';
+import { CORS_ALLOW_HEADERS } from './lib/cors-policy';
 import { logger as appLogger, isLoggingTransportError } from './lib/logger';
 import { emitOtelSpan } from './lib/otel';
 import {
@@ -204,7 +205,7 @@ app.use(
       return null; // not allowed → no Access-Control-Allow-Origin
     },
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'X-Kortix-Token', 'X-Api-Key', 'Accept', 'X-Kortix-Signature', 'X-Hub-Signature-256', 'traceparent', 'tracestate', 'X-Request-Id'],
+    allowHeaders: [...CORS_ALLOW_HEADERS],
     credentials: true,
   })
 );

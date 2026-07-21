@@ -1,8 +1,34 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import * as React from 'react';
+import { configureKortix } from '../core/http/config';
 
 let invalidated: unknown[][] = [];
+let queryConfigs: Array<Record<string, unknown>> = [];
+let stateValues: unknown[] = [];
+let stateIndex = 0;
+let effectDependencies: Array<readonly unknown[] | undefined> = [];
+let effectCleanups: Array<(() => void) | undefined> = [];
+let effectIndex = 0;
+let refValues: unknown[] = [];
+let refIndex = 0;
+const originalFetch = globalThis.fetch;
+
+function sameDependencies(
+  left: readonly unknown[] | undefined,
+  right: readonly unknown[] | undefined,
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.length === right.length &&
+    left.every((value, index) => Object.is(value, right[index]))
+  );
+}
 mock.module('@tanstack/react-query', () => ({
-  useQuery: (config: Record<string, unknown>) => config,
+  useQuery: (config: Record<string, unknown>) => {
+    queryConfigs.push(config);
+    return config;
+  },
   useMutation: (config: Record<string, unknown>) => config,
   useQueryClient: () => ({
     invalidateQueries: (options: { queryKey: unknown[] }) => {
@@ -11,7 +37,34 @@ mock.module('@tanstack/react-query', () => ({
   }),
   keepPreviousData: Symbol('keepPreviousData'),
 }));
-
+mock.module('react', () => ({
+  ...React,
+  useEffect: (effect: () => undefined | (() => void), dependencies?: readonly unknown[]) => {
+    const index = effectIndex;
+    effectIndex += 1;
+    if (sameDependencies(effectDependencies[index], dependencies)) return;
+    effectCleanups[index]?.();
+    effectDependencies[index] = dependencies;
+    effectCleanups[index] = effect() ?? undefined;
+  },
+  useRef: <T,>(initial: T) => {
+    const index = refIndex;
+    refIndex += 1;
+    if (refValues[index] === undefined) refValues[index] = { current: initial };
+    return refValues[index] as { current: T };
+  },
+  useState: <T,>(initial: T) => {
+    const index = stateIndex;
+    stateIndex += 1;
+    if (stateValues[index] === undefined) stateValues[index] = initial;
+    return [
+      stateValues[index] as T,
+      (value: T) => {
+        stateValues[index] = value;
+      },
+    ] as const;
+  },
+}));
 const {
   intelligenceAgentCardKey,
   intelligenceCapabilityDiscoveryKey,
@@ -33,6 +86,7 @@ const {
   useDecideIntelligenceWorkflowApproval,
   useIntelligence,
   useIntelligenceAgentCard,
+  useIntelligenceAgUiWorkflow,
   useIntelligenceCapabilityDiscovery,
   useIntelligenceCatalog,
   useIntelligenceCapabilities,
@@ -59,6 +113,19 @@ const asMockQueryConfig = (value: unknown) => value as MockQueryConfig;
 
 beforeEach(() => {
   invalidated = [];
+  queryConfigs = [];
+  stateValues = [];
+  stateIndex = 0;
+  effectDependencies = [];
+  effectCleanups = [];
+  effectIndex = 0;
+  refValues = [];
+  refIndex = 0;
+});
+
+afterEach(() => {
+  for (const cleanup of effectCleanups) cleanup?.();
+  globalThis.fetch = originalFetch;
 });
 
 describe('Intelligence React Query bindings', () => {
@@ -75,6 +142,7 @@ describe('Intelligence React Query bindings', () => {
     expect(typeof barrel.useIntelligenceAssetDownload).toBe('function');
     expect(typeof barrel.intelligenceTaskByJobKey).toBe('function');
     expect(typeof barrel.useIntelligenceCatalog).toBe('function');
+    expect(typeof barrel.useIntelligenceAgUiWorkflow).toBe('function');
     expect(typeof barrel.useIntelligenceTaskByJob).toBe('function');
   });
 
@@ -190,5 +258,81 @@ describe('Intelligence React Query bindings', () => {
     expect(invalidated).toContainEqual([...intelligenceWorkflowKey('project-1', 'run-1')]);
     expect(invalidated.some((key) => key.includes('project-2'))).toBe(false);
     expect(invalidated.some((key) => key[0] === 'session' || key[0] === 'opencode')).toBe(false);
+  });
+
+  test('falls back to project-scoped workflow polling when the AG-UI stream is unavailable', async () => {
+    const requests: Array<{ url: string; headers: Headers }> = [];
+    configureKortix({
+      backendUrl: 'https://api.example.test/v1',
+      getToken: async () => 'test-token',
+    });
+    globalThis.fetch = (async (input, init) => {
+      requests.push({ url: String(input), headers: new Headers(init?.headers) });
+      return new Response(JSON.stringify({ code: 'INTELLIGENCE_AG_UI_DISABLED' }), { status: 404 });
+    }) as typeof fetch;
+    let fallbackCount = 0;
+    const first = useIntelligenceAgUiWorkflow('project-1', 'run-1', {
+      cursor: 7,
+      onFallback: () => {
+        fallbackCount += 1;
+      },
+    });
+    const firstFallback = first.fallback as unknown as Record<string, unknown>;
+
+    expect(first.mode).toBe('stream');
+    expect(firstFallback.enabled).toBe(false);
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.headers.get('Last-Event-ID')).toBe('7');
+    expect(fallbackCount).toBe(1);
+
+    stateIndex = 0;
+    queryConfigs = [];
+    const fallback = useIntelligenceAgUiWorkflow('project-1', 'run-1', {
+      cursor: 7,
+      onFallback: () => {
+        fallbackCount += 1;
+      },
+    });
+    const fallbackQuery = fallback.fallback as unknown as Record<string, unknown>;
+
+    expect(fallback.mode).toBe('polling');
+    expect(fallbackQuery.enabled).toBe(true);
+    expect(fallbackQuery.refetchInterval).toBe(500);
+    expect(queryConfigs[0]?.queryKey).toEqual([
+      'intelligence-workflow-events',
+      'project-1',
+      'run-1',
+      '7',
+    ]);
+  });
+
+  test('does not reconnect when inline stream callbacks change on rerender', async () => {
+    const requests: string[] = [];
+    configureKortix({
+      backendUrl: 'https://api.example.test/v1',
+      getToken: async () => 'test-token',
+    });
+    globalThis.fetch = (async (input) => {
+      requests.push(String(input));
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start() {},
+        }),
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      );
+    }) as typeof fetch;
+
+    useIntelligenceAgUiWorkflow('project-1', 'run-1', { onEvent: () => {} });
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+    expect(requests).toHaveLength(1);
+
+    stateIndex = 0;
+    effectIndex = 0;
+    refIndex = 0;
+    useIntelligenceAgUiWorkflow('project-1', 'run-1', { onEvent: () => {} });
+    for (let index = 0; index < 8; index += 1) await Promise.resolve();
+
+    expect(requests).toHaveLength(1);
   });
 });

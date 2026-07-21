@@ -126,6 +126,7 @@ export {
   useIntelligenceCatalog,
   useIntelligenceCapabilities,
   useIntelligenceAssetDownload,
+  useIntelligenceAgUiWorkflow,
   useIntelligenceAssets,
   useEstimateIntelligenceImage,
   useFinalizeIntelligenceUpload,
@@ -135,5 +136,7 @@ export {
   useIntelligenceWorkflow,
   useIntelligenceWorkflowEvents,
   useStartIntelligenceWorkflow,
+  type IntelligenceAgUiWorkflowOptions,
+  type IntelligenceAgUiWorkflowResult,
   type IntelligenceQueryOptions,
 } from './use-intelligence';

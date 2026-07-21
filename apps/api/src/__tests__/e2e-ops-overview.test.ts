@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Hono } from 'hono';
 
 let executeResults: Array<{ rows: unknown[] }> = [];
+type MockContext = { set: (key: string, value: string) => void };
+type MockNext = () => Promise<unknown>;
 
 mock.module('../shared/db', () => ({
   db: {
@@ -10,14 +12,14 @@ mock.module('../shared/db', () => ({
 }));
 
 mock.module('../middleware/auth', () => ({
-  supabaseAuth: async (c: any, next: any) => {
+  supabaseAuth: async (c: MockContext, next: MockNext) => {
     c.set('userId', '00000000-0000-4000-a000-000000000001');
     await next();
   },
 }));
 
 mock.module('../middleware/require-admin', () => ({
-  requireAdmin: async (_c: any, next: any) => {
+  requireAdmin: async (_c: unknown, next: MockNext) => {
     await next();
   },
 }));
@@ -74,10 +76,40 @@ describe('ops overview dashboard API', () => {
           occurred_at: new Date('2026-05-15T00:00:00Z'),
         }],
       },
+      {
+        rows: [
+          {
+            provider: null,
+            requests: 8,
+            errors: 2,
+            retries: 3,
+            input_tokens: 240,
+            output_tokens: 80,
+            cached_tokens: 20,
+            cost_usd: '0.420000',
+            p50_ms: 120,
+            p95_ms: 900,
+            p99_ms: 1400,
+          },
+          {
+            provider: 'openai',
+            requests: 6,
+            errors: 1,
+            retries: 2,
+            input_tokens: 180,
+            output_tokens: 60,
+            cached_tokens: 15,
+            cost_usd: '0.300000',
+            p50_ms: 100,
+            p95_ms: 800,
+            p99_ms: 1200,
+          },
+        ],
+      },
     ];
   });
 
-  test('returns production support signals for API, queues, audit, usage, and migrations', async () => {
+  test('returns production support signals for API, gateway, queues, audit, usage, and migrations', async () => {
     const res = await app().request('/v1/ops/overview');
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -103,6 +135,36 @@ describe('ops overview dashboard API', () => {
     expect(body.usage).toMatchObject({
       calls_24h: 7,
       cost_usd_24h: 0.123456,
+    });
+    expect(body.gateway).toEqual({
+      requests_24h: 8,
+      errors_24h: 2,
+      error_rate_24h: 0.25,
+      retries_24h: 3,
+      input_tokens_24h: 240,
+      output_tokens_24h: 80,
+      cached_tokens_24h: 20,
+      tokens_24h: 320,
+      cost_usd_24h: 0.42,
+      latency_ms: {
+        p50: 120,
+        p95: 900,
+        p99: 1400,
+      },
+      by_provider: [
+        {
+          provider: 'openai',
+          requests: 6,
+          errors: 1,
+          error_rate: 1 / 6,
+          retries: 2,
+          input_tokens: 180,
+          output_tokens: 60,
+          cached_tokens: 15,
+          tokens: 240,
+          cost_usd: 0.3,
+        },
+      ],
     });
     expect(body.observability).toEqual({
       managed_logs_configured: true,

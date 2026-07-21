@@ -16,10 +16,12 @@ import {
 import { useOpsOverview } from '@/hooks/admin/use-ops-overview';
 import { Activity, AlertTriangle, Clock, Database, Gauge, RefreshCw } from 'lucide-react';
 import { SectionContainer, SectionHeader, StatPill, StatRow } from '../_components/section-header';
+import { GatewayOpsPanel } from './gateway-ops-panel';
 
 // Cap how many audit rows we render — the list is unbounded and re-renders on a
 // 15s poll, so showing the latest N keeps the DOM bounded if the backend grows it.
 const MAX_AUDIT_ROWS = 100;
+const OPS_STAT_SKELETONS = ['api', 'queues', 'sandboxes', 'usage'] as const;
 
 export default function AdminOpsPage() {
   const tI18nHardcoded = useTranslations('hardcodedUi');
@@ -31,11 +33,11 @@ export default function AdminOpsPage() {
       <SectionContainer>
         <SectionHeader icon={Activity} title="Operations" />
         <StatRow>
-          {Array.from({ length: 4 }).map((_, index) => (
-            <Skeleton key={index} className="h-24 rounded-2xl" />
+          {OPS_STAT_SKELETONS.map((key) => (
+            <Skeleton key={key} className="h-24 rounded-md" />
           ))}
         </StatRow>
-        <Skeleton className="h-80 rounded-2xl" />
+        <Skeleton className="h-80 rounded-md" />
       </SectionContainer>
     );
   }
@@ -116,6 +118,8 @@ export default function AdminOpsPage() {
         </SignalPanel>
       </div>
 
+      {data.gateway ? <GatewayOpsPanel gateway={data.gateway} /> : null}
+
       <div className="grid gap-4 lg:grid-cols-2">
         <SignalPanel
           icon={Clock}
@@ -157,7 +161,7 @@ export default function AdminOpsPage() {
 
         <SignalPanel icon={Database} title="Migration">
           <StatusList values={data.migrations.by_status} />
-          <div className="border-border/60 mt-4 flex items-center justify-between rounded-2xl border px-3 py-2">
+          <div className="border-border/60 mt-4 flex items-center justify-between rounded-md border px-3 py-2">
             <span className="text-muted-foreground text-sm">
               {tHardcodedUi.raw('appAdminOpsPage.line116JsxTextLegacySandboxes')}
             </span>
@@ -228,7 +232,7 @@ function SignalPanel({
   children: React.ReactNode;
 }) {
   return (
-    <section className="border-border/60 bg-card rounded-2xl border p-4">
+    <section className="border-border/60 bg-card rounded-md border p-4">
       <div className="mb-4 flex items-center gap-2">
         <Icon className="text-muted-foreground h-4 w-4" />
         <h2 className="text-sm font-semibold">{title}</h2>

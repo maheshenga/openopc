@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
 import { backendApi } from '@/lib/api-client';
+import { useQuery } from '@tanstack/react-query';
 
 export interface OpsOverview {
   generated_at: string;
@@ -51,6 +51,7 @@ export interface OpsOverview {
     calls_24h: number;
     cost_usd_24h: number;
   };
+  gateway?: GatewayOpsSnapshot;
   observability: {
     managed_logs_configured: boolean;
     managed_log_host: string | null;
@@ -64,13 +65,43 @@ export interface OpsOverview {
   };
 }
 
+export interface GatewayOpsSnapshot {
+  requests_24h: number;
+  errors_24h: number;
+  error_rate_24h: number;
+  retries_24h: number;
+  input_tokens_24h: number;
+  output_tokens_24h: number;
+  cached_tokens_24h: number;
+  tokens_24h: number;
+  cost_usd_24h: number;
+  latency_ms: {
+    p50: number;
+    p95: number;
+    p99: number;
+  };
+  by_provider: Array<{
+    provider: string;
+    requests: number;
+    errors: number;
+    error_rate: number;
+    retries: number;
+    input_tokens: number;
+    output_tokens: number;
+    cached_tokens: number;
+    tokens: number;
+    cost_usd: number;
+  }>;
+}
+
 export function useOpsOverview() {
   return useQuery<OpsOverview>({
     queryKey: ['admin', 'ops', 'overview'],
     queryFn: async () => {
       const response = await backendApi.get<OpsOverview>('/ops/overview');
       if (response.error) throw new Error(response.error.message);
-      return response.data!;
+      if (!response.data) throw new Error('Operations overview returned no data');
+      return response.data;
     },
     staleTime: 5_000,
     refetchInterval: 15_000,

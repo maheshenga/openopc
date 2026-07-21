@@ -92,6 +92,87 @@ async function usageLast24h() {
   }));
 }
 
+async function gatewayLast24h() {
+  type GatewayAggregateRow = {
+    provider: string | null;
+    requests: number | string | null;
+    errors: number | string | null;
+    retries: number | string | null;
+    input_tokens: number | string | null;
+    output_tokens: number | string | null;
+    cached_tokens: number | string | null;
+    cost_usd: number | string | null;
+    p50_ms: number | string | null;
+    p95_ms: number | string | null;
+    p99_ms: number | string | null;
+  };
+
+  const rows = resultRows<GatewayAggregateRow>(
+    await db.execute(sql`
+      SELECT
+        provider,
+        count(*)::int AS requests,
+        count(*) FILTER (WHERE NOT ok)::int AS errors,
+        COALESCE(sum(GREATEST(attempts - 1, 0)), 0)::int AS retries,
+        COALESCE(sum(input_tokens), 0)::text AS input_tokens,
+        COALESCE(sum(output_tokens), 0)::text AS output_tokens,
+        COALESCE(sum(cached_tokens), 0)::text AS cached_tokens,
+        COALESCE(sum(final_cost), 0)::text AS cost_usd,
+        COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms), 0)::int AS p50_ms,
+        COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms), 0)::int AS p95_ms,
+        COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY latency_ms), 0)::int AS p99_ms
+      FROM kortix.gateway_request_logs
+      WHERE created_at >= now() - interval '24 hours'
+      GROUP BY GROUPING SETS ((), (provider))
+      ORDER BY GROUPING(provider) DESC, requests DESC
+    `),
+  );
+  const summary = rows.find((row) => row.provider === null);
+  const requests = Number(summary?.requests ?? 0);
+  const errors = Number(summary?.errors ?? 0);
+  const inputTokens = Number(summary?.input_tokens ?? 0);
+  const outputTokens = Number(summary?.output_tokens ?? 0);
+
+  const byProvider = rows
+    .filter((row): row is GatewayAggregateRow & { provider: string } => row.provider !== null)
+    .map((row) => {
+      const providerRequests = Number(row.requests ?? 0);
+      const providerErrors = Number(row.errors ?? 0);
+      const providerInputTokens = Number(row.input_tokens ?? 0);
+      const providerOutputTokens = Number(row.output_tokens ?? 0);
+      return {
+        provider: row.provider,
+        requests: providerRequests,
+        errors: providerErrors,
+        error_rate: providerRequests > 0 ? providerErrors / providerRequests : 0,
+        retries: Number(row.retries ?? 0),
+        input_tokens: providerInputTokens,
+        output_tokens: providerOutputTokens,
+        cached_tokens: Number(row.cached_tokens ?? 0),
+        tokens: providerInputTokens + providerOutputTokens,
+        cost_usd: Number(row.cost_usd ?? 0),
+      };
+    });
+
+  return {
+    requests_24h: requests,
+    errors_24h: errors,
+    error_rate_24h: requests > 0 ? errors / requests : 0,
+    retries_24h: Number(summary?.retries ?? 0),
+    input_tokens_24h: inputTokens,
+    output_tokens_24h: outputTokens,
+    cached_tokens_24h: Number(summary?.cached_tokens ?? 0),
+    tokens_24h: inputTokens + outputTokens,
+    cost_usd_24h: Number(summary?.cost_usd ?? 0),
+    latency_ms: {
+      p50: Number(summary?.p50_ms ?? 0),
+      p95: Number(summary?.p95_ms ?? 0),
+      p99: Number(summary?.p99_ms ?? 0),
+    },
+    by_provider: byProvider,
+  };
+}
+
 function observabilityStatus() {
   return {
     managed_logs_configured: Boolean(process.env.BETTERSTACK_API_LOG_TOKEN),
@@ -118,7 +199,7 @@ opsApp.openapi(
       ...errors(401, 403),
     },
   }),
-  async (c: any) => {
+  async (c) => {
   const [
     accountCount,
     projectCount,
@@ -131,6 +212,7 @@ opsApp.openapi(
     migrationStatus,
     usage,
     recentAudit,
+    gateway,
   ] = await Promise.all([
     oneCount(sql`SELECT count(*)::int AS count FROM kortix.accounts`),
     oneCount(sql`SELECT count(*)::int AS count FROM kortix.projects`),
@@ -170,6 +252,7 @@ opsApp.openapi(
     `),
     usageLast24h(),
     recentAuditEvents(),
+    gatewayLast24h(),
   ]);
 
   const queuedTriggerEvents = triggerEventStatus.queued ?? 0;
@@ -214,6 +297,7 @@ opsApp.openapi(
       calls_24h: usage.reduce((sum, row) => sum + row.calls, 0),
       cost_usd_24h: usage.reduce((sum, row) => sum + row.cost_usd, 0),
     },
+    gateway,
     observability: observabilityStatus(),
     migrations: {
       by_status: migrationStatus,

@@ -1,4 +1,10 @@
-import type { GatewayHooks, GatewayLogger, GatewayTrace, TokenCounts } from '../domain';
+import type {
+  GatewayHooks,
+  GatewayLogger,
+  GatewayRequestContext,
+  GatewayTrace,
+  TokenCounts,
+} from '../domain';
 
 const EMPTY_USAGE: TokenCounts = { promptTokens: 0, completionTokens: 0, cachedTokens: 0 };
 
@@ -30,10 +36,12 @@ export function createTraceEmitter(
   requestId: string,
   startedAt: string,
   startMs: number,
+  context: GatewayRequestContext,
 ): TraceEmitter {
   return (fields) => {
     const trace: GatewayTrace = {
       requestId,
+      traceparent: context.traceparent,
       startedAt,
       accountId: fields.accountId ?? '',
       actorUserId: fields.actorUserId ?? '',
@@ -67,7 +75,7 @@ export function createTraceEmitter(
       // (e.g. postgres-js) carries `.query` and `.parameters` — the entire LLM
       // request body — which we must not ship to the log transport on every
       // failed trace write.
-      void hooks.recordTrace(trace).catch((err) =>
+      void hooks.recordTrace(trace, context).catch((err) =>
         logger.warn(
           `[gateway] recordTrace failed for ${requestId}: ${err instanceof Error ? err.message : String(err)}`,
         ),

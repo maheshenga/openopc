@@ -3,6 +3,7 @@ import type { TokenCounts } from './usage';
 
 export interface GatewayTrace {
   requestId: string;
+  traceparent?: string;
   startedAt: string;
   accountId: string;
   actorUserId: string;

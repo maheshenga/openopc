@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { traceToLangfuse } from './langfuse';
 import type { GatewayTrace } from '@kortix/llm-gateway';
+import { traceToLangfuse } from './langfuse';
 
 function trace(over: Partial<GatewayTrace> = {}): GatewayTrace {
   return {
@@ -27,6 +27,7 @@ function trace(over: Partial<GatewayTrace> = {}): GatewayTrace {
     request: { a: 1 },
     response: { b: 2 },
     metadata: { tag: 't' },
+    traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
     ...over,
   };
 }
@@ -39,6 +40,15 @@ describe('traceToLangfuse', () => {
     expect(t.sessionId).toBe('p1');
     expect(t.timestamp).toBeInstanceOf(Date);
     expect(t.tags).toEqual(['openrouter', 'credits']);
+    expect(t.metadata).toMatchObject({
+      traceparent: '00-11111111111111111111111111111111-2222222222222222-01',
+      genAi: {
+        'gen_ai.operation.name': 'chat',
+        'gen_ai.provider.name': 'openrouter',
+        'gen_ai.request.model': 'kortix/x',
+        'gen_ai.response.model': 'anthropic/x',
+      },
+    });
 
     expect(generation.model).toBe('anthropic/x');
     expect(generation.usageDetails).toEqual({

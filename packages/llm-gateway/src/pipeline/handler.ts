@@ -5,11 +5,13 @@ import type {
   GatewayConfig,
   GatewayHooks,
   GatewayLogger,
+  GatewayRequestContext,
   ModelRoutePlan,
   TokenCounts,
   UpstreamDescriptor,
   UsageEvent,
 } from '../domain';
+import { gatewayRequestContext } from '../domain';
 import type { FetchImpl } from '../http';
 import { type CircuitBreaker, backoffDelay, realSleep } from '../resilience';
 import {
@@ -32,6 +34,8 @@ import { createTraceEmitter } from './trace';
 export interface ChatCompletionRequest {
   authorization: string | undefined;
   rawBody: string;
+  traceparent?: string;
+  tracestate?: string;
 }
 
 export interface GatewayDeps {
@@ -98,22 +102,23 @@ async function admit(
   token: string,
   lap: () => number,
   step: (event: string, fields?: Record<string, unknown>) => void,
+  context: GatewayRequestContext,
 ): Promise<AuthorizeResult> {
   if (hooks.authorize) {
-    const outcome = await hooks.authorize(token);
+    const outcome = await hooks.authorize(token, context);
     if (!outcome.ok) step('authorize_denied', { ms: lap(), code: outcome.errorCode });
     else step('authorized', { ms: lap() });
     return outcome;
   }
 
-  const principal = await hooks.authenticate(token);
+  const principal = await hooks.authenticate(token, context);
   if (!principal) {
     step('auth_failed', { ms: lap() });
     return { ok: false, status: 401, errorCode: 'invalid_token', message: 'Invalid token' };
   }
 
   try {
-    await hooks.assertBillingActive(principal.accountId);
+    await hooks.assertBillingActive(principal.accountId, context);
     step('billing_ok', { ms: lap() });
   } catch (err) {
     step('billing_inactive', { ms: lap(), reason: errorMessage(err) });
@@ -128,7 +133,7 @@ async function admit(
 
   if (hooks.assertBudget) {
     try {
-      await hooks.assertBudget(principal);
+      await hooks.assertBudget(principal, context);
       step('budget_ok', { ms: lap() });
     } catch (err) {
       step('budget_exceeded', { ms: lap(), reason: errorMessage(err) });
@@ -154,10 +159,11 @@ export async function handleChatCompletions(
   const { hooks, config, logger, fetchImpl, captureBodies, capture, breakerFor } = runtime;
 
   const requestId = newRequestId();
+  const context = gatewayRequestContext(requestId, req);
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
 
-  const emit = createTraceEmitter(hooks, logger, requestId, startedAt, startMs);
+  const emit = createTraceEmitter(hooks, logger, requestId, startedAt, startMs, context);
 
   let lastMark = startMs;
   const lap = (): number => {
@@ -192,7 +198,7 @@ export async function handleChatCompletions(
   // cross-process RPCs into one), use it; otherwise run the granular hooks (the
   // in-process mount, where the three direct calls are free). Both yield the same
   // outcome: a principal, or a 401/402 denial with the same response + trace.
-  const gate = await admit(hooks, token, lap, step);
+  const gate = await admit(hooks, token, lap, step, context);
   if (!gate.ok) {
     const denyId = gate.principal ? idOf(gate.principal) : {};
     emit({
@@ -261,10 +267,11 @@ export async function handleChatCompletions(
   // capability traits, then executes the returned finite route generically.
   let route: ModelRoutePlan | null;
   try {
-    route = await hooks.resolveRoute?.(principal, {
-      requestedModel,
-      requires: requirements,
-    }) ?? null;
+    route = await hooks.resolveRoute?.(
+      principal,
+      { requestedModel, requires: requirements },
+      context,
+    ) ?? null;
   } catch (err) {
     const message = errorMessage(err);
     step('route_resolution_failed', { ms: lap(), error: message });
@@ -357,7 +364,7 @@ export async function handleChatCompletions(
   let resolvedCandidateCount = 0;
   for (const routeModel of routeModels) {
     try {
-      const resolved = await hooks.resolveUpstream(principal, routeModel);
+      const resolved = await hooks.resolveUpstream(principal, routeModel, context);
       resolvedCandidateCount += resolved.length;
       for (const descriptor of resolved) {
         const decision = evaluateUpstreamCapabilities(descriptor, requirements);
@@ -748,7 +755,7 @@ export async function handleChatCompletions(
         requestId,
       };
       try {
-        await hooks.recordUsage(event);
+        await hooks.recordUsage(event, context);
       } catch (err) {
         logger.warn(`[llm-gateway] recordUsage failed for ${requestId}:`, err);
       }

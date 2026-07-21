@@ -133,6 +133,21 @@ reasoning as supported by the existing request adapter. State continuation and
 background jobs remain disabled. This is not a public `/v1/responses`,
 Computer Use, background execution, or production-readiness claim.
 
+## Gateway trace context
+
+Chat requests accept a strict W3C version `00` `traceparent` and a bounded
+`tracestate`. Valid context follows the existing Gateway hooks and standalone
+Gateway-to-API control-plane RPCs. It is never added to model-provider requests;
+invalid, all-zero, oversized, or control-character values are dropped.
+
+The Gateway emits a sink-neutral `gen_ai.chat` observation with bounded model,
+provider, token, status, retry, billing-mode, and cost attributes. That
+observation excludes prompts, responses, identities, URLs, candidate lists,
+credentials, arbitrary errors, and `tracestate`. The existing API trace record
+and optional Langfuse sink consume this projection without changing the
+separately configured body-capture policy. This does not enable an OTLP
+deployment, a public cost dashboard, or production readiness.
+
 ## Redaction invariants
 
 Public discovery exposes capability descriptors, provider configuration IDs, and non-sensitive model identifiers only. Agent Cards never contain credentials or provider connection details. Task responses contain task/job IDs and public state only. Events contain status, progress, stable error codes, and asset IDs; internal Studio cursors, object keys, raw provider bodies, credential material, billing reservation identifiers, and downloadable locations remain private.

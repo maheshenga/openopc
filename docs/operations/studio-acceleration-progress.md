@@ -54,6 +54,14 @@ native `/v1/responses`, state continuation, background jobs, and Computer Use
 remain separate later plans. This slice adds no provider credentials, database
 state, Web route, Desktop route, or production-readiness claim.
 
+The Gateway observability slice validates W3C trace context, carries it through
+the existing control-plane hooks and internal API RPCs, and projects bounded
+GenAI token, retry, status, provider, model, billing-mode, and cost attributes.
+It does not forward trace context to model providers, and the new GenAI
+observation excludes prompts, responses, identities, URLs, credentials,
+candidate lists, and arbitrary errors. Existing configurable trace body capture
+is unchanged. OTLP deployment and the Web cost dashboard remain later gates.
+
 ## Milestone 0-1 Gate
 
 The milestone closes only after all eleven tasks in the implementation plan have commit-backed evidence, package/type/public-surface gates pass, and Electron acceptance proves the Web Image Studio and Assets flow without exposing credentials, signed URLs, request bodies, or identifiers in logs or telemetry. Android/iOS acceptance is deferred and is not a current milestone gate.

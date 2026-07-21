@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
+import type { GatewayRequestContext } from '@kortix/llm-gateway';
 import { ApiUnavailableError, type FetchLike, createApiClient } from './api-client';
 
 const principal = { userId: 'u1', accountId: 'a1' };
@@ -34,6 +35,45 @@ describe('ApiClient', () => {
     };
     await client(fetchImpl).authenticate('tok');
     expect(seenAuth).toBe('Bearer secret');
+  });
+
+  test('forwards W3C trace headers only to the internal API request', async () => {
+    const traceparent = '00-11111111111111111111111111111111-2222222222222222-01';
+    const tracestate = 'vendor=value';
+    let seenHeaders: Record<string, string> = {};
+    const c = client(async (_url, init) => {
+      seenHeaders = init.headers as Record<string, string>;
+      return jsonResponse({ ok: true, principal });
+    });
+    const context: GatewayRequestContext = {
+      requestId: 'req_1',
+      traceparent,
+      tracestate,
+    };
+
+    await c.authorize('tok', context);
+
+    expect(seenHeaders.traceparent).toBe(traceparent);
+    expect(seenHeaders.tracestate).toBe(tracestate);
+    expect(seenHeaders['x-request-id']).toBe('req_1');
+  });
+
+  test('drops manually constructed unsafe internal context headers', async () => {
+    let seenHeaders: Record<string, string> = {};
+    const c = client(async (_url, init) => {
+      seenHeaders = init.headers as Record<string, string>;
+      return jsonResponse({ ok: true, principal });
+    });
+
+    await c.authorize('tok', {
+      requestId: 'req_1\r\nx-private: secret',
+      traceparent: 'private trace value',
+      tracestate: 'vendor=value\r\nx-private: secret',
+    });
+
+    expect(seenHeaders.traceparent).toBeUndefined();
+    expect(seenHeaders.tracestate).toBeUndefined();
+    expect(seenHeaders['x-request-id']).toBeUndefined();
   });
 
   test('resolveUpstream returns candidates', async () => {

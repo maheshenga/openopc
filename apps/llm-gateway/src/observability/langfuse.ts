@@ -1,5 +1,5 @@
+import { type GatewayTrace, gatewayTraceToGenAiObservation } from '@kortix/llm-gateway';
 import { Langfuse } from 'langfuse';
-import type { GatewayTrace } from '@kortix/llm-gateway';
 
 export interface LangfuseConfig {
   publicKey: string;
@@ -20,6 +20,7 @@ function nonEmpty(...values: (string | undefined)[]): string[] {
 }
 
 export function traceToLangfuse(t: GatewayTrace): TracePayloads {
+  const observation = gatewayTraceToGenAiObservation(t);
   const startedAt = new Date(t.startedAt);
   const endedAt = new Date(startedAt.getTime() + t.latencyMs);
   const totalTokens = t.usage.promptTokens + t.usage.completionTokens;
@@ -50,6 +51,8 @@ export function traceToLangfuse(t: GatewayTrace): TracePayloads {
         finalCost: t.finalCost,
         errorCode: t.errorCode,
         errorMessage: t.errorMessage,
+        ...(observation.traceparent ? { traceparent: observation.traceparent } : {}),
+        genAi: observation.attributes,
       },
     },
     generation: {
@@ -79,6 +82,7 @@ export function traceToLangfuse(t: GatewayTrace): TracePayloads {
         candidatesTried: t.candidatesTried,
         upstreamCost: t.upstreamCost,
         finalCost: t.finalCost,
+        genAi: observation.attributes,
       },
     },
   };

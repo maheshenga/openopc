@@ -169,6 +169,8 @@ export function buildServer(): GatewayServer {
       const res = await gateway.chatCompletions({
         authorization: c.req.header('authorization'),
         rawBody: await c.req.text(),
+        traceparent: c.req.header('traceparent'),
+        tracestate: c.req.header('tracestate'),
       });
       recordOutcome(res.status);
       return res;

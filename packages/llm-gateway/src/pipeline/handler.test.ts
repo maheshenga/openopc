@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { createGateway } from "../create-gateway";
 import type {
   GatewayHooks,
+  GatewayRequestContext,
   GatewayTrace,
   UpstreamDescriptor,
   UsageEvent,
@@ -187,6 +188,57 @@ describe("gateway.chatCompletions", () => {
     expect(t.request).toBeDefined();
     expect(t.response).toBeDefined();
     expect(t.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("forwards one normalized W3C context through control-plane hooks and the trace", async () => {
+    const contexts: GatewayRequestContext[] = [];
+    let recordedTrace: GatewayTrace | undefined;
+    const remember = (context?: GatewayRequestContext) => {
+      if (context) contexts.push(context);
+    };
+    const { hooks } = makeHooks({
+      authorize: async (_token, context) => {
+        remember(context);
+        return { ok: true, principal };
+      },
+      resolveRoute: async (_principal, _input, context) => {
+        remember(context);
+        return null;
+      },
+      resolveUpstream: async (_principal, _model, context) => {
+        remember(context);
+        return [managed];
+      },
+      recordUsage: async (_event, context) => remember(context),
+      recordTrace: async (trace, context) => {
+        recordedTrace = trace;
+        remember(context);
+      },
+    });
+    const response = await createGateway(
+      hooks,
+      { retry: fastRetry },
+      {
+        fetchImpl: okFetch({
+          model: "kortix/x",
+          choices: [{ message: { content: "ok" } }],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        }),
+      },
+    ).chatCompletions({
+      authorization: "Bearer good",
+      rawBody: '{"model":"kortix/x"}',
+      traceparent: "00-11111111111111111111111111111111-2222222222222222-01",
+      tracestate: "vendor=value",
+    });
+
+    expect(response.status).toBe(200);
+    await flush();
+    expect(contexts).toHaveLength(5);
+    expect(new Set(contexts.map((context) => context.requestId)).size).toBe(1);
+    expect(contexts.every((context) => context.traceparent === contexts[0].traceparent)).toBe(true);
+    expect(contexts.every((context) => context.tracestate === "vendor=value")).toBe(true);
+    expect(recordedTrace?.traceparent).toBe(contexts[0].traceparent);
   });
 
   test('BYOK billingMode "none" records zero final cost', async () => {

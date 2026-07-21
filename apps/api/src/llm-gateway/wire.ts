@@ -31,6 +31,8 @@ export function mountLlmGateway(app: OpenAPIHono): void {
       gateway.chatCompletions({
         authorization: c.req.header('authorization'),
         rawBody: await c.req.text(),
+        traceparent: c.req.header('traceparent'),
+        tracestate: c.req.header('tracestate'),
       }),
     );
     llm.get('/models', (c) => gateway.listModels(c.req.header('authorization')));

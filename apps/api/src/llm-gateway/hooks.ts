@@ -5,6 +5,7 @@ import type {
   GatewayTrace,
   UsageEvent,
 } from '@kortix/llm-gateway';
+import { gatewayTraceToGenAiObservation } from '@kortix/llm-gateway';
 import { assertBillingActive } from '../billing/services/billing-gate';
 import { deductForLlmUsage } from '../billing/services/credits';
 import { getCachedAccountTier } from '../billing/services/entitlements';
@@ -16,11 +17,11 @@ import { isGatewayKey } from '../shared/crypto';
 import { recordGatewayTrace } from '../shared/gateway-logs';
 import { recordUsageEvent } from '../shared/usage-events';
 import { checkBudget } from './budgets';
-import { resolveDefaultModelForPrincipal } from './resolution/default-model';
 import { validateGatewayKey } from './gateway-keys';
 import { gatewayModelCatalog } from './models/catalog-models';
-import { resolveGatewayRoute } from './routing';
+import { resolveDefaultModelForPrincipal } from './resolution/default-model';
 import { resolveCandidates } from './resolution/resolve-candidates';
+import { resolveGatewayRoute } from './routing';
 
 // ─── Canonical gateway control plane ────────────────────────────────────────
 //
@@ -176,6 +177,7 @@ export async function recordGatewayUsage(event: UsageEvent): Promise<void> {
 export async function persistGatewayTrace(trace: GatewayTrace): Promise<void> {
   // Pre-auth failures (401) carry no accountId — nothing useful to attribute.
   if (!trace.accountId) return;
+  const observation = gatewayTraceToGenAiObservation(trace);
   await recordGatewayTrace({
     requestId: trace.requestId,
     accountId: trace.accountId,
@@ -202,7 +204,10 @@ export async function persistGatewayTrace(trace: GatewayTrace): Promise<void> {
     billingMode: trace.billingMode,
     request: trace.request,
     response: trace.response,
-    metadata: trace.metadata,
+    metadata: {
+      ...trace.metadata,
+      gatewayTelemetry: observation,
+    },
   });
 }
 

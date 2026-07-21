@@ -10,6 +10,8 @@ export type { ProviderKind, UpstreamDescriptor } from './descriptor';
 export type { TokenCounts, UsageEvent } from './usage';
 export type { GatewayTrace } from './trace';
 export type { AuthorizeResult, GatewayHooks } from './hooks';
+export { gatewayRequestContext } from './request-context';
+export type { GatewayRequestContext, GatewayTraceHeaders } from './request-context';
 export type { ModelInfo, ModelCatalog } from './catalog';
 export type { GatewayConfig } from './config';
 export type {

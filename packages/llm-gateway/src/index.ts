@@ -50,6 +50,11 @@ export type { CapabilityEvaluation, ModelFallbackPolicyEngine } from './routing'
 
 export { OPENAI_COMPATIBLE_NPM, providerKindForNpm } from './catalog';
 
+export { gatewayTraceToGenAiObservation } from './observability';
+export type { GatewayGenAiAttributes, GatewayGenAiObservation } from './observability';
+
+export { gatewayRequestContext } from './domain';
+
 export type {
   AuthedPrincipal,
   AuthorizeResult,
@@ -60,6 +65,8 @@ export type {
   GatewayCapabilityRequirements,
   GatewayHooks,
   GatewayLogger,
+  GatewayRequestContext,
+  GatewayTraceHeaders,
   GatewayTrace,
   ModelFallbackCondition,
   ModelFallbackPolicy,

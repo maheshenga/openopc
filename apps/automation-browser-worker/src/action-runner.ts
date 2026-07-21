@@ -31,7 +31,16 @@ type RunnerDependencies = Readonly<{
   isLeaseCurrent: (lease: AutomationLease) => Promise<boolean>;
   currentKillSwitchGeneration: (lease: AutomationLease) => Promise<number>;
   isActionHashCurrent: (step: AutomationStep, lease: AutomationLease) => Promise<boolean>;
+  consumeApproval: (input: ApprovalBinding) => Promise<ApprovalBinding | null>;
   isAllowedUrl: (url: string, policy: BrowserPolicy) => Promise<boolean>;
+  writeEvidence: (contentType: string, body: Uint8Array) => Promise<string>;
+}>;
+
+export type ApprovalBinding = Readonly<{
+  actionHash: string;
+  jobId: string;
+  projectId: string;
+  stepId: string;
 }>;
 
 const executableActions = new Set(['navigate', 'click', 'fill', 'read', 'screenshot']);
@@ -47,17 +56,19 @@ function event(
   lease: AutomationLease,
   type: AutomationEvent['type'],
   payload: Record<string, unknown>,
+  sequence: number,
+  createdAt: Date,
 ): AutomationEvent {
   return {
     protocol_version: 'automation.v1',
     event_id: randomUUID(),
     job_id: lease.job_id,
-    sequence: 1,
+    sequence,
     type,
     status: null,
     payload,
     trace_id: null,
-    created_at: new Date().toISOString(),
+    created_at: createdAt.toISOString(),
   };
 }
 
@@ -86,20 +97,42 @@ export function createBrowserActionRunner(dependencies: RunnerDependencies): Bro
     async run({ lease, steps, policy, signal }) {
       if (steps.length > AUTOMATION_MAX_STEPS) throw new Error('automation step limit exceeded');
       const events: AutomationEvent[] = [];
+      let nextSequence = 1;
+      const now = dependencies.now ?? (() => new Date());
+      const pushEvent = (type: AutomationEvent['type'], payload: Record<string, unknown>): void => {
+        events.push(event(lease, type, payload, nextSequence, now()));
+        nextSequence += 1;
+      };
       for (const step of steps) {
         await checkStep(dependencies, lease, step, signal);
-        if (approvalActions.has(step.action)) {
-          events.push(
-            event(lease, 'approval_required', {
-              step_id: step.step_id,
-              action_hash: step.action_hash,
-            }),
-          );
+        const requiresApproval =
+          step.risk === 'external_effect' || approvalActions.has(step.action);
+        const expectedApproval: ApprovalBinding = {
+          actionHash: step.action_hash,
+          jobId: lease.job_id,
+          projectId: lease.project_id,
+          stepId: step.step_id,
+        };
+        const consumedApproval = requiresApproval
+          ? await dependencies.consumeApproval(expectedApproval)
+          : null;
+        const approvalMatches =
+          consumedApproval !== null &&
+          consumedApproval.actionHash === expectedApproval.actionHash &&
+          consumedApproval.jobId === expectedApproval.jobId &&
+          consumedApproval.projectId === expectedApproval.projectId &&
+          consumedApproval.stepId === expectedApproval.stepId;
+        if (requiresApproval && !approvalMatches) {
+          pushEvent('approval_required', {
+            step_id: step.step_id,
+            action_hash: step.action_hash,
+          });
           break;
         }
-        if (!executableActions.has(step.action))
+        if (!executableActions.has(step.action) && !approvalActions.has(step.action))
           throw new Error(`unsupported browser action: ${step.action}`);
-        events.push(event(lease, 'step_started', { step_id: step.step_id }));
+        pushEvent('step_started', { step_id: step.step_id });
+        let evidenceReference: string | undefined;
         switch (step.action) {
           case 'navigate': {
             const url = requiredString(step.args, 'url');
@@ -111,6 +144,9 @@ export function createBrowserActionRunner(dependencies: RunnerDependencies): Bro
             break;
           }
           case 'click':
+          case 'submit':
+          case 'delete':
+          case 'send':
             await dependencies.page.click(requiredString(step.args, 'selector'));
             break;
           case 'fill':
@@ -119,14 +155,24 @@ export function createBrowserActionRunner(dependencies: RunnerDependencies): Bro
               requiredString(step.args, 'value'),
             );
             break;
-          case 'read':
-            await dependencies.page.textContent(requiredString(step.args, 'selector'));
+          case 'read': {
+            const text = await dependencies.page.textContent(requiredString(step.args, 'selector'));
+            evidenceReference = await dependencies.writeEvidence(
+              'text/plain; charset=utf-8',
+              new TextEncoder().encode(text ?? ''),
+            );
             break;
-          case 'screenshot':
-            await dependencies.page.screenshot();
+          }
+          case 'screenshot': {
+            const screenshot = await dependencies.page.screenshot();
+            evidenceReference = await dependencies.writeEvidence('image/png', screenshot);
             break;
+          }
         }
-        events.push(event(lease, 'step_completed', { step_id: step.step_id }));
+        pushEvent('step_completed', {
+          step_id: step.step_id,
+          ...(evidenceReference === undefined ? {} : { evidence_reference: evidenceReference }),
+        });
       }
       return events;
     },

@@ -66,7 +66,19 @@ function page(): { page: BrowserPageAdapter; calls: string[] } {
 
 function runner(
   adapter: BrowserPageAdapter,
-  options?: { actionHash?: boolean; generation?: number; signed?: boolean },
+  options?: {
+    actionHash?: boolean;
+    approval?: boolean;
+    approvalGrant?: Partial<{
+      actionHash: string;
+      jobId: string;
+      projectId: string;
+      stepId: string;
+    }>;
+    generation?: number;
+    signed?: boolean;
+    approvalInputs?: Array<Record<string, unknown>>;
+  },
 ) {
   return createBrowserActionRunner({
     page: adapter,
@@ -75,7 +87,14 @@ function runner(
     isLeaseCurrent: async () => true,
     currentKillSwitchGeneration: async () => options?.generation ?? 7,
     isActionHashCurrent: async () => options?.actionHash ?? true,
+    consumeApproval: async (input) => {
+      options?.approvalInputs?.push(input);
+      if (!(options?.approval ?? false)) return null;
+      return { ...input, ...options?.approvalGrant };
+    },
     isAllowedUrl: async () => true,
+    writeEvidence: async (contentType, body) =>
+      `evidence:${contentType}:${body.byteLength.toString()}`,
   });
 }
 
@@ -102,6 +121,11 @@ describe('browser action runner', () => {
       'screenshot',
     ]);
     expect(events.filter((event) => event.type === 'step_completed')).toHaveLength(5);
+    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(events.at(-1)?.payload).toEqual({
+      evidence_reference: 'evidence:image/png:0',
+      step_id: ID,
+    });
   });
 
   test('rejects script-like, unknown, overflowing, and download actions before they reach the page', async () => {
@@ -161,6 +185,72 @@ describe('browser action runner', () => {
         steps: [step('click', { selector: '#run' })],
       }),
     ).rejects.toThrow('browser');
+  });
+
+  test('requires approval for every external-effect risk and binds consumption to project, step, and action hash', async () => {
+    const fake = page();
+    const approvalInputs: Array<Record<string, unknown>> = [];
+    const externalClick = {
+      ...step('click', { selector: '#pay' }),
+      risk: 'external_effect' as const,
+    };
+
+    const paused = await runner(fake.page, { approvalInputs }).run({
+      lease: lease(),
+      policy,
+      signal: new AbortController().signal,
+      steps: [externalClick],
+    });
+    expect(paused.map((item) => item.type)).toEqual(['approval_required']);
+    expect(fake.calls).toEqual([]);
+    expect(approvalInputs).toEqual([
+      { actionHash: HASH, jobId: lease().job_id, projectId: lease().project_id, stepId: ID },
+    ]);
+
+    const resumed = await runner(fake.page, { approval: true }).run({
+      lease: lease(),
+      policy,
+      signal: new AbortController().signal,
+      steps: [externalClick],
+    });
+    expect(resumed.map((item) => item.type)).toEqual(['step_started', 'step_completed']);
+    expect(fake.calls).toEqual(['click:#pay']);
+
+    const wrongProject = page();
+    const stillPaused = await runner(wrongProject.page, {
+      approval: true,
+      approvalGrant: { projectId: '90000000-0000-4000-a000-000000000001' },
+    }).run({
+      lease: lease(),
+      policy,
+      signal: new AbortController().signal,
+      steps: [externalClick],
+    });
+    expect(stillPaused.map((item) => item.type)).toEqual(['approval_required']);
+    expect(wrongProject.calls).toEqual([]);
+  });
+
+  test('pauses submit, delete, and send until their bound approval is consumed', async () => {
+    for (const action of ['submit', 'delete', 'send']) {
+      const fake = page();
+      const destructive = step(action, { selector: `#${action}` });
+      const paused = await runner(fake.page).run({
+        lease: lease(),
+        policy,
+        signal: new AbortController().signal,
+        steps: [destructive],
+      });
+      expect(paused.map((item) => item.type)).toEqual(['approval_required']);
+      expect(fake.calls).toEqual([]);
+
+      await runner(fake.page, { approval: true }).run({
+        lease: lease(),
+        policy,
+        signal: new AbortController().signal,
+        steps: [destructive],
+      });
+      expect(fake.calls).toEqual([`click:#${action}`]);
+    }
   });
 
   test('rejects an unsigned or invalidly signed lease before it reaches the page', async () => {

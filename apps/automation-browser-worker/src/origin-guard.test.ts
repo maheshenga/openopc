@@ -12,7 +12,7 @@ const policy = (overrides: Partial<BrowserPolicy> = {}): BrowserPolicy => ({
 
 describe('browser origin guard', () => {
   test('allows only an exact allowlisted public origin', async () => {
-    const guard = createBrowserOriginGuard({ resolveHostname: async () => ['203.0.113.10'] });
+    const guard = createBrowserOriginGuard({ resolveHostname: async () => ['93.184.216.34'] });
 
     await expect(
       guard.isAllowed('https://console.example.test/workflows', policy()),
@@ -40,6 +40,7 @@ describe('browser origin guard', () => {
         'http://127.0.0.1',
         'http://[::1]',
         'http://169.254.169.254',
+        'http://168.63.129.16',
         'https://private.example.test',
         'https://fails.example.test',
       ],
@@ -50,6 +51,9 @@ describe('browser origin guard', () => {
       'http://10.0.0.2',
       'http://[::1]',
       'http://169.254.169.254/latest/meta-data',
+      'http://168.63.129.16/machine?comp=goalstate',
+      'http://[::ffff:7f00:1]',
+      'http://[::ffff:ac10:1]',
       'https://private.example.test',
       'https://fails.example.test',
       'not a url',
@@ -61,7 +65,7 @@ describe('browser origin guard', () => {
   test('requires a still-valid explicit expiry for open network and re-checks redirect targets', async () => {
     const guard = createBrowserOriginGuard({
       now: () => new Date('2026-07-22T00:00:00.000Z'),
-      resolveHostname: async () => ['203.0.113.10'],
+      resolveHostname: async () => ['93.184.216.34'],
     });
     const open = policy({
       network_mode: 'open',
@@ -78,5 +82,26 @@ describe('browser origin guard', () => {
     await expect(
       guard.isAllowed('https://outside.example.test/final', policy()),
     ).resolves.toBeFalse();
+  });
+
+  test('returns the validated public address so the network connector can pin it', async () => {
+    let resolutions = 0;
+    const guard = createBrowserOriginGuard({
+      resolveHostname: async () => {
+        resolutions += 1;
+        return resolutions === 1 ? ['93.184.216.34'] : ['127.0.0.1'];
+      },
+    });
+
+    const target = await guard.resolve('https://console.example.test/workflows', policy());
+
+    expect(target).toEqual({
+      address: '93.184.216.34',
+      hostname: 'console.example.test',
+      port: 443,
+      protocol: 'https:',
+      url: 'https://console.example.test/workflows',
+    });
+    expect(resolutions).toBe(1);
   });
 });

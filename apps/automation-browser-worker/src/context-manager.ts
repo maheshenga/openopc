@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export interface BrowserPage {
   close(): Promise<void>;
 }
@@ -14,8 +16,14 @@ export interface BrowserAdapter {
 
 export type PersistentProfileRequest = Readonly<{
   projectId: string;
+  profileId: string;
   encryptedObjectRef: string;
   brokerCredential: string;
+}>;
+
+export type PersistentProfileAuthority = Readonly<{
+  projectId: string;
+  profileId: string;
 }>;
 
 export interface BrowserProfileBroker {
@@ -28,8 +36,14 @@ export type BrowserSession = Readonly<{
   close(): Promise<void>;
 }>;
 
-function assertPersistentProfile(input: PersistentProfileRequest): void {
-  const expectedPrefix = `projects/${input.projectId}/browser-profiles/`;
+function assertPersistentProfile(
+  input: PersistentProfileRequest,
+  authority: PersistentProfileAuthority,
+): void {
+  if (input.projectId !== authority.projectId)
+    throw new Error('profile reference project mismatch');
+  if (input.profileId !== authority.profileId) throw new Error('profile reference ID mismatch');
+  const expectedPrefix = `projects/${authority.projectId}/browser-profiles/`;
   if (!input.encryptedObjectRef.endsWith('.enc'))
     throw new Error('profile reference must be encrypted');
   if (!input.encryptedObjectRef.startsWith(expectedPrefix))
@@ -41,6 +55,7 @@ export function createBrowserContextManager(options: {
   browser: BrowserAdapter;
   profileBroker?: BrowserProfileBroker;
   closeBrowserOnAbort?: boolean;
+  onCleanupError?: (errors: readonly unknown[]) => void | Promise<void>;
 }) {
   const consumedCredentials = new Set<string>();
   const closeBrowserOnAbort = options.closeBrowserOnAbort ?? true;
@@ -50,21 +65,45 @@ export function createBrowserContextManager(options: {
     signal: AbortSignal,
   ): Promise<BrowserSession> => {
     const page = await context.newPage();
-    let closed = false;
-    const close = async () => {
-      if (closed) return;
-      closed = true;
+    let pageContextCleanup: Promise<PromiseSettledResult<void>[]> | undefined;
+    let browserCleanup: Promise<PromiseSettledResult<void>[]> | undefined;
+    let cleanupErrorsReported = false;
+    const cleanup = async (closeBrowser: boolean, surfaceErrors: boolean) => {
       signal.removeEventListener('abort', onAbort);
-      await page.close();
-      await context.close();
+      pageContextCleanup ??= Promise.allSettled([
+        Promise.resolve().then(() => page.close()),
+        Promise.resolve().then(() => context.close()),
+      ]);
+      if (closeBrowser) {
+        browserCleanup ??= Promise.allSettled([
+          Promise.resolve().then(() => options.browser.close()),
+        ]);
+      }
+      const resultGroups = await Promise.all([
+        pageContextCleanup,
+        ...(browserCleanup === undefined ? [] : [browserCleanup]),
+      ]);
+      const results = resultGroups.flat();
+      const errors = results
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason);
+      if (errors.length > 0) {
+        if (!cleanupErrorsReported) {
+          cleanupErrorsReported = true;
+          await options.onCleanupError?.(errors);
+        }
+        if (surfaceErrors) throw new AggregateError(errors, 'browser cleanup failed');
+      }
     };
+    const close = () => cleanup(false, true);
     const onAbort = () => {
-      void close().then(async () => {
-        if (closeBrowserOnAbort) await options.browser.close();
-      });
+      void cleanup(closeBrowserOnAbort, false).catch(() => undefined);
     };
-    if (signal.aborted) onAbort();
-    else signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) {
+      await cleanup(closeBrowserOnAbort, false);
+      throw new Error('browser execution aborted');
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
     return { page, context, close };
   };
 
@@ -74,12 +113,13 @@ export function createBrowserContextManager(options: {
     },
     async openPersistent(
       input: PersistentProfileRequest,
+      authority: PersistentProfileAuthority,
       signal: AbortSignal,
     ): Promise<BrowserSession> {
-      assertPersistentProfile(input);
-      if (consumedCredentials.has(input.brokerCredential))
-        throw new Error('reused broker credential');
-      consumedCredentials.add(input.brokerCredential);
+      assertPersistentProfile(input, authority);
+      const credentialHash = createHash('sha256').update(input.brokerCredential).digest('hex');
+      if (consumedCredentials.has(credentialHash)) throw new Error('reused broker credential');
+      consumedCredentials.add(credentialHash);
       if (!options.profileBroker) throw new Error('persistent profile broker is unavailable');
       const profile = await options.profileBroker.fetchEncryptedProfile(input);
       return sessionFor(

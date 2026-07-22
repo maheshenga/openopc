@@ -3,7 +3,9 @@ import { z } from 'zod';
 const AutomationControlEnvironmentSchema = z
   .object({
     AUTOMATION_CONTROL_ENABLED: z.enum(['true', 'false']).default('false'),
+    AUTOMATION_DESKTOP_COORDINATOR_ENABLED: z.enum(['true', 'false']).default('false'),
     AUTOMATION_CONTROL_PORT: z.coerce.number().int().min(1).max(65_535).default(4011),
+    AUTOMATION_API_URL: z.string().url().default('http://localhost:8008'),
     DATABASE_URL: z.string().trim().default(''),
     REDIS_URL: z.string().trim().default(''),
     AUTOMATION_SERVICE_ID: z
@@ -20,8 +22,20 @@ const AutomationControlEnvironmentSchema = z
       .min(1_000)
       .max(5 * 60_000)
       .default(30_000),
+    AUTOMATION_COORDINATOR_POLL_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
+    AUTOMATION_COORDINATOR_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(4),
   })
   .superRefine((environment, context) => {
+    if (
+      environment.AUTOMATION_DESKTOP_COORDINATOR_ENABLED === 'true' &&
+      environment.AUTOMATION_CONTROL_ENABLED !== 'true'
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['AUTOMATION_DESKTOP_COORDINATOR_ENABLED'],
+        message: 'Desktop coordinator requires automation control to be enabled',
+      });
+    }
     if (environment.AUTOMATION_CONTROL_ENABLED !== 'true') return;
 
     if (!/^postgres(?:ql)?:\/\//.test(environment.DATABASE_URL)) {
@@ -52,12 +66,16 @@ const AutomationControlEnvironmentSchema = z
 
 export type AutomationControlConfig = Readonly<{
   enabled: boolean;
+  desktopCoordinatorEnabled: boolean;
   port: number;
+  automationApiUrl: string;
   databaseUrl: string;
   redisUrl: string;
   serviceId: string;
   sharedSecret: string;
   leaseMs: number;
+  coordinatorPollMs: number;
+  coordinatorBatchSize: number;
 }>;
 
 export function loadAutomationControlConfig(
@@ -66,11 +84,15 @@ export function loadAutomationControlConfig(
   const parsed = AutomationControlEnvironmentSchema.parse(environment);
   return Object.freeze({
     enabled: parsed.AUTOMATION_CONTROL_ENABLED === 'true',
+    desktopCoordinatorEnabled: parsed.AUTOMATION_DESKTOP_COORDINATOR_ENABLED === 'true',
     port: parsed.AUTOMATION_CONTROL_PORT,
+    automationApiUrl: parsed.AUTOMATION_API_URL,
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
     serviceId: parsed.AUTOMATION_SERVICE_ID,
     sharedSecret: parsed.AUTOMATION_CONTROL_SHARED_SECRET,
     leaseMs: parsed.AUTOMATION_LEASE_MS,
+    coordinatorPollMs: parsed.AUTOMATION_COORDINATOR_POLL_MS,
+    coordinatorBatchSize: parsed.AUTOMATION_COORDINATOR_BATCH_SIZE,
   });
 }

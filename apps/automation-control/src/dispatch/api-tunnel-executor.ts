@@ -133,7 +133,10 @@ export function createAutomationApiTunnelExecutor(
           'x-automation-project-id': params.data.automation.project_id,
         },
         body,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal:
+          input.signal === undefined
+            ? AbortSignal.timeout(timeoutMs)
+            : AbortSignal.any([input.signal, AbortSignal.timeout(timeoutMs)]),
       });
     } catch {
       return localFailure('Automation API desktop executor transport failed');

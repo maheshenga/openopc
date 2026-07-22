@@ -64,6 +64,86 @@ function createRepository() {
 }
 
 describe('automation repository', () => {
+  test('lists only live desktop dispatch candidates within the requested bound', async () => {
+    const repository = createRepository();
+    await repository.createJob(REQUEST, ACTOR);
+    const desktopRequest: AutomationJobRequest = {
+      ...REQUEST,
+      execution_domain: 'desktop',
+      steps: [
+        {
+          ...REQUEST.steps[0],
+          action: 'desktop.read_screen',
+          args: { method: 'desktop.cua.get_screen_size', params: {} },
+          risk: 'observe',
+        },
+      ],
+      capability_requirements: [
+        {
+          capability: 'desktop',
+          methods: ['read_screen'],
+          scope: {
+            device_id: '70000000-0000-4000-a000-000000000001',
+            permission_id: '80000000-0000-4000-a000-000000000001',
+          },
+        },
+      ],
+      browser_policy: null,
+      desktop_policy: {
+        device_id: '70000000-0000-4000-a000-000000000001',
+        allowed_applications: ['desktop'],
+        full_access_expires_at: null,
+        kill_switch_generation: 0,
+      },
+      idempotency_key: 'automation-desktop-request-0001',
+    };
+    await repository.createJob(
+      {
+        ...desktopRequest,
+        steps: [
+          {
+            ...desktopRequest.steps[0],
+            action: 'desktop.mouse',
+            args: { method: 'desktop.cua.click', params: { x: 10, y: 10 } },
+            risk: 'operate',
+          },
+        ],
+        idempotency_key: 'automation-desktop-operate-request-0001',
+      },
+      ACTOR,
+    );
+    await repository.createJob(
+      {
+        ...desktopRequest,
+        capability_requirements: [
+          {
+            capability: 'desktop',
+            methods: ['read_screen'],
+            scope: { device_id: '70000000-0000-4000-a000-000000000001' },
+          },
+        ],
+        idempotency_key: 'automation-desktop-missing-permission-0001',
+      },
+      ACTOR,
+    );
+    const created = await repository.createJob(desktopRequest, ACTOR);
+
+    const candidates = await repository.listDispatchCandidates({
+      executionDomain: 'desktop',
+      now: JOB_TIME,
+      limit: 3,
+      onlyStep: {
+        action: 'desktop.read_screen',
+        risk: 'observe',
+        method: 'desktop.cua.get_screen_size',
+        capability: 'desktop',
+        capabilityMethod: 'read_screen',
+      },
+    });
+
+    expect(candidates.map((job) => job.job_id)).toEqual([created.job.job_id]);
+  });
+
   test('hashes semantically identical requests canonically', () => {
     const reordered: AutomationJobRequest = {
       ...REQUEST,

@@ -8,14 +8,16 @@ import {
 } from '@kortix/db';
 import {
   type AutomationEvent,
+  type AutomationExecutionDomain,
   type AutomationJob,
   type AutomationJobRequest,
   AutomationJobRequestSchema,
   AutomationJobSchema,
   type AutomationJobStatus,
+  type AutomationRisk,
   canonicalAutomationRequestJson as sharedCanonicalAutomationRequestJson,
 } from '@kortix/intelligence-contracts';
-import { and, eq, max } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lte, max, or, sql } from 'drizzle-orm';
 import {
   type AppendAutomationEventInput,
   AutomationJobNotFoundError,
@@ -43,6 +45,14 @@ export type AutomationActor = Readonly<{
   deviceId: string | null;
 }>;
 
+export type DispatchCandidateStepConstraint = Readonly<{
+  action: string;
+  risk: AutomationRisk;
+  method: string;
+  capability: string;
+  capabilityMethod: string;
+}>;
+
 export interface AutomationRepository {
   createJob(
     input: AutomationJobRequest,
@@ -53,6 +63,12 @@ export interface AutomationRepository {
     projectId: string,
     jobId: string,
   ): Promise<AutomationJob | null>;
+  listDispatchCandidates(input: {
+    executionDomain: AutomationExecutionDomain;
+    now: Date;
+    limit: number;
+    onlyStep: DispatchCandidateStepConstraint;
+  }): Promise<readonly AutomationJob[]>;
   appendEvent(input: AppendAutomationEventInput): Promise<AutomationEvent>;
   requestCancellation(
     accountId: string,
@@ -60,6 +76,76 @@ export interface AutomationRepository {
     jobId: string,
     actorUserId: string,
   ): Promise<AutomationJob>;
+}
+
+function dispatchCandidateLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new RangeError('Automation dispatch candidate limit must be between 1 and 100');
+  }
+  return limit;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function matchesOnlyStep(job: AutomationJob, constraint: DispatchCandidateStepConstraint): boolean {
+  if (job.request.steps.length !== 1) return false;
+  const step = job.request.steps[0];
+  if (
+    step === undefined ||
+    step.action !== constraint.action ||
+    step.risk !== constraint.risk ||
+    !isRecord(step.args) ||
+    step.args.method !== constraint.method ||
+    Object.keys(step.args).some((key) => key !== 'method' && key !== 'params')
+  ) {
+    return false;
+  }
+  if (step.args.params !== undefined && !isRecord(step.args.params)) return false;
+  const deviceId = job.request.desktop_policy?.device_id;
+  if (deviceId === undefined) return false;
+  return job.request.capability_requirements.some(
+    (requirement) =>
+      requirement.capability === constraint.capability &&
+      requirement.methods.includes(constraint.capabilityMethod) &&
+      isRecord(requirement.scope) &&
+      requirement.scope.device_id === deviceId &&
+      typeof requirement.scope.permission_id === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        requirement.scope.permission_id,
+      ),
+  );
+}
+
+function matchesOnlyStepSql(constraint: DispatchCandidateStepConstraint) {
+  return sql<boolean>`
+    jsonb_typeof(${automationJobs.requestEnvelope}->'steps') = 'array'
+    AND jsonb_array_length(${automationJobs.requestEnvelope}->'steps') = 1
+    AND ${automationJobs.requestEnvelope}->'steps'->0->>'action' = ${constraint.action}
+    AND ${automationJobs.requestEnvelope}->'steps'->0->>'risk' = ${constraint.risk}
+    AND jsonb_typeof(${automationJobs.requestEnvelope}->'steps'->0->'args') = 'object'
+    AND ${automationJobs.requestEnvelope}->'steps'->0->'args'->>'method' = ${constraint.method}
+    AND (${automationJobs.requestEnvelope}->'steps'->0->'args' - 'method' - 'params') = '{}'::jsonb
+    AND (
+      NOT (${automationJobs.requestEnvelope}->'steps'->0->'args' ? 'params')
+      OR jsonb_typeof(${automationJobs.requestEnvelope}->'steps'->0->'args'->'params') = 'object'
+    )
+    AND jsonb_typeof(${automationJobs.requestEnvelope}->'desktop_policy') = 'object'
+    AND EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(
+        ${automationJobs.requestEnvelope}->'capability_requirements'
+      ) AS requirement
+      WHERE requirement->>'capability' = ${constraint.capability}
+        AND requirement->'methods' ? ${constraint.capabilityMethod}
+        AND jsonb_typeof(requirement->'scope') = 'object'
+        AND requirement->'scope'->>'device_id' =
+          ${automationJobs.requestEnvelope}->'desktop_policy'->>'device_id'
+        AND requirement->'scope'->>'permission_id' ~*
+          '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    )
+  `;
 }
 
 export class AutomationIdempotencyConflictError extends Error {
@@ -213,6 +299,27 @@ export function createMemoryAutomationRepository(input?: {
     async getJobForProject(accountId, projectId, jobId) {
       const record = scopedRecord(accountId, projectId, jobId);
       return record ? cloneJob(record.job) : null;
+    },
+
+    async listDispatchCandidates(input) {
+      const limit = dispatchCandidateLimit(input.limit);
+      const checkedAt = input.now.getTime();
+      return [...jobs.values()]
+        .map((record) => record.job)
+        .filter(
+          (job) =>
+            job.request.execution_domain === input.executionDomain &&
+            (job.status === 'queued' || job.status === 'dispatched') &&
+            Date.parse(job.request.deadline_at) > checkedAt &&
+            matchesOnlyStep(job, input.onlyStep),
+        )
+        .sort(
+          (left, right) =>
+            Date.parse(left.created_at) - Date.parse(right.created_at) ||
+            left.job_id.localeCompare(right.job_id),
+        )
+        .slice(0, limit)
+        .map(cloneJob);
     },
 
     async appendEvent(eventInput) {
@@ -406,6 +513,31 @@ export function createPostgresAutomationRepository(db: Database): AutomationRepo
         )
         .limit(1);
       return job ? toAutomationJob(job) : null;
+    },
+
+    async listDispatchCandidates(input) {
+      const limit = dispatchCandidateLimit(input.limit);
+      const nowIso = input.now.toISOString();
+      const databaseNow = sql`GREATEST(clock_timestamp(), ${nowIso}::timestamptz)`;
+      const rows = await db
+        .select()
+        .from(automationJobs)
+        .where(
+          and(
+            eq(automationJobs.executionDomain, input.executionDomain),
+            matchesOnlyStepSql(input.onlyStep),
+            inArray(automationJobs.status, ['queued', 'dispatched']),
+            isNull(automationJobs.cancelRequestedAt),
+            gt(automationJobs.deadlineAt, databaseNow),
+            or(
+              isNull(automationJobs.leaseExpiresAt),
+              lte(automationJobs.leaseExpiresAt, databaseNow),
+            ),
+          ),
+        )
+        .orderBy(asc(automationJobs.createdAt), asc(automationJobs.jobId))
+        .limit(limit);
+      return rows.map(toAutomationJob);
     },
 
     appendEvent(eventInput) {

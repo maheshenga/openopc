@@ -6,12 +6,16 @@ import { createAutomationControlApp } from './server';
 
 const ENABLED_CONFIG: AutomationControlConfig = {
   enabled: true,
+  desktopCoordinatorEnabled: false,
   port: 4011,
+  automationApiUrl: 'https://api.example.test',
   databaseUrl: 'postgresql://automation:password@db.example.test/automation',
   redisUrl: 'redis://redis.example.test:6379',
   serviceId: 'automation-control-test',
   sharedSecret: 'test-shared-secret-that-is-at-least-32-bytes',
   leaseMs: 30_000,
+  coordinatorPollMs: 1_000,
+  coordinatorBatchSize: 4,
 };
 
 describe('automation control configuration', () => {
@@ -19,6 +23,8 @@ describe('automation control configuration', () => {
     const config = loadAutomationControlConfig({});
 
     expect(config.enabled).toBeFalse();
+    expect(config.desktopCoordinatorEnabled).toBeFalse();
+    expect(config.automationApiUrl).toBe('http://localhost:8008');
     expect(config.port).toBeGreaterThan(0);
     expect(config.databaseUrl).toBe('');
     expect(config.redisUrl).toBe('');
@@ -31,6 +37,14 @@ describe('automation control configuration', () => {
         AUTOMATION_CONTROL_ENABLED: 'true',
         DATABASE_URL: 'postgresql://db.example.test/automation',
         REDIS_URL: 'redis://redis.example.test:6379',
+      }),
+    ).toThrow();
+  });
+
+  test('does not allow the desktop coordinator while the control service is disabled', () => {
+    expect(() =>
+      loadAutomationControlConfig({
+        AUTOMATION_DESKTOP_COORDINATOR_ENABLED: 'true',
       }),
     ).toThrow();
   });

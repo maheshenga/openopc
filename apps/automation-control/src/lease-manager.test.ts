@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createMemoryLeaseManager } from './lease-manager';
+import { createMemoryLeaseManager, verifyAutomationLeaseSignature } from './lease-manager';
 
 const JOB_ID = '40000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
@@ -33,6 +33,33 @@ describe('automation fencing leases', () => {
     });
     expect(lease.owner).toBe(`browser-worker-1:${lease.lease_id}`);
     expect(await manager.isCurrent(JOB_ID, lease.owner, NOW)).toBeTrue();
+  });
+
+  test('verifies the signed lease and rejects authority tampering', async () => {
+    const sharedSecret = 'test-shared-secret-that-is-at-least-32-bytes';
+    const manager = createMemoryLeaseManager({
+      sharedSecret,
+      jobs: [
+        {
+          jobId: JOB_ID,
+          projectId: PROJECT_ID,
+          executionDomain: 'desktop',
+          requestHash: `sha256:${'a'.repeat(64)}`,
+          killSwitchGeneration: 7,
+          status: 'queued',
+        },
+      ],
+    });
+    const lease = await manager.claim(JOB_ID, 'desktop-worker-1', NOW, 30_000, PERMISSION_ID);
+    if (lease === null) throw new Error('expected a claimed lease');
+
+    expect(verifyAutomationLeaseSignature(lease, sharedSecret)).toBeTrue();
+    expect(
+      verifyAutomationLeaseSignature(
+        { ...lease, permission_id: '80000000-0000-4000-a000-000000000099' },
+        sharedSecret,
+      ),
+    ).toBeFalse();
   });
 
   test('heartbeats only the current unexpired owner and extends its lease', async () => {

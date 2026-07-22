@@ -114,6 +114,7 @@ export type TunnelRpcExecutor = (input: {
   method: string;
   requiredPermissionId: string;
   params: Record<string, unknown>;
+  signal?: AbortSignal;
 }) => Promise<TunnelRpcOutcome>;
 
 export class DesktopDispatchError extends Error {
@@ -153,6 +154,7 @@ export function createDesktopDispatcher(input: {
       tunnelId: string;
       permissionId: string;
       approvalCredential?: StepApprovalCredential;
+      signal?: AbortSignal;
     }): Promise<unknown> {
       const job = AutomationJobSchema.parse(raw.job);
       const lease = AutomationLeaseSchema.parse(raw.lease);
@@ -296,6 +298,7 @@ export function createDesktopDispatcher(input: {
         accountId: job.account_id,
         method: args.method,
         requiredPermissionId: raw.permissionId,
+        signal: raw.signal,
         params: {
           ...args.params,
           permissionId: raw.permissionId,

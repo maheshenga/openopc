@@ -130,4 +130,32 @@ describe('automation API Tunnel executor client', () => {
       message: 'Automation API desktop executor rejected the request (401)',
     });
   });
+
+  test('combines coordinator cancellation with the bounded transport timeout', async () => {
+    let requestSignal: AbortSignal | null | undefined;
+    const abortController = new AbortController();
+    const executeTunnelRpc = createAutomationApiTunnelExecutor({
+      baseUrl: 'http://api.local',
+      sharedSecret: SHARED_SECRET,
+      now: () => NOW,
+      nextNonce: () => NONCE,
+      nextRequestId: () => REQUEST_ID,
+      fetch: (async (_input, init) => {
+        requestSignal = init?.signal;
+        return Response.json({ ok: true, result: { width: 1920, height: 1080 } });
+      }) as typeof fetch,
+    });
+
+    await executeTunnelRpc({
+      tunnelId: TUNNEL_ID,
+      accountId: ACCOUNT_ID,
+      method: 'desktop.cua.get_screen_size',
+      requiredPermissionId: PERMISSION_ID,
+      params: validParams(),
+      signal: abortController.signal,
+    });
+    abortController.abort();
+
+    expect(requestSignal?.aborted).toBeTrue();
+  });
 });

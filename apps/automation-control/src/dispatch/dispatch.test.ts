@@ -444,6 +444,7 @@ describe('automation dispatch boundary', () => {
     const currentLease = lease(request, PERMISSION_ID);
     const tunnelCalls: Array<Record<string, unknown>> = [];
     const consumed: Array<Record<string, unknown>> = [];
+    const abortController = new AbortController();
     let leaseChecks = 0;
     const dispatcher = createDesktopDispatcher({
       now: () => NOW,
@@ -470,6 +471,7 @@ describe('automation dispatch boundary', () => {
       tunnelId: DEVICE_ID,
       permissionId: PERMISSION_ID,
       approvalCredential: { approvalId: APPROVAL_ID, token: APPROVAL_TOKEN },
+      signal: abortController.signal,
     });
 
     expect(result).toEqual({ clicked: true });
@@ -494,6 +496,7 @@ describe('automation dispatch boundary', () => {
       accountId: ACCOUNT_ID,
       method: 'desktop.cua.click',
       requiredPermissionId: PERMISSION_ID,
+      signal: abortController.signal,
       params: {
         x: 12,
         y: 24,

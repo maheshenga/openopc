@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { type Database, automationJobEvents, automationJobs } from '@kortix/db';
 import {
   type AutomationExecutionDomain,
@@ -86,6 +86,21 @@ function signLease(lease: Omit<AutomationLease, 'signature'>, sharedSecret: stri
     lease.expires_at,
   ].join('\n');
   return `hmac-sha256:${createHmac('sha256', sharedSecret).update(payload).digest('hex')}`;
+}
+
+export function verifyAutomationLeaseSignature(
+  leaseInput: AutomationLease,
+  sharedSecret: string,
+): boolean {
+  const parsed = AutomationLeaseSchema.safeParse(leaseInput);
+  if (!parsed.success || sharedSecret.length < 32) return false;
+  const { signature, ...unsignedLease } = parsed.data;
+  const expected = signLease(unsignedLease, sharedSecret);
+  const receivedBytes = Buffer.from(signature);
+  const expectedBytes = Buffer.from(expected);
+  return (
+    receivedBytes.length === expectedBytes.length && timingSafeEqual(receivedBytes, expectedBytes)
+  );
 }
 
 type LeasableJob = Readonly<{

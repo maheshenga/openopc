@@ -70,6 +70,7 @@ const TRANSITION_EVENT_TYPES: Readonly<
 > = {
   approval_required: ['approval_required'],
   execution_approval_required: ['approval_required'],
+  approval_expired: ['job_expired'],
   approval_granted: ['job_dispatched'],
   dispatched: ['job_dispatched'],
   started: ['job_started'],

@@ -3,6 +3,7 @@ import type { AutomationJobStatus } from '@kortix/intelligence-contracts';
 export type AutomationTransitionEvent =
   | { type: 'approval_required' }
   | { type: 'execution_approval_required' }
+  | { type: 'approval_expired' }
   | { type: 'approval_granted' }
   | { type: 'dispatched' }
   | { type: 'started' }
@@ -43,6 +44,7 @@ export function transitionAutomationJob(
   if (current === 'running' && event.type === 'execution_approval_required') {
     return 'awaiting_approval';
   }
+  if (current === 'awaiting_approval' && event.type === 'approval_expired') return 'expired';
   if (current === 'running' && event.type === 'succeeded') return 'succeeded';
   if (event.type === 'cancelled' && CANCELLABLE_STATUSES.has(current)) return 'cancelled';
   if (current === 'running' && event.type === 'lease_expired') return 'expired';

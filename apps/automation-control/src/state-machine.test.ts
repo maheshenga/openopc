@@ -49,6 +49,29 @@ describe('automation job state machine', () => {
     }
   });
 
+  test('applies approval expiry to an awaiting job', () => {
+    expect(transitionAutomationJob('awaiting_approval', { type: 'approval_expired' })).toBe(
+      'expired',
+    );
+  });
+
+  test('rejects approval expiry outside awaiting approval', () => {
+    for (const status of [
+      'queued',
+      'dispatched',
+      'running',
+      'succeeded',
+      'failed',
+      'cancelled',
+      'expired',
+      'retryable',
+    ] as const) {
+      expect(() => transitionAutomationJob(status, { type: 'approval_expired' })).toThrow(
+        AutomationTransitionError,
+      );
+    }
+  });
+
   test('expires a running job when its fencing lease expires', () => {
     expect(transitionAutomationJob('running', { type: 'lease_expired' })).toBe('expired');
   });

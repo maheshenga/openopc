@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 
 const ServiceIdSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
@@ -38,11 +39,31 @@ function parseBrowserWorkerTrust(raw: string): BrowserWorkerPeers | null {
   }
 }
 
+function parseBrowserWorkerUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (
+      url.protocol !== 'wss:' ||
+      url.username !== '' ||
+      url.password !== '' ||
+      url.pathname !== '/' ||
+      url.search !== '' ||
+      url.hash !== ''
+    ) {
+      return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 const AutomationControlEnvironmentSchema = z
   .object({
     AUTOMATION_CONTROL_ENABLED: z.enum(['true', 'false']).default('false'),
     AUTOMATION_DESKTOP_COORDINATOR_ENABLED: z.enum(['true', 'false']).default('false'),
     AUTOMATION_BROWSER_HEARTBEAT_ENABLED: z.enum(['true', 'false']).default('false'),
+    AUTOMATION_BROWSER_DISPATCH_ENABLED: z.enum(['true', 'false']).default('false'),
     AUTOMATION_CONTROL_PORT: z.coerce.number().int().min(1).max(65_535).default(4011),
     AUTOMATION_API_URL: z.string().url().default('http://localhost:8008'),
     DATABASE_URL: z.string().trim().default(''),
@@ -75,6 +96,22 @@ const AutomationControlEnvironmentSchema = z
       .min(100)
       .max(30_000)
       .default(5_000),
+    AUTOMATION_BROWSER_WORKER_URL: z.string().trim().max(2_048).default(''),
+    AUTOMATION_CONTROL_MTLS_CERT_PATH: z.string().trim().max(4_096).default(''),
+    AUTOMATION_CONTROL_MTLS_KEY_PATH: z.string().trim().max(4_096).default(''),
+    AUTOMATION_CONTROL_MTLS_CA_PATH: z.string().trim().max(4_096).default(''),
+    AUTOMATION_BROWSER_DISPATCH_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(100)
+      .max(30_000)
+      .default(5_000),
+    AUTOMATION_BROWSER_DISPATCH_MAX_MESSAGE_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1_024)
+      .max(1024 * 1024)
+      .default(64 * 1024),
     AUTOMATION_LEASE_MS: z.coerce
       .number()
       .int()
@@ -104,6 +141,38 @@ const AutomationControlEnvironmentSchema = z
         path: ['AUTOMATION_BROWSER_HEARTBEAT_ENABLED'],
         message: 'Browser Worker heartbeat requires automation control to be enabled',
       });
+    }
+    if (
+      environment.AUTOMATION_BROWSER_DISPATCH_ENABLED === 'true' &&
+      environment.AUTOMATION_BROWSER_HEARTBEAT_ENABLED !== 'true'
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['AUTOMATION_BROWSER_DISPATCH_ENABLED'],
+        message: 'Browser Worker dispatch requires heartbeat to be enabled',
+      });
+    }
+    if (environment.AUTOMATION_BROWSER_DISPATCH_ENABLED === 'true') {
+      if (parseBrowserWorkerUrl(environment.AUTOMATION_BROWSER_WORKER_URL) === null) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['AUTOMATION_BROWSER_WORKER_URL'],
+          message: 'Browser Worker dispatch URL must be a WSS origin',
+        });
+      }
+      for (const name of [
+        'AUTOMATION_CONTROL_MTLS_CERT_PATH',
+        'AUTOMATION_CONTROL_MTLS_KEY_PATH',
+        'AUTOMATION_CONTROL_MTLS_CA_PATH',
+      ] as const) {
+        if (!isAbsolute(environment[name])) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [name],
+            message: `${name} must be an absolute path`,
+          });
+        }
+      }
     }
     if (environment.AUTOMATION_CONTROL_ENABLED !== 'true') return;
 
@@ -152,10 +221,23 @@ const AutomationControlEnvironmentSchema = z
     }
   });
 
+export type AutomationBrowserDispatchConfig =
+  | Readonly<{ enabled: false }>
+  | Readonly<{
+      enabled: true;
+      workerUrl: string;
+      mtlsCertificatePath: string;
+      mtlsPrivateKeyPath: string;
+      mtlsCaPath: string;
+      requestTimeoutMs: number;
+      maxMessageBytes: number;
+    }>;
+
 export type AutomationControlConfig = Readonly<{
   enabled: boolean;
   desktopCoordinatorEnabled: boolean;
   browserHeartbeatEnabled: boolean;
+  browserDispatch: AutomationBrowserDispatchConfig;
   port: number;
   automationApiUrl: string;
   databaseUrl: string;
@@ -186,16 +268,35 @@ export function loadAutomationControlConfig(
 ): AutomationControlConfig {
   const parsed = AutomationControlEnvironmentSchema.parse(environment);
   const browserHeartbeatEnabled = parsed.AUTOMATION_BROWSER_HEARTBEAT_ENABLED === 'true';
+  const browserDispatchEnabled = parsed.AUTOMATION_BROWSER_DISPATCH_ENABLED === 'true';
   const browserWorkerPeers = browserHeartbeatEnabled
     ? parseBrowserWorkerTrust(parsed.AUTOMATION_BROWSER_WORKER_TRUST_JSON)
     : Object.freeze({});
   if (browserHeartbeatEnabled && browserWorkerPeers === null) {
     throw new Error('Trusted Browser Worker configuration is invalid');
   }
+  const workerUrl = browserDispatchEnabled
+    ? parseBrowserWorkerUrl(parsed.AUTOMATION_BROWSER_WORKER_URL)
+    : null;
+  if (browserDispatchEnabled && workerUrl === null) {
+    throw new Error('Browser Worker dispatch URL is invalid');
+  }
+  const browserDispatch: AutomationBrowserDispatchConfig = browserDispatchEnabled
+    ? Object.freeze({
+        enabled: true,
+        workerUrl: workerUrl as string,
+        mtlsCertificatePath: parsed.AUTOMATION_CONTROL_MTLS_CERT_PATH,
+        mtlsPrivateKeyPath: parsed.AUTOMATION_CONTROL_MTLS_KEY_PATH,
+        mtlsCaPath: parsed.AUTOMATION_CONTROL_MTLS_CA_PATH,
+        requestTimeoutMs: parsed.AUTOMATION_BROWSER_DISPATCH_TIMEOUT_MS,
+        maxMessageBytes: parsed.AUTOMATION_BROWSER_DISPATCH_MAX_MESSAGE_BYTES,
+      })
+    : Object.freeze({ enabled: false });
   return Object.freeze({
     enabled: parsed.AUTOMATION_CONTROL_ENABLED === 'true',
     desktopCoordinatorEnabled: parsed.AUTOMATION_DESKTOP_COORDINATOR_ENABLED === 'true',
     browserHeartbeatEnabled,
+    browserDispatch,
     port: parsed.AUTOMATION_CONTROL_PORT,
     automationApiUrl: parsed.AUTOMATION_API_URL,
     databaseUrl: parsed.DATABASE_URL,

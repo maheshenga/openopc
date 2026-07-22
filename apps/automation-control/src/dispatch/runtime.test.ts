@@ -27,6 +27,7 @@ const CONFIG: AutomationControlConfig = {
   enabled: true,
   desktopCoordinatorEnabled: true,
   browserHeartbeatEnabled: false,
+  browserDispatch: { enabled: false },
   port: 4011,
   automationApiUrl: 'https://api.example.test',
   databaseUrl: 'postgresql://automation:password@db.example.test/automation',

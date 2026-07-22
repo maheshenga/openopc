@@ -10,6 +10,10 @@ test('container pins matching Playwright and Bun runtimes and applies rootless p
   expect(dockerfile).toMatch(/^FROM oven\/bun:\d+\.\d+\.\d+ AS bun-runtime$/m);
   expect(dockerfile).toContain('COPY --from=bun-runtime /usr/local/bin/bun');
   expect(dockerfile).toContain('USER pwuser');
+  expect(dockerfile).toContain('chmod -R a-w /app');
+  expect(dockerfile).toContain('TMPDIR=/tmp/openopc-browser');
+  expect(dockerfile).toContain('set -eu;');
+  expect(dockerfile).not.toContain('chown -R pwuser:pwuser /app');
   expect(dockerfile).toContain('ulimit -t');
   expect(dockerfile).toContain('ulimit -v');
   expect(dockerfile).not.toMatch(/^VOLUME/m);

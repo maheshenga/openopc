@@ -199,6 +199,9 @@ importers:
       '@kortix/intelligence-contracts':
         specifier: workspace:*
         version: link:../../packages/intelligence-contracts
+      ipaddr.js:
+        specifier: 2.4.0
+        version: 2.4.0
       playwright:
         specifier: 1.61.1
         version: 1.61.1

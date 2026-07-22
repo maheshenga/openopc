@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@kortix/intelligence-contracts": "workspace:*",
+    "ipaddr.js": "2.4.0",
     "playwright": "1.61.1"
   },
   "devDependencies": {

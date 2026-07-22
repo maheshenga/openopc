@@ -13,6 +13,7 @@ import {
   AutomationJobRequestSchema,
   AutomationJobSchema,
   type AutomationJobStatus,
+  canonicalAutomationRequestJson as sharedCanonicalAutomationRequestJson,
 } from '@kortix/intelligence-contracts';
 import { and, eq, max } from 'drizzle-orm';
 import {
@@ -79,21 +80,8 @@ export class AutomationScopeMismatchError extends Error {
   }
 }
 
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => canonicalize(item));
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([, entry]) => entry !== undefined)
-        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-        .map(([key, entry]) => [key, canonicalize(entry)]),
-    );
-  }
-  return value;
-}
-
 export function canonicalAutomationRequestJson(value: unknown): string {
-  return JSON.stringify(canonicalize(value));
+  return sharedCanonicalAutomationRequestJson(value);
 }
 
 export function canonicalAutomationRequestHash(value: unknown): `sha256:${string}` {

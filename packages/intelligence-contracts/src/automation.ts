@@ -20,6 +20,18 @@ const IdentifierSchema = z
   .max(128)
   .regex(/^[A-Za-z][A-Za-z0-9]*(?:[._:-][A-Za-z0-9]+)*$/);
 const PublicTextSchema = z.string().trim().min(1).max(256);
+const BrowserUrlSchema = z
+  .string()
+  .url()
+  .max(2_048)
+  .refine((value) => {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === 'https:' || parsed.protocol === 'http:') &&
+      parsed.username === '' &&
+      parsed.password === ''
+    );
+  }, 'browser URL must use HTTP(S) without embedded credentials');
 
 const AutomationJsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
   z.union([
@@ -51,6 +63,23 @@ function isFutureDateTime(value: string): boolean {
 
 function hasUniqueValues(values: readonly unknown[]): boolean {
   return new Set(values).size === values.length;
+}
+
+function canonicalizeAutomationValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => canonicalizeAutomationValue(item));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, entry]) => [key, canonicalizeAutomationValue(entry)]),
+    );
+  }
+  return value;
+}
+
+export function canonicalAutomationRequestJson(value: unknown): string {
+  return JSON.stringify(canonicalizeAutomationValue(value));
 }
 
 const OriginSchema = z
@@ -103,6 +132,88 @@ export const AutomationStepSchema = z
   })
   .strict();
 export type AutomationStep = z.infer<typeof AutomationStepSchema>;
+
+const BrowserSelectorSchema = z.string().trim().min(1).max(4_096);
+const BrowserSelectorArgsSchema = z.object({ selector: BrowserSelectorSchema }).strict();
+const BrowserPointArgsSchema = z
+  .object({ x: z.number().finite().min(0).max(100_000), y: z.number().finite().min(0).max(100_000) })
+  .strict();
+
+export const BrowserAutomationStepSchema = z.discriminatedUnion('action', [
+  AutomationStepSchema.extend({
+    action: z.literal('browser.navigate'),
+    args: z.object({ url: BrowserUrlSchema }).strict(),
+    risk: z.literal('operate'),
+  }),
+  AutomationStepSchema.extend({
+    action: z.literal('browser.click'),
+    args: z.union([BrowserSelectorArgsSchema, BrowserPointArgsSchema]),
+    risk: z.literal('operate'),
+  }),
+  AutomationStepSchema.extend({
+    action: z.literal('browser.type'),
+    args: z
+      .object({ selector: BrowserSelectorSchema, value: z.string().max(32_768) })
+      .strict(),
+    risk: z.literal('operate'),
+  }),
+  AutomationStepSchema.extend({
+    action: z.literal('browser.read'),
+    args: BrowserSelectorArgsSchema,
+    risk: z.literal('observe'),
+  }),
+  AutomationStepSchema.extend({
+    action: z.literal('browser.screenshot'),
+    args: z.object({}).strict(),
+    risk: z.literal('observe'),
+  }),
+  AutomationStepSchema.extend({
+    action: z.literal('browser.wait'),
+    args: z.object({ milliseconds: z.number().int().positive().max(30_000) }).strict(),
+    risk: z.literal('observe'),
+  }),
+  AutomationStepSchema.extend({
+    action: z.literal('browser.submit'),
+    args: BrowserSelectorArgsSchema,
+    risk: z.literal('external_effect'),
+  }),
+  AutomationStepSchema.extend({
+    action: z.literal('browser.payment'),
+    args: BrowserSelectorArgsSchema,
+    risk: z.literal('external_effect'),
+  }),
+  AutomationStepSchema.extend({
+    action: z.literal('browser.delete'),
+    args: BrowserSelectorArgsSchema,
+    risk: z.literal('external_effect'),
+  }),
+  AutomationStepSchema.extend({
+    action: z.literal('browser.send'),
+    args: BrowserSelectorArgsSchema,
+    risk: z.literal('external_effect'),
+  }),
+]);
+export type BrowserAutomationStep = z.infer<typeof BrowserAutomationStepSchema>;
+
+export const BROWSER_AUTOMATION_ACTION_RISKS = Object.freeze({
+  'browser.navigate': 'operate',
+  'browser.click': 'operate',
+  'browser.type': 'operate',
+  'browser.read': 'observe',
+  'browser.screenshot': 'observe',
+  'browser.wait': 'observe',
+  'browser.submit': 'external_effect',
+  'browser.payment': 'external_effect',
+  'browser.delete': 'external_effect',
+  'browser.send': 'external_effect',
+} satisfies Readonly<Record<BrowserAutomationStep['action'], AutomationRisk>>);
+
+export function browserAutomationRiskForAction(action: string): AutomationRisk | null {
+  if (!Object.hasOwn(BROWSER_AUTOMATION_ACTION_RISKS, action)) return null;
+  return BROWSER_AUTOMATION_ACTION_RISKS[
+    action as keyof typeof BROWSER_AUTOMATION_ACTION_RISKS
+  ];
+}
 
 export const AutomationCapabilityRequirementSchema = z
   .object({

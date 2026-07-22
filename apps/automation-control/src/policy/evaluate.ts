@@ -1,19 +1,11 @@
-import type { AutomationRisk } from '@kortix/intelligence-contracts';
+import {
+  type AutomationRisk,
+  browserAutomationRiskForAction,
+} from '@kortix/intelligence-contracts';
 import { isSafePublicTarget, matchesAllowedOrigin } from './origin-policy';
 import type { PolicyDecision, PolicyInput } from './types';
 
-const ACTION_RISK_CATALOG: Readonly<Record<string, AutomationRisk>> = Object.freeze({
-  'browser.read': 'observe',
-  'browser.screenshot': 'observe',
-  'browser.wait': 'observe',
-  'browser.navigate': 'operate',
-  'browser.click': 'operate',
-  'browser.type': 'operate',
-  'browser.download': 'operate',
-  'browser.submit': 'external_effect',
-  'browser.payment': 'external_effect',
-  'browser.delete': 'external_effect',
-  'browser.send': 'external_effect',
+const DESKTOP_ACTION_RISK_CATALOG: Readonly<Record<string, AutomationRisk>> = Object.freeze({
   'desktop.read_screen': 'observe',
   'desktop.list_windows': 'observe',
   'desktop.mouse': 'operate',
@@ -106,7 +98,9 @@ export function evaluateAutomationPolicy(input: PolicyInput): PolicyDecision {
     return denied('SCOPE_DENIED', 'Actor, job, or step scope does not match');
   }
 
-  const risk = ACTION_RISK_CATALOG[input.step.action];
+  const risk =
+    browserAutomationRiskForAction(input.step.action) ??
+    DESKTOP_ACTION_RISK_CATALOG[input.step.action];
   if (!risk) return denied('FEATURE_DISABLED', 'Action is absent from the server catalog');
 
   const targetDecision =

@@ -62,6 +62,24 @@ describe('browser origin guard', () => {
     }
   });
 
+  test('denies IANA special-use and deprecated address ranges in open-network mode', async () => {
+    const guard = createBrowserOriginGuard();
+    const open = policy({
+      network_mode: 'open',
+      open_network_expires_at: '2999-01-01T00:00:00.000Z',
+    });
+
+    for (const url of [
+      'http://192.0.2.1',
+      'http://198.51.100.1',
+      'http://203.0.113.1',
+      'http://[2001:db8::1]',
+      'http://[fec0::1]',
+    ]) {
+      await expect(guard.isAllowed(url, open)).resolves.toBeFalse();
+    }
+  });
+
   test('requires a still-valid explicit expiry for open network and re-checks redirect targets', async () => {
     const guard = createBrowserOriginGuard({
       now: () => new Date('2026-07-22T00:00:00.000Z'),

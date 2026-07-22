@@ -4,7 +4,10 @@ import type {
   AutomationStep,
   BrowserPolicy,
 } from '@kortix/intelligence-contracts';
-import { AUTOMATION_MAX_STEPS } from '@kortix/intelligence-contracts';
+import {
+  AUTOMATION_MAX_STEPS,
+  browserAutomationRiskForAction,
+} from '@kortix/intelligence-contracts';
 import { type BrowserPageAdapter, createBrowserActionRunner } from './action-runner';
 
 const ID = '10000000-0000-4000-a000-000000000001';
@@ -33,21 +36,30 @@ const step = (action: string, args: Record<string, unknown> = {}): AutomationSte
   sequence: 1,
   action,
   args,
-  risk: 'observe',
+  risk: browserAutomationRiskForAction(action) ?? 'observe',
   action_hash: HASH,
 });
 
-function page(): { page: BrowserPageAdapter; calls: string[] } {
+function page(initialUrl = 'about:blank'): {
+  page: BrowserPageAdapter & { currentUrl(): string };
+  calls: string[];
+} {
   const calls: string[] = [];
+  let currentUrl = initialUrl;
   return {
     calls,
     page: {
+      currentUrl: () => currentUrl,
       goto: async (url) => {
+        currentUrl = url;
         calls.push(`goto:${url}`);
         return url;
       },
       click: async (selector) => {
         calls.push(`click:${selector}`);
+      },
+      clickPoint: async (x: number, y: number) => {
+        calls.push(`click-point:${x.toString()}:${y.toString()}`);
       },
       fill: async (selector, value) => {
         calls.push(`fill:${selector}:${value}`);
@@ -76,6 +88,9 @@ function runner(
       stepId: string;
     }>;
     generation?: number;
+    generations?: number[];
+    fullAccessGrant?: boolean;
+    isAllowedUrl?: (url: string) => boolean;
     signed?: boolean;
     approvalInputs?: Array<Record<string, unknown>>;
   },
@@ -85,32 +100,149 @@ function runner(
     now: () => new Date('2026-07-22T00:00:00.000Z'),
     isSignedLeaseValid: async () => options?.signed ?? true,
     isLeaseCurrent: async () => true,
-    currentKillSwitchGeneration: async () => options?.generation ?? 7,
+    currentKillSwitchGeneration: async () =>
+      options?.generations?.shift() ?? options?.generation ?? 7,
     isActionHashCurrent: async () => options?.actionHash ?? true,
+    isFullAccessGrantCurrent: async () => options?.fullAccessGrant ?? true,
     consumeApproval: async (input) => {
       options?.approvalInputs?.push(input);
       if (!(options?.approval ?? false)) return null;
       return { ...input, ...options?.approvalGrant };
     },
-    isAllowedUrl: async () => true,
-    writeEvidence: async (contentType, body) =>
+    isAllowedUrl: async (url) => options?.isAllowedUrl?.(url) ?? true,
+    writeEvidence: async (_step, contentType, body) =>
       `evidence:${contentType}:${body.byteLength.toString()}`,
   });
 }
 
 describe('browser action runner', () => {
-  test('executes only structured navigate, click, fill, read, and screenshot actions', async () => {
+  test('requires approval for operate actions under the project-default policy', async () => {
     const fake = page();
+    const operateClick = {
+      ...step('browser.click', { selector: '#run' }),
+      risk: 'operate' as const,
+    };
+
+    const events = await runner(fake.page).run({
+      approvalPolicy: 'project-default',
+      lease: lease(),
+      policy,
+      signal: new AbortController().signal,
+      steps: [operateClick],
+    } as never);
+
+    expect(events.map((event) => event.type)).toEqual(['approval_required']);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test('executes operate actions under full access only while the grant is current', async () => {
+    const stepInput = {
+      ...step('browser.click', { selector: '#run' }),
+      risk: 'operate' as const,
+    };
+    const expired = page();
+    const expiredEvents = await runner(expired.page, { fullAccessGrant: false }).run({
+      approvalPolicy: 'full-access',
+      lease: lease(),
+      policy,
+      signal: new AbortController().signal,
+      steps: [stepInput],
+    });
+    expect(expiredEvents.map((event) => event.type)).toEqual(['approval_required']);
+    expect(expired.calls).toEqual([]);
+
+    const current = page();
+    await runner(current.page, { fullAccessGrant: true }).run({
+      approvalPolicy: 'full-access',
+      lease: lease(),
+      policy,
+      signal: new AbortController().signal,
+      steps: [stepInput],
+    });
+    expect(current.calls).toEqual(['click:#run']);
+  });
+
+  test('executes a canonical coordinate click through the structured page adapter', async () => {
+    const fake = page();
+
+    await runner(fake.page, { fullAccessGrant: true }).run({
+      approvalPolicy: 'full-access',
+      lease: lease(),
+      policy,
+      signal: new AbortController().signal,
+      steps: [step('browser.click', { x: 120, y: 48 })],
+    });
+
+    expect(fake.calls).toEqual(['click-point:120:48']);
+  });
+
+  test('executes a bounded canonical browser wait', async () => {
+    const fake = page();
+
     const events = await runner(fake.page).run({
       lease: lease(),
       policy,
       signal: new AbortController().signal,
+      steps: [step('browser.wait', { milliseconds: 1 })],
+    });
+
+    expect(events.map((event) => event.type)).toEqual(['step_started', 'step_completed']);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test('rejects malformed action arguments before attempting to consume approval', async () => {
+    const fake = page();
+    const approvalInputs: Array<Record<string, unknown>> = [];
+
+    await expect(
+      runner(fake.page, { approvalInputs }).run({
+        lease: lease(),
+        policy,
+        signal: new AbortController().signal,
+        steps: [
+          {
+            ...step('browser.submit'),
+            risk: 'external_effect',
+          },
+        ],
+      }),
+    ).rejects.toThrow();
+    expect(approvalInputs).toEqual([]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test('rechecks kill generation after approval consumption and before the effect', async () => {
+    const fake = page();
+
+    await expect(
+      runner(fake.page, { approval: true, generations: [7, 8] }).run({
+        lease: lease(),
+        policy,
+        signal: new AbortController().signal,
+        steps: [
+          {
+            ...step('browser.submit', { selector: '#submit' }),
+            risk: 'external_effect',
+          },
+        ],
+      }),
+    ).rejects.toThrow('kill-switch');
+    expect(fake.calls).toEqual([]);
+  });
+
+  test('executes only canonical structured navigate, click, fill, read, and screenshot actions', async () => {
+    const fake = page();
+    const events = await runner(fake.page).run({
+      approvalPolicy: 'full-access',
+      lease: lease(),
+      policy,
+      signal: new AbortController().signal,
       steps: [
-        step('navigate', { url: 'https://console.example.test/a' }),
-        step('click', { selector: '#run' }),
-        step('fill', { selector: '#name', value: 'OpenOPC' }),
-        step('read', { selector: '#status' }),
-        step('screenshot'),
+        step('browser.navigate', { url: 'https://console.example.test/a' }),
+        step('browser.click', { selector: '#run' }),
+        step('browser.type', { selector: '#name', value: 'OpenOPC' }),
+        step('browser.read', { selector: '#status' }),
+        step('browser.screenshot'),
       ],
     });
     expect(fake.calls).toEqual([
@@ -121,11 +253,64 @@ describe('browser action runner', () => {
       'screenshot',
     ]);
     expect(events.filter((event) => event.type === 'step_completed')).toHaveLength(5);
-    expect(events.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(events.map((event) => (event as { ordinal?: number }).ordinal)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    ]);
+    expect(events.every((event) => !('event_id' in event))).toBeTrue();
+    expect(events.every((event) => !('sequence' in event))).toBeTrue();
+    expect(events.every((event) => !('status' in event))).toBeTrue();
     expect(events.at(-1)?.payload).toEqual({
       evidence_reference: 'evidence:image/png:0',
       step_id: ID,
     });
+  });
+
+  test('rejects legacy unnamespaced actions before risk or page access', async () => {
+    const fake = page();
+
+    await expect(
+      runner(fake.page).run({
+        approvalPolicy: 'full-access',
+        lease: lease(),
+        policy,
+        signal: new AbortController().signal,
+        steps: [step('click', { selector: '#run' })],
+      }),
+    ).rejects.toThrow('unsupported browser action');
+    expect(fake.calls).toEqual([]);
+  });
+
+  test('rejects a canonical action whose supplied risk does not match the server catalog', async () => {
+    const fake = page();
+
+    await expect(
+      runner(fake.page).run({
+        approvalPolicy: 'full-access',
+        lease: lease(),
+        policy,
+        signal: new AbortController().signal,
+        steps: [{ ...step('browser.click', { selector: '#run' }), risk: 'observe' }],
+      }),
+    ).rejects.toThrow();
+    expect(fake.calls).toEqual([]);
+  });
+
+  test('rechecks the current page origin before every non-navigation action', async () => {
+    const fake = page('https://unexpected.example.test/account');
+
+    await expect(
+      runner(fake.page, {
+        fullAccessGrant: true,
+        isAllowedUrl: (url) => url.startsWith('https://console.example.test/'),
+      }).run({
+        approvalPolicy: 'full-access',
+        lease: lease(),
+        policy,
+        signal: new AbortController().signal,
+        steps: [step('browser.click', { selector: '#run' })],
+      }),
+    ).rejects.toThrow('current page origin');
+    expect(fake.calls).toEqual([]);
   });
 
   test('rejects script-like, unknown, overflowing, and download actions before they reach the page', async () => {
@@ -145,7 +330,7 @@ describe('browser action runner', () => {
         lease: lease(),
         policy,
         signal: new AbortController().signal,
-        steps: Array.from({ length: AUTOMATION_MAX_STEPS + 1 }, () => step('screenshot')),
+        steps: Array.from({ length: AUTOMATION_MAX_STEPS + 1 }, () => step('browser.screenshot')),
       }),
     ).rejects.toThrow();
     expect(fake.calls).toEqual([]);
@@ -157,7 +342,7 @@ describe('browser action runner', () => {
       lease: lease(),
       policy,
       signal: new AbortController().signal,
-      steps: [step('submit')],
+      steps: [step('browser.submit', { selector: '#submit' })],
     });
     expect(approved.map((event) => event.type)).toEqual(['approval_required']);
     expect(fake.calls).toEqual([]);
@@ -166,7 +351,7 @@ describe('browser action runner', () => {
         lease: lease(),
         policy,
         signal: new AbortController().signal,
-        steps: [step('click', { selector: '#run' })],
+        steps: [step('browser.click', { selector: '#run' })],
       }),
     ).rejects.toThrow('action hash');
     await expect(
@@ -174,7 +359,7 @@ describe('browser action runner', () => {
         lease: lease(),
         policy,
         signal: new AbortController().signal,
-        steps: [step('click', { selector: '#run' })],
+        steps: [step('browser.click', { selector: '#run' })],
       }),
     ).rejects.toThrow('kill-switch');
     await expect(
@@ -182,17 +367,16 @@ describe('browser action runner', () => {
         lease: { ...lease(), execution_domain: 'desktop' },
         policy,
         signal: new AbortController().signal,
-        steps: [step('click', { selector: '#run' })],
+        steps: [step('browser.click', { selector: '#run' })],
       }),
     ).rejects.toThrow('browser');
   });
 
-  test('requires approval for every external-effect risk and binds consumption to project, step, and action hash', async () => {
+  test('binds every external-effect approval to project, step, and action hash', async () => {
     const fake = page();
     const approvalInputs: Array<Record<string, unknown>> = [];
     const externalClick = {
-      ...step('click', { selector: '#pay' }),
-      risk: 'external_effect' as const,
+      ...step('browser.payment', { selector: '#pay' }),
     };
 
     const paused = await runner(fake.page, { approvalInputs }).run({
@@ -231,9 +415,10 @@ describe('browser action runner', () => {
   });
 
   test('pauses submit, delete, and send until their bound approval is consumed', async () => {
-    for (const action of ['submit', 'delete', 'send']) {
+    for (const action of ['browser.submit', 'browser.delete', 'browser.send']) {
       const fake = page();
-      const destructive = step(action, { selector: `#${action}` });
+      const selector = `#${action.slice('browser.'.length)}`;
+      const destructive = step(action, { selector });
       const paused = await runner(fake.page).run({
         lease: lease(),
         policy,
@@ -249,7 +434,7 @@ describe('browser action runner', () => {
         signal: new AbortController().signal,
         steps: [destructive],
       });
-      expect(fake.calls).toEqual([`click:#${action}`]);
+      expect(fake.calls).toEqual([`click:${selector}`]);
     }
   });
 
@@ -260,7 +445,7 @@ describe('browser action runner', () => {
         lease: lease(),
         policy,
         signal: new AbortController().signal,
-        steps: [step('click', { selector: '#run' })],
+        steps: [step('browser.click', { selector: '#run' })],
       }),
     ).rejects.toThrow('signature');
     expect(fake.calls).toEqual([]);

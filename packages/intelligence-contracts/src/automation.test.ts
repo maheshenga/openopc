@@ -6,9 +6,12 @@ import {
   AutomationJobRequestSchema,
   AutomationJobSchema,
   AutomationLeaseSchema,
+  BrowserAutomationStepSchema,
   BrowserPolicySchema,
   DesktopPolicySchema,
   KillSwitchSchema,
+  browserAutomationRiskForAction,
+  canonicalAutomationRequestJson,
 } from './automation';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
@@ -64,6 +67,69 @@ function browserRequest() {
 }
 
 describe('OpenOPC automation wire contract', () => {
+  test('accepts only canonical namespaced browser actions with server-owned risk and args', () => {
+    const canonical = {
+      ...browserRequest().steps[0],
+      action: 'browser.navigate',
+      args: { url: 'https://example.test/dashboard' },
+      risk: 'operate',
+    };
+
+    expect(BrowserAutomationStepSchema.parse(canonical).action).toBe('browser.navigate');
+    expect(
+      BrowserAutomationStepSchema.safeParse({ ...canonical, action: 'navigate' }).success,
+    ).toBeFalse();
+    expect(
+      BrowserAutomationStepSchema.safeParse({ ...canonical, risk: 'observe' }).success,
+    ).toBeFalse();
+    expect(
+      BrowserAutomationStepSchema.safeParse({
+        ...canonical,
+        args: { url: 'https://example.test/dashboard', evaluate: 'alert(1)' },
+      }).success,
+    ).toBeFalse();
+  });
+
+  test('defines the complete executable browser action catalog', () => {
+    const cases = [
+      ['browser.navigate', { url: 'https://example.test/dashboard' }, 'operate'],
+      ['browser.click', { selector: '#open' }, 'operate'],
+      ['browser.click', { x: 12, y: 34 }, 'operate'],
+      ['browser.type', { selector: '#name', value: 'OpenOPC' }, 'operate'],
+      ['browser.read', { selector: '#result' }, 'observe'],
+      ['browser.screenshot', {}, 'observe'],
+      ['browser.wait', { milliseconds: 250 }, 'observe'],
+      ['browser.submit', { selector: '#submit' }, 'external_effect'],
+      ['browser.payment', { selector: '#pay' }, 'external_effect'],
+      ['browser.delete', { selector: '#delete' }, 'external_effect'],
+      ['browser.send', { selector: '#send' }, 'external_effect'],
+    ] as const;
+
+    for (const [action, args, risk] of cases) {
+      expect(
+        BrowserAutomationStepSchema.safeParse({
+          ...browserRequest().steps[0],
+          action,
+          args,
+          risk,
+        }).success,
+      ).toBeTrue();
+    }
+  });
+
+  test('derives browser risk from the shared server catalog', () => {
+    expect(browserAutomationRiskForAction('browser.read')).toBe('observe');
+    expect(browserAutomationRiskForAction('browser.click')).toBe('operate');
+    expect(browserAutomationRiskForAction('browser.payment')).toBe('external_effect');
+    expect(browserAutomationRiskForAction('navigate')).toBeNull();
+  });
+
+  test('canonicalizes request objects identically across control and worker runtimes', () => {
+    expect(
+      canonicalAutomationRequestJson({ z: 1, nested: { b: true, a: ['x', { d: 4, c: 3 }] } }),
+    ).toBe('{"nested":{"a":["x",{"c":3,"d":4}],"b":true},"z":1}');
+  });
+
   test('accepts a bounded browser automation request', () => {
     const parsed = AutomationJobRequestSchema.parse(browserRequest());
 

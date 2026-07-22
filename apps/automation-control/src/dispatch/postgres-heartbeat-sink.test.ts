@@ -350,18 +350,71 @@ describe('PostgreSQL heartbeat event sink', () => {
     }
   });
 
-  test('fails closed on step completion and success until durable validation is wired', async () => {
-    const events = [
-      {
+  test('atomically completes a running step with its evidence reference', async () => {
+    const { db, state } = fakeDatabase([
+      [{ jobId: JOB_ID, status: 'running' }],
+      [{ value: 1 }],
+      [{ stepId: STEP_ID, status: 'running' }],
+      [{ value: 5 }],
+    ]);
+    const input = {
+      ...heartbeatInput(2),
+      event: {
         type: 'step_completed' as const,
-        payload: {
-          step_id: STEP_ID,
-          evidence_reference: EVIDENCE_REFERENCE,
-        },
+        payload: { step_id: STEP_ID, evidence_reference: EVIDENCE_REFERENCE },
         trace_id: null,
       },
-      { type: 'job_succeeded' as const, payload: {}, trace_id: null },
-    ];
+    };
+
+    const result = await createPostgresHeartbeatEventSink(db).append(input);
+
+    expect(result).toMatchObject({
+      accepted: true,
+      event: { type: 'step_completed', status: 'running', sequence: 6 },
+    });
+    expect(state.updateTargets).toEqual(['step']);
+    expect(state.updates).toEqual([
+      expect.objectContaining({
+        status: 'succeeded',
+        endedAt: NOW.toISOString(),
+        resultRef: EVIDENCE_REFERENCE,
+      }),
+    ]);
+    expect(state.inserts).toHaveLength(1);
+  });
+
+  test('rejects an unknown or non-running step completion without committing state', async () => {
+    for (const stepRows of [
+      [],
+      [{ stepId: STEP_ID, status: 'pending' }],
+      [{ stepId: STEP_ID, status: 'succeeded' }],
+    ]) {
+      const { db, state } = fakeDatabase([
+        [{ jobId: JOB_ID, status: 'running' }],
+        [{ value: 0 }],
+        stepRows,
+      ]);
+      const input = {
+        ...heartbeatInput(),
+        event: {
+          type: 'step_completed' as const,
+          payload: { step_id: STEP_ID, evidence_reference: EVIDENCE_REFERENCE },
+          trace_id: null,
+        },
+      };
+
+      await expect(createPostgresHeartbeatEventSink(db).append(input)).resolves.toEqual({
+        accepted: false,
+        reason: 'semantic_mismatch',
+      });
+      expect(state.updateTargets).toHaveLength(0);
+      expect(state.updates).toHaveLength(0);
+      expect(state.inserts).toHaveLength(0);
+    }
+  });
+
+  test('fails closed on success until durable validation is wired', async () => {
+    const events = [{ type: 'job_succeeded' as const, payload: {}, trace_id: null }];
 
     for (const event of events) {
       const { db, state } = fakeDatabase([]);

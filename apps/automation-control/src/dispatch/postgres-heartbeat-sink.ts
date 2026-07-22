@@ -25,12 +25,22 @@ function projectWorkerEvent(
 ): Pick<AppendAutomationEventInput, 'event' | 'transition'> | null {
   switch (event.type) {
     case 'approval_required':
-    case 'step_completed':
     case 'job_succeeded':
       // These intents require atomic automation_job_steps validation and, for approval,
       // a durable pause/resume handoff. Reject them until that runtime is composed.
       return null;
     case 'step_started':
+      return {
+        event: {
+          protocol_version: 'automation.v1',
+          type: event.type,
+          status: 'running',
+          payload: event.payload,
+          trace_id: event.trace_id,
+        },
+        transition: null,
+      };
+    case 'step_completed':
       return {
         event: {
           protocol_version: 'automation.v1',
@@ -207,6 +217,41 @@ export function createPostgresHeartbeatEventSink(db: Database): HeartbeatEventSi
                 eq(automationJobSteps.jobId, input.binding.jobId),
                 eq(automationJobSteps.stepId, input.event.payload.step_id),
                 eq(automationJobSteps.status, 'pending'),
+              ),
+            )
+            .returning({ stepId: automationJobSteps.stepId });
+          if (!updatedStep) {
+            return { accepted: false, reason: 'semantic_mismatch' } as const;
+          }
+        }
+
+        if (input.event.type === 'step_completed') {
+          const [step] = await tx
+            .select({ stepId: automationJobSteps.stepId, status: automationJobSteps.status })
+            .from(automationJobSteps)
+            .where(
+              and(
+                eq(automationJobSteps.jobId, input.binding.jobId),
+                eq(automationJobSteps.stepId, input.event.payload.step_id),
+              ),
+            )
+            .limit(1)
+            .for('update');
+          if (step?.status !== 'running') {
+            return { accepted: false, reason: 'semantic_mismatch' } as const;
+          }
+          const [updatedStep] = await tx
+            .update(automationJobSteps)
+            .set({
+              status: 'succeeded',
+              endedAt: observedAt,
+              resultRef: input.event.payload.evidence_reference,
+            })
+            .where(
+              and(
+                eq(automationJobSteps.jobId, input.binding.jobId),
+                eq(automationJobSteps.stepId, input.event.payload.step_id),
+                eq(automationJobSteps.status, 'running'),
               ),
             )
             .returning({ stepId: automationJobSteps.stepId });

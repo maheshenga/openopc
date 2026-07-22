@@ -9,6 +9,7 @@ import {
   canonicalAutomationWorkerProof,
 } from '@kortix/intelligence-contracts';
 import { loadBrowserWorkerHeartbeatConfig } from './config';
+import * as workerConfig from './config';
 import {
   BrowserWorkerHeartbeatClientError,
   createBrowserWorkerHeartbeatClient,
@@ -97,6 +98,53 @@ function acceptedEvent(sequence: number, payload: Record<string, unknown>): Auto
 }
 
 describe('Browser Worker heartbeat client', () => {
+  test('keeps inbound dispatch disabled and requires heartbeat plus separate Control trust', () => {
+    const loadDispatchConfig = (
+      workerConfig as typeof workerConfig & {
+        loadBrowserWorkerDispatchConfig?: (
+          environment: Readonly<Record<string, string | undefined>>,
+        ) => unknown;
+      }
+    ).loadBrowserWorkerDispatchConfig;
+    expect(typeof loadDispatchConfig).toBe('function');
+    if (loadDispatchConfig === undefined) return;
+
+    expect(loadDispatchConfig({})).toEqual({ enabled: false });
+    expect(() =>
+      loadDispatchConfig({
+        AUTOMATION_BROWSER_DISPATCH_ENABLED: 'true',
+        AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'false',
+      }),
+    ).toThrow(/heartbeat/i);
+    expect(
+      loadDispatchConfig({
+        AUTOMATION_BROWSER_DISPATCH_ENABLED: 'true',
+        AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'true',
+        AUTOMATION_CONTROL_SERVICE_ID: 'automation-control',
+        AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256: '11:22:33:44',
+        AUTOMATION_CONTROL_WORKER_SHARED_SECRET: 'control-proof-secret-at-least-thirty-two-bytes',
+        AUTOMATION_BROWSER_SERVICE_ID: WORKER_ID,
+        AUTOMATION_BROWSER_CERTIFICATE_FINGERPRINT256: WORKER_FINGERPRINT,
+        AUTOMATION_BROWSER_WORKER_SHARED_SECRET: WORKER_SECRET,
+        AUTOMATION_BROWSER_TLS_ATTESTATION_SECRET:
+          'worker-proxy-attestation-at-least-thirty-two-bytes',
+        AUTOMATION_BROWSER_DISPATCH_MAX_MESSAGE_BYTES: '65536',
+        AUTOMATION_BROWSER_DISPATCH_PROOF_SKEW_MS: '45000',
+      }),
+    ).toEqual({
+      enabled: true,
+      controlServiceId: 'automation-control',
+      controlCertificateFingerprint256: '11:22:33:44',
+      controlSharedSecret: 'control-proof-secret-at-least-thirty-two-bytes',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      tlsAttestationSecret: 'worker-proxy-attestation-at-least-thirty-two-bytes',
+      maxMessageBytes: 65_536,
+      proofSkewMs: 45_000,
+    });
+  });
+
   test('keeps outbound heartbeat and mTLS credentials disabled by default', () => {
     expect(loadBrowserWorkerHeartbeatConfig({})).toEqual({ enabled: false });
     expect(() =>

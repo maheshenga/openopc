@@ -34,6 +34,21 @@ export type BrowserWorkerHeartbeatConfig =
       requestTimeoutMs: number;
     }>;
 
+export type BrowserWorkerDispatchConfig =
+  | Readonly<{ enabled: false }>
+  | Readonly<{
+      enabled: true;
+      controlServiceId: string;
+      controlCertificateFingerprint256: string;
+      controlSharedSecret: string;
+      serviceId: string;
+      certificateFingerprint256: string;
+      sharedSecret: string;
+      tlsAttestationSecret: string;
+      maxMessageBytes: number;
+      proofSkewMs: number;
+    }>;
+
 function boundedInteger(
   environment: Readonly<Record<string, string | undefined>>,
   name: string,
@@ -141,6 +156,70 @@ export function loadBrowserWorkerHeartbeatConfig(
       5_000,
       100,
       30_000,
+    ),
+  });
+}
+
+function serviceIdentity(
+  environment: Readonly<Record<string, string | undefined>>,
+  name: string,
+): string {
+  const value = requiredValue(environment, name, 128);
+  if (!/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/.test(value)) {
+    throw new Error(`${name} is invalid`);
+  }
+  return value;
+}
+
+function certificateFingerprint(
+  environment: Readonly<Record<string, string | undefined>>,
+  name: string,
+): string {
+  const value = requiredValue(environment, name, 256);
+  if (/[\r\n]/.test(value)) throw new Error(`${name} is invalid`);
+  return value;
+}
+
+export function loadBrowserWorkerDispatchConfig(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): BrowserWorkerDispatchConfig {
+  const enabledText = environment.AUTOMATION_BROWSER_DISPATCH_ENABLED ?? 'false';
+  if (enabledText !== 'true' && enabledText !== 'false') {
+    throw new Error('AUTOMATION_BROWSER_DISPATCH_ENABLED must be true or false');
+  }
+  if (enabledText === 'false') return Object.freeze({ enabled: false });
+  if (environment.AUTOMATION_BROWSER_HEARTBEAT_ENABLED !== 'true') {
+    throw new Error('Browser Worker dispatch requires heartbeat to be enabled');
+  }
+
+  return Object.freeze({
+    enabled: true,
+    controlServiceId: serviceIdentity(environment, 'AUTOMATION_CONTROL_SERVICE_ID'),
+    controlCertificateFingerprint256: certificateFingerprint(
+      environment,
+      'AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256',
+    ),
+    controlSharedSecret: requiredSecret(environment, 'AUTOMATION_CONTROL_WORKER_SHARED_SECRET'),
+    serviceId: serviceIdentity(environment, 'AUTOMATION_BROWSER_SERVICE_ID'),
+    certificateFingerprint256: certificateFingerprint(
+      environment,
+      'AUTOMATION_BROWSER_CERTIFICATE_FINGERPRINT256',
+    ),
+    sharedSecret: requiredSecret(environment, 'AUTOMATION_BROWSER_WORKER_SHARED_SECRET'),
+    tlsAttestationSecret: requiredSecret(environment, 'AUTOMATION_BROWSER_TLS_ATTESTATION_SECRET'),
+    maxMessageBytes: boundedInteger(
+      environment,
+      'AUTOMATION_BROWSER_DISPATCH_MAX_MESSAGE_BYTES',
+      64 * 1024,
+      1_024,
+      1024 * 1024,
+    ),
+    proofSkewMs: boundedInteger(
+      environment,
+      'AUTOMATION_BROWSER_DISPATCH_PROOF_SKEW_MS',
+      60_000,
+      1_000,
+      5 * 60_000,
     ),
   });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { Database } from '@kortix/db';
+import { type Database, automationJobSteps, automationJobs } from '@kortix/db';
 import { automationLeaseOwnerPrefix } from '../lease-manager';
 import { createPostgresHeartbeatEventSink } from './postgres-heartbeat-sink';
 
@@ -7,6 +7,8 @@ const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
 const JOB_ID = '30000000-0000-4000-a000-000000000001';
 const LEASE_ID = '40000000-0000-4000-a000-000000000001';
+const STEP_ID = '50000000-0000-4000-a000-000000000001';
+const EVIDENCE_REFERENCE = 'evidence:60000000-0000-4000-a000-000000000001';
 const NOW = new Date('2026-07-22T10:00:00.000Z');
 
 const BINDING = {
@@ -18,12 +20,22 @@ const BINDING = {
   killSwitchGeneration: 7,
 } as const;
 
+type UpdateTarget = 'job' | 'step';
+
 type FakeState = {
   selections: unknown[][];
   inserts: Array<Record<string, unknown>>;
   updates: Array<Record<string, unknown>>;
+  updateTargets: UpdateTarget[];
   transactions: number;
+  commits: number;
+  rollbacks: number;
   rowLocks: number;
+};
+
+type FakeDatabaseOptions = {
+  failInsert?: boolean;
+  updateReturning?: Partial<Record<UpdateTarget, unknown[]>>;
 };
 
 function awaitableQuery(result: unknown[], onRowLock?: () => void) {
@@ -43,41 +55,73 @@ function awaitableQuery(result: unknown[], onRowLock?: () => void) {
   return query;
 }
 
-function fakeDatabase(selectionResults: unknown[][]): { db: Database; state: FakeState } {
+function fakeDatabase(
+  selectionResults: unknown[][],
+  options: FakeDatabaseOptions = {},
+): { db: Database; state: FakeState } {
   const state: FakeState = {
     selections: [...selectionResults],
     inserts: [],
     updates: [],
+    updateTargets: [],
     transactions: 0,
+    commits: 0,
+    rollbacks: 0,
     rowLocks: 0,
   };
-  const transaction = {
-    select: () =>
-      awaitableQuery(state.selections.shift() ?? [], () => {
-        state.rowLocks += 1;
-      }),
-    update: () => ({
-      set(values: Record<string, unknown>) {
-        state.updates.push(values);
-        return {
-          where() {
+  const db = {
+    async transaction<T>(callback: (tx: unknown) => Promise<T>): Promise<T> {
+      state.transactions += 1;
+      const pendingInserts: Array<Record<string, unknown>> = [];
+      const pendingUpdates: Array<{ target: UpdateTarget; values: Record<string, unknown> }> = [];
+      const transaction = {
+        select: () =>
+          awaitableQuery(state.selections.shift() ?? [], () => {
+            state.rowLocks += 1;
+          }),
+        update: (table: unknown) => ({
+          set(values: Record<string, unknown>) {
             return {
-              returning: async () => [{ jobId: JOB_ID }],
+              where() {
+                return {
+                  returning: async () => {
+                    const target: UpdateTarget =
+                      table === automationJobSteps
+                        ? 'step'
+                        : table === automationJobs
+                          ? 'job'
+                          : (() => {
+                              throw new Error('unexpected fake update target');
+                            })();
+                    const returning =
+                      options.updateReturning?.[target] ??
+                      (target === 'step' ? [{ stepId: STEP_ID }] : [{ jobId: JOB_ID }]);
+                    if (returning.length > 0) pendingUpdates.push({ target, values });
+                    return returning;
+                  },
+                };
+              },
             };
           },
-        };
-      },
-    }),
-    insert: () => ({
-      values: async (values: Record<string, unknown>) => {
-        state.inserts.push(values);
-      },
-    }),
-  };
-  const db = {
-    async transaction<T>(callback: (tx: typeof transaction) => Promise<T>): Promise<T> {
-      state.transactions += 1;
-      return callback(transaction);
+        }),
+        insert: () => ({
+          values: async (values: Record<string, unknown>) => {
+            if (options.failInsert) throw new Error('fake event insert failed');
+            pendingInserts.push(values);
+          },
+        }),
+      };
+      try {
+        const result = await callback(transaction);
+        state.inserts.push(...pendingInserts);
+        state.updates.push(...pendingUpdates.map(({ values }) => values));
+        state.updateTargets.push(...pendingUpdates.map(({ target }) => target));
+        state.commits += 1;
+        return result;
+      } catch (error) {
+        state.rollbacks += 1;
+        throw error;
+      }
     },
   } as unknown as Database;
   return { db, state };
@@ -246,18 +290,73 @@ describe('PostgreSQL heartbeat event sink', () => {
     expect(state.inserts).toHaveLength(1);
   });
 
-  test('fails closed on step events and success until durable step validation is wired', async () => {
-    const events = [
-      {
+  test('atomically starts a pending step and records the worker event', async () => {
+    const { db, state } = fakeDatabase([
+      [{ jobId: JOB_ID, status: 'running' }],
+      [{ value: 0 }],
+      [{ stepId: STEP_ID, status: 'pending' }],
+      [{ value: 4 }],
+    ]);
+    const input = {
+      ...heartbeatInput(),
+      event: {
         type: 'step_started' as const,
-        payload: { step_id: '50000000-0000-4000-a000-000000000001' },
+        payload: { step_id: STEP_ID },
         trace_id: null,
       },
+    };
+
+    const result = await createPostgresHeartbeatEventSink(db).append(input);
+
+    expect(result).toMatchObject({
+      accepted: true,
+      event: { type: 'step_started', status: 'running', sequence: 5 },
+    });
+    expect(state.updateTargets).toEqual(['step']);
+    expect(state.updates).toEqual([
+      expect.objectContaining({ status: 'running', startedAt: NOW.toISOString() }),
+    ]);
+    expect(state.inserts).toHaveLength(1);
+    expect(state.commits).toBe(1);
+  });
+
+  test('rejects an unknown or non-pending step without committing state', async () => {
+    for (const stepRows of [
+      [],
+      [{ stepId: STEP_ID, status: 'running' }],
+      [{ stepId: STEP_ID, status: 'succeeded' }],
+    ]) {
+      const { db, state } = fakeDatabase([
+        [{ jobId: JOB_ID, status: 'running' }],
+        [{ value: 0 }],
+        stepRows,
+      ]);
+      const input = {
+        ...heartbeatInput(),
+        event: {
+          type: 'step_started' as const,
+          payload: { step_id: STEP_ID },
+          trace_id: null,
+        },
+      };
+
+      await expect(createPostgresHeartbeatEventSink(db).append(input)).resolves.toEqual({
+        accepted: false,
+        reason: 'semantic_mismatch',
+      });
+      expect(state.updateTargets).toHaveLength(0);
+      expect(state.updates).toHaveLength(0);
+      expect(state.inserts).toHaveLength(0);
+    }
+  });
+
+  test('fails closed on step completion and success until durable validation is wired', async () => {
+    const events = [
       {
         type: 'step_completed' as const,
         payload: {
-          step_id: '50000000-0000-4000-a000-000000000001',
-          evidence_reference: 'evidence:60000000-0000-4000-a000-000000000001',
+          step_id: STEP_ID,
+          evidence_reference: EVIDENCE_REFERENCE,
         },
         trace_id: null,
       },

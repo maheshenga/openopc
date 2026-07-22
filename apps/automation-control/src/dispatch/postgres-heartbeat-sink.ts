@@ -1,4 +1,4 @@
-import { type Database, automationJobEvents, automationJobs } from '@kortix/db';
+import { type Database, automationJobEvents, automationJobSteps, automationJobs } from '@kortix/db';
 import type { AutomationJobStatus } from '@kortix/intelligence-contracts';
 import { and, eq, gt, max, sql } from 'drizzle-orm';
 import {
@@ -25,12 +25,22 @@ function projectWorkerEvent(
 ): Pick<AppendAutomationEventInput, 'event' | 'transition'> | null {
   switch (event.type) {
     case 'approval_required':
-    case 'step_started':
     case 'step_completed':
     case 'job_succeeded':
       // These intents require atomic automation_job_steps validation and, for approval,
       // a durable pause/resume handoff. Reject them until that runtime is composed.
       return null;
+    case 'step_started':
+      return {
+        event: {
+          protocol_version: 'automation.v1',
+          type: event.type,
+          status: 'running',
+          payload: event.payload,
+          trace_id: event.trace_id,
+        },
+        transition: null,
+      };
     case 'job_started':
       return {
         event: {
@@ -172,6 +182,37 @@ export function createPostgresHeartbeatEventSink(db: Database): HeartbeatEventSi
             return { accepted: false, reason: 'semantic_mismatch' } as const;
           }
           throw error;
+        }
+
+        if (input.event.type === 'step_started') {
+          const [step] = await tx
+            .select({ stepId: automationJobSteps.stepId, status: automationJobSteps.status })
+            .from(automationJobSteps)
+            .where(
+              and(
+                eq(automationJobSteps.jobId, input.binding.jobId),
+                eq(automationJobSteps.stepId, input.event.payload.step_id),
+              ),
+            )
+            .limit(1)
+            .for('update');
+          if (step?.status !== 'pending') {
+            return { accepted: false, reason: 'semantic_mismatch' } as const;
+          }
+          const [updatedStep] = await tx
+            .update(automationJobSteps)
+            .set({ status: 'running', startedAt: observedAt })
+            .where(
+              and(
+                eq(automationJobSteps.jobId, input.binding.jobId),
+                eq(automationJobSteps.stepId, input.event.payload.step_id),
+                eq(automationJobSteps.status, 'pending'),
+              ),
+            )
+            .returning({ stepId: automationJobSteps.stepId });
+          if (!updatedStep) {
+            return { accepted: false, reason: 'semantic_mismatch' } as const;
+          }
         }
 
         const [maximum] = await tx

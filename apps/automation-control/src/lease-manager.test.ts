@@ -3,6 +3,7 @@ import { createMemoryLeaseManager } from './lease-manager';
 
 const JOB_ID = '40000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
+const PERMISSION_ID = '80000000-0000-4000-a000-000000000001';
 const NOW = new Date('2026-07-22T00:00:00.000Z');
 
 describe('automation fencing leases', () => {
@@ -23,13 +24,15 @@ describe('automation fencing leases', () => {
 
     const lease = await manager.claim(JOB_ID, 'browser-worker-1', NOW, 30_000);
 
+    expect(lease).not.toBeNull();
+    if (lease === null) throw new Error('expected a claimed lease');
     expect(lease).toMatchObject({
       job_id: JOB_ID,
       project_id: PROJECT_ID,
-      owner: 'browser-worker-1',
       execution_domain: 'browser',
     });
-    expect(await manager.isCurrent(JOB_ID, 'browser-worker-1', NOW)).toBeTrue();
+    expect(lease.owner).toBe(`browser-worker-1:${lease.lease_id}`);
+    expect(await manager.isCurrent(JOB_ID, lease.owner, NOW)).toBeTrue();
   });
 
   test('heartbeats only the current unexpired owner and extends its lease', async () => {
@@ -46,13 +49,14 @@ describe('automation fencing leases', () => {
         },
       ],
     });
-    await manager.claim(JOB_ID, 'browser-worker-1', NOW, 30_000);
+    const lease = await manager.claim(JOB_ID, 'browser-worker-1', NOW, 30_000);
+    if (lease === null) throw new Error('expected a claimed lease');
     const heartbeatAt = new Date(NOW.getTime() + 10_000);
 
     expect(await manager.heartbeat(JOB_ID, 'stale-worker', heartbeatAt, 30_000)).toBeFalse();
-    expect(await manager.heartbeat(JOB_ID, 'browser-worker-1', heartbeatAt, 30_000)).toBeTrue();
+    expect(await manager.heartbeat(JOB_ID, lease.owner, heartbeatAt, 30_000)).toBeTrue();
     expect(
-      await manager.isCurrent(JOB_ID, 'browser-worker-1', new Date(NOW.getTime() + 35_000)),
+      await manager.isCurrent(JOB_ID, lease.owner, new Date(NOW.getTime() + 35_000)),
     ).toBeTrue();
   });
 
@@ -70,14 +74,43 @@ describe('automation fencing leases', () => {
         },
       ],
     });
-    await manager.claim(JOB_ID, 'browser-worker-1', NOW, 30_000);
+    const lease = await manager.claim(JOB_ID, 'browser-worker-1', NOW, 30_000);
+    if (lease === null) throw new Error('expected a claimed lease');
     const releaseAt = new Date(NOW.getTime() + 1_000);
 
     await manager.release(JOB_ID, 'stale-worker', releaseAt);
-    expect(await manager.isCurrent(JOB_ID, 'browser-worker-1', releaseAt)).toBeTrue();
+    expect(await manager.isCurrent(JOB_ID, lease.owner, releaseAt)).toBeTrue();
 
-    await manager.release(JOB_ID, 'browser-worker-1', releaseAt);
-    expect(await manager.isCurrent(JOB_ID, 'browser-worker-1', releaseAt)).toBeFalse();
+    await manager.release(JOB_ID, lease.owner, releaseAt);
+    expect(await manager.isCurrent(JOB_ID, lease.owner, releaseAt)).toBeFalse();
+  });
+
+  test('fences a reclaimed lease when the same worker identity is reused', async () => {
+    const manager = createMemoryLeaseManager({
+      sharedSecret: 'test-shared-secret-that-is-at-least-32-bytes',
+      jobs: [
+        {
+          jobId: JOB_ID,
+          projectId: PROJECT_ID,
+          executionDomain: 'browser',
+          requestHash: `sha256:${'a'.repeat(64)}`,
+          killSwitchGeneration: 0,
+          status: 'queued',
+        },
+      ],
+    });
+    const first = await manager.claim(JOB_ID, 'browser-worker-1', NOW, 1_000);
+    if (first === null) throw new Error('expected the first lease');
+    const reclaimAt = new Date(NOW.getTime() + 1_001);
+    const second = await manager.claim(JOB_ID, 'browser-worker-1', reclaimAt, 30_000);
+    if (second === null) throw new Error('expected the replacement lease');
+
+    expect(second.lease_id).not.toBe(first.lease_id);
+    expect(second.owner).not.toBe(first.owner);
+    expect(second.owner).toBe(`browser-worker-1:${second.lease_id}`);
+    expect(await manager.heartbeat(JOB_ID, first.owner, reclaimAt, 30_000)).toBeFalse();
+    expect(await manager.isCurrent(JOB_ID, first.owner, reclaimAt)).toBeFalse();
+    expect(await manager.heartbeat(JOB_ID, second.owner, reclaimAt, 30_000)).toBeTrue();
   });
 
   test('does not bypass explicit retry approval by claiming a retryable job', async () => {
@@ -96,5 +129,56 @@ describe('automation fencing leases', () => {
     });
 
     expect(await manager.claim(JOB_ID, 'browser-worker-1', NOW, 30_000)).toBeNull();
+  });
+
+  test('binds desktop claims to a supplied permission without mutating on invalid permission input', async () => {
+    const manager = createMemoryLeaseManager({
+      sharedSecret: 'test-shared-secret-that-is-at-least-32-bytes',
+      jobs: [
+        {
+          jobId: JOB_ID,
+          projectId: PROJECT_ID,
+          executionDomain: 'desktop',
+          requestHash: `sha256:${'a'.repeat(64)}`,
+          killSwitchGeneration: 7,
+          status: 'queued',
+        },
+      ],
+    });
+
+    await expect(manager.claim(JOB_ID, 'desktop-worker-1', NOW, 30_000)).rejects.toThrow(
+      /permission/i,
+    );
+    await expect(
+      manager.claim(JOB_ID, 'desktop-worker-1', NOW, 30_000, 'not-a-uuid'),
+    ).rejects.toThrow(/permission/i);
+
+    const lease = await manager.claim(JOB_ID, 'desktop-worker-1', NOW, 30_000, PERMISSION_ID);
+    expect(lease).toMatchObject({
+      execution_domain: 'desktop',
+      permission_id: PERMISSION_ID,
+    });
+  });
+
+  test('keeps browser claims permissionless and rejects a desktop permission before claim mutation', async () => {
+    const manager = createMemoryLeaseManager({
+      sharedSecret: 'test-shared-secret-that-is-at-least-32-bytes',
+      jobs: [
+        {
+          jobId: JOB_ID,
+          projectId: PROJECT_ID,
+          executionDomain: 'browser',
+          requestHash: `sha256:${'a'.repeat(64)}`,
+          killSwitchGeneration: 0,
+          status: 'queued',
+        },
+      ],
+    });
+
+    await expect(
+      manager.claim(JOB_ID, 'browser-worker-1', NOW, 30_000, PERMISSION_ID),
+    ).rejects.toThrow(/permission/i);
+    const lease = await manager.claim(JOB_ID, 'browser-worker-1', NOW, 30_000);
+    expect(lease?.permission_id).toBeNull();
   });
 });

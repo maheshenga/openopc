@@ -7,9 +7,16 @@ import {
   AutomationLeaseSchema,
 } from '@kortix/intelligence-contracts';
 import { and, eq, gt, inArray, isNull, lte, max, or, sql } from 'drizzle-orm';
+import { z } from 'zod';
 
 export interface LeaseManager {
-  claim(jobId: string, owner: string, now: Date, ttlMs: number): Promise<AutomationLease | null>;
+  claim(
+    jobId: string,
+    owner: string,
+    now: Date,
+    ttlMs: number,
+    permissionId?: string | null,
+  ): Promise<AutomationLease | null>;
   heartbeat(jobId: string, owner: string, now: Date, ttlMs: number): Promise<boolean>;
   release(jobId: string, owner: string, now: Date): Promise<void>;
   isCurrent(jobId: string, owner: string, now: Date): Promise<boolean>;
@@ -25,9 +32,45 @@ export type MemoryLeaseJob = Readonly<{
 }>;
 
 type MemoryLease = {
+  leaseId: string;
   owner: string;
   expiresAt: Date;
 };
+
+const PermissionIdSchema = z.string().uuid();
+const LeaseOwnerPrefixSchema = z.string().trim().min(1).max(128);
+
+export class LeasePermissionError extends Error {
+  override readonly name = 'LeasePermissionError';
+}
+
+function permissionForDomain(
+  executionDomain: AutomationExecutionDomain,
+  permissionId: string | null | undefined,
+): string | null {
+  if (executionDomain === 'browser') {
+    if (permissionId !== null && permissionId !== undefined) {
+      throw new LeasePermissionError('browser leases cannot carry a desktop permission');
+    }
+    return null;
+  }
+  const parsed = PermissionIdSchema.safeParse(permissionId);
+  if (!parsed.success) {
+    throw new LeasePermissionError('desktop leases require a valid permission UUID');
+  }
+  return parsed.data;
+}
+
+function createLeaseIdentity(ownerPrefix: string): {
+  leaseId: string;
+  owner: string;
+  workerOwner: string;
+} {
+  const workerOwner = LeaseOwnerPrefixSchema.parse(ownerPrefix);
+  const leaseId = randomUUID();
+  const owner = `${workerOwner.slice(0, 91)}:${leaseId}`;
+  return { leaseId, owner, workerOwner };
+}
 
 function signLease(lease: Omit<AutomationLease, 'signature'>, sharedSecret: string): string {
   const payload = [
@@ -55,18 +98,20 @@ type LeasableJob = Readonly<{
 
 function issueLease(
   job: LeasableJob,
+  leaseId: string,
   owner: string,
   issuedAt: Date,
   expiresAt: Date,
+  permissionId: string | null,
   sharedSecret: string,
 ): AutomationLease {
   const unsignedLease: Omit<AutomationLease, 'signature'> = {
-    lease_id: randomUUID(),
+    lease_id: leaseId,
     job_id: job.jobId,
     project_id: job.projectId,
     execution_domain: job.executionDomain,
     owner,
-    permission_id: null,
+    permission_id: permissionId,
     request_hash: job.requestHash,
     kill_switch_generation: job.killSwitchGeneration,
     issued_at: issuedAt.toISOString(),
@@ -86,21 +131,31 @@ export function createMemoryLeaseManager(input: {
   const leases = new Map<string, MemoryLease>();
 
   return {
-    async claim(jobId, owner, now, ttlMs) {
+    async claim(jobId, owner, now, ttlMs, permissionId) {
       const job = jobs.get(jobId);
+      if (!job) return null;
+      const leasePermissionId = permissionForDomain(job.executionDomain, permissionId);
       const existing = leases.get(jobId);
       if (
-        !job ||
-        job.status !== 'queued' ||
+        !['queued', 'dispatched'].includes(job.status) ||
         (existing !== undefined && existing.expiresAt.getTime() > now.getTime())
       ) {
         return null;
       }
 
       const expiresAt = new Date(now.getTime() + ttlMs);
-      leases.set(jobId, { owner, expiresAt });
+      const identity = createLeaseIdentity(owner);
+      leases.set(jobId, { leaseId: identity.leaseId, owner: identity.owner, expiresAt });
       job.status = 'dispatched';
-      return issueLease(job, owner, now, expiresAt, input.sharedSecret);
+      return issueLease(
+        job,
+        identity.leaseId,
+        identity.owner,
+        now,
+        expiresAt,
+        leasePermissionId,
+        input.sharedSecret,
+      );
     },
     async heartbeat(jobId, owner, now, ttlMs) {
       const job = jobs.get(jobId);
@@ -138,7 +193,7 @@ export function createMemoryLeaseManager(input: {
 
 export function createPostgresLeaseManager(db: Database, sharedSecret: string): LeaseManager {
   return {
-    async claim(jobId, owner, now, ttlMs) {
+    async claim(jobId, owner, now, ttlMs, permissionId) {
       const nowIso = now.toISOString();
       const expiresAt = new Date(now.getTime() + ttlMs);
       const expiresAtIso = expiresAt.toISOString();
@@ -164,12 +219,16 @@ export function createPostgresLeaseManager(db: Database, sharedSecret: string): 
           .limit(1)
           .for('update');
         if (!job) return null;
+        const leasePermissionId = permissionForDomain(job.executionDomain, permissionId);
+        // lease_owner is a per-claim fencing token. Its UUID suffix is also the signed lease_id,
+        // so the existing nullable column safely identifies one lease instance without a schema fork.
+        const identity = createLeaseIdentity(owner);
 
         const [updated] = await tx
           .update(automationJobs)
           .set({
             status: 'dispatched',
-            leaseOwner: owner,
+            leaseOwner: identity.owner,
             leaseExpiresAt: expiresAtIso,
             updatedAt: nowIso,
           })
@@ -186,12 +245,24 @@ export function createPostgresLeaseManager(db: Database, sharedSecret: string): 
           sequence: Number(maximum?.value ?? 0) + 1,
           type: 'job_dispatched',
           status: 'dispatched',
-          payload: { lease_owner: owner },
+          payload: {
+            lease_id: identity.leaseId,
+            lease_owner: identity.owner,
+            worker_owner: identity.workerOwner,
+          },
           traceId: null,
           createdAt: nowIso,
         });
 
-        return issueLease(updated, owner, now, expiresAt, sharedSecret);
+        return issueLease(
+          updated,
+          identity.leaseId,
+          identity.owner,
+          now,
+          expiresAt,
+          leasePermissionId,
+          sharedSecret,
+        );
       });
     },
 

@@ -16,7 +16,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence protocol     | implemented                                             | REST, SDK, MCP, A2A, task/event commits                                                                                                     | retained regression gates                                         |
 | Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
 | OpenOPC Milestone A       | implemented, disabled by default                        | catalog, project SSE projection, SDK subscription, and focused contract/API/SDK/CLI gates verified locally                                  | production rollout and later milestones                           |
-| Automation Task 8A        | secure dispatch contracts implemented; runtime open     | commit `920375679`; focused Automation Control tests, typecheck, Biome, and diff gates green                                                  | coordinator and production execution-domain adapters              |
+| Automation Task 8A-8B     | desktop observe coordinator implemented; default-off    | commits `920375679`, `c6fda9161`, `497a46d35`, and `e07ffd813`; focused Control/API gates green                                                | remaining production hardening and Browser Worker runtime          |
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                                            | focused Web hardening without full-suite reruns                   |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
@@ -215,7 +215,7 @@ implementation remains in the branch, but no additional native development or
 acceptance is scheduled. Current execution priority is Web first and
 Desktop/Electron second.
 
-## Automation Task 8A Dispatch Contract Slice
+## Automation Task 8A-8B Desktop Observe Coordinator Slice
 
 Commit `920375679` adds the secure Automation Control dispatch boundary without
 creating a second desktop RPC channel. Browser dispatch binds the signed job
@@ -232,9 +232,27 @@ before allocating sequence and inserting the event. Reclaimed leases receive a
 new per-claim fencing token, and unknown or external-effect outcomes do not
 automatically retry.
 
-The focused gate passed `34/34` tests with `143` assertions, Automation Control
-typecheck, scoped Biome over nine files, and working/staged diff checks. No full
-suite was run. This records Task 8A only: the production coordinator, durable
-shared nonce and heartbeat implementations, authenticated Browser Worker
-transport, Control-to-API Tunnel adapter, restart recovery, and readiness
-wiring remain open, so complete Task 8 and production readiness are not claimed.
+Commits `c6fda9161` and `497a46d35` bind the desktop permission fence to the
+existing API-to-Tunnel route. Commit `e07ffd813` adds the default-off production
+composition for exactly one `desktop.read_screen` /
+`desktop.cua.get_screen_size` step. Candidate polling requires the declared
+device and permission, claims a signed permission-bound lease, rechecks the
+lease before and after dispatch, persists bounded lifecycle events, and never
+stores raw provider results or errors. Once execution crosses the dispatcher
+boundary, a failure is conservatively recorded as an unknown result.
+
+The process loop is serialized and batch-bounded. Shutdown cancels the active
+API request, drains it for at most five seconds, clears the next timer, and then
+closes the service. Poll failures expose only a stable event name and service
+identifier. The independent `AUTOMATION_DESKTOP_COORDINATOR_ENABLED` flag stays
+false by default and cannot be enabled while Automation Control is disabled.
+
+The final focused gate passed `60/60` Automation Control tests with `220`
+assertions and `9/9` API desktop-executor bridge tests with `23` assertions.
+Automation Control typecheck, scoped Biome over 17 files, and diff checks also
+passed. No full suite was run. Durable shared API nonce storage, the durable
+heartbeat/ordinal sink, authenticated Browser Worker transport,
+dispatch-attempt idempotency and unknown-result recovery, response
+authentication/mTLS enforcement, internal endpoint body-size/deadline
+hardening, and complete readiness/deployment wiring remain open. Complete Task
+8 and production readiness are therefore not claimed.

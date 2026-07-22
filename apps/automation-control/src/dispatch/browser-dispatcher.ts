@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  AutomationBrowserApprovalResumeDispatchEnvelopeSchema,
   type AutomationJob,
   AutomationJobSchema,
   type AutomationLease,
@@ -9,6 +10,7 @@ import {
   AutomationBrowserDispatchReceiptSchema as BrowserDispatchReceiptSchema,
   canonicalAutomationRequestJson,
 } from '@kortix/intelligence-contracts';
+import type { IssuedBrowserApprovalResume } from './browser-approval-resume-store';
 import type {
   VerifiedWorkerPeer,
   WorkerServiceAuthenticator,
@@ -84,6 +86,67 @@ export function createBrowserDispatcher(input: {
   isLeaseCurrent: (binding: DispatchLeaseBinding) => Promise<boolean>;
 }) {
   const now = input.now ?? (() => new Date());
+  const dispatchEnvelope = async (raw: {
+    job: AutomationJob;
+    lease: AutomationLease;
+    connection: BrowserWorkerConnection;
+    envelope: BrowserDispatchEnvelope;
+    dispatchedAt: Date;
+    requireApprovalResumeCapability: boolean;
+  }): Promise<BrowserDispatchReceipt> => {
+    input.authenticator.assertPeer(raw.connection.peer, 'browser-worker');
+    if (!(await input.isLeaseSignatureValid(raw.lease))) {
+      throw new BrowserDispatchError('browser lease signature is invalid');
+    }
+    const binding: DispatchLeaseBinding = {
+      accountId: raw.job.account_id,
+      projectId: raw.job.request.project_id,
+      jobId: raw.job.job_id,
+      leaseId: raw.lease.lease_id,
+      owner: raw.lease.owner,
+      killSwitchGeneration: raw.lease.kill_switch_generation,
+    };
+    if (!(await input.isLeaseCurrent(binding))) {
+      throw new BrowserDispatchError('browser lease is not current');
+    }
+    const proof = input.authenticator.sign({
+      serviceId: input.localServiceId,
+      certificateFingerprint256: input.localCertificateFingerprint256,
+      timestamp: raw.dispatchedAt,
+      nonce: input.nextNonce(),
+      body: raw.envelope,
+    });
+    assertDispatchBinding(raw.job, raw.lease, now());
+    const response = await raw.connection.send({ envelope: raw.envelope, proof });
+    const receipt = BrowserDispatchReceiptSchema.parse(response.receipt);
+    await input.authenticator.verify({
+      peer: raw.connection.peer,
+      expectedRole: 'browser-worker',
+      proof: response.proof,
+      body: receipt,
+    });
+    if (
+      !receipt.accepted ||
+      receipt.job_id !== raw.job.job_id ||
+      receipt.lease_id !== raw.lease.lease_id ||
+      receipt.worker_id !== raw.connection.peer.serviceId ||
+      receipt.dispatch_envelope_hash !== canonicalEnvelopeHash(raw.envelope) ||
+      receipt.dispatch_proof_nonce !== proof.nonce
+    ) {
+      throw new BrowserDispatchError('browser worker receipt does not match the dispatch');
+    }
+    if (
+      raw.requireApprovalResumeCapability &&
+      receipt.capabilities?.includes('browser.approval-resume.v1') !== true
+    ) {
+      throw new BrowserDispatchError('browser worker approval resume capability is missing');
+    }
+    if (!(await input.isLeaseCurrent(binding))) {
+      throw new BrowserDispatchError('browser lease is not current after dispatch');
+    }
+    return receipt;
+  };
+
   return {
     async dispatch(raw: {
       job: AutomationJob;
@@ -95,21 +158,6 @@ export function createBrowserDispatcher(input: {
       const lease = AutomationLeaseSchema.parse(raw.lease);
       const dispatchedAt = now();
       assertDispatchBinding(job, lease, dispatchedAt);
-      input.authenticator.assertPeer(raw.connection.peer, 'browser-worker');
-      if (!(await input.isLeaseSignatureValid(lease))) {
-        throw new BrowserDispatchError('browser lease signature is invalid');
-      }
-      const binding: DispatchLeaseBinding = {
-        accountId: job.account_id,
-        projectId: job.request.project_id,
-        jobId: job.job_id,
-        leaseId: lease.lease_id,
-        owner: lease.owner,
-        killSwitchGeneration: lease.kill_switch_generation,
-      };
-      if (!(await input.isLeaseCurrent(binding))) {
-        throw new BrowserDispatchError('browser lease is not current');
-      }
       const resumeAfterSequence = raw.resumeAfterSequence ?? 0;
       if (!Number.isSafeInteger(resumeAfterSequence) || resumeAfterSequence < 0) {
         throw new BrowserDispatchError('browser resume cursor is invalid');
@@ -122,36 +170,70 @@ export function createBrowserDispatcher(input: {
         resume_after_sequence: resumeAfterSequence,
         dispatched_at: dispatchedAt.toISOString(),
       });
-      const proof = input.authenticator.sign({
-        serviceId: input.localServiceId,
-        certificateFingerprint256: input.localCertificateFingerprint256,
-        timestamp: dispatchedAt,
-        nonce: input.nextNonce(),
-        body: envelope,
+      return dispatchEnvelope({
+        job,
+        lease,
+        connection: raw.connection,
+        envelope,
+        dispatchedAt,
+        requireApprovalResumeCapability: false,
       });
-      assertDispatchBinding(job, lease, now());
-      const response = await raw.connection.send({ envelope, proof });
-      const receipt = BrowserDispatchReceiptSchema.parse(response.receipt);
-      await input.authenticator.verify({
-        peer: raw.connection.peer,
-        expectedRole: 'browser-worker',
-        proof: response.proof,
-        body: receipt,
-      });
+    },
+    async dispatchResume(raw: {
+      job: AutomationJob;
+      lease: AutomationLease;
+      connection: BrowserWorkerConnection;
+      resumeAfterSequence: number;
+      approval: IssuedBrowserApprovalResume;
+    }): Promise<BrowserDispatchReceipt> {
+      const job = AutomationJobSchema.parse(raw.job);
+      const lease = AutomationLeaseSchema.parse(raw.lease);
+      const dispatchedAt = now();
+      assertDispatchBinding(job, lease, dispatchedAt);
+      if (!Number.isSafeInteger(raw.resumeAfterSequence) || raw.resumeAfterSequence < 0) {
+        throw new BrowserDispatchError('browser approval resume cursor is invalid');
+      }
+      const targetStep = [...job.request.steps]
+        .sort((left, right) => left.sequence - right.sequence)
+        .find((step) => step.sequence > raw.resumeAfterSequence);
+      const expiresAt = Date.parse(raw.approval.expiresAt);
       if (
-        !receipt.accepted ||
-        receipt.job_id !== job.job_id ||
-        receipt.lease_id !== lease.lease_id ||
-        receipt.worker_id !== raw.connection.peer.serviceId ||
-        receipt.dispatch_envelope_hash !== canonicalEnvelopeHash(envelope) ||
-        receipt.dispatch_proof_nonce !== proof.nonce
+        raw.approval.jobId !== job.job_id ||
+        raw.approval.approvalId.length === 0 ||
+        targetStep === undefined ||
+        raw.approval.stepId !== targetStep.step_id ||
+        raw.approval.actionHash !== targetStep.action_hash ||
+        raw.approval.resumeAfterSequence !== raw.resumeAfterSequence ||
+        !Number.isFinite(expiresAt) ||
+        expiresAt > Date.parse(lease.expires_at)
       ) {
-        throw new BrowserDispatchError('browser worker receipt does not match the dispatch');
+        throw new BrowserDispatchError('browser approval resume binding is invalid');
       }
-      if (!(await input.isLeaseCurrent(binding))) {
-        throw new BrowserDispatchError('browser lease is not current after dispatch');
-      }
-      return receipt;
+      const envelope = AutomationBrowserApprovalResumeDispatchEnvelopeSchema.parse({
+        protocol_version: 'automation.v1',
+        dispatch_kind: 'browser.approval-resume.v1',
+        request: job.request,
+        lease,
+        policy_version: job.policy_version,
+        resume_after_sequence: raw.resumeAfterSequence,
+        dispatched_at: dispatchedAt.toISOString(),
+        approval_resume: {
+          approval_id: raw.approval.approvalId,
+          attempt_id: raw.approval.attemptId,
+          step_id: raw.approval.stepId,
+          action_hash: raw.approval.actionHash,
+          token: raw.approval.token,
+          expires_at: raw.approval.expiresAt,
+        },
+      });
+      return dispatchEnvelope({
+        job,
+        lease,
+        connection: raw.connection,
+        envelope,
+        dispatchedAt,
+        requireApprovalResumeCapability: true,
+      });
     },
   };
 }

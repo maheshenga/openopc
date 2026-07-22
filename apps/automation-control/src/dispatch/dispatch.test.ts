@@ -21,12 +21,17 @@ const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
 const USER_ID = '30000000-0000-4000-a000-000000000001';
 const JOB_ID = '40000000-0000-4000-a000-000000000001';
 const STEP_ID = '50000000-0000-4000-a000-000000000001';
+const RESUME_CURSOR_STEP_ID = '50000000-0000-4000-a000-000000000002';
+const RESUME_STEP_ID = '50000000-0000-4000-a000-000000000003';
 const LEASE_ID = '60000000-0000-4000-a000-000000000001';
 const DEVICE_ID = '70000000-0000-4000-a000-000000000001';
 const PERMISSION_ID = '80000000-0000-4000-a000-000000000001';
 const APPROVAL_ID = '81000000-0000-4000-a000-000000000001';
+const ATTEMPT_ID = '82000000-0000-4000-a000-000000000001';
 const APPROVAL_TOKEN = `approval.v1.${'A'.repeat(43)}`;
+const APPROVAL_RESUME_TOKEN = `approval-resume.v1.${'B'.repeat(43)}`;
 const ACTION_HASH = `sha256:${'a'.repeat(64)}` as const;
+const RESUME_ACTION_HASH = `sha256:${'d'.repeat(64)}` as const;
 const POLICY_HASH = `sha256:${'b'.repeat(64)}`;
 const TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
 // Keep schema-level "future" checks deterministic without letting this fixture expire.
@@ -75,6 +80,32 @@ function browserRequest(): AutomationJobRequest {
     idempotency_key: 'dispatch-browser-0001',
     deadline_at: '2099-07-22T08:05:00.000Z',
     traceparent: TRACEPARENT,
+  });
+}
+
+function resumeBrowserRequest(): AutomationJobRequest {
+  return AutomationJobRequestSchema.parse({
+    ...browserRequest(),
+    steps: [
+      ...browserRequest().steps,
+      {
+        step_id: RESUME_CURSOR_STEP_ID,
+        sequence: 2,
+        action: 'browser.wait',
+        args: { milliseconds: 1 },
+        risk: 'observe',
+        action_hash: `sha256:${'c'.repeat(64)}`,
+      },
+      {
+        step_id: RESUME_STEP_ID,
+        sequence: 3,
+        action: 'browser.click',
+        args: { selector: '#approve' },
+        risk: 'external_effect',
+        action_hash: RESUME_ACTION_HASH,
+      },
+    ],
+    idempotency_key: 'dispatch-browser-resume-0001',
   });
 }
 
@@ -251,6 +282,211 @@ describe('automation dispatch boundary', () => {
     expect(leaseChecks).toBe(2);
     expect(result.worker_id).toBe('browser-worker-1');
     expect(result.lease_id).toBe(LEASE_ID);
+  });
+
+  test('dispatches a bound approval Resume only with the signed Worker capability', async () => {
+    const request = resumeBrowserRequest();
+    const currentJob = job(request);
+    const currentLease = lease(request);
+    const approval = {
+      attemptId: ATTEMPT_ID,
+      approvalId: APPROVAL_ID,
+      jobId: JOB_ID,
+      stepId: RESUME_STEP_ID,
+      actionHash: RESUME_ACTION_HASH,
+      token: APPROVAL_RESUME_TOKEN,
+      expiresAt: '2099-07-22T08:00:45.000Z',
+      resumeAfterSequence: 2,
+    } as const;
+    const { authenticator, controlPeer, workerPeer } = authentication();
+    let sentEnvelope: unknown;
+    let leaseChecks = 0;
+    const dispatcher = createBrowserDispatcher({
+      authenticator,
+      localCertificateFingerprint256: 'AA:CONTROL',
+      localServiceId: 'automation-control',
+      nextNonce: () => 31,
+      now: () => NOW,
+      isLeaseCurrent: async () => {
+        leaseChecks += 1;
+        return true;
+      },
+      isLeaseSignatureValid: async () => true,
+    });
+
+    const receipt = await dispatcher.dispatchResume({
+      job: currentJob,
+      lease: currentLease,
+      connection: {
+        peer: workerPeer,
+        async send(message) {
+          sentEnvelope = message.envelope;
+          await authenticator.verify({
+            peer: controlPeer,
+            expectedRole: 'automation-control',
+            body: message.envelope,
+            proof: message.proof,
+          });
+          const workerReceipt = {
+            protocol_version: 'automation.v1' as const,
+            accepted: true,
+            job_id: JOB_ID,
+            lease_id: LEASE_ID,
+            worker_id: 'browser-worker-1',
+            dispatch_envelope_hash: canonicalHash(message.envelope),
+            dispatch_proof_nonce: message.proof.nonce,
+            received_at: NOW.toISOString(),
+            capabilities: ['browser.approval-resume.v1' as const],
+          };
+          return {
+            receipt: workerReceipt,
+            proof: authenticator.sign({
+              serviceId: 'browser-worker-1',
+              certificateFingerprint256: 'BB:WORKER',
+              timestamp: NOW,
+              nonce: 32,
+              body: workerReceipt,
+            }),
+          };
+        },
+      },
+      resumeAfterSequence: 2,
+      approval,
+    });
+
+    expect(receipt.capabilities).toContain('browser.approval-resume.v1');
+    expect(sentEnvelope).toEqual(
+      expect.objectContaining({
+        dispatch_kind: 'browser.approval-resume.v1',
+        resume_after_sequence: 2,
+        approval_resume: expect.objectContaining({
+          approval_id: APPROVAL_ID,
+          attempt_id: ATTEMPT_ID,
+          token: APPROVAL_RESUME_TOKEN,
+        }),
+      }),
+    );
+    expect(leaseChecks).toBe(2);
+  });
+
+  test('rejects inconsistent Resume credentials before contacting the Worker', async () => {
+    const request = resumeBrowserRequest();
+    const currentJob = job(request);
+    const currentLease = lease(request);
+    const validApproval = {
+      attemptId: ATTEMPT_ID,
+      approvalId: APPROVAL_ID,
+      jobId: JOB_ID,
+      stepId: RESUME_STEP_ID,
+      actionHash: RESUME_ACTION_HASH,
+      token: APPROVAL_RESUME_TOKEN,
+      expiresAt: '2099-07-22T08:00:45.000Z',
+      resumeAfterSequence: 2,
+    } as const;
+    const cases = [
+      { ...validApproval, approvalId: '' },
+      { ...validApproval, jobId: '40000000-0000-4000-a000-000000000099' },
+      { ...validApproval, stepId: '50000000-0000-4000-a000-000000000099' },
+      { ...validApproval, actionHash: `sha256:${'f'.repeat(64)}` as const },
+      { ...validApproval, resumeAfterSequence: 1 },
+      { ...validApproval, expiresAt: '2099-07-22T08:01:01.000Z' },
+    ];
+
+    for (const approval of cases) {
+      const { authenticator, workerPeer } = authentication();
+      let sends = 0;
+      const dispatcher = createBrowserDispatcher({
+        authenticator,
+        localCertificateFingerprint256: 'AA:CONTROL',
+        localServiceId: 'automation-control',
+        nextNonce: () => 41,
+        now: () => NOW,
+        isLeaseCurrent: async () => true,
+        isLeaseSignatureValid: async () => true,
+      });
+      await expect(
+        dispatcher.dispatchResume({
+          job: currentJob,
+          lease: currentLease,
+          connection: {
+            peer: workerPeer,
+            async send() {
+              sends += 1;
+              throw new Error('unexpected Resume transport');
+            },
+          },
+          resumeAfterSequence: 2,
+          approval,
+        }),
+      ).rejects.toThrow(/approval resume/i);
+      expect(sends).toBe(0);
+    }
+  });
+
+  test('rejects Resume receipts without capability and leases revoked during transport', async () => {
+    for (const scenario of ['missing_capability', 'stale_lease'] as const) {
+      const request = resumeBrowserRequest();
+      const currentLease = lease(request);
+      const { authenticator, workerPeer } = authentication();
+      let leaseChecks = 0;
+      const dispatcher = createBrowserDispatcher({
+        authenticator,
+        localCertificateFingerprint256: 'AA:CONTROL',
+        localServiceId: 'automation-control',
+        nextNonce: () => 51,
+        now: () => NOW,
+        isLeaseCurrent: async () => {
+          leaseChecks += 1;
+          return scenario !== 'stale_lease' || leaseChecks === 1;
+        },
+        isLeaseSignatureValid: async () => true,
+      });
+      await expect(
+        dispatcher.dispatchResume({
+          job: job(request),
+          lease: currentLease,
+          connection: {
+            peer: workerPeer,
+            async send(message) {
+              const workerReceipt = {
+                protocol_version: 'automation.v1' as const,
+                accepted: true,
+                job_id: JOB_ID,
+                lease_id: LEASE_ID,
+                worker_id: 'browser-worker-1',
+                dispatch_envelope_hash: canonicalHash(message.envelope),
+                dispatch_proof_nonce: message.proof.nonce,
+                received_at: NOW.toISOString(),
+                ...(scenario === 'stale_lease'
+                  ? { capabilities: ['browser.approval-resume.v1' as const] }
+                  : {}),
+              };
+              return {
+                receipt: workerReceipt,
+                proof: authenticator.sign({
+                  serviceId: 'browser-worker-1',
+                  certificateFingerprint256: 'BB:WORKER',
+                  timestamp: NOW,
+                  nonce: 52,
+                  body: workerReceipt,
+                }),
+              };
+            },
+          },
+          resumeAfterSequence: 2,
+          approval: {
+            attemptId: ATTEMPT_ID,
+            approvalId: APPROVAL_ID,
+            jobId: JOB_ID,
+            stepId: RESUME_STEP_ID,
+            actionHash: RESUME_ACTION_HASH,
+            token: APPROVAL_RESUME_TOKEN,
+            expiresAt: '2099-07-22T08:00:45.000Z',
+            resumeAfterSequence: 2,
+          },
+        }),
+      ).rejects.toThrow(scenario === 'missing_capability' ? /capability/i : /lease.*current/i);
+    }
   });
 
   test('does not contact the browser worker when async checks cross the job deadline', async () => {

@@ -38,6 +38,7 @@ export type BrowserWorkerDispatchConfig =
   | Readonly<{ enabled: false }>
   | Readonly<{
       enabled: true;
+      approvalResumeEnabled: boolean;
       controlServiceId: string;
       controlCertificateFingerprint256: string;
       controlSharedSecret: string;
@@ -184,8 +185,16 @@ export function loadBrowserWorkerDispatchConfig(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): BrowserWorkerDispatchConfig {
   const enabledText = environment.AUTOMATION_BROWSER_DISPATCH_ENABLED ?? 'false';
+  const approvalResumeEnabledText =
+    environment.AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED ?? 'false';
   if (enabledText !== 'true' && enabledText !== 'false') {
     throw new Error('AUTOMATION_BROWSER_DISPATCH_ENABLED must be true or false');
+  }
+  if (approvalResumeEnabledText !== 'true' && approvalResumeEnabledText !== 'false') {
+    throw new Error('AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED must be true or false');
+  }
+  if (approvalResumeEnabledText === 'true' && enabledText !== 'true') {
+    throw new Error('Browser approval resume requires dispatch to be enabled');
   }
   if (enabledText === 'false') return Object.freeze({ enabled: false });
   if (environment.AUTOMATION_BROWSER_HEARTBEAT_ENABLED !== 'true') {
@@ -194,6 +203,7 @@ export function loadBrowserWorkerDispatchConfig(
 
   return Object.freeze({
     enabled: true,
+    approvalResumeEnabled: approvalResumeEnabledText === 'true',
     controlServiceId: serviceIdentity(environment, 'AUTOMATION_CONTROL_SERVICE_ID'),
     controlCertificateFingerprint256: certificateFingerprint(
       environment,

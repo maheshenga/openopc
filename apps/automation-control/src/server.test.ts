@@ -8,6 +8,7 @@ const ENABLED_CONFIG: AutomationControlConfig = {
   enabled: true,
   desktopCoordinatorEnabled: false,
   browserHeartbeatEnabled: false,
+  browserApprovalResumeEnabled: false,
   browserDispatch: { enabled: false },
   port: 4011,
   automationApiUrl: 'https://api.example.test',
@@ -39,6 +40,7 @@ describe('automation control configuration', () => {
 
     expect(config.enabled).toBeFalse();
     expect(config.desktopCoordinatorEnabled).toBeFalse();
+    expect(config.browserApprovalResumeEnabled).toBeFalse();
     expect(config.automationApiUrl).toBe('http://localhost:8008');
     expect(config.port).toBeGreaterThan(0);
     expect(config.databaseUrl).toBe('');

@@ -356,6 +356,12 @@ export function createBrowserWorkerDispatchSource(input: {
             previousNonce: lastControlNonce,
           });
           const { envelope, proof } = parsed.data;
+          const isResume = 'dispatch_kind' in envelope;
+          if (isResume && !config.approvalResumeEnabled) {
+            throw new BrowserWorkerDispatchSourceError(
+              'Browser approval resume capability is disabled',
+            );
+          }
           const requestHash = `sha256:${createHash('sha256')
             .update(canonicalAutomationRequestJson(envelope.request))
             .digest('hex')}`;
@@ -383,6 +389,9 @@ export function createBrowserWorkerDispatchSource(input: {
               .digest('hex')}`,
             dispatch_proof_nonce: proof.nonce,
             received_at: checkedAt.toISOString(),
+            capabilities: config.approvalResumeEnabled
+              ? (['browser.approval-resume.v1'] as const)
+              : undefined,
           };
           const nonce = input.nextNonce();
           if (nonce <= lastWorkerNonce) {

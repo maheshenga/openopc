@@ -217,9 +217,17 @@ function config(
 }
 
 test('keeps dispatch disabled by default and requires heartbeat, WSS, and absolute mTLS files', () => {
+  expect(loadAutomationControlConfig({}).browserApprovalResumeEnabled).toBeFalse();
   expect(
     (loadAutomationControlConfig({}) as { browserDispatch?: unknown }).browserDispatch,
   ).toEqual({ enabled: false });
+  expect(() =>
+    loadAutomationControlConfig({
+      ...enabledEnvironment,
+      AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED: 'true',
+      AUTOMATION_BROWSER_DISPATCH_ENABLED: 'false',
+    }),
+  ).toThrow(/approval resume requires Browser Worker dispatch/i);
   expect(() =>
     loadAutomationControlConfig({
       ...enabledEnvironment,
@@ -298,6 +306,29 @@ test('sends one strict dispatch and returns the exact accepted receipt for Dispa
   socket.message(canonicalAutomationRequestJson(accepted));
 
   await expect(pending).resolves.toEqual({ receipt, proof: workerProof });
+});
+
+test('rejects unrelated fields in either dispatch envelope variant before transport', async () => {
+  const module = await connectionModule();
+  expect(module).not.toBeNull();
+  if (module === null) return;
+  const socket = new FakeWebSocket();
+  const connection = module.createBrowserWorkerConnection({
+    config: config(),
+    peer: workerPeer,
+    webSocketFactory: () => socket,
+  });
+
+  await expect(
+    connection.send({
+      envelope: {
+        ...envelope,
+        unrelated: true,
+      } as unknown as AutomationBrowserDispatchEnvelope,
+      proof: controlProof,
+    }),
+  ).rejects.toMatchObject({ reason: 'configuration' });
+  expect(socket.sent).toHaveLength(0);
 });
 
 test('allows exactly one in-flight dispatch', async () => {

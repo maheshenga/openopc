@@ -27,6 +27,7 @@ const CONFIG: AutomationControlConfig = {
   enabled: true,
   desktopCoordinatorEnabled: true,
   browserHeartbeatEnabled: false,
+  browserApprovalResumeEnabled: false,
   browserDispatch: { enabled: false },
   port: 4011,
   automationApiUrl: 'https://api.example.test',

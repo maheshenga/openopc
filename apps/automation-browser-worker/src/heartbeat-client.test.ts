@@ -133,6 +133,7 @@ describe('Browser Worker heartbeat client', () => {
       }),
     ).toEqual({
       enabled: true,
+      approvalResumeEnabled: false,
       controlServiceId: 'automation-control',
       controlCertificateFingerprint256: '11:22:33:44',
       controlSharedSecret: 'control-proof-secret-at-least-thirty-two-bytes',

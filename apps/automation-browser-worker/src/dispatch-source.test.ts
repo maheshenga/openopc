@@ -6,6 +6,7 @@ import {
   canonicalAutomationRequestJson,
   canonicalAutomationWorkerProof,
 } from '@kortix/intelligence-contracts';
+import { loadBrowserWorkerDispatchConfig } from './config';
 
 const NOW = new Date('2026-07-23T06:00:00.000Z');
 const CONTROL_ID = 'automation-control';
@@ -20,9 +21,12 @@ const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
 const JOB_ID = '30000000-0000-4000-a000-000000000001';
 const LEASE_ID = '40000000-0000-4000-a000-000000000001';
 const STEP_ID = '50000000-0000-4000-a000-000000000001';
+const APPROVAL_ID = '60000000-0000-4000-a000-000000000001';
+const ATTEMPT_ID = '70000000-0000-4000-a000-000000000001';
 
 const config = {
   enabled: true as const,
+  approvalResumeEnabled: false,
   controlServiceId: CONTROL_ID,
   controlCertificateFingerprint256: CONTROL_FINGERPRINT,
   controlSharedSecret: CONTROL_SECRET,
@@ -33,6 +37,19 @@ const config = {
   maxMessageBytes: 64 * 1024,
   proofSkewMs: 60_000,
 };
+
+const enabledEnvironment = {
+  AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'true',
+  AUTOMATION_BROWSER_DISPATCH_ENABLED: 'true',
+  AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED: 'true',
+  AUTOMATION_CONTROL_SERVICE_ID: CONTROL_ID,
+  AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256: CONTROL_FINGERPRINT,
+  AUTOMATION_CONTROL_WORKER_SHARED_SECRET: CONTROL_SECRET,
+  AUTOMATION_BROWSER_SERVICE_ID: WORKER_ID,
+  AUTOMATION_BROWSER_CERTIFICATE_FINGERPRINT256: WORKER_FINGERPRINT,
+  AUTOMATION_BROWSER_WORKER_SHARED_SECRET: WORKER_SECRET,
+  AUTOMATION_BROWSER_TLS_ATTESTATION_SECRET: PROXY_SECRET,
+} as const;
 
 const request = AutomationJobRequestSchema.parse({
   protocol_version: 'automation.v1',
@@ -87,6 +104,19 @@ const envelope = {
   dispatched_at: NOW.toISOString(),
 };
 
+const resumeEnvelope = {
+  ...envelope,
+  dispatch_kind: 'browser.approval-resume.v1' as const,
+  approval_resume: {
+    approval_id: APPROVAL_ID,
+    attempt_id: ATTEMPT_ID,
+    step_id: STEP_ID,
+    action_hash: request.steps[0]?.action_hash,
+    token: `approval-resume.v1.${'A'.repeat(43)}`,
+    expires_at: '2026-07-24T05:00:00.000Z',
+  },
+};
+
 function proofFor(
   body: unknown,
   input: { serviceId: string; fingerprint: string; secret: string; nonce: number },
@@ -113,7 +143,7 @@ function proofFor(
   };
 }
 
-async function openRuntime(nextNonce = () => 11) {
+async function openRuntime(nextNonce = () => 11, runtimeConfig: typeof config = config) {
   const dispatchSource = await import('./dispatch-source');
   const certificate = {
     authorized: true,
@@ -130,7 +160,7 @@ async function openRuntime(nextNonce = () => 11) {
   });
   headers.upgrade = 'websocket';
   const runtime = dispatchSource.createBrowserWorkerDispatchSource({
-    config,
+    config: runtimeConfig,
     now: () => NOW,
     nextNonce,
   });
@@ -142,6 +172,37 @@ async function openRuntime(nextNonce = () => 11) {
   );
   return { dispatchSource, runtime, session };
 }
+
+test('keeps approval resume disabled by default and requires dispatch when enabled', () => {
+  expect(loadBrowserWorkerDispatchConfig({})).toEqual({ enabled: false });
+  expect(() =>
+    loadBrowserWorkerDispatchConfig({
+      AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED: 'true',
+      AUTOMATION_BROWSER_DISPATCH_ENABLED: 'false',
+    }),
+  ).toThrow(/approval resume requires dispatch/i);
+  expect(loadBrowserWorkerDispatchConfig(enabledEnvironment)).toMatchObject({
+    enabled: true,
+    approvalResumeEnabled: true,
+  });
+});
+
+test('rejects disabled Resume work before queueing and advertises enabled capability', async () => {
+  const disabled = await openRuntime(() => 11, { ...config, approvalResumeEnabled: false });
+  const disabledMessage = dispatchMessage(7, resumeEnvelope);
+  await expect(disabled.session.receive(disabledMessage)).rejects.toThrow(
+    'Browser approval resume capability is disabled',
+  );
+  const disabledSignal = new AbortController();
+  disabledSignal.abort('no work expected');
+  await expect(disabled.runtime.source.next(disabledSignal.signal)).resolves.toBeNull();
+
+  const enabled = await openRuntime(() => 11, { ...config, approvalResumeEnabled: true });
+  const accepted = await enabled.session.receive(dispatchMessage(7, resumeEnvelope));
+  expect(accepted.receipt.capabilities).toContain('browser.approval-resume.v1');
+  const item = await enabled.runtime.source.next(new AbortController().signal);
+  expect(item?.request.envelope).toEqual(resumeEnvelope);
+});
 
 function dispatchMessage(nonce: number, body = envelope): string {
   return JSON.stringify({

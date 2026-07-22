@@ -64,6 +64,7 @@ const AutomationControlEnvironmentSchema = z
     AUTOMATION_DESKTOP_COORDINATOR_ENABLED: z.enum(['true', 'false']).default('false'),
     AUTOMATION_BROWSER_HEARTBEAT_ENABLED: z.enum(['true', 'false']).default('false'),
     AUTOMATION_BROWSER_DISPATCH_ENABLED: z.enum(['true', 'false']).default('false'),
+    AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED: z.enum(['true', 'false']).default('false'),
     AUTOMATION_CONTROL_PORT: z.coerce.number().int().min(1).max(65_535).default(4011),
     AUTOMATION_API_URL: z.string().url().default('http://localhost:8008'),
     DATABASE_URL: z.string().trim().default(''),
@@ -152,6 +153,26 @@ const AutomationControlEnvironmentSchema = z
         message: 'Browser Worker dispatch requires heartbeat to be enabled',
       });
     }
+    if (
+      environment.AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED === 'true' &&
+      environment.AUTOMATION_CONTROL_ENABLED !== 'true'
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED'],
+        message: 'Browser approval resume requires automation control to be enabled',
+      });
+    }
+    if (
+      environment.AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED === 'true' &&
+      environment.AUTOMATION_BROWSER_DISPATCH_ENABLED !== 'true'
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED'],
+        message: 'Browser approval resume requires Browser Worker dispatch',
+      });
+    }
     if (environment.AUTOMATION_BROWSER_DISPATCH_ENABLED === 'true') {
       if (parseBrowserWorkerUrl(environment.AUTOMATION_BROWSER_WORKER_URL) === null) {
         context.addIssue({
@@ -237,6 +258,7 @@ export type AutomationControlConfig = Readonly<{
   enabled: boolean;
   desktopCoordinatorEnabled: boolean;
   browserHeartbeatEnabled: boolean;
+  browserApprovalResumeEnabled: boolean;
   browserDispatch: AutomationBrowserDispatchConfig;
   port: number;
   automationApiUrl: string;
@@ -269,6 +291,7 @@ export function loadAutomationControlConfig(
   const parsed = AutomationControlEnvironmentSchema.parse(environment);
   const browserHeartbeatEnabled = parsed.AUTOMATION_BROWSER_HEARTBEAT_ENABLED === 'true';
   const browserDispatchEnabled = parsed.AUTOMATION_BROWSER_DISPATCH_ENABLED === 'true';
+  const browserApprovalResumeEnabled = parsed.AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED === 'true';
   const browserWorkerPeers = browserHeartbeatEnabled
     ? parseBrowserWorkerTrust(parsed.AUTOMATION_BROWSER_WORKER_TRUST_JSON)
     : Object.freeze({});
@@ -296,6 +319,7 @@ export function loadAutomationControlConfig(
     enabled: parsed.AUTOMATION_CONTROL_ENABLED === 'true',
     desktopCoordinatorEnabled: parsed.AUTOMATION_DESKTOP_COORDINATOR_ENABLED === 'true',
     browserHeartbeatEnabled,
+    browserApprovalResumeEnabled,
     browserDispatch,
     port: parsed.AUTOMATION_CONTROL_PORT,
     automationApiUrl: parsed.AUTOMATION_API_URL,

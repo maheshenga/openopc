@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
-import { type Database, automationApprovalResumeAttempts } from '@kortix/db';
+import { createHash, createHmac } from 'node:crypto';
 import {
+  type Database,
+  automationApprovalResumeAttempts,
+  automationApprovals,
+  automationJobEvents,
+  automationJobSteps,
+  automationJobs,
+} from '@kortix/db';
+import {
+  type AutomationBrowserApprovalConsumeInput,
   type AutomationJob,
   type AutomationJobRequest,
   AutomationJobRequestSchema,
@@ -12,6 +20,7 @@ import {
 } from '@kortix/intelligence-contracts';
 import {
   type BrowserApprovalResumeCandidate,
+  type BrowserApprovalResumeConsumeResult,
   createPostgresBrowserApprovalResumeStore,
 } from './browser-approval-resume-store';
 
@@ -35,6 +44,8 @@ const APPROVAL_EXPIRES_AT = '2099-07-23T08:04:00.000Z';
 const LEASE_EXPIRES_AT = '2099-07-23T08:03:00.000Z';
 const JOB_DEADLINE_AT = '2099-07-23T08:05:00.000Z';
 const TOKEN_PEPPER = 'resume-token-pepper-with-at-least-32-bytes';
+const WORKER_ID = 'browser-worker-1';
+const RESUME_TOKEN = `approval-resume.v1.${'A'.repeat(43)}`;
 
 type FakeState = {
   selections: unknown[][];
@@ -118,6 +129,86 @@ function fakeDatabase(options: FakeDatabaseOptions): { db: Database; state: Fake
                 return [{ attemptId: values.attemptId }];
               },
             };
+          },
+        }),
+      };
+      try {
+        const result = await callback(tx);
+        state.inserts.push(...pendingInserts);
+        state.updates.push(...pendingUpdates);
+        state.commits += 1;
+        return result;
+      } catch (error) {
+        state.rollbacks += 1;
+        throw error;
+      }
+    },
+  } as unknown as Database;
+  return { db, state };
+}
+
+type SettlementTarget = 'attempt' | 'approval' | 'step' | 'job' | 'event';
+
+type SettlementFakeOptions = {
+  selections: unknown[][];
+  failTarget?: SettlementTarget;
+};
+
+function settlementFakeDatabase(options: SettlementFakeOptions): {
+  db: Database;
+  state: FakeState;
+} {
+  const state: FakeState = {
+    selections: [...options.selections],
+    inserts: [],
+    updates: [],
+    transactions: 0,
+    commits: 0,
+    rollbacks: 0,
+    rowLocks: 0,
+  };
+  const targetForTable = (table: unknown): Exclude<SettlementTarget, 'event'> => {
+    if (table === automationApprovalResumeAttempts) return 'attempt';
+    if (table === automationApprovals) return 'approval';
+    if (table === automationJobSteps) return 'step';
+    if (table === automationJobs) return 'job';
+    throw new Error('unexpected fake update target');
+  };
+  const db = {
+    async transaction<T>(callback: (tx: unknown) => Promise<T>): Promise<T> {
+      state.transactions += 1;
+      const pendingInserts: FakeState['inserts'] = [];
+      const pendingUpdates: FakeState['updates'] = [];
+      const tx = {
+        select: () =>
+          awaitableQuery(state.selections.shift() ?? [], () => {
+            state.rowLocks += 1;
+          }),
+        update: (table: unknown) => ({
+          set(values: Record<string, unknown>) {
+            return {
+              where() {
+                return {
+                  async returning() {
+                    const target = targetForTable(table);
+                    if (options.failTarget === target) return [];
+                    pendingUpdates.push({ table, values });
+                    if (target === 'attempt') return [{ attemptId: ATTEMPT_ID }];
+                    if (target === 'approval') return [{ approvalId: APPROVAL_ID }];
+                    if (target === 'step') return [{ stepId: STEP_ID }];
+                    return [{ jobId: JOB_ID }];
+                  },
+                };
+              },
+            };
+          },
+        }),
+        insert: (table: unknown) => ({
+          values(values: Record<string, unknown>) {
+            if (table !== automationJobEvents) throw new Error('unexpected fake insert target');
+            if (options.failTarget === 'event') return Promise.reject(new Error('event failed'));
+            pendingInserts.push({ table, values });
+            return Promise.resolve();
           },
         }),
       };
@@ -311,6 +402,96 @@ function candidateFixture(overrides: Partial<BrowserApprovalResumeCandidate> = {
   } satisfies BrowserApprovalResumeCandidate;
 }
 
+const CONSUME_INPUT = {
+  account_id: ACCOUNT_ID,
+  project_id: PROJECT_ID,
+  job_id: JOB_ID,
+  approval_id: APPROVAL_ID,
+  attempt_id: ATTEMPT_ID,
+  step_id: STEP_ID,
+  action_hash: ACTION_HASH,
+  lease_id: LEASE_ID,
+  lease_owner: `browser-worker-1:${LEASE_ID}`,
+  kill_switch_generation: 7,
+  resume_after_sequence: 1,
+  token: RESUME_TOKEN,
+  requested_at: NOW.toISOString(),
+} satisfies AutomationBrowserApprovalConsumeInput;
+
+function resumeTokenHash(binding: Record<string, unknown>): `sha256:${string}` {
+  const digest = createHmac('sha256', TOKEN_PEPPER)
+    .update(
+      [
+        RESUME_TOKEN,
+        binding.accountId,
+        binding.projectId,
+        binding.approvalId,
+        binding.jobId,
+        binding.stepId,
+        binding.actionHash,
+        binding.leaseId,
+        binding.leaseOwner,
+        binding.killSwitchGeneration,
+        binding.attemptId,
+        binding.resumeAfterSequence,
+        binding.expiresAt,
+      ].join('\0'),
+    )
+    .digest('hex');
+  return `sha256:${digest}`;
+}
+
+function attemptRow(overrides: Record<string, unknown> = {}) {
+  const attempt = {
+    attemptId: ATTEMPT_ID,
+    accountId: ACCOUNT_ID,
+    projectId: PROJECT_ID,
+    approvalId: APPROVAL_ID,
+    jobId: JOB_ID,
+    stepId: STEP_ID,
+    actionHash: ACTION_HASH,
+    leaseId: LEASE_ID,
+    leaseOwner: `browser-worker-1:${LEASE_ID}`,
+    killSwitchGeneration: 7,
+    resumeAfterSequence: 1,
+    status: 'issued',
+    issuedAt: NOW.toISOString(),
+    expiresAt: LEASE_EXPIRES_AT,
+    consumedAt: null,
+    ...overrides,
+  };
+  return { ...attempt, tokenHash: resumeTokenHash(attempt), ...overrides };
+}
+
+function settlementSelections(input?: {
+  job?: Record<string, unknown>;
+  approval?: Record<string, unknown>;
+  steps?: ReturnType<typeof stepRows>;
+  attempt?: Record<string, unknown> | null;
+  includeSequence?: boolean;
+}): unknown[][] {
+  return [
+    [jobRow(input?.job)],
+    [approvalRow(input?.approval)],
+    input?.steps ?? stepRows(),
+    input?.attempt === null ? [] : [attemptRow(input?.attempt)],
+    ...(input?.includeSequence === false ? [] : [[{ value: 4 }]]),
+  ];
+}
+
+function settlementStore(options: SettlementFakeOptions) {
+  const fake = settlementFakeDatabase(options);
+  const observations: unknown[] = [];
+  return {
+    ...fake,
+    observations,
+    store: createPostgresBrowserApprovalResumeStore(fake.db, {
+      tokenPepper: TOKEN_PEPPER,
+      observe: (event) => observations.push(event),
+    }),
+  };
+}
+
 function storeFor(options: FakeDatabaseOptions) {
   const fake = fakeDatabase(options);
   const observations: unknown[] = [];
@@ -446,5 +627,234 @@ describe('PostgreSQL browser approval resume store issuance', () => {
     expect(() =>
       createPostgresBrowserApprovalResumeStore(db, { tokenPepper: 'too-short' }),
     ).toThrow(/pepper/i);
+  });
+});
+
+describe('PostgreSQL browser approval resume store settlement', () => {
+  test('atomically consumes an Attempt and starts its Job and Step', async () => {
+    const { store, state, observations } = settlementStore({
+      selections: settlementSelections(),
+    });
+
+    const result = await store.consumeAndStart({ ...CONSUME_INPUT, workerId: WORKER_ID, now: NOW });
+
+    expect(result).toEqual({ accepted: true, idempotent: false, startedAt: NOW.toISOString() });
+    expect(state.commits).toBe(1);
+    expect(state.updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ values: expect.objectContaining({ status: 'consumed' }) }),
+        expect.objectContaining({ values: expect.objectContaining({ status: 'running' }) }),
+      ]),
+    );
+    expect(state.inserts.at(-1)?.values).toEqual(
+      expect.objectContaining({
+        type: 'job_started',
+        status: 'running',
+        workerId: null,
+        workerLeaseId: null,
+        workerOrdinal: null,
+      }),
+    );
+    expect(observations).toEqual([
+      expect.objectContaining({ type: 'browser_resume_consumed', attemptId: ATTEMPT_ID }),
+    ]);
+    expect(JSON.stringify(observations)).not.toContain(RESUME_TOKEN);
+    expect(JSON.stringify(observations)).not.toContain('tokenHash');
+  });
+
+  test('returns idempotent success for the same consumed Attempt only', async () => {
+    const later = new Date(NOW.getTime() + 1_000);
+    const { store, state, observations } = settlementStore({
+      selections: settlementSelections({
+        job: { status: 'running' },
+        approval: { status: 'consumed' },
+        steps: stepRows({ target: { status: 'running', startedAt: NOW.toISOString() } }),
+        attempt: { status: 'consumed', consumedAt: NOW.toISOString() },
+        includeSequence: false,
+      }),
+    });
+
+    const result = await store.consumeAndStart({
+      ...CONSUME_INPUT,
+      workerId: WORKER_ID,
+      now: later,
+    });
+
+    expect(result).toEqual({ accepted: true, idempotent: true, startedAt: NOW.toISOString() });
+    expect(state.updates).toHaveLength(0);
+    expect(state.inserts).toHaveLength(0);
+    expect(observations).toEqual([
+      expect.objectContaining({ type: 'browser_resume_duplicate', attemptId: ATTEMPT_ID }),
+    ]);
+  });
+
+  test('rolls back Approval, Step, Job, Attempt, and event on every write failure', async () => {
+    for (const failTarget of ['attempt', 'approval', 'step', 'job', 'event'] as const) {
+      const failing = settlementStore({
+        selections: settlementSelections(),
+        failTarget,
+      });
+      await expect(
+        failing.store.consumeAndStart({ ...CONSUME_INPUT, workerId: WORKER_ID, now: NOW }),
+      ).rejects.toThrow();
+      expect(failing.state.commits).toBe(0);
+      expect(failing.state.rollbacks).toBe(1);
+      expect(failing.state.updates).toHaveLength(0);
+      expect(failing.state.inserts).toHaveLength(0);
+    }
+  });
+
+  test('rejects invalid credentials, stale leases, dispatch mismatches, terminal approvals, and conflicts', async () => {
+    const cases: Array<{
+      reason: Extract<BrowserApprovalResumeConsumeResult, { accepted: false }>['reason'];
+      input?: Partial<AutomationBrowserApprovalConsumeInput>;
+      selections: unknown[][];
+    }> = [
+      {
+        reason: 'credential_invalid',
+        selections: settlementSelections({ attempt: null, includeSequence: false }),
+      },
+      {
+        reason: 'stale_lease',
+        input: { lease_owner: `browser-worker-1:${OTHER_LEASE_ID}` },
+        selections: settlementSelections({ includeSequence: false }),
+      },
+      {
+        reason: 'dispatch_mismatch',
+        input: { resume_after_sequence: 0 },
+        selections: settlementSelections({ includeSequence: false }),
+      },
+      {
+        reason: 'approval_terminal',
+        selections: settlementSelections({
+          approval: { status: 'rejected' },
+          includeSequence: false,
+        }),
+      },
+      {
+        reason: 'conflict',
+        selections: settlementSelections({
+          steps: stepRows({ target: { status: 'running' } }),
+          includeSequence: false,
+        }),
+      },
+    ];
+
+    for (const current of cases) {
+      const { store } = settlementStore({ selections: current.selections });
+      expect(
+        await store.consumeAndStart({
+          ...CONSUME_INPUT,
+          ...current.input,
+          workerId: WORKER_ID,
+          now: NOW,
+        }),
+      ).toEqual({ accepted: false, reason: current.reason });
+    }
+  });
+
+  test('keeps scope misses opaque and expires only a proven expired Attempt', async () => {
+    for (const input of [
+      { account_id: '10000000-0000-4000-a000-000000000099' },
+      { project_id: '20000000-0000-4000-a000-000000000099' },
+    ]) {
+      const { store, state } = settlementStore({
+        selections: settlementSelections({ includeSequence: false }),
+      });
+      expect(
+        await store.consumeAndStart({
+          ...CONSUME_INPUT,
+          ...input,
+          workerId: WORKER_ID,
+          now: NOW,
+        }),
+      ).toEqual({ accepted: false, reason: 'credential_invalid' });
+      expect(state.updates).toHaveLength(0);
+    }
+
+    const expiredAt = NOW.toISOString();
+    const expired = settlementStore({
+      selections: settlementSelections({
+        attempt: { expiresAt: expiredAt },
+        includeSequence: false,
+      }),
+    });
+    expect(
+      await expired.store.consumeAndStart({ ...CONSUME_INPUT, workerId: WORKER_ID, now: NOW }),
+    ).toEqual({ accepted: false, reason: 'credential_invalid' });
+    expect(expired.state.updates).toEqual([
+      expect.objectContaining({ values: { status: 'expired' } }),
+    ]);
+    expect(expired.observations).toEqual([
+      expect.objectContaining({ type: 'browser_resume_expired', attemptId: ATTEMPT_ID }),
+    ]);
+  });
+
+  test('does not mutate an Attempt for a bad token or a not-yet-expired stale lease', async () => {
+    const badToken = settlementStore({
+      selections: settlementSelections({ includeSequence: false }),
+    });
+    expect(
+      await badToken.store.consumeAndStart({
+        ...CONSUME_INPUT,
+        token: `approval-resume.v1.${'B'.repeat(43)}`,
+        workerId: WORKER_ID,
+        now: NOW,
+      }),
+    ).toEqual({ accepted: false, reason: 'credential_invalid' });
+    expect(badToken.state.updates).toHaveLength(0);
+
+    const staleLease = settlementStore({
+      selections: settlementSelections({
+        job: { killSwitchGeneration: 8 },
+        includeSequence: false,
+      }),
+    });
+    expect(
+      await staleLease.store.consumeAndStart({
+        ...CONSUME_INPUT,
+        workerId: WORKER_ID,
+        now: NOW,
+      }),
+    ).toEqual({ accepted: false, reason: 'stale_lease' });
+    expect(staleLease.state.updates).toHaveLength(0);
+  });
+
+  test('uses database-clock validity for the lease and proven Attempt expiry', async () => {
+    const staleLease = settlementStore({
+      selections: [
+        [{ job: jobRow(), leaseCurrent: false, deadlineCurrent: true }],
+        [{ approval: approvalRow(), current: true }],
+        stepRows(),
+        [{ attempt: attemptRow(), current: true }],
+      ],
+    });
+    expect(
+      await staleLease.store.consumeAndStart({
+        ...CONSUME_INPUT,
+        workerId: WORKER_ID,
+        now: NOW,
+      }),
+    ).toEqual({ accepted: false, reason: 'stale_lease' });
+    expect(staleLease.state.updates).toHaveLength(0);
+
+    const expiredAttempt = settlementStore({
+      selections: [
+        [{ job: jobRow(), leaseCurrent: true, deadlineCurrent: true }],
+        [{ approval: approvalRow(), current: true }],
+        stepRows(),
+        [{ attempt: attemptRow(), current: false }],
+      ],
+    });
+    expect(
+      await expiredAttempt.store.consumeAndStart({
+        ...CONSUME_INPUT,
+        workerId: WORKER_ID,
+        now: NOW,
+      }),
+    ).toEqual({ accepted: false, reason: 'credential_invalid' });
+    expect(expiredAttempt.state.updates).toEqual([
+      expect.objectContaining({ values: { status: 'expired' } }),
+    ]);
   });
 });

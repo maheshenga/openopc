@@ -50,6 +50,13 @@ export type ApprovalGenerationReader = (scope: {
   projectId: string;
 }) => Promise<number>;
 
+export type PostgresApprovalServiceOptions = {
+  now?: () => Date;
+  currentGeneration?: ApprovalGenerationReader;
+  durableExecutionResolutionEnabled?: boolean;
+  newEventId?: () => string;
+};
+
 type ApprovalErrorCode =
   | 'AUTOMATION_INVALID_REQUEST'
   | 'AUTOMATION_NOT_FOUND'
@@ -334,13 +341,12 @@ function rowToApproval(
 
 export function createPostgresApprovalService(
   db: Database,
-  options?: {
-    now?: () => Date;
-    currentGeneration?: ApprovalGenerationReader;
-  },
+  options?: PostgresApprovalServiceOptions,
 ): ApprovalService {
   const now = options?.now ?? (() => new Date());
   const currentGeneration = options?.currentGeneration ?? (async () => 0);
+  const durableExecutionResolutionEnabled =
+    options?.durableExecutionResolutionEnabled ?? false;
 
   return {
     async request(requestInput) {
@@ -397,7 +403,7 @@ export function createPostgresApprovalService(
           .limit(1)
           .for('update');
         if (!approval) throw notFound();
-        const [job] = await tx
+        const jobQuery = tx
           .select({
             accountId: automationJobs.accountId,
             projectId: automationJobs.projectId,
@@ -406,7 +412,33 @@ export function createPostgresApprovalService(
           .from(automationJobs)
           .where(eq(automationJobs.jobId, approval.jobId))
           .limit(1);
+        const [job] = durableExecutionResolutionEnabled
+          ? await jobQuery.for('update')
+          : await jobQuery;
         if (!job) throw notFound();
+
+        if (durableExecutionResolutionEnabled) {
+          const steps = await tx
+            .select({
+              stepId: automationJobSteps.stepId,
+              sequence: automationJobSteps.sequence,
+              status: automationJobSteps.status,
+              actionHash: automationJobSteps.actionHash,
+              approvalId: automationJobSteps.approvalId,
+            })
+            .from(automationJobSteps)
+            .where(eq(automationJobSteps.jobId, approval.jobId))
+            .for('update');
+          const target = steps.find((step) => step.stepId === approval.stepId);
+          const executionPauseSignalled =
+            target?.approvalId === approval.approvalId || target?.status === 'awaiting_approval';
+          if (executionPauseSignalled) {
+            throw new AutomationApprovalServiceError(
+              'AUTOMATION_CONFLICT',
+              'Durable execution approval resolution is not composed',
+            );
+          }
+        }
 
         const record: StoredApprovalRecord = {
           approvalId: approval.approvalId,

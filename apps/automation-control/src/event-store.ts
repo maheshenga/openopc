@@ -69,6 +69,7 @@ const TRANSITION_EVENT_TYPES: Readonly<
   Record<AutomationTransitionEvent['type'], readonly AutomationEvent['type'][]>
 > = {
   approval_required: ['approval_required'],
+  execution_approval_required: ['approval_required'],
   approval_granted: ['job_dispatched'],
   dispatched: ['job_dispatched'],
   started: ['job_started'],
@@ -87,6 +88,7 @@ export function automationEventRequiresLease(input: AppendAutomationEventInput):
     input.event.type === 'job_succeeded' ||
     input.event.type === 'job_failed' ||
     input.event.type === 'heartbeat' ||
+    input.transition?.type === 'execution_approval_required' ||
     input.transition?.type === 'started' ||
     input.transition?.type === 'succeeded' ||
     input.transition?.type === 'failed'

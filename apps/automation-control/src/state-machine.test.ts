@@ -26,6 +26,29 @@ describe('automation job state machine', () => {
     expect(transitionAutomationJob('running', { type: 'cancelled' })).toBe('cancelled');
   });
 
+  test('pauses a running job for execution-time approval', () => {
+    expect(transitionAutomationJob('running', { type: 'execution_approval_required' })).toBe(
+      'awaiting_approval',
+    );
+  });
+
+  test('rejects execution-time approval outside a running job', () => {
+    for (const status of [
+      'queued',
+      'awaiting_approval',
+      'dispatched',
+      'succeeded',
+      'failed',
+      'cancelled',
+      'expired',
+      'retryable',
+    ] as const) {
+      expect(() =>
+        transitionAutomationJob(status, { type: 'execution_approval_required' }),
+      ).toThrow(AutomationTransitionError);
+    }
+  });
+
   test('expires a running job when its fencing lease expires', () => {
     expect(transitionAutomationJob('running', { type: 'lease_expired' })).toBe('expired');
   });

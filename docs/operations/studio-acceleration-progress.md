@@ -16,7 +16,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence protocol     | implemented                                             | REST, SDK, MCP, A2A, task/event commits                                                                                                     | retained regression gates                                         |
 | Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
 | OpenOPC Milestone A       | implemented, disabled by default                        | catalog, project SSE projection, SDK subscription, and focused contract/API/SDK/CLI gates verified locally                                  | production rollout and later milestones                           |
-| Automation Task 8A-8B     | authenticated heartbeat receiver, Browser Worker heartbeat lifecycle, and desktop observe coordinator implemented; production hardening partial; default-off | commits `920375679`, `c6fda9161`, `497a46d35`, `e07ffd813`, `5d4182f73`, `ff71d4bd4`, and `5c6ec31d0`; Redis replay fencing, PostgreSQL heartbeat sink, receiver/client composition, and focused gates verified | authenticated production job source, real mTLS deployment, response authentication, sink concurrency validation, and durable step/approval handling |
+| Automation Task 8A-8B     | authenticated heartbeat plus bounded Browser Worker dispatch transport implemented; desktop observe coordinator implemented; production hardening partial; default-off | heartbeat commits through `5c6ec31d0`; dispatch commits `44ff08329`, `bf3b2a4a2`, `9f7399997`, and `cce38b4ff`; shared schemas, signed receipts, mTLS client options, replay fencing, and package gates verified | main-runtime composition, real mTLS deployment, sink concurrency validation, durable step/approval handling, and unknown-result recovery |
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                                            | focused Web hardening without full-suite reruns                   |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
@@ -279,11 +279,32 @@ runs periodic sends serially during execution, aborts the active action on the
 first heartbeat failure, and still closes the page, context, browser, and proxy.
 Heartbeat-loop cleanup is deadline bounded.
 
-The Browser Worker process still has no production authenticated job source or
-main-runtime composition; its entry server remains fail closed and not ready.
-No real mTLS proxy/certificate deployment or end-to-end exchange has been
-accepted, and application-layer response authentication is not implemented.
-Real concurrent sink execution against PostgreSQL has also not been verified.
+Commit `44ff08329` moves the Browser dispatch path, request, envelope, receipt,
+and accepted response into the shared strict Automation Protocol contract.
+Commit `bf3b2a4a2` adds the default-off Worker authenticated source. A trusted
+TLS proxy attestation binds the Control certificate to the WebSocket upgrade,
+and every dispatch is separately protected by a body-bound HMAC proof, bounded
+timestamp, and monotonic nonce. The source admits only one queued or active
+request, sends a signed receipt before exposing work, rejects replay/tampering,
+bounds messages and backpressure to 64 KiB by default, and aborts
+connection-owned work on close.
+
+Commit `cce38b4ff` adds the default-off Automation Control WebSocket adapter. It
+accepts only a `wss://` origin, supplies Bun client certificate, private key,
+CA, `rejectUnauthorized=true`, explicit `serverName`, and no spoofable Worker
+proxy-attestation headers. It permits one in-flight dispatch, strictly parses
+the shared accepted schema, and classifies timeout or disconnect after dispatch
+as an unknown result. The existing Browser Dispatcher still verifies the
+Worker receipt proof, dispatch hash, nonce, job, lease, Worker identity, and
+post-transport lease fence. Commit `9f7399997` replaces four host-speed guesses
+in runtime deadline tests with operation-start synchronization and bounded
+cleanup safety.
+
+The Browser Worker process still does not compose this authenticated source
+with the execution loop in its production entry point; that entry server
+remains fail closed and not ready. No real mTLS proxy/certificate deployment or
+end-to-end Control-to-Worker exchange has been accepted. Real concurrent sink
+execution against PostgreSQL has also not been verified.
 Reclaimed leases still receive a new per-claim fencing token, and unknown or
 external-effect outcomes do not automatically retry.
 
@@ -349,9 +370,19 @@ typechecks passed. The wider pre-commit package gates passed `278/278` tests
 with `901` assertions. Scoped Biome over the 11 changed files and
 `git diff --check` passed. No full repository suite was run.
 
+For `44ff08329` through `cce38b4ff`, the final package gates passed `50/50`
+Intelligence Contracts tests with `138` assertions, `100/100` Browser Worker
+tests with `338` assertions, and `144/144` Automation Control tests with `492`
+assertions: `294/294` tests and `968` assertions total. All three package
+typechecks passed, and scoped Biome over 13 files passed. An earlier Worker
+package run exposed the existing client-close-during-CONNECT-resolution timing
+test once; the final package gate passed, but that test still depends on a
+fixed local socket propagation delay and remains a stability risk. No full
+repository suite was run.
+
 Production authenticated job-source/main-runtime composition, real mTLS
-proxy/certificate deployment and end-to-end verification, application-layer
-response authentication, real sink concurrency validation, durable step and
-approval-resume handling, dispatch-attempt idempotency and unknown-result
-recovery, and complete readiness/deployment wiring remain open. Complete Task 8
-and production readiness are therefore not claimed.
+proxy/certificate deployment and end-to-end verification, real sink concurrency
+validation, durable step and approval-resume handling, dispatch-attempt
+idempotency and unknown-result recovery, and complete readiness/deployment
+wiring remain open. Complete Task 8 and production readiness are therefore not
+claimed.

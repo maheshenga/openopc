@@ -177,6 +177,32 @@ function jobRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function durableSteps() {
+  return [
+    {
+      stepId: NEXT_STEP_ID,
+      sequence: 90,
+      status: 'pending',
+      actionHash: NEXT_HASH,
+      approvalId: null,
+    },
+    {
+      stepId: STEP_ID,
+      sequence: 40,
+      status: 'awaiting_approval',
+      actionHash: ACTION_HASH,
+      approvalId: APPROVAL_ID,
+    },
+    {
+      stepId: PREVIOUS_STEP_ID,
+      sequence: 10,
+      status: 'succeeded',
+      actionHash: PREVIOUS_HASH,
+      approvalId: null,
+    },
+  ];
+}
+
 function resolveInput(decision: 'approve' | 'reject' = 'approve') {
   return {
     accountId: ACCOUNT_ID,
@@ -279,29 +305,7 @@ describe('PostgreSQL execution approval resolution', () => {
     const { db, state } = fakeDatabase([
       [approvalRow()],
       [jobRow()],
-      [
-        {
-          stepId: NEXT_STEP_ID,
-          sequence: 90,
-          status: 'pending',
-          actionHash: NEXT_HASH,
-          approvalId: null,
-        },
-        {
-          stepId: STEP_ID,
-          sequence: 40,
-          status: 'awaiting_approval',
-          actionHash: ACTION_HASH,
-          approvalId: APPROVAL_ID,
-        },
-        {
-          stepId: PREVIOUS_STEP_ID,
-          sequence: 10,
-          status: 'succeeded',
-          actionHash: PREVIOUS_HASH,
-          approvalId: null,
-        },
-      ],
+      durableSteps(),
       [{ value: 3 }],
     ]);
     const service = createPostgresApprovalService(db, {
@@ -348,4 +352,104 @@ describe('PostgreSQL execution approval resolution', () => {
       workerOrdinal: null,
     });
   });
+
+  test('atomically rejects a valid durable execution pause', async () => {
+    const { db, state } = fakeDatabase(
+      [[approvalRow()], [jobRow()], durableSteps(), [{ value: 3 }]],
+      {
+        updateReturning: {
+          step: [{ stepId: STEP_ID }, { stepId: NEXT_STEP_ID }],
+        },
+      },
+    );
+    let generationReads = 0;
+    const service = createPostgresApprovalService(db, {
+      now: () => NOW,
+      currentGeneration: async () => {
+        generationReads += 1;
+        return 7;
+      },
+      durableExecutionResolutionEnabled: true,
+      newEventId: () => EVENT_ID,
+    });
+
+    const resolved = await service.resolve(resolveInput('reject'));
+
+    expect(resolved).toBeNull();
+    expect(generationReads).toBe(0);
+    expect(state.updateTargets).toEqual(['step', 'approval', 'job']);
+    expect(state.updates[0]).toMatchObject({ status: 'cancelled' });
+    expect(state.updates[1]).toMatchObject({
+      status: 'rejected',
+      actingUserId: USER_ID,
+      tokenHash: null,
+      resolvedAt: NOW.toISOString(),
+    });
+    expect(state.updates[2]).toMatchObject({
+      status: 'cancelled',
+      terminalAt: NOW.toISOString(),
+    });
+    expect(state.inserts[0]).toMatchObject({
+      type: 'job_cancelled',
+      status: 'cancelled',
+      payload: {
+        approval_id: APPROVAL_ID,
+        step_id: STEP_ID,
+        action_hash: ACTION_HASH,
+        decision: 'rejected',
+        resume_after_sequence: 10,
+        expires_at: APPROVAL_EXPIRES_AT,
+      },
+    });
+    expect(JSON.stringify([...state.updates, ...state.inserts])).not.toContain('approval.v1.');
+  });
+
+  for (const expiryCase of [
+    {
+      name: 'Approval deadline expiry',
+      approval: approvalRow({ expiresAt: NOW.toISOString() }),
+      job: jobRow(),
+    },
+    {
+      name: 'Job deadline expiry',
+      approval: approvalRow(),
+      job: jobRow({ deadlineAt: NOW.toISOString() }),
+    },
+  ]) {
+    test(`atomically settles ${expiryCase.name}`, async () => {
+      const { db, state } = fakeDatabase(
+        [[expiryCase.approval], [expiryCase.job], durableSteps(), [{ value: 3 }]],
+        {
+          updateReturning: {
+            step: [{ stepId: STEP_ID }, { stepId: NEXT_STEP_ID }],
+          },
+        },
+      );
+      const service = createPostgresApprovalService(db, {
+        now: () => NOW,
+        currentGeneration: async () => 7,
+        durableExecutionResolutionEnabled: true,
+        newEventId: () => EVENT_ID,
+      });
+
+      await expect(service.resolve(resolveInput())).rejects.toMatchObject({
+        code: 'AUTOMATION_APPROVAL_EXPIRED',
+      });
+      expect(state.commits).toBe(1);
+      expect(state.rollbacks).toBe(0);
+      expect(state.updateTargets).toEqual(['step', 'approval', 'job']);
+      expect(state.updates[0]).toMatchObject({ status: 'cancelled' });
+      expect(state.updates[1]).toMatchObject({
+        status: 'expired',
+        actingUserId: null,
+        tokenHash: null,
+        resolvedAt: NOW.toISOString(),
+      });
+      expect(state.updates[2]).toMatchObject({
+        status: 'expired',
+        terminalAt: NOW.toISOString(),
+      });
+      expect(state.inserts[0]).toMatchObject({ type: 'job_expired', status: 'expired' });
+    });
+  }
 });

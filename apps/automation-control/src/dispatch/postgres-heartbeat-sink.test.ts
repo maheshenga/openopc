@@ -178,7 +178,9 @@ describe('PostgreSQL heartbeat event sink', () => {
         createPostgresHeartbeatEventSink(db).append(heartbeatInput(ordinal)),
       ).resolves.toEqual({ accepted: false, reason: 'replayed_ordinal' });
       expect(state.updates).toHaveLength(0);
+      expect(state.updateTargets).toHaveLength(0);
       expect(state.inserts).toHaveLength(0);
+      expect(state.rowLocks).toBe(1);
     }
   });
 
@@ -191,7 +193,9 @@ describe('PostgreSQL heartbeat event sink', () => {
     });
     expect(state.selections).toHaveLength(0);
     expect(state.updates).toHaveLength(0);
+    expect(state.updateTargets).toHaveLength(0);
     expect(state.inserts).toHaveLength(0);
+    expect(state.rowLocks).toBe(1);
   });
 
   test('accepts the lease-manager owner form when a long worker id is hashed for storage', async () => {
@@ -254,8 +258,11 @@ describe('PostgreSQL heartbeat event sink', () => {
       accepted: false,
       reason: 'semantic_mismatch',
     });
+    expect(state.transactions).toBe(1);
     expect(state.updates).toHaveLength(0);
+    expect(state.updateTargets).toHaveLength(0);
     expect(state.inserts).toHaveLength(0);
+    expect(state.rowLocks).toBe(1);
   });
 
   test('updates the job and event in the same transaction for a valid terminal worker failure', async () => {
@@ -348,6 +355,60 @@ describe('PostgreSQL heartbeat event sink', () => {
       expect(state.updates).toHaveLength(0);
       expect(state.inserts).toHaveLength(0);
     }
+  });
+
+  test('rejects a step start when its conditional update no longer matches', async () => {
+    const { db, state } = fakeDatabase(
+      [
+        [{ jobId: JOB_ID, status: 'running' }],
+        [{ value: 0 }],
+        [{ stepId: STEP_ID, status: 'pending' }],
+      ],
+      { updateReturning: { step: [] } },
+    );
+    const input = {
+      ...heartbeatInput(),
+      event: {
+        type: 'step_started' as const,
+        payload: { step_id: STEP_ID },
+        trace_id: null,
+      },
+    };
+
+    await expect(createPostgresHeartbeatEventSink(db).append(input)).resolves.toEqual({
+      accepted: false,
+      reason: 'semantic_mismatch',
+    });
+    expect(state.updates).toHaveLength(0);
+    expect(state.inserts).toHaveLength(0);
+  });
+
+  test('rolls back a step update when the worker event insert fails', async () => {
+    const { db, state } = fakeDatabase(
+      [
+        [{ jobId: JOB_ID, status: 'running' }],
+        [{ value: 0 }],
+        [{ stepId: STEP_ID, status: 'pending' }],
+        [{ value: 4 }],
+      ],
+      { failInsert: true },
+    );
+    const input = {
+      ...heartbeatInput(),
+      event: {
+        type: 'step_started' as const,
+        payload: { step_id: STEP_ID },
+        trace_id: null,
+      },
+    };
+
+    await expect(createPostgresHeartbeatEventSink(db).append(input)).rejects.toThrow(
+      'fake event insert failed',
+    );
+    expect(state.updates).toHaveLength(0);
+    expect(state.inserts).toHaveLength(0);
+    expect(state.commits).toBe(0);
+    expect(state.rollbacks).toBe(1);
   });
 
   test('atomically completes a running step with its evidence reference', async () => {
@@ -506,8 +567,11 @@ describe('PostgreSQL heartbeat event sink', () => {
       accepted: false,
       reason: 'semantic_mismatch',
     });
+    expect(state.transactions).toBe(0);
     expect(state.updates).toHaveLength(0);
+    expect(state.updateTargets).toHaveLength(0);
     expect(state.inserts).toHaveLength(0);
+    expect(state.rowLocks).toBe(0);
   });
 
   test('rejects worker payload project substitution as a semantic mismatch', async () => {

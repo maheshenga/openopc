@@ -11,6 +11,12 @@ export interface PermissionCheckResult {
   reason?: string;
 }
 
+export type PermissionCandidate = Readonly<{
+  permissionId: string;
+  expiresAt: Date | string | null;
+  scope: unknown;
+}>;
+
 interface TunnelDesktopScope {
   features?: string[];
 }
@@ -20,6 +26,7 @@ export async function checkPermission(
   capability: TunnelCapability,
   operation: string,
   args: Record<string, unknown>,
+  requiredPermissionId?: string,
 ): Promise<PermissionCheckResult> {
   const permissions = await db
     .select()
@@ -32,12 +39,37 @@ export async function checkPermission(
       ),
     );
 
+  return checkPermissionCandidates(
+    permissions,
+    capability,
+    operation,
+    args,
+    requiredPermissionId,
+  );
+}
+
+export function checkPermissionCandidates(
+  permissions: readonly PermissionCandidate[],
+  capability: TunnelCapability,
+  operation: string,
+  args: Record<string, unknown>,
+  requiredPermissionId?: string,
+): PermissionCheckResult {
   if (permissions.length === 0) {
+    if (requiredPermissionId !== undefined) {
+      return {
+        allowed: false,
+        reason: `Required permission "${requiredPermissionId}" is not active`,
+      };
+    }
     return { allowed: false, reason: `No active permission for capability "${capability}"` };
   }
 
   const now = new Date();
   for (const perm of permissions) {
+    if (requiredPermissionId !== undefined && perm.permissionId !== requiredPermissionId) {
+      continue;
+    }
     if (perm.expiresAt && new Date(perm.expiresAt) < now) {
       continue;
     }
@@ -48,6 +80,12 @@ export async function checkPermission(
     }
   }
 
+  if (requiredPermissionId !== undefined) {
+    return {
+      allowed: false,
+      reason: `Required permission "${requiredPermissionId}" is not active or does not grant operation "${operation}"`,
+    };
+  }
   return { allowed: false, reason: `Operation "${operation}" not within any granted scope for "${capability}"` };
 }
 

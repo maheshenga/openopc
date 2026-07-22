@@ -58,8 +58,10 @@ export async function executeTunnelRpc(input: {
   accountId: string;
   method: string;
   params: Record<string, unknown>;
+  /** Optional exact permission fence for lease-bound internal automation calls. */
+  requiredPermissionId?: string;
 }): Promise<TunnelRpcOutcome> {
-  const { tunnelId, accountId, method, params } = input;
+  const { tunnelId, accountId, method, params, requiredPermissionId } = input;
 
   const rpcRateCheck = tunnelRateLimiter.check('rpc', tunnelId);
   if (!rpcRateCheck.allowed) {
@@ -68,6 +70,14 @@ export async function executeTunnelRpc(input: {
 
   if (!method || typeof method !== 'string') {
     return { ok: false, kind: 'bad_request', message: 'method is required' };
+  }
+  if (
+    requiredPermissionId !== undefined &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      requiredPermissionId,
+    )
+  ) {
+    return { ok: false, kind: 'bad_request', message: 'requiredPermissionId must be a UUID' };
   }
 
   const capability = resolveCapability(method);
@@ -80,9 +90,22 @@ export async function executeTunnelRpc(input: {
 
   const capPrefix = method.indexOf('.');
   const operation = capPrefix !== -1 ? method.slice(capPrefix + 1) : method;
-  const permCheck = await checkPermission(tunnelId, capability, operation, params);
+  const permCheck = await checkPermission(
+    tunnelId,
+    capability,
+    operation,
+    params,
+    requiredPermissionId,
+  );
 
   if (!permCheck.allowed) {
+    if (requiredPermissionId !== undefined) {
+      return {
+        ok: false,
+        kind: 'bad_request',
+        message: permCheck.reason ?? 'Required permission is not active or outside scope',
+      };
+    }
     const permReqRateCheck = tunnelRateLimiter.check('permRequest', accountId);
     if (!permReqRateCheck.allowed) {
       return { ok: false, kind: 'rate_limited', retryAfterMs: permReqRateCheck.retryAfterMs, message: 'Too many permission requests' };
@@ -109,6 +132,16 @@ export async function executeTunnelRpc(input: {
       kind: 'permission_required',
       requestId: request.requestId,
       message: permCheck.reason ?? 'Permission required',
+    };
+  }
+  if (
+    permCheck.permissionId === undefined ||
+    (requiredPermissionId !== undefined && permCheck.permissionId !== requiredPermissionId)
+  ) {
+    return {
+      ok: false,
+      kind: 'bad_request',
+      message: 'Permission check did not return the exact required permission',
     };
   }
 

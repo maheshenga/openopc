@@ -16,7 +16,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence protocol     | implemented                                             | REST, SDK, MCP, A2A, task/event commits                                                                                                     | retained regression gates                                         |
 | Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
 | OpenOPC Milestone A       | implemented, disabled by default                        | catalog, project SSE projection, SDK subscription, and focused contract/API/SDK/CLI gates verified locally                                  | production rollout and later milestones                           |
-| Automation Task 8A-8B     | desktop observe coordinator implemented; durability hardening partial; default-off | commits `920375679`, `c6fda9161`, `497a46d35`, `e07ffd813`, and `5d4182f73`; Redis nonce runtime wiring, PostgreSQL sink/migration implementation, and focused gates verified | authenticated Browser Worker heartbeat route, sink runtime composition/concurrency validation, and remaining production hardening |
+| Automation Task 8A-8B     | authenticated heartbeat receiver and desktop observe coordinator implemented; production hardening partial; default-off | commits `920375679`, `c6fda9161`, `497a46d35`, `e07ffd813`, `5d4182f73`, and `ff71d4bd4`; Redis replay fencing, PostgreSQL heartbeat sink, receiver runtime composition, and focused gates verified | Browser Worker heartbeat client, real mTLS proxy deployment, sink concurrency validation, and durable step/approval handling |
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                                            | focused Web hardening without full-suite reruns                   |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
@@ -232,12 +232,38 @@ exact account, project, job, lease owner, generation, and expiry; enforces a
 contiguous ordinal scoped to the Worker and lease; allocates the next job event
 sequence; applies supported state transitions; and persists the Worker receipt.
 
-The sink is currently an implemented adapter, not a complete runtime path.
-There is no authenticated Browser Worker heartbeat route composing
-`createHeartbeatProcessor` with `createPostgresHeartbeatEventSink`, and real
-concurrent sink execution against PostgreSQL has not been verified. Reclaimed
-leases still receive a new per-claim fencing token, and unknown or
-external-effect outcomes do not automatically retry.
+Commit `ff71d4bd4` adds the default-off server-side heartbeat receiver at
+`POST /internal/automation/browser/heartbeat` and composes the Worker
+authenticator, shared Redis monotonic nonce store, exact lease precheck,
+heartbeat processor, and PostgreSQL event sink in the Automation Control
+runtime. This is a sibling internal route rather than a `/v1/automation/*`
+user/project API, so it does not change Kortix actor-HMAC middleware or public
+routes.
+
+The receiver requires two independent proofs: an HMAC attestation produced by
+a trusted mTLS proxy and the Browser Worker proof bound to its certificate
+fingerprint and heartbeat body. Certificate service ID, proof service ID, and
+heartbeat `worker_id` must all agree. The proxy attestation covers timestamp,
+service ID, fingerprint, certificate expiry, HTTP method, complete path and
+query, and the SHA-256 digest of the exact request bytes. Production proxies
+must strip all external `x-automation-worker-*` headers before adding their own;
+the TLS attestation secret belongs only to that proxy and must never be given to
+a Browser Worker.
+
+The receiver limits the body to 64 KiB and the complete body-read interval to
+five seconds by default, with bounded configuration overrides. It rejects
+oversized certificate metadata, invalid UTF-8/JSON, stale attestations,
+tampered path/body data, untrusted fingerprints, identity substitution, proof
+replay, stale leases, ordinal replay, and semantic conflicts with stable
+Automation Protocol errors. Unknown Redis/PostgreSQL failures return a generic
+retryable unavailable response without exposing internal errors or connection
+strings.
+
+The server-side runtime path is now implemented, but the Browser Worker does
+not yet send heartbeat requests and no real mTLS proxy/certificate deployment
+has been accepted. Real concurrent sink execution against PostgreSQL has also
+not been verified. Reclaimed leases still receive a new per-claim fencing
+token, and unknown or external-effect outcomes do not automatically retry.
 
 Commits `c6fda9161` and `497a46d35` bind the desktop permission fence to the
 existing API-to-Tunnel route. Commit `e07ffd813` adds the default-off production
@@ -287,10 +313,16 @@ reporting seven pre-existing destructive-operation warnings. A live Redis probe
 accepted the first reservation, rejected its replay, and observed approximately
 `4941ms` remaining on the configured five-second TTL. No full suite was run.
 
-Authenticated Browser Worker transport, runtime composition of the heartbeat
-processor with the PostgreSQL sink, real sink concurrency validation, durable
-step and approval-resume handling, dispatch-attempt idempotency and
-unknown-result recovery, response
-authentication/mTLS enforcement, internal endpoint body-size/deadline
-hardening, and complete readiness/deployment wiring also remain open. Complete
-Task 8 and production readiness are therefore not claimed.
+For `ff71d4bd4`, the seven focused Automation Control files passed `63/63`
+tests with `248` assertions. Automation Control typecheck passed, scoped Biome
+over 13 files passed, and `git diff --check` passed. A direct `redis-cli` check
+of the monotonic Worker nonce Lua accepted the first and higher nonces, rejected
+the replay and lower nonce, and reported approximately `4960ms` TTL. The local
+Bun Redis client could not connect to the host's legacy Windows Redis `3.0.504`,
+so Bun-to-Redis integration is not claimed. No full suite was run.
+
+Browser Worker client transport, real mTLS proxy/certificate enforcement,
+response authentication, real sink concurrency validation, durable step and
+approval-resume handling, dispatch-attempt idempotency and unknown-result
+recovery, and complete readiness/deployment wiring remain open. Complete Task 8
+and production readiness are therefore not claimed.

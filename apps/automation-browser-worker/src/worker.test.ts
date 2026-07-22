@@ -373,25 +373,35 @@ describe('isolated browser worker', () => {
     const verifierGate = new Promise<void>((resolve) => {
       releaseVerifier = resolve;
     });
+    let markVerifierStarted: () => void = () => undefined;
+    const verifierStarted = new Promise<void>((resolve) => {
+      markVerifierStarted = resolve;
+    });
     const running = runIsolatedBrowserRequest({
       ...fixture.input,
       isSignedLeaseValid: async () => {
+        markVerifierStarted();
         await verifierGate;
         return true;
       },
       maxRuntimeMs: 5,
     });
 
-    const outcome = await Promise.race([
-      running.then(
-        () => 'resolved',
-        (error) => (error instanceof Error ? error.message : String(error)),
-      ),
-      new Promise<'still-pending'>((resolve) => setTimeout(() => resolve('still-pending'), 30)),
-    ]);
+    await verifierStarted;
+    let cleanupForced = false;
+    const safetyRelease = setTimeout(() => {
+      cleanupForced = true;
+      releaseVerifier();
+    }, 1_000);
+    const outcome = await running.then(
+      () => 'resolved',
+      (error) => (error instanceof Error ? error.message : String(error)),
+    );
+    clearTimeout(safetyRelease);
     releaseVerifier();
     await running.catch(() => undefined);
 
+    expect(cleanupForced).toBeFalse();
     expect(outcome).toContain('runtime-timeout');
     expect(fake.launchOptions).toHaveLength(0);
   });
@@ -407,9 +417,14 @@ describe('isolated browser worker', () => {
     const verifierGate = new Promise<void>((resolve) => {
       releaseVerifier = resolve;
     });
+    let markVerifierStarted: () => void = () => undefined;
+    const verifierStarted = new Promise<void>((resolve) => {
+      markVerifierStarted = resolve;
+    });
     const running = runIsolatedBrowserRequest({
       ...fixture.input,
       isSignedLeaseValid: async () => {
+        markVerifierStarted();
         await verifierGate;
         return true;
       },
@@ -418,16 +433,21 @@ describe('isolated browser worker', () => {
       request,
     });
 
-    const outcome = await Promise.race([
-      running.then(
-        () => 'resolved',
-        (error) => (error instanceof Error ? error.message : String(error)),
-      ),
-      new Promise<'still-pending'>((resolve) => setTimeout(() => resolve('still-pending'), 150)),
-    ]);
+    await verifierStarted;
+    let cleanupForced = false;
+    const safetyRelease = setTimeout(() => {
+      cleanupForced = true;
+      releaseVerifier();
+    }, 1_000);
+    const outcome = await running.then(
+      () => 'resolved',
+      (error) => (error instanceof Error ? error.message : String(error)),
+    );
+    clearTimeout(safetyRelease);
     releaseVerifier();
     await running.catch(() => undefined);
 
+    expect(cleanupForced).toBeFalse();
     expect(outcome).toContain('request-deadline');
     expect(fake.launchOptions).toHaveLength(0);
   });
@@ -439,6 +459,10 @@ describe('isolated browser worker', () => {
     const proxyGate = new Promise<void>((resolve) => {
       releaseProxy = resolve;
     });
+    let markProxyStarted: () => void = () => undefined;
+    const proxyStarted = new Promise<void>((resolve) => {
+      markProxyStarted = resolve;
+    });
     let confirmProxyClosed: () => void = () => undefined;
     const proxyClosed = new Promise<void>((resolve) => {
       confirmProxyClosed = resolve;
@@ -447,6 +471,7 @@ describe('isolated browser worker', () => {
       ...fixture.input,
       maxRuntimeMs: 5,
       startProxy: async () => {
+        markProxyStarted();
         await proxyGate;
         return {
           close: async () => {
@@ -458,17 +483,22 @@ describe('isolated browser worker', () => {
       },
     });
 
-    const outcome = await Promise.race([
-      running.then(
-        () => 'resolved',
-        (error) => (error instanceof Error ? error.message : String(error)),
-      ),
-      new Promise<'still-pending'>((resolve) => setTimeout(() => resolve('still-pending'), 30)),
-    ]);
+    await proxyStarted;
+    let cleanupForced = false;
+    const safetyRelease = setTimeout(() => {
+      cleanupForced = true;
+      releaseProxy();
+    }, 1_000);
+    const outcome = await running.then(
+      () => 'resolved',
+      (error) => (error instanceof Error ? error.message : String(error)),
+    );
+    clearTimeout(safetyRelease);
     releaseProxy();
     await running.catch(() => undefined);
     await proxyClosed;
 
+    expect(cleanupForced).toBeFalse();
     expect(outcome).toContain('runtime-timeout');
     expect(fake.closed).toContain('late-proxy');
     expect(fake.launchOptions).toHaveLength(0);
@@ -881,22 +911,29 @@ describe('isolated browser worker', () => {
     const launchGate = new Promise<void>((resolve) => {
       releaseLaunch = resolve;
     });
+    let markLaunchStarted: () => void = () => undefined;
+    const launchStarted = new Promise<void>((resolve) => {
+      markLaunchStarted = resolve;
+    });
     const running = runIsolatedBrowserRequest({
       ...fixture.input,
       launchBrowser: async () => {
+        markLaunchStarted();
         await launchGate;
         return fake.browser;
       },
       maxRuntimeMs: 5,
     });
 
-    const outcome = await Promise.race([
-      running.then(
-        () => 'resolved',
-        (error) => (error instanceof Error ? error.message : String(error)),
-      ),
-      new Promise<'still-pending'>((resolve) => setTimeout(() => resolve('still-pending'), 30)),
-    ]);
+    await launchStarted;
+    // Cleanup safety only: the assertion waits for the real runtime outcome instead of guessing
+    // how quickly an aborted late allocation settles on a loaded host.
+    const safetyRelease = setTimeout(releaseLaunch, 1_000);
+    const outcome = await running.then(
+      () => 'resolved',
+      (error) => (error instanceof Error ? error.message : String(error)),
+    );
+    clearTimeout(safetyRelease);
     releaseLaunch();
     await running.catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -942,6 +979,10 @@ describe('isolated browser worker', () => {
     const brokerGate = new Promise<void>((resolve) => {
       releaseBroker = resolve;
     });
+    let markBrokerStarted: () => void = () => undefined;
+    const brokerStarted = new Promise<void>((resolve) => {
+      markBrokerStarted = resolve;
+    });
     const running = runIsolatedBrowserRequest({
       ...fixture.input,
       lease: { ...lease, request_hash: requestHash(request) },
@@ -951,6 +992,7 @@ describe('isolated browser worker', () => {
       },
       profileBroker: {
         consumePersistentProfile: async () => {
+          markBrokerStarted();
           await brokerGate;
           return brokeredProfile(profileId);
         },
@@ -958,17 +1000,22 @@ describe('isolated browser worker', () => {
       request,
     });
 
-    const outcome = await Promise.race([
-      running.then(
-        () => 'resolved',
-        (error) => (error instanceof Error ? error.message : String(error)),
-      ),
-      new Promise<'still-pending'>((resolve) => setTimeout(() => resolve('still-pending'), 30)),
-    ]);
+    await brokerStarted;
+    let cleanupForced = false;
+    const safetyRelease = setTimeout(() => {
+      cleanupForced = true;
+      releaseBroker();
+    }, 1_000);
+    const outcome = await running.then(
+      () => 'resolved',
+      (error) => (error instanceof Error ? error.message : String(error)),
+    );
+    clearTimeout(safetyRelease);
     releaseBroker();
     await running.catch(() => undefined);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
+    expect(cleanupForced).toBeFalse();
     expect(outcome).toContain('runtime-timeout');
     expect(fake.closed).toContain('browser');
     expect(fake.closed).toContain('proxy');

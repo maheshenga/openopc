@@ -5467,6 +5467,11 @@ export const automationApprovalStatusEnum = kortixSchema.enum('automation_approv
   'consumed',
 ]);
 
+export const automationApprovalResumeAttemptStatusEnum = kortixSchema.enum(
+  'automation_approval_resume_attempt_status',
+  ['issued', 'consumed', 'expired', 'rejected'],
+);
+
 export const automationApprovalPolicyEnum = kortixSchema.enum('automation_approval_policy', [
   'project-default',
   'full-access',
@@ -5800,6 +5805,64 @@ export const automationApprovals = kortixSchema.table(
   ],
 );
 
+export const automationApprovalResumeAttempts = kortixSchema.table(
+  'automation_approval_resume_attempts',
+  {
+    attemptId: uuid('attempt_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    approvalId: uuid('approval_id')
+      .notNull()
+      .references(() => automationApprovals.approvalId, { onDelete: 'cascade' }),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => automationJobs.jobId, { onDelete: 'cascade' }),
+    stepId: uuid('step_id').notNull(),
+    leaseId: uuid('lease_id').notNull(),
+    leaseOwner: varchar('lease_owner', { length: 128 }).notNull(),
+    killSwitchGeneration: bigint('kill_switch_generation', { mode: 'number' }).notNull(),
+    resumeAfterSequence: integer('resume_after_sequence').notNull(),
+    actionHash: varchar('action_hash', { length: 71 }).notNull(),
+    tokenHash: varchar('token_hash', { length: 71 }).notNull(),
+    status: automationApprovalResumeAttemptStatusEnum('status').default('issued').notNull(),
+    issuedAt: timestamp('issued_at', { withTimezone: true, mode: 'string' }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.jobId, table.stepId],
+      foreignColumns: [automationJobSteps.jobId, automationJobSteps.stepId],
+      name: 'automation_approval_resume_attempts_job_step_fk',
+    }).onDelete('cascade'),
+    uniqueIndex('idx_automation_approval_resume_attempts_active_approval')
+      .on(table.approvalId)
+      .where(sql`${table.status} = 'issued'`),
+    index('idx_automation_approval_resume_attempts_job_status').on(
+      table.jobId,
+      table.status,
+      table.issuedAt,
+    ),
+    index('idx_automation_approval_resume_attempts_expiry')
+      .on(table.expiresAt)
+      .where(sql`${table.status} = 'issued'`),
+    check(
+      'automation_approval_resume_attempts_binding_check',
+      sql`${table.killSwitchGeneration} >= 0
+        AND ${table.resumeAfterSequence} >= 0
+        AND ${table.actionHash} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.tokenHash} ~ '^sha256:[0-9a-f]{64}$'
+        AND length(BTRIM(${table.leaseOwner})) BETWEEN 1 AND 128
+        AND ${table.expiresAt} > ${table.issuedAt}`,
+    ),
+    check(
+      'automation_approval_resume_attempts_lifecycle_check',
+      sql`(${table.status} = 'consumed' AND ${table.consumedAt} IS NOT NULL)
+        OR (${table.status} <> 'consumed' AND ${table.consumedAt} IS NULL)`,
+    ),
+  ],
+);
+
 export const automationJobEvents = kortixSchema.table(
   'automation_job_events',
   {
@@ -5958,6 +6021,7 @@ export const automationJobsRelations = relations(automationJobs, ({ one, many })
   steps: many(automationJobSteps),
   events: many(automationJobEvents),
   approvals: many(automationApprovals),
+  approvalResumeAttempts: many(automationApprovalResumeAttempts),
 }));
 
 export const automationJobStepsRelations = relations(
@@ -5968,6 +6032,7 @@ export const automationJobStepsRelations = relations(
       references: [automationJobs.jobId],
     }),
     approvals: many(automationApprovals),
+    approvalResumeAttempts: many(automationApprovalResumeAttempts),
   }),
 );
 
@@ -5978,7 +6043,7 @@ export const automationJobEventsRelations = relations(automationJobEvents, ({ on
   }),
 }));
 
-export const automationApprovalsRelations = relations(automationApprovals, ({ one }) => ({
+export const automationApprovalsRelations = relations(automationApprovals, ({ one, many }) => ({
   job: one(automationJobs, {
     fields: [automationApprovals.jobId],
     references: [automationJobs.jobId],
@@ -5987,7 +6052,26 @@ export const automationApprovalsRelations = relations(automationApprovals, ({ on
     fields: [automationApprovals.jobId, automationApprovals.stepId],
     references: [automationJobSteps.jobId, automationJobSteps.stepId],
   }),
+  resumeAttempts: many(automationApprovalResumeAttempts),
 }));
+
+export const automationApprovalResumeAttemptsRelations = relations(
+  automationApprovalResumeAttempts,
+  ({ one }) => ({
+    approval: one(automationApprovals, {
+      fields: [automationApprovalResumeAttempts.approvalId],
+      references: [automationApprovals.approvalId],
+    }),
+    job: one(automationJobs, {
+      fields: [automationApprovalResumeAttempts.jobId],
+      references: [automationJobs.jobId],
+    }),
+    step: one(automationJobSteps, {
+      fields: [automationApprovalResumeAttempts.jobId, automationApprovalResumeAttempts.stepId],
+      references: [automationJobSteps.jobId, automationJobSteps.stepId],
+    }),
+  }),
+);
 
 export const automationKillSwitchesRelations = relations(automationKillSwitches, ({ one }) => ({
   account: one(accounts, {

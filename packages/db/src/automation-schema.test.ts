@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { PgDialect, type PgTable, getTableConfig } from 'drizzle-orm/pg-core';
 import {
   automationApprovalPolicyEnum,
+  automationApprovalResumeAttemptStatusEnum,
+  automationApprovalResumeAttempts,
   automationApprovalStatusEnum,
   automationApprovals,
   automationBrowserProfileStatusEnum,
@@ -93,16 +95,63 @@ describe('automation durable schema', () => {
       'consumed',
     ]);
     expect(automationApprovalPolicyEnum.enumValues).toEqual(['project-default', 'full-access']);
+    expect(automationApprovalResumeAttemptStatusEnum.enumValues).toEqual([
+      'issued',
+      'consumed',
+      'expired',
+      'rejected',
+    ]);
     expect(automationBrowserProfileStatusEnum.enumValues).toEqual(['active', 'revoked', 'expired']);
     expect(automationKillSwitchScopeEnum.enumValues).toEqual(['account', 'project', 'device']);
   });
 
-  test('places all seven automation tables in the kortix schema', () => {
+  test('stores lease-bound browser approval resume attempts without raw credentials', () => {
+    expect(getTableConfig(automationApprovalResumeAttempts).name).toBe(
+      'automation_approval_resume_attempts',
+    );
+    expect(columnNames(automationApprovalResumeAttempts)).toEqual(
+      expect.arrayContaining([
+        'attempt_id',
+        'account_id',
+        'project_id',
+        'approval_id',
+        'job_id',
+        'step_id',
+        'lease_id',
+        'lease_owner',
+        'kill_switch_generation',
+        'resume_after_sequence',
+        'action_hash',
+        'token_hash',
+        'status',
+        'issued_at',
+        'expires_at',
+        'consumed_at',
+      ]),
+    );
+    expect(indexNames(automationApprovalResumeAttempts)).toEqual(
+      expect.arrayContaining([
+        'idx_automation_approval_resume_attempts_active_approval',
+        'idx_automation_approval_resume_attempts_job_status',
+        'idx_automation_approval_resume_attempts_expiry',
+      ]),
+    );
+    expect(checkConstraintNames(automationApprovalResumeAttempts)).toEqual(
+      expect.arrayContaining([
+        'automation_approval_resume_attempts_binding_check',
+        'automation_approval_resume_attempts_lifecycle_check',
+      ]),
+    );
+    expect(columnNames(automationApprovalResumeAttempts)).not.toContain('token');
+  });
+
+  test('places all eight automation tables in the kortix schema', () => {
     const expectedNames = new Map<PgTable, string>([
       [automationJobs, 'automation_jobs'],
       [automationJobSteps, 'automation_job_steps'],
       [automationJobEvents, 'automation_job_events'],
       [automationApprovals, 'automation_approvals'],
+      [automationApprovalResumeAttempts, 'automation_approval_resume_attempts'],
       [automationPolicies, 'automation_policies'],
       [automationBrowserProfiles, 'automation_browser_profiles'],
       [automationKillSwitches, 'automation_kill_switches'],
@@ -311,5 +360,33 @@ describe('automation migration', () => {
     expect(migration).toContain('worker_ordinal IS NOT NULL');
     expect(migration).toContain('idx_automation_job_events_worker_ordinal_unique');
     expect(migration).not.toMatch(/DROP\s+(?:TABLE|COLUMN)/i);
+  });
+
+  test('creates durable browser approval resume attempts with bound lifecycle constraints', () => {
+    const migration = readFileSync(
+      join(
+        import.meta.dir,
+        '..',
+        'migrations',
+        '20260723120000000_automation_browser_approval_resume.sql',
+      ),
+      'utf8',
+    );
+
+    expect(migration).toContain(
+      'CREATE TABLE IF NOT EXISTS kortix.automation_approval_resume_attempts',
+    );
+    expect(migration).toContain('automation_approval_resume_attempts_lifecycle_check');
+    expect(migration).toContain(
+      'REFERENCES kortix.automation_approvals(approval_id) ON DELETE CASCADE',
+    );
+    expect(migration).toContain('REFERENCES kortix.automation_jobs(job_id) ON DELETE CASCADE');
+    expect(migration).toContain('FOREIGN KEY (job_id, step_id)');
+    expect(migration).toContain('REFERENCES kortix.automation_job_steps(job_id, step_id)');
+    expect(migration).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_approval_resume_attempts_active_approval',
+    );
+    expect(migration).toContain("WHERE status = 'issued'");
+    expect(migration).not.toMatch(/\btoken\s+(?:text|varchar)/i);
   });
 });

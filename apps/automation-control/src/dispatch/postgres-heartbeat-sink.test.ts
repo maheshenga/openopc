@@ -413,16 +413,78 @@ describe('PostgreSQL heartbeat event sink', () => {
     }
   });
 
-  test('fails closed on success until durable validation is wired', async () => {
-    const events = [{ type: 'job_succeeded' as const, payload: {}, trace_id: null }];
+  test('succeeds the job only after locking and verifying every step', async () => {
+    const { db, state } = fakeDatabase([
+      [{ jobId: JOB_ID, status: 'running' }],
+      [{ value: 2 }],
+      [
+        { stepId: STEP_ID, sequence: 1, status: 'succeeded' },
+        {
+          stepId: '50000000-0000-4000-a000-000000000002',
+          sequence: 2,
+          status: 'succeeded',
+        },
+      ],
+      [{ value: 6 }],
+    ]);
+    const input = {
+      ...heartbeatInput(3),
+      event: { type: 'job_succeeded' as const, payload: {}, trace_id: null },
+    };
 
-    for (const event of events) {
-      const { db, state } = fakeDatabase([]);
-      await expect(
-        createPostgresHeartbeatEventSink(db).append({ ...heartbeatInput(), event }),
-      ).resolves.toEqual({ accepted: false, reason: 'semantic_mismatch' });
-      expect(state.transactions).toBe(0);
+    const result = await createPostgresHeartbeatEventSink(db).append(input);
+
+    expect(result).toMatchObject({
+      accepted: true,
+      event: { type: 'job_succeeded', status: 'succeeded', sequence: 7 },
+    });
+    expect(state.updateTargets).toEqual(['job']);
+    expect(state.updates).toEqual([
+      expect.objectContaining({
+        status: 'succeeded',
+        terminalAt: NOW.toISOString(),
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      }),
+    ]);
+    expect(state.rowLocks).toBe(2);
+    expect(state.inserts).toHaveLength(1);
+  });
+
+  test('rejects job success when the step set is empty or incomplete', async () => {
+    const invalidStepSets = [
+      [],
+      [{ stepId: STEP_ID, sequence: 1, status: 'pending' }],
+      [{ stepId: STEP_ID, sequence: 1, status: 'running' }],
+      [
+        { stepId: STEP_ID, sequence: 1, status: 'succeeded' },
+        {
+          stepId: '50000000-0000-4000-a000-000000000002',
+          sequence: 2,
+          status: 'running',
+        },
+      ],
+    ];
+
+    for (const stepRows of invalidStepSets) {
+      const { db, state } = fakeDatabase([
+        [{ jobId: JOB_ID, status: 'running' }],
+        [{ value: 0 }],
+        stepRows,
+      ]);
+      const input = {
+        ...heartbeatInput(),
+        event: { type: 'job_succeeded' as const, payload: {}, trace_id: null },
+      };
+
+      await expect(createPostgresHeartbeatEventSink(db).append(input)).resolves.toEqual({
+        accepted: false,
+        reason: 'semantic_mismatch',
+      });
+      expect(state.updateTargets).toHaveLength(0);
+      expect(state.updates).toHaveLength(0);
       expect(state.inserts).toHaveLength(0);
+      expect(state.rowLocks).toBe(2);
     }
   });
 

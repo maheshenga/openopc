@@ -25,9 +25,8 @@ function projectWorkerEvent(
 ): Pick<AppendAutomationEventInput, 'event' | 'transition'> | null {
   switch (event.type) {
     case 'approval_required':
-    case 'job_succeeded':
-      // These intents require atomic automation_job_steps validation and, for approval,
-      // a durable pause/resume handoff. Reject them until that runtime is composed.
+      // Approval requires a durable pause/resume handoff. Reject it until that
+      // runtime is composed.
       return null;
     case 'step_started':
       return {
@@ -39,6 +38,17 @@ function projectWorkerEvent(
           trace_id: event.trace_id,
         },
         transition: null,
+      };
+    case 'job_succeeded':
+      return {
+        event: {
+          protocol_version: 'automation.v1',
+          type: event.type,
+          status: 'succeeded',
+          payload: event.payload,
+          trace_id: event.trace_id,
+        },
+        transition: { type: 'succeeded' },
       };
     case 'step_completed':
       return {
@@ -256,6 +266,21 @@ export function createPostgresHeartbeatEventSink(db: Database): HeartbeatEventSi
             )
             .returning({ stepId: automationJobSteps.stepId });
           if (!updatedStep) {
+            return { accepted: false, reason: 'semantic_mismatch' } as const;
+          }
+        }
+
+        if (input.event.type === 'job_succeeded') {
+          const steps = await tx
+            .select({
+              stepId: automationJobSteps.stepId,
+              sequence: automationJobSteps.sequence,
+              status: automationJobSteps.status,
+            })
+            .from(automationJobSteps)
+            .where(eq(automationJobSteps.jobId, input.binding.jobId))
+            .for('update');
+          if (steps.length === 0 || steps.some((step) => step.status !== 'succeeded')) {
             return { accepted: false, reason: 'semantic_mismatch' } as const;
           }
         }

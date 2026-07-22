@@ -9,13 +9,17 @@ import {
 import { createPostgresApprovalService } from './approval-service';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
+const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000002';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
+const OTHER_PROJECT_ID = '20000000-0000-4000-a000-000000000002';
 const JOB_ID = '30000000-0000-4000-a000-000000000001';
 const STEP_ID = '40000000-0000-4000-a000-000000000001';
 const PREVIOUS_STEP_ID = '40000000-0000-4000-a000-000000000002';
 const NEXT_STEP_ID = '40000000-0000-4000-a000-000000000003';
 const USER_ID = '50000000-0000-4000-a000-000000000001';
+const OTHER_USER_ID = '50000000-0000-4000-a000-000000000002';
 const APPROVAL_ID = '60000000-0000-4000-a000-000000000001';
+const OTHER_APPROVAL_ID = '60000000-0000-4000-a000-000000000002';
 const EVENT_ID = '70000000-0000-4000-a000-000000000001';
 const ACTION_HASH = `sha256:${'a'.repeat(64)}` as const;
 const PREVIOUS_HASH = `sha256:${'b'.repeat(64)}` as const;
@@ -203,7 +207,16 @@ function durableSteps() {
   ];
 }
 
-function resolveInput(decision: 'approve' | 'reject' = 'approve') {
+function resolveInput(
+  decision: 'approve' | 'reject' = 'approve',
+  overrides: {
+    accountId?: string;
+    projectId?: string;
+    approvalId?: string;
+    actionHash?: `sha256:${string}`;
+    actorUserId?: string;
+  } = {},
+) {
   return {
     accountId: ACCOUNT_ID,
     projectId: PROJECT_ID,
@@ -211,6 +224,7 @@ function resolveInput(decision: 'approve' | 'reject' = 'approve') {
     actionHash: ACTION_HASH,
     actorUserId: USER_ID,
     decision,
+    ...overrides,
   } as const;
 }
 
@@ -351,6 +365,12 @@ describe('PostgreSQL execution approval resolution', () => {
       workerLeaseId: null,
       workerOrdinal: null,
     });
+    expect((state.inserts[0]?.payload as Record<string, unknown>).resume_after_sequence).not.toBe(
+      1,
+    );
+    expect((state.inserts[0]?.payload as Record<string, unknown>).resume_after_sequence).not.toBe(
+      39,
+    );
   });
 
   test('atomically rejects a valid durable execution pause', async () => {
@@ -452,4 +472,194 @@ describe('PostgreSQL execution approval resolution', () => {
       expect(state.inserts[0]).toMatchObject({ type: 'job_expired', status: 'expired' });
     });
   }
+
+  for (const rejectionCase of [
+    {
+      name: 'wrong account',
+      expectedCode: 'AUTOMATION_NOT_FOUND',
+      input: resolveInput('approve', { accountId: OTHER_ACCOUNT_ID }),
+    },
+    {
+      name: 'wrong project',
+      expectedCode: 'AUTOMATION_NOT_FOUND',
+      input: resolveInput('approve', { projectId: OTHER_PROJECT_ID }),
+    },
+    {
+      name: 'wrong actor',
+      expectedCode: 'AUTOMATION_FORBIDDEN',
+      input: resolveInput('approve', { actorUserId: OTHER_USER_ID }),
+    },
+    {
+      name: 'wrong action hash',
+      expectedCode: 'AUTOMATION_CONFLICT',
+      input: resolveInput('approve', { actionHash: NEXT_HASH }),
+    },
+    {
+      name: 'approval already resolved',
+      expectedCode: 'AUTOMATION_CONFLICT',
+      input: resolveInput(),
+      approval: approvalRow({
+        status: 'approved',
+        actingUserId: USER_ID,
+        tokenHash: PREVIOUS_HASH,
+        resolvedAt: NOW.toISOString(),
+      }),
+    },
+    {
+      name: 'job not awaiting approval',
+      expectedCode: 'AUTOMATION_CONFLICT',
+      input: resolveInput(),
+      job: jobRow({ status: 'running' }),
+    },
+    {
+      name: 'job still has a lease',
+      expectedCode: 'AUTOMATION_CONFLICT',
+      input: resolveInput(),
+      job: jobRow({
+        leaseOwner: 'worker:test',
+        leaseExpiresAt: '2026-07-23T10:05:00.000Z',
+      }),
+    },
+    {
+      name: 'target step not awaiting approval',
+      expectedCode: 'AUTOMATION_CONFLICT',
+      input: resolveInput(),
+      steps: durableSteps().map((step) =>
+        step.stepId === STEP_ID ? { ...step, status: 'pending' } : step,
+      ),
+    },
+    {
+      name: 'target approval id mismatch',
+      expectedCode: 'AUTOMATION_CONFLICT',
+      input: resolveInput(),
+      steps: durableSteps().map((step) =>
+        step.stepId === STEP_ID ? { ...step, approvalId: OTHER_APPROVAL_ID } : step,
+      ),
+    },
+    {
+      name: 'incomplete previous step',
+      expectedCode: 'AUTOMATION_CONFLICT',
+      input: resolveInput(),
+      steps: durableSteps().map((step) =>
+        step.stepId === PREVIOUS_STEP_ID ? { ...step, status: 'pending' } : step,
+      ),
+    },
+    {
+      name: 'started later step',
+      expectedCode: 'AUTOMATION_CONFLICT',
+      input: resolveInput(),
+      steps: durableSteps().map((step) =>
+        step.stepId === NEXT_STEP_ID ? { ...step, status: 'running' } : step,
+      ),
+    },
+    {
+      name: 'kill-switch generation changed before approve',
+      expectedCode: 'AUTOMATION_CONFLICT',
+      input: resolveInput(),
+      generation: 8,
+    },
+  ]) {
+    test(`rejects ${rejectionCase.name} without partial state`, async () => {
+      const { db, state } = fakeDatabase([
+        [rejectionCase.approval ?? approvalRow()],
+        [rejectionCase.job ?? jobRow()],
+        rejectionCase.steps ?? durableSteps(),
+        [{ value: 3 }],
+      ]);
+      const service = createPostgresApprovalService(db, {
+        now: () => NOW,
+        currentGeneration: async () => rejectionCase.generation ?? 7,
+        durableExecutionResolutionEnabled: true,
+        newEventId: () => EVENT_ID,
+      });
+
+      await expect(service.resolve(rejectionCase.input)).rejects.toMatchObject({
+        code: rejectionCase.expectedCode,
+      });
+      expect(state.commits).toBe(0);
+      expect(state.rollbacks).toBe(1);
+      expect(state.updates).toEqual([]);
+      expect(state.inserts).toEqual([]);
+      expect(JSON.stringify([...state.updates, ...state.inserts])).not.toContain('approval.v1.');
+    });
+  }
+
+  test('uses zero as the resume cursor when the approval target is the first step', async () => {
+    const { db, state } = fakeDatabase([
+      [approvalRow()],
+      [jobRow()],
+      [
+        {
+          stepId: NEXT_STEP_ID,
+          sequence: 90,
+          status: 'pending',
+          actionHash: NEXT_HASH,
+          approvalId: null,
+        },
+        {
+          stepId: STEP_ID,
+          sequence: 40,
+          status: 'awaiting_approval',
+          actionHash: ACTION_HASH,
+          approvalId: APPROVAL_ID,
+        },
+      ],
+      [{ value: 12 }],
+    ]);
+    const service = createPostgresApprovalService(db, {
+      now: () => NOW,
+      currentGeneration: async () => 7,
+      durableExecutionResolutionEnabled: true,
+      newEventId: () => EVENT_ID,
+    });
+
+    await service.resolve(resolveInput());
+
+    expect(state.inserts[0]).toMatchObject({
+      sequence: 13,
+      payload: { resume_after_sequence: 0 },
+    });
+  });
+
+  for (const updateTarget of ['step', 'approval', 'job'] as const) {
+    test(`rolls back when the ${updateTarget} conditional update returns no row`, async () => {
+      const { db, state } = fakeDatabase(
+        [[approvalRow()], [jobRow()], durableSteps(), [{ value: 3 }]],
+        { updateReturning: { [updateTarget]: [] } },
+      );
+      const service = createPostgresApprovalService(db, {
+        now: () => NOW,
+        currentGeneration: async () => 7,
+        durableExecutionResolutionEnabled: true,
+        newEventId: () => EVENT_ID,
+      });
+
+      await expect(service.resolve(resolveInput())).rejects.toMatchObject({
+        code: 'AUTOMATION_CONFLICT',
+      });
+      expect(state.commits).toBe(0);
+      expect(state.rollbacks).toBe(1);
+      expect(state.updates).toEqual([]);
+      expect(state.inserts).toEqual([]);
+    });
+  }
+
+  test('rolls back and preserves the database error when event insertion fails', async () => {
+    const { db, state } = fakeDatabase(
+      [[approvalRow()], [jobRow()], durableSteps(), [{ value: 3 }]],
+      { failInsertTarget: 'event' },
+    );
+    const service = createPostgresApprovalService(db, {
+      now: () => NOW,
+      currentGeneration: async () => 7,
+      durableExecutionResolutionEnabled: true,
+      newEventId: () => EVENT_ID,
+    });
+
+    await expect(service.resolve(resolveInput())).rejects.toThrow('fake event insert failed');
+    expect(state.commits).toBe(0);
+    expect(state.rollbacks).toBe(1);
+    expect(state.updates).toEqual([]);
+    expect(state.inserts).toEqual([]);
+  });
 });

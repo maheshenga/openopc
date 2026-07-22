@@ -4,5 +4,6 @@
 export * from './compatibility.js';
 export * from './ag-ui.js';
 export * from './automation.js';
+export * from './automation-desktop-executor.js';
 export * from './capability-catalog.js';
 export * from './schemas.js';

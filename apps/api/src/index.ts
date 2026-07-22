@@ -45,6 +45,7 @@ import { isPlatinumSandboxNotRunningError } from './shared/platinum';
 import { db, hasDatabase } from './shared/db';
 import { getPlatformRole } from './shared/platform-roles';
 import { platformSettings } from '@kortix/db';
+import { AUTOMATION_DESKTOP_EXECUTOR_BASE_PATH } from '@kortix/intelligence-contracts';
 import { eq } from 'drizzle-orm';
 import { ensureSchema } from './ensure-schema';
 import { initModelPricing, stopModelPricing } from './router/config/model-pricing';
@@ -76,7 +77,7 @@ import { auditStateChangingRequest } from './shared/audit';
 import { opsApp } from './ops';
 import { adminApp } from './admin';
 import { closeDefaultStudioApiRuntime } from './studio/default-routes';
-import { automationApp } from './automation/runtime';
+import { automationApp, automationDesktopExecutorApp } from './automation/runtime';
 import {
   startDefaultIntelligenceWorkflowRuntime,
   stopDefaultIntelligenceWorkflowRuntime,
@@ -697,6 +698,7 @@ registerSunaMigrationRoutes(projectsApp); // /v1/projects/suna-migration/* (OG S
 app.route('/v1/projects', projectsApp); // /v1/projects — Git-backed Kortix projects
 app.route('/v1/marketplace', marketplaceApp); // /v1/marketplace — browse the registry catalog
 app.route('/v1/automation', automationApp); // OpenOPC project-scoped browser/desktop automation
+app.route(AUTOMATION_DESKTOP_EXECUTOR_BASE_PATH, automationDesktopExecutorApp);
 
 // Universal git smart-HTTP proxy — every git-backed project's client origin.
 // Auth is handled inside (git sends Basic/Bearer, not combinedAuth's Bearer),

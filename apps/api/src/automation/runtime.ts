@@ -1,12 +1,18 @@
-import { tunnelConnections } from '@kortix/db';
-import { desc, eq } from 'drizzle-orm';
+import { projects, tunnelConnections } from '@kortix/db';
+import { AUTOMATION_DESKTOP_EXECUTOR_AUDIENCE } from '@kortix/intelligence-contracts';
+import { and, desc, eq } from 'drizzle-orm';
 import { config } from '../config';
 import { getRequestContext } from '../lib/request-context';
 import { supabaseAuth } from '../middleware/auth';
 import { loadProjectForUser } from '../projects/lib/access';
 import { db } from '../shared/db';
 import { isTunnelConnectionLive } from '../tunnel/core/cluster-forwarder';
+import { executeTunnelRpc } from '../tunnel/core/rpc-core';
 import { createAutomationControlClient } from './control-client';
+import {
+  createAutomationDesktopExecutorApp,
+  createMemoryAutomationDesktopNonceStore,
+} from './desktop-executor';
 import { createAutomationApiApp } from './index';
 
 const controlClient = createAutomationControlClient({
@@ -49,4 +55,42 @@ export const automationApp = createAutomationApiApp({
       }));
     },
   },
+});
+
+// This store is deliberately process-local while the bridge remains default-off.
+// Production rollout stays blocked until an atomic shared nonce store is wired.
+const desktopExecutorNonceStore = createMemoryAutomationDesktopNonceStore();
+
+export const automationDesktopExecutorApp = createAutomationDesktopExecutorApp({
+  controlEnabled: config.AUTOMATION_CONTROL_ENABLED,
+  desktopExecutorEnabled: config.AUTOMATION_DESKTOP_EXECUTOR_ENABLED,
+  sharedSecret: config.AUTOMATION_CONTROL_SHARED_SECRET,
+  allowedServiceIds: [config.AUTOMATION_CONTROL_SERVICE_ID],
+  audience: AUTOMATION_DESKTOP_EXECUTOR_AUDIENCE,
+  nonceStore: desktopExecutorNonceStore,
+  async verifyProjectScope({ accountId, projectId }) {
+    const [project] = await db
+      .select({ projectId: projects.projectId })
+      .from(projects)
+      .where(
+        and(
+          eq(projects.projectId, projectId),
+          eq(projects.accountId, accountId),
+          eq(projects.status, 'active'),
+        ),
+      )
+      .limit(1);
+    return project !== undefined;
+  },
+  async verifyTunnelOwnership({ accountId, tunnelId }) {
+    const [tunnel] = await db
+      .select({ tunnelId: tunnelConnections.tunnelId })
+      .from(tunnelConnections)
+      .where(
+        and(eq(tunnelConnections.tunnelId, tunnelId), eq(tunnelConnections.accountId, accountId)),
+      )
+      .limit(1);
+    return tunnel !== undefined;
+  },
+  executeTunnelRpc,
 });

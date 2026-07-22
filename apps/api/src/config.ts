@@ -117,7 +117,14 @@ const envSchema = z.object({
   INTELLIGENCE_AG_UI_ENABLED:       optBoolFalse,
   // Independent automation control plane. Inert unless explicitly enabled.
   AUTOMATION_CONTROL_ENABLED:       optBoolFalse,
+  // Internal Control -> API desktop relay. Requires the control-plane flag too.
+  AUTOMATION_DESKTOP_EXECUTOR_ENABLED: optBoolFalse,
   AUTOMATION_CONTROL_URL:           optUrl('http://localhost:4011'),
+  AUTOMATION_CONTROL_SERVICE_ID:    z
+    .string()
+    .regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/)
+    .optional()
+    .default('automation-control'),
   AUTOMATION_CONTROL_SHARED_SECRET: optStr,
   AUTOMATION_CONTROL_MTLS_CA:       optStr,
   AUTOMATION_CONTROL_TIMEOUT_MS:    optBoundedInt(10_000, 100, 60_000),
@@ -531,6 +538,16 @@ function validateEnv(): z.infer<typeof envSchema> {
   const automationControlEnabled = ['true', '1', 'yes', 'on'].includes(
     String(raw.AUTOMATION_CONTROL_ENABLED ?? '').trim().toLowerCase(),
   );
+  const automationDesktopExecutorEnabled = ['true', '1', 'yes', 'on'].includes(
+    String(raw.AUTOMATION_DESKTOP_EXECUTOR_ENABLED ?? '').trim().toLowerCase(),
+  );
+  if (automationDesktopExecutorEnabled && !automationControlEnabled) {
+    issues.push({
+      var: 'AUTOMATION_DESKTOP_EXECUTOR_ENABLED',
+      message: 'Requires AUTOMATION_CONTROL_ENABLED=true',
+      level: 'error',
+    });
+  }
   if (automationControlEnabled && (raw.AUTOMATION_CONTROL_SHARED_SECRET?.length ?? 0) < 32) {
     issues.push({
       var: 'AUTOMATION_CONTROL_SHARED_SECRET',
@@ -637,7 +654,9 @@ export const config = {
   INTELLIGENCE_WORKFLOWS_ENABLED: env.INTELLIGENCE_WORKFLOWS_ENABLED,
   INTELLIGENCE_AG_UI_ENABLED: env.INTELLIGENCE_AG_UI_ENABLED,
   AUTOMATION_CONTROL_ENABLED: env.AUTOMATION_CONTROL_ENABLED,
+  AUTOMATION_DESKTOP_EXECUTOR_ENABLED: env.AUTOMATION_DESKTOP_EXECUTOR_ENABLED,
   AUTOMATION_CONTROL_URL: env.AUTOMATION_CONTROL_URL,
+  AUTOMATION_CONTROL_SERVICE_ID: env.AUTOMATION_CONTROL_SERVICE_ID,
   AUTOMATION_CONTROL_SHARED_SECRET: env.AUTOMATION_CONTROL_SHARED_SECRET,
   AUTOMATION_CONTROL_MTLS_CA: env.AUTOMATION_CONTROL_MTLS_CA,
   AUTOMATION_CONTROL_TIMEOUT_MS: env.AUTOMATION_CONTROL_TIMEOUT_MS,

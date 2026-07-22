@@ -1,5 +1,6 @@
 import { projects, tunnelConnections } from '@kortix/db';
 import { AUTOMATION_DESKTOP_EXECUTOR_AUDIENCE } from '@kortix/intelligence-contracts';
+import { RedisClient } from 'bun';
 import { and, desc, eq } from 'drizzle-orm';
 import { config } from '../config';
 import { getRequestContext } from '../lib/request-context';
@@ -12,6 +13,7 @@ import { createAutomationControlClient } from './control-client';
 import {
   createAutomationDesktopExecutorApp,
   createMemoryAutomationDesktopNonceStore,
+  createRedisAutomationDesktopNonceStore,
 } from './desktop-executor';
 import { createAutomationApiApp } from './index';
 
@@ -57,9 +59,14 @@ export const automationApp = createAutomationApiApp({
   },
 });
 
-// This store is deliberately process-local while the bridge remains default-off.
-// Production rollout stays blocked until an atomic shared nonce store is wired.
-const desktopExecutorNonceStore = createMemoryAutomationDesktopNonceStore();
+const automationRedis = config.AUTOMATION_DESKTOP_EXECUTOR_ENABLED
+  ? new RedisClient(config.AUTOMATION_REDIS_URL)
+  : null;
+const desktopExecutorNonceStore = automationRedis
+  ? createRedisAutomationDesktopNonceStore({
+      send: (command, args) => automationRedis.send(command, args),
+    })
+  : createMemoryAutomationDesktopNonceStore();
 
 export const automationDesktopExecutorApp = createAutomationDesktopExecutorApp({
   controlEnabled: config.AUTOMATION_CONTROL_ENABLED,

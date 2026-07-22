@@ -65,6 +65,35 @@ export function createMemoryAutomationDesktopNonceStore(): AutomationDesktopNonc
   return new MemoryAutomationDesktopNonceStore();
 }
 
+export type AutomationRedisCommandClient = Readonly<{
+  send(command: string, args: string[]): Promise<unknown>;
+}>;
+
+/** Shared production store. Redis owns expiry so replay state is bounded across API replicas. */
+export function createRedisAutomationDesktopNonceStore(
+  client: AutomationRedisCommandClient,
+  options?: { keyPrefix?: string },
+): AutomationDesktopNonceStore {
+  const keyPrefix = options?.keyPrefix ?? 'automation:desktop-executor:nonce:v1';
+  return {
+    async consume(input) {
+      const ttlMs = input.expiresAt.getTime() - input.now.getTime();
+      if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) return false;
+      const keyDigest = createHash('sha256')
+        .update(`${input.serviceId}\0${input.nonce}`)
+        .digest('hex');
+      const reserved = await client.send('SET', [
+        `${keyPrefix}:${keyDigest}`,
+        '1',
+        'PX',
+        String(ttlMs),
+        'NX',
+      ]);
+      return reserved === 'OK';
+    },
+  };
+}
+
 export type AutomationDesktopExecutorDependencies = Readonly<{
   controlEnabled: boolean;
   desktopExecutorEnabled: boolean;

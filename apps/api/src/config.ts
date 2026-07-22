@@ -127,6 +127,7 @@ const envSchema = z.object({
     .default('automation-control'),
   AUTOMATION_CONTROL_SHARED_SECRET: optStr,
   AUTOMATION_CONTROL_MTLS_CA:       optStr,
+  AUTOMATION_REDIS_URL:             optStr,
   AUTOMATION_CONTROL_TIMEOUT_MS:    optBoundedInt(10_000, 100, 60_000),
   AUTOMATION_CONTROL_STREAM_TIMEOUT_MS: optBoundedInt(60_000, 1_000, 120_000),
 
@@ -555,6 +556,16 @@ function validateEnv(): z.infer<typeof envSchema> {
       level: 'error',
     });
   }
+  if (
+    automationDesktopExecutorEnabled &&
+    !/^rediss?:\/\//.test(String(raw.AUTOMATION_REDIS_URL ?? ''))
+  ) {
+    issues.push({
+      var: 'AUTOMATION_REDIS_URL',
+      message: 'Must be a Redis URL when the automation desktop executor is enabled',
+      level: 'error',
+    });
+  }
 
   // ── Conditional: Tunnel enabled → need signing secret ──────────────────
   const tunnelEnabled = (raw as any).TUNNEL_ENABLED !== 'false' && (raw as any).TUNNEL_ENABLED !== false;
@@ -659,6 +670,7 @@ export const config = {
   AUTOMATION_CONTROL_SERVICE_ID: env.AUTOMATION_CONTROL_SERVICE_ID,
   AUTOMATION_CONTROL_SHARED_SECRET: env.AUTOMATION_CONTROL_SHARED_SECRET,
   AUTOMATION_CONTROL_MTLS_CA: env.AUTOMATION_CONTROL_MTLS_CA,
+  AUTOMATION_REDIS_URL: env.AUTOMATION_REDIS_URL,
   AUTOMATION_CONTROL_TIMEOUT_MS: env.AUTOMATION_CONTROL_TIMEOUT_MS,
   AUTOMATION_CONTROL_STREAM_TIMEOUT_MS: env.AUTOMATION_CONTROL_STREAM_TIMEOUT_MS,
 

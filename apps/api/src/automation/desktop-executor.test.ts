@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import {
   createAutomationDesktopExecutorApp,
   createMemoryAutomationDesktopNonceStore,
+  createRedisAutomationDesktopNonceStore,
 } from './desktop-executor';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
@@ -386,5 +387,61 @@ describe('automation desktop executor bridge', () => {
     expect(response.status).toBe(400);
     expect(scopeCalls).toBe(0);
     expect(relayCalls).toBe(0);
+  });
+});
+
+describe('automation desktop executor shared nonce store', () => {
+  test('atomically reserves a hashed Redis key for exactly the remaining proof window', async () => {
+    const commands: Array<{ command: string; args: string[] }> = [];
+    const results: unknown[] = ['OK', null];
+    const store = createRedisAutomationDesktopNonceStore({
+      async send(command, args) {
+        commands.push({ command, args: [...args] });
+        return results.shift();
+      },
+    });
+    const input = {
+      serviceId: 'automation-control',
+      nonce: NONCE,
+      now: NOW,
+      expiresAt: new Date(NOW.getTime() + 45_000),
+    };
+
+    await expect(store.consume(input)).resolves.toBeTrue();
+    await expect(store.consume(input)).resolves.toBeFalse();
+
+    expect(commands).toHaveLength(2);
+    expect(commands[0]).toEqual({
+      command: 'SET',
+      args: [
+        expect.stringMatching(/^automation:desktop-executor:nonce:v1:[a-f0-9]{64}$/),
+        '1',
+        'PX',
+        '45000',
+        'NX',
+      ],
+    });
+    expect(commands[0]?.args[0]).not.toContain(input.serviceId);
+    expect(commands[0]?.args[0]).not.toContain(input.nonce);
+  });
+
+  test('fails closed without touching Redis when the nonce lifetime is already exhausted', async () => {
+    let commands = 0;
+    const store = createRedisAutomationDesktopNonceStore({
+      async send() {
+        commands += 1;
+        return 'OK';
+      },
+    });
+
+    await expect(
+      store.consume({
+        serviceId: 'automation-control',
+        nonce: NONCE,
+        now: NOW,
+        expiresAt: new Date(NOW.getTime()),
+      }),
+    ).resolves.toBeFalse();
+    expect(commands).toBe(0);
   });
 });

@@ -5812,12 +5812,18 @@ export const automationJobEvents = kortixSchema.table(
     status: automationJobStatusEnum('status'),
     payload: jsonb('payload').default({}).notNull().$type<Record<string, unknown>>(),
     traceId: varchar('trace_id', { length: 32 }),
+    workerId: varchar('worker_id', { length: 128 }),
+    workerLeaseId: uuid('worker_lease_id'),
+    workerOrdinal: bigint('worker_ordinal', { mode: 'number' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
       .notNull(),
   },
   (table) => [
     unique('automation_job_events_job_sequence_unique').on(table.jobId, table.sequence),
+    uniqueIndex('idx_automation_job_events_worker_ordinal_unique')
+      .on(table.jobId, table.workerId, table.workerLeaseId, table.workerOrdinal)
+      .where(sql`${table.workerId} IS NOT NULL`),
     index('idx_automation_job_events_job_created').on(table.jobId, table.createdAt),
     check('automation_job_events_sequence_positive_check', sql`${table.sequence} > 0`),
     check(
@@ -5835,6 +5841,20 @@ export const automationJobEvents = kortixSchema.table(
     check(
       'automation_job_events_trace_id_check',
       sql`${table.traceId} IS NULL OR ${table.traceId} ~ '^[0-9a-f]{32}$'`,
+    ),
+    check(
+      'automation_job_events_worker_receipt_check',
+      sql`(
+          ${table.workerId} IS NULL
+          AND ${table.workerLeaseId} IS NULL
+          AND ${table.workerOrdinal} IS NULL
+        ) OR (
+          ${table.workerId} IS NOT NULL
+          AND ${table.workerLeaseId} IS NOT NULL
+          AND ${table.workerOrdinal} IS NOT NULL
+          AND ${table.workerId} ~ '^[A-Za-z][A-Za-z0-9._:-]{0,127}$'
+          AND ${table.workerOrdinal} > 0
+        )`,
     ),
   ],
 );

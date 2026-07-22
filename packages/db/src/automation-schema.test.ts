@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core';
+import { PgDialect, type PgTable, getTableConfig } from 'drizzle-orm/pg-core';
 import {
   automationApprovalPolicyEnum,
   automationApprovalStatusEnum,
@@ -40,6 +40,12 @@ function checkConstraintNames(table: PgTable): string[] {
   return getTableConfig(table)
     .checks.map((constraint) => constraint.name)
     .filter((name): name is string => name !== undefined);
+}
+
+function checkConstraintSql(table: PgTable, name: string): string {
+  const constraint = getTableConfig(table).checks.find((candidate) => candidate.name === name);
+  if (!constraint) throw new Error(`Missing check constraint: ${name}`);
+  return new PgDialect().sqlToQuery(constraint.value).sql;
 }
 
 function foreignKeys(table: PgTable) {
@@ -158,6 +164,22 @@ describe('automation durable schema', () => {
     expect(checkConstraintNames(automationJobEvents)).toContain(
       'automation_job_events_sequence_positive_check',
     );
+    expect(columnNames(automationJobEvents)).toEqual(
+      expect.arrayContaining(['worker_id', 'worker_lease_id', 'worker_ordinal']),
+    );
+    expect(indexNames(automationJobEvents)).toContain(
+      'idx_automation_job_events_worker_ordinal_unique',
+    );
+    expect(checkConstraintNames(automationJobEvents)).toContain(
+      'automation_job_events_worker_receipt_check',
+    );
+    const receiptCheck = checkConstraintSql(
+      automationJobEvents,
+      'automation_job_events_worker_receipt_check',
+    );
+    expect(receiptCheck).toContain('"worker_id" IS NOT NULL');
+    expect(receiptCheck).toContain('"worker_lease_id" IS NOT NULL');
+    expect(receiptCheck).toContain('"worker_ordinal" IS NOT NULL');
   });
 
   test('binds persistent profiles and approvals to the same project and job', () => {
@@ -268,5 +290,26 @@ describe('automation migration', () => {
     expect(migration).toContain('CREATE TRIGGER automation_policies_set_updated_at');
     expect(migration).toContain('CREATE TRIGGER automation_browser_profiles_set_updated_at');
     expect(migration).not.toMatch(/(?:ALTER|DROP|CREATE)\s+TABLE\s+kortix\.tunnel_/i);
+  });
+
+  test('adds lease-scoped worker ordinal fencing without rewriting the original migration', () => {
+    const migration = readFileSync(
+      join(
+        import.meta.dir,
+        '..',
+        'migrations',
+        '20260722100000000_automation_heartbeat_durability.sql',
+      ),
+      'utf8',
+    );
+
+    expect(migration).toContain('ALTER TABLE kortix.automation_job_events');
+    expect(migration).toContain('worker_lease_id uuid');
+    expect(migration).toContain('automation_job_events_worker_receipt_check');
+    expect(migration).toContain('worker_id IS NOT NULL');
+    expect(migration).toContain('worker_lease_id IS NOT NULL');
+    expect(migration).toContain('worker_ordinal IS NOT NULL');
+    expect(migration).toContain('idx_automation_job_events_worker_ordinal_unique');
+    expect(migration).not.toMatch(/DROP\s+(?:TABLE|COLUMN)/i);
   });
 });

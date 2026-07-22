@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { createMemoryLeaseManager, verifyAutomationLeaseSignature } from './lease-manager';
+import {
+  automationLeaseOwnerPrefix,
+  createMemoryLeaseManager,
+  verifyAutomationLeaseSignature,
+} from './lease-manager';
 
 const JOB_ID = '40000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
@@ -7,6 +11,18 @@ const PERMISSION_ID = '80000000-0000-4000-a000-000000000001';
 const NOW = new Date('2026-07-22T00:00:00.000Z');
 
 describe('automation fencing leases', () => {
+  test('hashes long worker identities into a namespace no valid worker id can impersonate', () => {
+    const sharedPrefix = `browser-worker-${'a'.repeat(100)}`;
+    const first = automationLeaseOwnerPrefix(`${sharedPrefix}1`);
+    const second = automationLeaseOwnerPrefix(`${sharedPrefix}2`);
+
+    expect(first).toMatch(/^worker~sha256~[a-f0-9]{64}$/);
+    expect(second).toMatch(/^worker~sha256~[a-f0-9]{64}$/);
+    expect(first).not.toBe(second);
+    expect(first.length).toBeLessThanOrEqual(91);
+    expect(() => automationLeaseOwnerPrefix(first)).toThrow();
+  });
+
   test('claims a queued job and recognizes the current owner before expiry', async () => {
     const manager = createMemoryLeaseManager({
       sharedSecret: 'test-shared-secret-that-is-at-least-32-bytes',

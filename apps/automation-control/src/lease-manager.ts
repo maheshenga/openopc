@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { type Database, automationJobEvents, automationJobs } from '@kortix/db';
 import {
   type AutomationExecutionDomain,
@@ -38,7 +38,16 @@ type MemoryLease = {
 };
 
 const PermissionIdSchema = z.string().uuid();
-const LeaseOwnerPrefixSchema = z.string().trim().min(1).max(128);
+const LeaseOwnerPrefixSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
+
+export function automationLeaseOwnerPrefix(ownerPrefix: string): string {
+  const workerOwner = LeaseOwnerPrefixSchema.parse(ownerPrefix);
+  if (workerOwner.length <= 91) return workerOwner;
+  return `worker~sha256~${createHash('sha256').update(workerOwner).digest('hex')}`;
+}
 
 export class LeasePermissionError extends Error {
   override readonly name = 'LeasePermissionError';
@@ -68,7 +77,7 @@ function createLeaseIdentity(ownerPrefix: string): {
 } {
   const workerOwner = LeaseOwnerPrefixSchema.parse(ownerPrefix);
   const leaseId = randomUUID();
-  const owner = `${workerOwner.slice(0, 91)}:${leaseId}`;
+  const owner = `${automationLeaseOwnerPrefix(workerOwner)}:${leaseId}`;
   return { leaseId, owner, workerOwner };
 }
 

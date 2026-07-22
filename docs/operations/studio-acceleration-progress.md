@@ -1,6 +1,6 @@
 # Studio Acceleration Progress
 
-**Updated:** 2026-07-22
+**Updated:** 2026-07-23
 
 **Branch:** `studio-platform`
 
@@ -16,7 +16,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence protocol     | implemented                                             | REST, SDK, MCP, A2A, task/event commits                                                                                                     | retained regression gates                                         |
 | Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
 | OpenOPC Milestone A       | implemented, disabled by default                        | catalog, project SSE projection, SDK subscription, and focused contract/API/SDK/CLI gates verified locally                                  | production rollout and later milestones                           |
-| Automation Task 8A-8B     | desktop observe coordinator implemented; default-off    | commits `920375679`, `c6fda9161`, `497a46d35`, and `e07ffd813`; focused Control/API gates green                                                | remaining production hardening and Browser Worker runtime          |
+| Automation Task 8A-8B     | desktop observe coordinator implemented; durability hardening partial; default-off | commits `920375679`, `c6fda9161`, `497a46d35`, `e07ffd813`, and `5d4182f73`; Redis nonce runtime wiring, PostgreSQL sink/migration implementation, and focused gates verified | authenticated Browser Worker heartbeat route, sink runtime composition/concurrency validation, and remaining production hardening |
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                                            | focused Web hardening without full-suite reruns                   |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
@@ -225,12 +225,19 @@ adapter, forwards the complete signed lease under controlled parameters, and
 fences permission, action hash, device, generation, one-time approval,
 full-access expiry, deadline, and lease currentness immediately before RPC.
 
-Heartbeat inputs are restricted to worker-owned event schemas. Evidence is an
-opaque `evidence:<UUID>` reference, and the durable sink contract requires one
-transaction to revalidate the exact lease, worker ordinal, and event semantics
-before allocating sequence and inserting the event. Reclaimed leases receive a
-new per-claim fencing token, and unknown or external-effect outcomes do not
-automatically retry.
+Heartbeat inputs are restricted to worker-owned event schemas, and evidence is
+an opaque `evidence:<UUID>` reference. Commit `5d4182f73` implements the
+PostgreSQL heartbeat/ordinal sink: one transaction locks and revalidates the
+exact account, project, job, lease owner, generation, and expiry; enforces a
+contiguous ordinal scoped to the Worker and lease; allocates the next job event
+sequence; applies supported state transitions; and persists the Worker receipt.
+
+The sink is currently an implemented adapter, not a complete runtime path.
+There is no authenticated Browser Worker heartbeat route composing
+`createHeartbeatProcessor` with `createPostgresHeartbeatEventSink`, and real
+concurrent sink execution against PostgreSQL has not been verified. Reclaimed
+leases still receive a new per-claim fencing token, and unknown or
+external-effect outcomes do not automatically retry.
 
 Commits `c6fda9161` and `497a46d35` bind the desktop permission fence to the
 existing API-to-Tunnel route. Commit `e07ffd813` adds the default-off production
@@ -247,12 +254,43 @@ closes the service. Poll failures expose only a stable event name and service
 identifier. The independent `AUTOMATION_DESKTOP_COORDINATOR_ENABLED` flag stays
 false by default and cannot be enabled while Automation Control is disabled.
 
-The final focused gate passed `60/60` Automation Control tests with `220`
-assertions and `9/9` API desktop-executor bridge tests with `23` assertions.
-Automation Control typecheck, scoped Biome over 17 files, and diff checks also
-passed. No full suite was run. Durable shared API nonce storage, the durable
-heartbeat/ordinal sink, authenticated Browser Worker transport,
-dispatch-attempt idempotency and unknown-result recovery, response
+Commit `5d4182f73` also runtime-wires API desktop-executor replay protection to
+shared Redis whenever `AUTOMATION_DESKTOP_EXECUTOR_ENABLED=true`. Feature
+configuration validation requires a valid `AUTOMATION_REDIS_URL`; the runtime
+uses a hashed service/nonce key with atomic Redis `SET PX NX`. The production
+runtime selects the in-memory nonce store only while the executor is disabled,
+while tests may inject it directly. Long Worker IDs use the reserved
+`worker~sha256~<digest>` namespace so a valid short service ID cannot
+impersonate a hash alias.
+
+The same commit adds `worker_id`, `worker_lease_id`, and `worker_ordinal`
+receipts, an all-null or all-present receipt CHECK constraint, and a
+lease-scoped ordinal replay index. The real PostgreSQL migration gate verifies
+idempotent application, rejection of partial receipts, and rejection of an
+exact lease-scoped ordinal replay. It does not verify real concurrent execution
+of the PostgreSQL sink.
+
+Worker `approval_required`, `step_started`, `step_completed`, and
+`job_succeeded` events deliberately fail closed with a semantic mismatch before
+a transaction is opened. They remain unavailable until atomic
+`automation_job_steps` validation and state updates are implemented and, for
+approval, the durable pause, lease release, approval, redispatch, new-lease,
+and cursor-resume protocol exists.
+
+The fresh focused gates passed `11/11` API desktop-executor tests with `31`
+assertions, `41/41` Automation Control dispatch/sink/lease tests with `173`
+assertions, `10/10` DB schema and migration-structure tests with `68`
+assertions, and `3/3` real PostgreSQL migration tests with `11` assertions. API,
+Automation Control, and DB typechecks passed; scoped Biome over nine files and
+`git diff --check` were clean. Migration lint passed all 69 migrations while
+reporting seven pre-existing destructive-operation warnings. A live Redis probe
+accepted the first reservation, rejected its replay, and observed approximately
+`4941ms` remaining on the configured five-second TTL. No full suite was run.
+
+Authenticated Browser Worker transport, runtime composition of the heartbeat
+processor with the PostgreSQL sink, real sink concurrency validation, durable
+step and approval-resume handling, dispatch-attempt idempotency and
+unknown-result recovery, response
 authentication/mTLS enforcement, internal endpoint body-size/deadline
-hardening, and complete readiness/deployment wiring remain open. Complete Task
-8 and production readiness are therefore not claimed.
+hardening, and complete readiness/deployment wiring also remain open. Complete
+Task 8 and production readiness are therefore not claimed.

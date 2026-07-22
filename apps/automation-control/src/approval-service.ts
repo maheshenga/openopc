@@ -1,8 +1,19 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { type Database, automationApprovals, automationJobSteps, automationJobs } from '@kortix/db';
+import {
+  type Database,
+  automationApprovals,
+  automationJobEvents,
+  automationJobSteps,
+  automationJobs,
+} from '@kortix/db';
 import { type AutomationApproval, AutomationApprovalSchema } from '@kortix/intelligence-contracts';
-import { and, eq, gt, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, max, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import {
+  type AppendAutomationEventInput,
+  materializeAutomationEvent,
+  resolveAutomationEventStatus,
+} from './event-store';
 
 const UuidSchema = z.string().uuid();
 const ActionHashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -71,6 +82,13 @@ export class AutomationApprovalServiceError extends Error {
   ) {
     super(message);
     this.name = 'AutomationApprovalServiceError';
+  }
+}
+
+class DurableExecutionApprovalConflictError extends Error {
+  constructor() {
+    super('Durable execution approval state changed during resolution');
+    this.name = 'DurableExecutionApprovalConflictError';
   }
 }
 
@@ -345,8 +363,8 @@ export function createPostgresApprovalService(
 ): ApprovalService {
   const now = options?.now ?? (() => new Date());
   const currentGeneration = options?.currentGeneration ?? (async () => 0);
-  const durableExecutionResolutionEnabled =
-    options?.durableExecutionResolutionEnabled ?? false;
+  const durableExecutionResolutionEnabled = options?.durableExecutionResolutionEnabled ?? false;
+  const newEventId = options?.newEventId ?? randomUUID;
 
   return {
     async request(requestInput) {
@@ -395,75 +413,285 @@ export function createPostgresApprovalService(
     },
 
     async resolve(input) {
-      return db.transaction(async (tx) => {
-        const [approval] = await tx
-          .select()
-          .from(automationApprovals)
-          .where(eq(automationApprovals.approvalId, input.approvalId))
-          .limit(1)
-          .for('update');
-        if (!approval) throw notFound();
-        const jobQuery = tx
-          .select({
-            accountId: automationJobs.accountId,
-            projectId: automationJobs.projectId,
-            actorUserId: automationJobs.actorUserId,
-          })
-          .from(automationJobs)
-          .where(eq(automationJobs.jobId, approval.jobId))
-          .limit(1);
-        const [job] = durableExecutionResolutionEnabled
-          ? await jobQuery.for('update')
-          : await jobQuery;
-        if (!job) throw notFound();
-
-        if (durableExecutionResolutionEnabled) {
-          const steps = await tx
-            .select({
-              stepId: automationJobSteps.stepId,
-              sequence: automationJobSteps.sequence,
-              status: automationJobSteps.status,
-              actionHash: automationJobSteps.actionHash,
-              approvalId: automationJobSteps.approvalId,
-            })
-            .from(automationJobSteps)
-            .where(eq(automationJobSteps.jobId, approval.jobId))
+      try {
+        return await db.transaction(async (tx) => {
+          const [approval] = await tx
+            .select()
+            .from(automationApprovals)
+            .where(eq(automationApprovals.approvalId, input.approvalId))
+            .limit(1)
             .for('update');
-          const target = steps.find((step) => step.stepId === approval.stepId);
-          const executionPauseSignalled =
-            target?.approvalId === approval.approvalId || target?.status === 'awaiting_approval';
-          if (executionPauseSignalled) {
-            throw new AutomationApprovalServiceError(
-              'AUTOMATION_CONFLICT',
-              'Durable execution approval resolution is not composed',
-            );
+          if (!approval) throw notFound();
+          const jobQuery = tx
+            .select({
+              accountId: automationJobs.accountId,
+              projectId: automationJobs.projectId,
+              actorUserId: automationJobs.actorUserId,
+              status: automationJobs.status,
+              leaseOwner: automationJobs.leaseOwner,
+              leaseExpiresAt: automationJobs.leaseExpiresAt,
+              killSwitchGeneration: automationJobs.killSwitchGeneration,
+              deadlineAt: automationJobs.deadlineAt,
+            })
+            .from(automationJobs)
+            .where(eq(automationJobs.jobId, approval.jobId))
+            .limit(1);
+          const [job] = durableExecutionResolutionEnabled
+            ? await jobQuery.for('update')
+            : await jobQuery;
+          if (!job) throw notFound();
+
+          let steps: Array<
+            Pick<
+              typeof automationJobSteps.$inferSelect,
+              'stepId' | 'sequence' | 'status' | 'actionHash' | 'approvalId'
+            >
+          > = [];
+          if (durableExecutionResolutionEnabled) {
+            steps = await tx
+              .select({
+                stepId: automationJobSteps.stepId,
+                sequence: automationJobSteps.sequence,
+                status: automationJobSteps.status,
+                actionHash: automationJobSteps.actionHash,
+                approvalId: automationJobSteps.approvalId,
+              })
+              .from(automationJobSteps)
+              .where(eq(automationJobSteps.jobId, approval.jobId))
+              .for('update');
           }
-        }
 
-        const record: StoredApprovalRecord = {
-          approvalId: approval.approvalId,
-          accountId: job.accountId,
-          projectId: job.projectId,
-          jobId: approval.jobId,
-          stepId: approval.stepId,
-          actionHash: approval.actionHash as `sha256:${string}`,
-          requestedByUserId: job.actorUserId,
-          status: approval.status,
-          actingUserId: approval.actingUserId,
-          tokenHash: approval.tokenHash as `sha256:${string}` | null,
-          expiresAt: approval.expiresAt,
-          resolvedAt: approval.resolvedAt,
-          createdAt: approval.createdAt,
-        };
-        const resolvedAt = now();
-        assertResolvable(record, input, resolvedAt);
+          const record: StoredApprovalRecord = {
+            approvalId: approval.approvalId,
+            accountId: job.accountId,
+            projectId: job.projectId,
+            jobId: approval.jobId,
+            stepId: approval.stepId,
+            actionHash: approval.actionHash as `sha256:${string}`,
+            requestedByUserId: job.actorUserId,
+            status: approval.status,
+            actingUserId: approval.actingUserId,
+            tokenHash: approval.tokenHash as `sha256:${string}` | null,
+            expiresAt: approval.expiresAt,
+            resolvedAt: approval.resolvedAt,
+            createdAt: approval.createdAt,
+          };
+          const resolvedAt = now();
+          assertResolvable(record, input, resolvedAt);
 
-        if (input.decision === 'reject') {
+          if (durableExecutionResolutionEnabled) {
+            const orderedSteps = [...steps].sort((left, right) => left.sequence - right.sequence);
+            const targetIndex = orderedSteps.findIndex((step) => step.stepId === approval.stepId);
+            const target = orderedSteps[targetIndex];
+            const executionPauseSignalled =
+              target?.approvalId === approval.approvalId || target?.status === 'awaiting_approval';
+
+            if (executionPauseSignalled) {
+              const previousSteps = orderedSteps.slice(0, targetIndex);
+              const laterSteps = orderedSteps.slice(targetIndex + 1);
+              const validSnapshot =
+                job.status === 'awaiting_approval' &&
+                job.leaseOwner === null &&
+                job.leaseExpiresAt === null &&
+                target?.status === 'awaiting_approval' &&
+                target.approvalId === approval.approvalId &&
+                target.actionHash === approval.actionHash &&
+                previousSteps.every((step) => step.status === 'succeeded') &&
+                laterSteps.every((step) => step.status === 'pending');
+              if (!validSnapshot || !target) {
+                throw new AutomationApprovalServiceError(
+                  'AUTOMATION_CONFLICT',
+                  'Durable execution approval snapshot is invalid',
+                );
+              }
+              if (input.decision !== 'approve') {
+                throw new AutomationApprovalServiceError(
+                  'AUTOMATION_CONFLICT',
+                  'Durable execution approval resolution is not composed',
+                );
+              }
+
+              const eventInput: AppendAutomationEventInput = {
+                accountId: job.accountId,
+                projectId: job.projectId,
+                jobId: approval.jobId,
+                leaseOwner: null,
+                killSwitchGeneration: job.killSwitchGeneration,
+                event: {
+                  protocol_version: 'automation.v1',
+                  type: 'job_dispatched',
+                  status: 'dispatched',
+                  payload: {
+                    approval_id: approval.approvalId,
+                    step_id: target.stepId,
+                    action_hash: target.actionHash,
+                    decision: 'approved',
+                    resume_after_sequence: previousSteps.at(-1)?.sequence ?? 0,
+                    expires_at: approval.expiresAt,
+                  },
+                  trace_id: null,
+                },
+                transition: { type: 'approval_granted' },
+                occurredAt: resolvedAt,
+              };
+              const nextStatus = resolveAutomationEventStatus(job.status, eventInput);
+              const [maximumEvent] = await tx
+                .select({ value: max(automationJobEvents.sequence) })
+                .from(automationJobEvents)
+                .where(eq(automationJobEvents.jobId, approval.jobId));
+              const event = materializeAutomationEvent(
+                eventInput,
+                Number(maximumEvent?.value ?? 0) + 1,
+                newEventId() as ReturnType<typeof randomUUID>,
+              );
+
+              const generation = await currentGeneration({
+                accountId: job.accountId,
+                projectId: job.projectId,
+              });
+              if (generation !== job.killSwitchGeneration) {
+                throw new AutomationApprovalServiceError(
+                  'AUTOMATION_CONFLICT',
+                  'Approval generation is no longer current',
+                );
+              }
+              const token = issueRawToken();
+              const tokenHash = boundTokenHash({
+                token,
+                approvalId: approval.approvalId,
+                projectId: job.projectId,
+                actionHash: approval.actionHash,
+                expiresAt: approval.expiresAt,
+                generation,
+              });
+
+              const [updatedStep] = await tx
+                .update(automationJobSteps)
+                .set({ status: 'pending' })
+                .where(
+                  and(
+                    eq(automationJobSteps.jobId, approval.jobId),
+                    eq(automationJobSteps.stepId, target.stepId),
+                    eq(automationJobSteps.status, 'awaiting_approval'),
+                    eq(automationJobSteps.approvalId, approval.approvalId),
+                    eq(automationJobSteps.actionHash, approval.actionHash),
+                  ),
+                )
+                .returning({ stepId: automationJobSteps.stepId });
+              if (!updatedStep) throw new DurableExecutionApprovalConflictError();
+
+              const [updatedApproval] = await tx
+                .update(automationApprovals)
+                .set({
+                  status: 'approved',
+                  actingUserId: input.actorUserId,
+                  tokenHash,
+                  resolvedAt: resolvedAt.toISOString(),
+                })
+                .where(
+                  and(
+                    eq(automationApprovals.approvalId, approval.approvalId),
+                    eq(automationApprovals.jobId, approval.jobId),
+                    eq(automationApprovals.stepId, approval.stepId),
+                    eq(automationApprovals.actionHash, approval.actionHash),
+                    eq(automationApprovals.status, 'pending'),
+                    gt(automationApprovals.expiresAt, sql`clock_timestamp()`),
+                  ),
+                )
+                .returning({ approvalId: automationApprovals.approvalId });
+              if (!updatedApproval) throw new DurableExecutionApprovalConflictError();
+
+              const [updatedJob] = await tx
+                .update(automationJobs)
+                .set({
+                  status: nextStatus,
+                  updatedAt: resolvedAt.toISOString(),
+                  terminalAt: null,
+                  leaseOwner: null,
+                  leaseExpiresAt: null,
+                })
+                .where(
+                  and(
+                    eq(automationJobs.jobId, approval.jobId),
+                    eq(automationJobs.accountId, job.accountId),
+                    eq(automationJobs.projectId, job.projectId),
+                    eq(automationJobs.status, 'awaiting_approval'),
+                    isNull(automationJobs.leaseOwner),
+                    isNull(automationJobs.leaseExpiresAt),
+                    eq(automationJobs.killSwitchGeneration, job.killSwitchGeneration),
+                    gt(automationJobs.deadlineAt, sql`clock_timestamp()`),
+                  ),
+                )
+                .returning({ jobId: automationJobs.jobId });
+              if (!updatedJob) throw new DurableExecutionApprovalConflictError();
+
+              await tx.insert(automationJobEvents).values({
+                eventId: event.event_id,
+                jobId: event.job_id,
+                sequence: event.sequence,
+                type: event.type,
+                status: event.status,
+                payload: event.payload,
+                traceId: event.trace_id,
+                workerId: null,
+                workerLeaseId: null,
+                workerOrdinal: null,
+                createdAt: event.created_at,
+              });
+              return {
+                token,
+                approvalId: approval.approvalId,
+                projectId: job.projectId,
+                actionHash: approval.actionHash as `sha256:${string}`,
+                expiresAt: approval.expiresAt,
+              };
+            }
+          }
+
+          if (input.decision === 'reject') {
+            const [updated] = await tx
+              .update(automationApprovals)
+              .set({
+                status: 'rejected',
+                actingUserId: input.actorUserId,
+                resolvedAt: resolvedAt.toISOString(),
+              })
+              .where(
+                and(
+                  eq(automationApprovals.approvalId, approval.approvalId),
+                  eq(automationApprovals.status, 'pending'),
+                  gt(automationApprovals.expiresAt, sql`clock_timestamp()`),
+                ),
+              )
+              .returning({ approvalId: automationApprovals.approvalId });
+            if (!updated) {
+              throw new AutomationApprovalServiceError(
+                'AUTOMATION_APPROVAL_EXPIRED',
+                'Approval has expired',
+              );
+            }
+            return null;
+          }
+
+          const generation = await currentGeneration({
+            accountId: job.accountId,
+            projectId: job.projectId,
+          });
+          const token = issueRawToken();
+          const tokenHash = boundTokenHash({
+            token,
+            approvalId: approval.approvalId,
+            projectId: job.projectId,
+            actionHash: approval.actionHash,
+            expiresAt: approval.expiresAt,
+            generation,
+          });
           const [updated] = await tx
             .update(automationApprovals)
             .set({
-              status: 'rejected',
+              status: 'approved',
               actingUserId: input.actorUserId,
+              tokenHash,
               resolvedAt: resolvedAt.toISOString(),
             })
             .where(
@@ -480,52 +708,20 @@ export function createPostgresApprovalService(
               'Approval has expired',
             );
           }
-          return null;
-        }
-
-        const generation = await currentGeneration({
-          accountId: job.accountId,
-          projectId: job.projectId,
+          return {
+            token,
+            approvalId: approval.approvalId,
+            projectId: job.projectId,
+            actionHash: approval.actionHash as `sha256:${string}`,
+            expiresAt: approval.expiresAt,
+          };
         });
-        const token = issueRawToken();
-        const tokenHash = boundTokenHash({
-          token,
-          approvalId: approval.approvalId,
-          projectId: job.projectId,
-          actionHash: approval.actionHash,
-          expiresAt: approval.expiresAt,
-          generation,
-        });
-        const [updated] = await tx
-          .update(automationApprovals)
-          .set({
-            status: 'approved',
-            actingUserId: input.actorUserId,
-            tokenHash,
-            resolvedAt: resolvedAt.toISOString(),
-          })
-          .where(
-            and(
-              eq(automationApprovals.approvalId, approval.approvalId),
-              eq(automationApprovals.status, 'pending'),
-              gt(automationApprovals.expiresAt, sql`clock_timestamp()`),
-            ),
-          )
-          .returning({ approvalId: automationApprovals.approvalId });
-        if (!updated) {
-          throw new AutomationApprovalServiceError(
-            'AUTOMATION_APPROVAL_EXPIRED',
-            'Approval has expired',
-          );
+      } catch (error) {
+        if (error instanceof DurableExecutionApprovalConflictError) {
+          throw new AutomationApprovalServiceError('AUTOMATION_CONFLICT', 'Approval state changed');
         }
-        return {
-          token,
-          approvalId: approval.approvalId,
-          projectId: job.projectId,
-          actionHash: approval.actionHash as `sha256:${string}`,
-          expiresAt: approval.expiresAt,
-        };
-      });
+        throw error;
+      }
     },
 
     async consume(input) {

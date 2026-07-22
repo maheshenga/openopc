@@ -12,10 +12,14 @@ const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
 const JOB_ID = '30000000-0000-4000-a000-000000000001';
 const STEP_ID = '40000000-0000-4000-a000-000000000001';
+const PREVIOUS_STEP_ID = '40000000-0000-4000-a000-000000000002';
+const NEXT_STEP_ID = '40000000-0000-4000-a000-000000000003';
 const USER_ID = '50000000-0000-4000-a000-000000000001';
 const APPROVAL_ID = '60000000-0000-4000-a000-000000000001';
 const EVENT_ID = '70000000-0000-4000-a000-000000000001';
 const ACTION_HASH = `sha256:${'a'.repeat(64)}` as const;
+const PREVIOUS_HASH = `sha256:${'b'.repeat(64)}` as const;
+const NEXT_HASH = `sha256:${'c'.repeat(64)}` as const;
 const NOW = new Date('2026-07-23T10:00:00.000Z');
 const APPROVAL_EXPIRES_AT = '2026-07-23T10:10:00.000Z';
 
@@ -237,7 +241,7 @@ describe('PostgreSQL execution approval resolution', () => {
     expect(state.insertTargets).toEqual([]);
   });
 
-  test('fails closed when durable execution approval resolution is not composed', async () => {
+  test('fails closed when a signalled durable execution snapshot is invalid', async () => {
     const { db, state } = fakeDatabase([
       [approvalRow()],
       [jobRow()],
@@ -246,7 +250,7 @@ describe('PostgreSQL execution approval resolution', () => {
           stepId: STEP_ID,
           sequence: 20,
           status: 'awaiting_approval',
-          actionHash: ACTION_HASH,
+          actionHash: NEXT_HASH,
           approvalId: APPROVAL_ID,
         },
       ],
@@ -269,5 +273,79 @@ describe('PostgreSQL execution approval resolution', () => {
     expect(state.selects).toBe(3);
     expect(state.updates).toEqual([]);
     expect(state.inserts).toEqual([]);
+  });
+
+  test('atomically approves a valid durable execution pause', async () => {
+    const { db, state } = fakeDatabase([
+      [approvalRow()],
+      [jobRow()],
+      [
+        {
+          stepId: NEXT_STEP_ID,
+          sequence: 90,
+          status: 'pending',
+          actionHash: NEXT_HASH,
+          approvalId: null,
+        },
+        {
+          stepId: STEP_ID,
+          sequence: 40,
+          status: 'awaiting_approval',
+          actionHash: ACTION_HASH,
+          approvalId: APPROVAL_ID,
+        },
+        {
+          stepId: PREVIOUS_STEP_ID,
+          sequence: 10,
+          status: 'succeeded',
+          actionHash: PREVIOUS_HASH,
+          approvalId: null,
+        },
+      ],
+      [{ value: 3 }],
+    ]);
+    const service = createPostgresApprovalService(db, {
+      now: () => NOW,
+      currentGeneration: async () => 7,
+      durableExecutionResolutionEnabled: true,
+      newEventId: () => EVENT_ID,
+    });
+
+    const resolved = await service.resolve(resolveInput());
+
+    expect(resolved?.token).toMatch(/^approval\.v1\.[A-Za-z0-9_-]{43}$/);
+    expect(state.updateTargets).toEqual(['step', 'approval', 'job']);
+    expect(state.insertTargets).toEqual(['event']);
+    expect(state.updates[0]).toMatchObject({ status: 'pending' });
+    expect(state.updates[1]).toMatchObject({
+      status: 'approved',
+      actingUserId: USER_ID,
+      resolvedAt: NOW.toISOString(),
+    });
+    expect(JSON.stringify(state.updates)).not.toContain(resolved?.token);
+    expect(state.updates[2]).toMatchObject({
+      status: 'dispatched',
+      terminalAt: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+    expect(state.inserts[0]).toMatchObject({
+      eventId: EVENT_ID,
+      jobId: JOB_ID,
+      sequence: 4,
+      type: 'job_dispatched',
+      status: 'dispatched',
+      payload: {
+        approval_id: APPROVAL_ID,
+        step_id: STEP_ID,
+        action_hash: ACTION_HASH,
+        decision: 'approved',
+        resume_after_sequence: 10,
+        expires_at: APPROVAL_EXPIRES_AT,
+      },
+      workerId: null,
+      workerLeaseId: null,
+      workerOrdinal: null,
+    });
   });
 });

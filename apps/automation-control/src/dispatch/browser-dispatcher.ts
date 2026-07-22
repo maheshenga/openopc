@@ -4,29 +4,18 @@ import {
   AutomationJobSchema,
   type AutomationLease,
   AutomationLeaseSchema,
+  type AutomationBrowserDispatchEnvelope as BrowserDispatchEnvelope,
+  type AutomationBrowserDispatchReceipt as BrowserDispatchReceipt,
+  AutomationBrowserDispatchReceiptSchema as BrowserDispatchReceiptSchema,
   canonicalAutomationRequestJson,
 } from '@kortix/intelligence-contracts';
-import { z } from 'zod';
 import type {
   VerifiedWorkerPeer,
   WorkerServiceAuthenticator,
   WorkerServiceProof,
 } from './worker-auth';
 
-const BrowserDispatchReceiptSchema = z
-  .object({
-    protocol_version: z.literal('automation.v1'),
-    accepted: z.boolean(),
-    job_id: z.string().uuid(),
-    lease_id: z.string().uuid(),
-    worker_id: z.string().min(1).max(128),
-    dispatch_envelope_hash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-    dispatch_proof_nonce: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    received_at: z.string().datetime({ offset: true }),
-  })
-  .strict();
-
-export type BrowserDispatchReceipt = z.infer<typeof BrowserDispatchReceiptSchema>;
+export type { BrowserDispatchEnvelope, BrowserDispatchReceipt };
 
 export type DispatchLeaseBinding = Readonly<{
   accountId: string;
@@ -35,15 +24,6 @@ export type DispatchLeaseBinding = Readonly<{
   leaseId: string;
   owner: string;
   killSwitchGeneration: number;
-}>;
-
-export type BrowserDispatchEnvelope = Readonly<{
-  protocol_version: 'automation.v1';
-  request: AutomationJob['request'];
-  lease: AutomationLease;
-  policy_version: string;
-  resume_after_sequence: number;
-  dispatched_at: string;
 }>;
 
 export interface BrowserWorkerConnection {

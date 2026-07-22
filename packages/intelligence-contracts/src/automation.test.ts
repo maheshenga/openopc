@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import * as automation from './automation';
 import {
   AutomationApprovalSchema,
   AutomationErrorSchema,
@@ -150,6 +151,91 @@ describe('OpenOPC automation wire contract', () => {
       AutomationWorkerHeartbeatSchema.safeParse({
         ...heartbeat,
         event: { ...heartbeat.event, payload: { last_completed_step: 3, token: 'forbidden' } },
+      }).success,
+    ).toBeFalse();
+  });
+
+  test('shares a strict Browser Worker dispatch WebSocket contract', () => {
+    expect(automation.AUTOMATION_BROWSER_DISPATCH_PATH).toBe(
+      '/internal/automation/browser/dispatch',
+    );
+    const request = AutomationJobRequestSchema.parse({
+      ...browserRequest(),
+      steps: [
+        {
+          ...browserRequest().steps[0],
+          action: 'browser.read',
+          args: { selector: '#result' },
+          risk: 'observe',
+        },
+      ],
+    });
+    const lease = AutomationLeaseSchema.parse({
+      lease_id: LEASE_ID,
+      job_id: JOB_ID,
+      project_id: PROJECT_ID,
+      execution_domain: 'browser',
+      owner: `browser-worker-1:${LEASE_ID}`,
+      permission_id: null,
+      request_hash: REQUEST_HASH,
+      kill_switch_generation: 2,
+      issued_at: '2026-07-23T00:00:00.000Z',
+      expires_at: FUTURE_AT,
+      signature: `hmac-sha256:${'d'.repeat(64)}`,
+    });
+    const envelope = automation.AutomationBrowserDispatchEnvelopeSchema.parse({
+      protocol_version: 'automation.v1',
+      request,
+      lease,
+      policy_version: 'policy-v1',
+      resume_after_sequence: 0,
+      dispatched_at: '2026-07-23T00:00:01.000Z',
+    });
+    const controlProof = AutomationWorkerServiceProofSchema.parse({
+      service_id: 'automation-control',
+      timestamp: envelope.dispatched_at,
+      nonce: 12,
+      signature: `hmac-sha256:${'e'.repeat(64)}`,
+    });
+    const receipt = automation.AutomationBrowserDispatchReceiptSchema.parse({
+      protocol_version: 'automation.v1',
+      accepted: true,
+      job_id: JOB_ID,
+      lease_id: LEASE_ID,
+      worker_id: 'browser-worker-1',
+      dispatch_envelope_hash: REQUEST_HASH,
+      dispatch_proof_nonce: controlProof.nonce,
+      received_at: '2026-07-23T00:00:02.000Z',
+    });
+    const accepted = automation.AutomationBrowserDispatchAcceptedSchema.parse({
+      protocol_version: 'automation.v1',
+      receipt,
+      proof: {
+        service_id: receipt.worker_id,
+        timestamp: receipt.received_at,
+        nonce: 13,
+        signature: `hmac-sha256:${'f'.repeat(64)}`,
+      },
+    });
+
+    expect(
+      automation.AutomationBrowserDispatchRequestSchema.parse({
+        protocol_version: 'automation.v1',
+        envelope,
+        proof: controlProof,
+      }).envelope,
+    ).toEqual(envelope);
+    expect(accepted.receipt).toEqual(receipt);
+    expect(
+      automation.AutomationBrowserDispatchAcceptedSchema.safeParse({
+        ...accepted,
+        worker_url: 'wss://worker.internal',
+      }).success,
+    ).toBeFalse();
+    expect(
+      automation.AutomationBrowserDispatchEnvelopeSchema.safeParse({
+        ...envelope,
+        request: { ...request, project_id: ACCOUNT_ID },
       }).success,
     ).toBeFalse();
   });

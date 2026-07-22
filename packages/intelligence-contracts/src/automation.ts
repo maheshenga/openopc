@@ -3,6 +3,7 @@ import { AutomationProtocolVersionSchema } from './compatibility.js';
 
 export const AUTOMATION_MAX_STEPS = 128 as const;
 export const AUTOMATION_BROWSER_HEARTBEAT_PATH = '/internal/automation/browser/heartbeat' as const;
+export const AUTOMATION_BROWSER_DISPATCH_PATH = '/internal/automation/browser/dispatch' as const;
 
 const UuidSchema = z.string().uuid();
 const DateTimeSchema = z.string().datetime({ offset: true });
@@ -683,6 +684,94 @@ export const AutomationLeaseSchema = z
     }
   });
 export type AutomationLease = z.infer<typeof AutomationLeaseSchema>;
+
+export const AutomationBrowserDispatchEnvelopeSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    request: AutomationJobRequestSchema,
+    lease: AutomationLeaseSchema,
+    policy_version: z.string().trim().min(1).max(128),
+    resume_after_sequence: z.number().int().nonnegative().max(AUTOMATION_MAX_STEPS),
+    dispatched_at: DateTimeSchema,
+  })
+  .strict()
+  .superRefine((envelope, context) => {
+    if (
+      envelope.request.execution_domain !== 'browser' ||
+      envelope.request.browser_policy === null ||
+      envelope.lease.execution_domain !== 'browser' ||
+      envelope.lease.project_id !== envelope.request.project_id
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['lease'],
+        message: 'browser dispatch authority is inconsistent',
+      });
+    }
+    const dispatchedAt = Date.parse(envelope.dispatched_at);
+    if (
+      Date.parse(envelope.lease.issued_at) > dispatchedAt ||
+      Date.parse(envelope.lease.expires_at) <= dispatchedAt ||
+      Date.parse(envelope.request.deadline_at) <= dispatchedAt
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dispatched_at'],
+        message: 'browser dispatch is outside its authority window',
+      });
+    }
+    if (
+      envelope.resume_after_sequence !== 0 &&
+      !envelope.request.steps.some((step) => step.sequence === envelope.resume_after_sequence)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['resume_after_sequence'],
+        message: 'browser dispatch resume cursor is invalid',
+      });
+    }
+  });
+export type AutomationBrowserDispatchEnvelope = z.infer<
+  typeof AutomationBrowserDispatchEnvelopeSchema
+>;
+
+export const AutomationBrowserDispatchRequestSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    envelope: AutomationBrowserDispatchEnvelopeSchema,
+    proof: AutomationWorkerServiceProofSchema,
+  })
+  .strict();
+export type AutomationBrowserDispatchRequest = z.infer<
+  typeof AutomationBrowserDispatchRequestSchema
+>;
+
+export const AutomationBrowserDispatchReceiptSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    accepted: z.boolean(),
+    job_id: UuidSchema,
+    lease_id: UuidSchema,
+    worker_id: IdentifierSchema,
+    dispatch_envelope_hash: Sha256HashSchema,
+    dispatch_proof_nonce: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    received_at: DateTimeSchema,
+  })
+  .strict();
+export type AutomationBrowserDispatchReceipt = z.infer<
+  typeof AutomationBrowserDispatchReceiptSchema
+>;
+
+export const AutomationBrowserDispatchAcceptedSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    receipt: AutomationBrowserDispatchReceiptSchema,
+    proof: AutomationWorkerServiceProofSchema,
+  })
+  .strict();
+export type AutomationBrowserDispatchAccepted = z.infer<
+  typeof AutomationBrowserDispatchAcceptedSchema
+>;
 
 export const KillSwitchScopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('account'), account_id: UuidSchema }).strict(),

@@ -16,7 +16,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence protocol     | implemented                                             | REST, SDK, MCP, A2A, task/event commits                                                                                                     | retained regression gates                                         |
 | Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
 | OpenOPC Milestone A       | implemented, disabled by default                        | catalog, project SSE projection, SDK subscription, and focused contract/API/SDK/CLI gates verified locally                                  | production rollout and later milestones                           |
-| Automation Task 8A-8B     | authenticated heartbeat receiver and desktop observe coordinator implemented; production hardening partial; default-off | commits `920375679`, `c6fda9161`, `497a46d35`, `e07ffd813`, `5d4182f73`, and `ff71d4bd4`; Redis replay fencing, PostgreSQL heartbeat sink, receiver runtime composition, and focused gates verified | Browser Worker heartbeat client, real mTLS proxy deployment, sink concurrency validation, and durable step/approval handling |
+| Automation Task 8A-8B     | authenticated heartbeat receiver, Browser Worker heartbeat lifecycle, and desktop observe coordinator implemented; production hardening partial; default-off | commits `920375679`, `c6fda9161`, `497a46d35`, `e07ffd813`, `5d4182f73`, `ff71d4bd4`, and `5c6ec31d0`; Redis replay fencing, PostgreSQL heartbeat sink, receiver/client composition, and focused gates verified | authenticated production job source, real mTLS deployment, response authentication, sink concurrency validation, and durable step/approval handling |
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                                            | focused Web hardening without full-suite reruns                   |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
@@ -259,11 +259,33 @@ Automation Protocol errors. Unknown Redis/PostgreSQL failures return a generic
 retryable unavailable response without exposing internal errors or connection
 strings.
 
-The server-side runtime path is now implemented, but the Browser Worker does
-not yet send heartbeat requests and no real mTLS proxy/certificate deployment
-has been accepted. Real concurrent sink execution against PostgreSQL has also
-not been verified. Reclaimed leases still receive a new per-claim fencing
-token, and unknown or external-effect outcomes do not automatically retry.
+Commit `5c6ec31d0` adds the Browser Worker side of this protocol while preserving
+the receiver's trust boundary. The default-off client accepts only an HTTPS
+Automation Control origin and uses Bun's client certificate, private key, CA,
+`rejectUnauthorized=true`, and explicit TLS `serverName` settings. It signs the
+canonical shared Worker proof, emits a contiguous ordinal per lease, rejects
+redirects, and never sends the proxy-owned `x-automation-worker-*` attestation
+headers. The TLS proxy attestation secret remains unavailable to the Worker.
+
+The client applies one deadline to both request headers and the streamed
+response body and accepts no more than 64 KiB. A rejected, malformed, timed-out,
+or otherwise unknown result permanently closes that lease's heartbeat stream,
+so a retry cannot ambiguously duplicate a durable event. Closed-lease state is
+bounded rather than retained without limit.
+
+The isolated browser execution path starts heartbeating only after permission,
+lease, and runtime-isolation checks pass. It reports the latest completed step,
+runs periodic sends serially during execution, aborts the active action on the
+first heartbeat failure, and still closes the page, context, browser, and proxy.
+Heartbeat-loop cleanup is deadline bounded.
+
+The Browser Worker process still has no production authenticated job source or
+main-runtime composition; its entry server remains fail closed and not ready.
+No real mTLS proxy/certificate deployment or end-to-end exchange has been
+accepted, and application-layer response authentication is not implemented.
+Real concurrent sink execution against PostgreSQL has also not been verified.
+Reclaimed leases still receive a new per-claim fencing token, and unknown or
+external-effect outcomes do not automatically retry.
 
 Commits `c6fda9161` and `497a46d35` bind the desktop permission fence to the
 existing API-to-Tunnel route. Commit `e07ffd813` adds the default-off production
@@ -321,7 +343,14 @@ the replay and lower nonce, and reported approximately `4960ms` TTL. The local
 Bun Redis client could not connect to the host's legacy Windows Redis `3.0.504`,
 so Bun-to-Redis integration is not claimed. No full suite was run.
 
-Browser Worker client transport, real mTLS proxy/certificate enforcement,
+For `5c6ec31d0`, the shared contract, Browser Worker, and Automation Control
+focused slice passed `135/135` tests with `489` assertions, and all three package
+typechecks passed. The wider pre-commit package gates passed `278/278` tests
+with `901` assertions. Scoped Biome over the 11 changed files and
+`git diff --check` passed. No full repository suite was run.
+
+Production authenticated job-source/main-runtime composition, real mTLS
+proxy/certificate deployment and end-to-end verification, application-layer
 response authentication, real sink concurrency validation, durable step and
 approval-resume handling, dispatch-attempt idempotency and unknown-result
 recovery, and complete readiness/deployment wiring remain open. Complete Task 8

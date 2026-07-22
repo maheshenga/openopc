@@ -23,7 +23,7 @@
 - Because `consumeAndStart()` starts the approved Step, the Worker must not emit a second `step_started` event for that Step.
 - A consumed/running Step is never automatically replayed. Unknown dispatch results remain fenced until lease expiry.
 - Never expose the new `approval-resume.v1` Token through public approval routes. Preserve the existing one-time `approval.v1` response and do not modify the Web, desktop, mobile, SDK, or public `/v1/automation/*` response shape.
-- Run only the focused tests and typechecks listed below. Do not run the full repository test suite or claim Browser E2E/production deployment proof.
+- Run every focused RED/GREEN test and typecheck listed below, then run the full repository test suite with `pnpm.cmd test`. Full unit/integration coverage still does not constitute Browser E2E or production deployment proof.
 - Do not modify or commit these protected, pre-existing untracked files:
   - `docs/plans/2026-07-21-openopc-milestone-a-implementation-plan.md`
   - `docs/specs/2026-07-21-openopc-frontier-ai-technology-selection.md`
@@ -2226,7 +2226,7 @@ Expected: the focused tests pass; the existing Desktop-only Poller behavior is u
 
 ---
 
-### Task 10: Focused acceptance and Resume Token regression
+### Task 10: Focused acceptance, full regression, and Resume Token boundary
 
 **Files:**
 - Modify: `apps/automation-control/src/routes/routes.test.ts`
@@ -2235,7 +2235,7 @@ Expected: the focused tests pass; the existing Desktop-only Poller behavior is u
 **Interfaces:**
 - Preserves the current public Approval resolve response, including its existing `approval.v1` one-time credential.
 - Proves the new `approval-resume.v1` credential remains confined to issuer memory, signed Worker dispatch, and the authenticated internal consume request.
-- Records focused evidence only; it does not claim Browser E2E, production wiring, or full-suite coverage.
+- Records focused evidence plus a fresh full repository test run; it does not claim Browser E2E, production wiring, or deployment readiness.
 
 - [ ] **Step 1: Add the public response regression test**
 
@@ -2294,11 +2294,19 @@ git status --short
 
 Expected: Biome and whitespace checks pass. Before the final test commit, `git status --short` shows the modified `apps/automation-control/src/routes/routes.test.ts` plus the two protected pre-existing untracked documents. `apps/automation-control/src/main.ts` has no diff, and the startup body of `startFailClosedWorkerServer()` remains unchanged even though Task 8 modifies other declarations/composition helpers in `worker.ts`.
 
-- [ ] **Step 6: Commit the acceptance regression**
+- [ ] **Step 6: Run the full repository test suite**
+
+```powershell
+pnpm.cmd test
+```
+
+Expected: every workspace package with a `test` script passes. Record any environment-skipped suites separately; do not describe them as executed coverage.
+
+- [ ] **Step 7: Commit the acceptance regression**
 
 ```powershell
 git add -- apps/automation-control/src/routes/routes.test.ts
 git commit -m "test: verify browser resume approval boundaries"
 ```
 
-Do not run the full repository suite. The completion report must list the exact focused commands that ran and state explicitly that real PostgreSQL concurrency, Browser E2E, production runtime wiring, deployment readiness, and environment enablement remain for the later activation stage.
+The completion report must list the exact focused and full-suite commands that ran and state explicitly that real PostgreSQL concurrency, Browser E2E, production runtime wiring, deployment readiness, and environment enablement remain for the later activation stage.

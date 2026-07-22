@@ -26,6 +26,10 @@ import {
   createBrowserContextManager,
 } from './context-manager';
 import { type EvidenceStore, createEvidenceWriter } from './evidence-writer';
+import {
+  type BrowserWorkerHeartbeatEmitter,
+  runBrowserWorkerHeartbeatLoop,
+} from './heartbeat-client';
 import { type BrowserNetworkProxy, startBrowserNetworkProxy } from './network-proxy';
 import { createBrowserOriginGuard } from './origin-guard';
 
@@ -100,6 +104,7 @@ type BrowserWorkerInput = Readonly<{
   maxRuntimeMs?: number;
   launchBrowser?: (options: LaunchOptions) => Promise<Browser>;
   startProxy?: typeof startBrowserNetworkProxy;
+  heartbeat?: BrowserWorkerHeartbeatEmitter;
 }>;
 
 function workerAuditIntent(
@@ -297,6 +302,11 @@ export async function runIsolatedBrowserRequest(
   let downloadCancellationsSettled = false;
   const pendingDownloads = new Set<Promise<PromiseSettledResult<void>>>();
   let actionEvents: ReadonlyArray<BrowserActionEventIntent> | undefined;
+  let lastCompletedStep = 0;
+  let heartbeatController: AbortController | undefined;
+  let heartbeatLoop: Promise<void> | undefined;
+  let heartbeatFailure: unknown;
+  let stopHeartbeatOnExecutionAbort: (() => void) | undefined;
   let primaryError: unknown;
   let hasPrimaryError = false;
   let cleanupFailure: AggregateError | undefined;
@@ -347,6 +357,32 @@ export async function runIsolatedBrowserRequest(
       ))
     ) {
       throw new Error('runtime isolation is not attested');
+    }
+    if (rawInput.heartbeat !== undefined) {
+      await abortableOperation(
+        () =>
+          rawInput.heartbeat?.send({
+            lease,
+            request,
+            lastCompletedStep,
+            signal: controller.signal,
+          }) ?? Promise.reject(new Error('browser heartbeat emitter is unavailable')),
+        controller.signal,
+      );
+      heartbeatController = new AbortController();
+      stopHeartbeatOnExecutionAbort = () =>
+        heartbeatController?.abort(controller.signal.reason ?? 'browser execution stopped');
+      controller.signal.addEventListener('abort', stopHeartbeatOnExecutionAbort, { once: true });
+      heartbeatLoop = runBrowserWorkerHeartbeatLoop({
+        emitter: rawInput.heartbeat,
+        lease,
+        request,
+        getLastCompletedStep: () => lastCompletedStep,
+        signal: heartbeatController.signal,
+      }).catch((error) => {
+        heartbeatFailure = error;
+        controller.abort('browser heartbeat transport failed');
+      });
     }
     proxy = await abortableOperation(
       () => proxyStarter({ guard, policy }),
@@ -450,6 +486,9 @@ export async function runIsolatedBrowserRequest(
       isLeaseCurrent: rawInput.isLeaseCurrent,
       currentKillSwitchGeneration: rawInput.currentKillSwitchGeneration,
       emitEvent: (intent) => rawInput.actionEventSink.write(intent),
+      onStepCompleted: (completedStepCount) => {
+        lastCompletedStep = completedStepCount;
+      },
       isActionHashCurrent: rawInput.isActionHashCurrent,
       isFullAccessGrantCurrent: rawInput.isFullAccessGrantCurrent,
       consumeApproval: rawInput.consumeApproval,
@@ -491,6 +530,19 @@ export async function runIsolatedBrowserRequest(
       killAudit ??= startKillAudit('generation_changed');
     }
   } finally {
+    heartbeatController?.abort('browser execution finalizing');
+    if (heartbeatLoop !== undefined) {
+      const heartbeatResult = await settleWithin(heartbeatLoop, Math.min(runtimeLimitMs, 1_000));
+      if (heartbeatResult.status === 'rejected') cleanupErrors.push(heartbeatResult.reason);
+    }
+    if (stopHeartbeatOnExecutionAbort !== undefined) {
+      controller.signal.removeEventListener('abort', stopHeartbeatOnExecutionAbort);
+    }
+    rawInput.heartbeat?.closeLease?.(lease.lease_id);
+    if (heartbeatFailure !== undefined) {
+      hasPrimaryError = true;
+      primaryError = heartbeatFailure;
+    }
     clearTimeout(timeout);
     rawInput.signal.removeEventListener('abort', onCallerAbort);
     rawInput.killSwitchSignal?.removeEventListener('abort', onKillSwitchAbort);

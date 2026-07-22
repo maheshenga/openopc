@@ -1,5 +1,10 @@
-import { type AutomationEvent, AutomationEventSchema } from '@kortix/intelligence-contracts';
-import { z } from 'zod';
+import {
+  type AutomationEvent,
+  AutomationEventSchema,
+  type AutomationWorkerHeartbeat,
+  AutomationWorkerHeartbeatEnvelopeSchema,
+  AutomationWorkerHeartbeatSchema,
+} from '@kortix/intelligence-contracts';
 import type { DispatchLeaseBinding } from './browser-dispatcher';
 import type {
   VerifiedWorkerPeer,
@@ -7,124 +12,7 @@ import type {
   WorkerServiceProof,
 } from './worker-auth';
 
-const TraceIdSchema = z
-  .string()
-  .regex(/^[a-f0-9]{32}$/)
-  .nullable();
-const StepIdSchema = z.string().uuid();
-const ActionHashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const EvidenceReferenceSchema = z
-  .string()
-  .refine(
-    (value) =>
-      value.startsWith('evidence:') &&
-      z.string().uuid().safeParse(value.slice('evidence:'.length)).success,
-    'evidence reference must be an evidence UUID',
-  );
-
-const UnvalidatedHeartbeatEventIntentSchema = z
-  .object({
-    type: z.string().trim().min(1).max(128),
-    payload: z.record(z.unknown()),
-    trace_id: TraceIdSchema,
-  })
-  .strict();
-
-const WorkerHeartbeatEventIntentSchema = z.discriminatedUnion('type', [
-  z
-    .object({
-      type: z.literal('heartbeat'),
-      payload: z.object({ last_completed_step: z.number().int().nonnegative() }).strict(),
-      trace_id: TraceIdSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('approval_required'),
-      payload: z.object({ step_id: StepIdSchema, action_hash: ActionHashSchema }).strict(),
-      trace_id: TraceIdSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('job_started'),
-      payload: z.object({}).strict(),
-      trace_id: TraceIdSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('step_started'),
-      payload: z.object({ step_id: StepIdSchema }).strict(),
-      trace_id: TraceIdSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('step_completed'),
-      payload: z
-        .object({
-          step_id: StepIdSchema,
-          evidence_reference: EvidenceReferenceSchema,
-        })
-        .strict(),
-      trace_id: TraceIdSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('job_succeeded'),
-      payload: z.object({}).strict(),
-      trace_id: TraceIdSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('job_failed'),
-      payload: z
-        .object({
-          cleanup_error_count: z.number().int().nonnegative(),
-          project_id: z.string().uuid(),
-        })
-        .strict(),
-      trace_id: TraceIdSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('kill_switch_activated'),
-      payload: z
-        .object({
-          project_id: z.string().uuid(),
-          reason: z.enum(['generation_changed', 'signal_abort']),
-        })
-        .strict(),
-      trace_id: TraceIdSchema,
-    })
-    .strict(),
-]);
-
-const WorkerHeartbeatEnvelopeSchema = z
-  .object({
-    protocol_version: z.literal('automation.v1'),
-    account_id: z.string().uuid(),
-    project_id: z.string().uuid(),
-    job_id: z.string().uuid(),
-    lease_id: z.string().uuid(),
-    lease_owner: z.string().trim().min(1).max(128),
-    kill_switch_generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-    worker_id: z.string().trim().min(1).max(128),
-    ordinal: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    observed_at: z.string().datetime({ offset: true }),
-    event: UnvalidatedHeartbeatEventIntentSchema,
-  })
-  .strict();
-
-const WorkerHeartbeatSchema = WorkerHeartbeatEnvelopeSchema.extend({
-  event: WorkerHeartbeatEventIntentSchema,
-}).strict();
-
-export type WorkerHeartbeat = z.infer<typeof WorkerHeartbeatSchema>;
+export type WorkerHeartbeat = AutomationWorkerHeartbeat;
 
 export type HeartbeatEventAppendResult =
   | Readonly<{ accepted: true; event: AutomationEvent }>
@@ -198,7 +86,7 @@ export function createHeartbeatProcessor(input: {
       proof: WorkerServiceProof;
       heartbeat: WorkerHeartbeat;
     }): Promise<AutomationEvent> {
-      const envelope = WorkerHeartbeatEnvelopeSchema.safeParse(raw.heartbeat);
+      const envelope = AutomationWorkerHeartbeatEnvelopeSchema.safeParse(raw.heartbeat);
       if (!envelope.success) {
         throw new WorkerHeartbeatError(
           'invalid_payload',
@@ -225,7 +113,7 @@ export function createHeartbeatProcessor(input: {
           'heartbeat payload contains a forbidden sensitive field',
         );
       }
-      const heartbeat = WorkerHeartbeatSchema.safeParse(unvalidatedHeartbeat);
+      const heartbeat = AutomationWorkerHeartbeatSchema.safeParse(unvalidatedHeartbeat);
       if (!heartbeat.success) {
         throw new WorkerHeartbeatError(
           'invalid_payload',

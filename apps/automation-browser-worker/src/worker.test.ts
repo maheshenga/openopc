@@ -1017,6 +1017,51 @@ describe('isolated browser worker', () => {
   });
 });
 
+test('heartbeat transport failure aborts an active browser execution and closes resources', async () => {
+  const fake = runtime({ hangingClick: true });
+  const fixture = dependencies(fake);
+  const request = browserRequest(
+    policy,
+    [step('browser.click', { selector: '#submit' })],
+    'full-access',
+  );
+  const heartbeatFailure = new Error('authenticated heartbeat channel failed');
+  const heartbeats: number[] = [];
+  const closedLeases: string[] = [];
+
+  const execution = runIsolatedBrowserRequest({
+    ...fixture.input,
+    request,
+    lease: { ...lease, request_hash: requestHash(request) },
+    heartbeat: {
+      intervalMs: 5,
+      async send(input) {
+        heartbeats.push(input.lastCompletedStep);
+        if (heartbeats.length > 1) throw heartbeatFailure;
+        return {
+          protocol_version: 'automation.v1',
+          event_id: '60000000-0000-4000-a000-000000000001',
+          job_id: lease.job_id,
+          sequence: 1,
+          type: 'heartbeat',
+          status: null,
+          payload: { last_completed_step: input.lastCompletedStep },
+          trace_id: null,
+          created_at: '2026-07-23T04:00:00.000Z',
+        };
+      },
+      closeLease(leaseId) {
+        closedLeases.push(leaseId);
+      },
+    },
+  });
+
+  await expect(execution).rejects.toBe(heartbeatFailure);
+  expect(heartbeats).toEqual([0, 0]);
+  expect(closedLeases).toEqual([lease.lease_id]);
+  expect(fake.closed).toEqual(expect.arrayContaining(['context', 'browser', 'proxy']));
+});
+
 test('worker loop consumes only authenticated requests', async () => {
   const rejected: number[] = [];
   const acknowledged: number[] = [];

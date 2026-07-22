@@ -6,12 +6,16 @@ import {
   AutomationJobRequestSchema,
   AutomationJobSchema,
   AutomationLeaseSchema,
+  AutomationWorkerHeartbeatAcceptedSchema,
+  AutomationWorkerHeartbeatSchema,
+  AutomationWorkerServiceProofSchema,
   BrowserAutomationStepSchema,
   BrowserPolicySchema,
   DesktopPolicySchema,
   KillSwitchSchema,
   browserAutomationRiskForAction,
   canonicalAutomationRequestJson,
+  canonicalAutomationWorkerProof,
 } from './automation';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
@@ -86,6 +90,66 @@ describe('OpenOPC automation wire contract', () => {
       BrowserAutomationStepSchema.safeParse({
         ...canonical,
         args: { url: 'https://example.test/dashboard', evaluate: 'alert(1)' },
+      }).success,
+    ).toBeFalse();
+  });
+
+  test('shares strict Browser Worker heartbeat and proof envelopes across services', () => {
+    const heartbeat = AutomationWorkerHeartbeatSchema.parse({
+      protocol_version: 'automation.v1',
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      job_id: JOB_ID,
+      lease_id: LEASE_ID,
+      lease_owner: `browser-worker-1:${LEASE_ID}`,
+      kill_switch_generation: 2,
+      worker_id: 'browser-worker-1',
+      ordinal: 7,
+      observed_at: '2026-07-21T00:00:00.000Z',
+      event: {
+        type: 'heartbeat',
+        payload: { last_completed_step: 3 },
+        trace_id: null,
+      },
+    });
+    const proof = AutomationWorkerServiceProofSchema.parse({
+      service_id: heartbeat.worker_id,
+      timestamp: heartbeat.observed_at,
+      nonce: 42,
+      signature: `hmac-sha256:${'f'.repeat(64)}`,
+    });
+    const event = AutomationEventSchema.parse({
+      protocol_version: 'automation.v1',
+      event_id: EVENT_ID,
+      job_id: JOB_ID,
+      sequence: 8,
+      type: 'heartbeat',
+      status: null,
+      payload: heartbeat.event.payload,
+      trace_id: null,
+      created_at: heartbeat.observed_at,
+    });
+
+    expect(
+      canonicalAutomationWorkerProof({
+        timestamp: proof.timestamp,
+        serviceId: proof.service_id,
+        certificateFingerprint256: 'AA:BB:CC:DD',
+        nonce: proof.nonce,
+        bodySha256: 'a'.repeat(64),
+      }),
+    ).toBe(`${proof.timestamp}\n${proof.service_id}\nAA:BB:CC:DD\n42\n${'a'.repeat(64)}`);
+    expect(
+      AutomationWorkerHeartbeatAcceptedSchema.parse({
+        protocol_version: 'automation.v1',
+        accepted: true,
+        event,
+      }).event,
+    ).toEqual(event);
+    expect(
+      AutomationWorkerHeartbeatSchema.safeParse({
+        ...heartbeat,
+        event: { ...heartbeat.event, payload: { last_completed_step: 3, token: 'forbidden' } },
       }).success,
     ).toBeFalse();
   });

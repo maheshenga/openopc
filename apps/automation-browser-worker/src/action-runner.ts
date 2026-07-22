@@ -50,6 +50,7 @@ type RunnerDependencies = Readonly<{
   isActionHashCurrent: (step: AutomationStep, lease: AutomationLease) => Promise<boolean>;
   consumeApproval: (input: ApprovalBinding) => Promise<ApprovalBinding | null>;
   emitEvent?: (intent: BrowserActionEventIntent) => Promise<void>;
+  onStepCompleted?: (completedStepCount: number) => void;
   isFullAccessGrantCurrent: (lease: AutomationLease) => Promise<boolean>;
   isAllowedUrl: (url: string, policy: BrowserPolicy) => Promise<boolean>;
   waitForApproval?: (input: ApprovalBinding, signal: AbortSignal) => Promise<void>;
@@ -203,6 +204,7 @@ export function createBrowserActionRunner(dependencies: RunnerDependencies): Bro
       if (steps.length > AUTOMATION_MAX_STEPS) throw new Error('automation step limit exceeded');
       const events: BrowserActionEventIntent[] = [];
       let nextOrdinal = 1;
+      let completedStepCount = 0;
       const pushEvent = async (
         type: AutomationEvent['type'],
         payload: Record<string, unknown>,
@@ -321,6 +323,8 @@ export function createBrowserActionRunner(dependencies: RunnerDependencies): Bro
           step_id: currentStep.step_id,
           ...(evidenceReference === undefined ? {} : { evidence_reference: evidenceReference }),
         });
+        completedStepCount += 1;
+        dependencies.onStepCompleted?.(completedStepCount);
       }
       return events;
     },

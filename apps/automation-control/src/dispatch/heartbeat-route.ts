@@ -1,8 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
+  AUTOMATION_BROWSER_HEARTBEAT_PATH,
   type AutomationErrorCode,
   AutomationErrorSchema,
   type AutomationEvent,
+  AutomationWorkerHeartbeatAcceptedSchema,
+  AutomationWorkerServiceProofSchema,
 } from '@kortix/intelligence-contracts';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -27,20 +30,13 @@ const HEADER = {
   attestation: 'x-automation-worker-tls-attestation',
 } as const;
 
-export const AUTOMATION_BROWSER_HEARTBEAT_PATH = '/internal/automation/browser/heartbeat';
+export { AUTOMATION_BROWSER_HEARTBEAT_PATH };
 
 const ServiceIdSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
 const WorkerRequestSchema = z
   .object({
     protocol_version: z.literal('automation.v1'),
-    proof: z
-      .object({
-        service_id: ServiceIdSchema,
-        timestamp: z.string().datetime({ offset: true }),
-        nonce: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-        signature: z.string().regex(/^hmac-sha256:[a-f0-9]{64}$/),
-      })
-      .strict(),
+    proof: AutomationWorkerServiceProofSchema,
     heartbeat: z.unknown(),
   })
   .strict();
@@ -345,7 +341,13 @@ export function createBrowserWorkerHeartbeatRoute(
         proof: request.proof,
         heartbeat: request.heartbeat as WorkerHeartbeat,
       });
-      return context.json({ protocol_version: 'automation.v1', accepted: true, event });
+      return context.json(
+        AutomationWorkerHeartbeatAcceptedSchema.parse({
+          protocol_version: 'automation.v1',
+          accepted: true,
+          event,
+        }),
+      );
     } catch (error) {
       if (error instanceof WorkerAuthenticationError) {
         if (error.reason === 'replayed_proof') return conflict();

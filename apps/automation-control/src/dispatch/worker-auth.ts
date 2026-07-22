@@ -1,5 +1,9 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
-import { canonicalAutomationRequestJson } from '@kortix/intelligence-contracts';
+import {
+  type AutomationWorkerServiceProof,
+  canonicalAutomationRequestJson,
+  canonicalAutomationWorkerProof,
+} from '@kortix/intelligence-contracts';
 
 export type WorkerServiceRole = 'automation-control' | 'browser-worker';
 
@@ -18,12 +22,7 @@ export type VerifiedWorkerPeer = Readonly<{
   certificateExpiresAt: string;
 }>;
 
-export type WorkerServiceProof = Readonly<{
-  service_id: string;
-  timestamp: string;
-  nonce: number;
-  signature: string;
-}>;
+export type WorkerServiceProof = AutomationWorkerServiceProof;
 
 export interface WorkerNonceStore {
   /**
@@ -143,13 +142,13 @@ function canonicalProof(input: {
   nonce: number;
   body: unknown;
 }): string {
-  return [
-    input.timestamp,
-    input.serviceId,
-    input.certificateFingerprint256,
-    input.nonce,
-    bodyHash(input.body),
-  ].join('\n');
+  return canonicalAutomationWorkerProof({
+    timestamp: input.timestamp,
+    serviceId: input.serviceId,
+    certificateFingerprint256: input.certificateFingerprint256,
+    nonce: input.nonce,
+    bodySha256: bodyHash(input.body),
+  });
 }
 
 function signatureFor(input: SignInput, secret: string): string {

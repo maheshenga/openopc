@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { AutomationProtocolVersionSchema } from './compatibility.js';
 
 export const AUTOMATION_MAX_STEPS = 128 as const;
+export const AUTOMATION_BROWSER_HEARTBEAT_PATH = '/internal/automation/browser/heartbeat' as const;
 
 const UuidSchema = z.string().uuid();
 const DateTimeSchema = z.string().datetime({ offset: true });
@@ -82,6 +83,22 @@ export function canonicalAutomationRequestJson(value: unknown): string {
   return JSON.stringify(canonicalizeAutomationValue(value));
 }
 
+export function canonicalAutomationWorkerProof(input: {
+  timestamp: string;
+  serviceId: string;
+  certificateFingerprint256: string;
+  nonce: number;
+  bodySha256: string;
+}): string {
+  return [
+    input.timestamp,
+    input.serviceId,
+    input.certificateFingerprint256,
+    input.nonce,
+    input.bodySha256,
+  ].join('\n');
+}
+
 const OriginSchema = z
   .string()
   .url()
@@ -136,7 +153,10 @@ export type AutomationStep = z.infer<typeof AutomationStepSchema>;
 const BrowserSelectorSchema = z.string().trim().min(1).max(4_096);
 const BrowserSelectorArgsSchema = z.object({ selector: BrowserSelectorSchema }).strict();
 const BrowserPointArgsSchema = z
-  .object({ x: z.number().finite().min(0).max(100_000), y: z.number().finite().min(0).max(100_000) })
+  .object({
+    x: z.number().finite().min(0).max(100_000),
+    y: z.number().finite().min(0).max(100_000),
+  })
   .strict();
 
 export const BrowserAutomationStepSchema = z.discriminatedUnion('action', [
@@ -152,9 +172,7 @@ export const BrowserAutomationStepSchema = z.discriminatedUnion('action', [
   }),
   AutomationStepSchema.extend({
     action: z.literal('browser.type'),
-    args: z
-      .object({ selector: BrowserSelectorSchema, value: z.string().max(32_768) })
-      .strict(),
+    args: z.object({ selector: BrowserSelectorSchema, value: z.string().max(32_768) }).strict(),
     risk: z.literal('operate'),
   }),
   AutomationStepSchema.extend({
@@ -210,9 +228,7 @@ export const BROWSER_AUTOMATION_ACTION_RISKS = Object.freeze({
 
 export function browserAutomationRiskForAction(action: string): AutomationRisk | null {
   if (!Object.hasOwn(BROWSER_AUTOMATION_ACTION_RISKS, action)) return null;
-  return BROWSER_AUTOMATION_ACTION_RISKS[
-    action as keyof typeof BROWSER_AUTOMATION_ACTION_RISKS
-  ];
+  return BROWSER_AUTOMATION_ACTION_RISKS[action as keyof typeof BROWSER_AUTOMATION_ACTION_RISKS];
 }
 
 export const AutomationCapabilityRequirementSchema = z
@@ -419,6 +435,145 @@ export const AutomationEventSchema = z
   })
   .strict();
 export type AutomationEvent = z.infer<typeof AutomationEventSchema>;
+
+export const AutomationWorkerServiceProofSchema = z
+  .object({
+    service_id: z.string().regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/),
+    timestamp: DateTimeSchema,
+    nonce: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    signature: z.string().regex(/^hmac-sha256:[a-f0-9]{64}$/),
+  })
+  .strict();
+export type AutomationWorkerServiceProof = z.infer<typeof AutomationWorkerServiceProofSchema>;
+
+const AutomationWorkerTraceIdSchema = z
+  .string()
+  .regex(/^[a-f0-9]{32}$/)
+  .nullable();
+const AutomationWorkerUnvalidatedEventIntentSchema = z
+  .object({
+    type: z.string().trim().min(1).max(128),
+    payload: z.record(z.unknown()),
+    trace_id: AutomationWorkerTraceIdSchema,
+  })
+  .strict();
+
+export const AutomationWorkerHeartbeatEventIntentSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('heartbeat'),
+      payload: z
+        .object({
+          last_completed_step: z.number().int().nonnegative().max(AUTOMATION_MAX_STEPS),
+        })
+        .strict(),
+      trace_id: AutomationWorkerTraceIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('approval_required'),
+      payload: z.object({ step_id: UuidSchema, action_hash: Sha256HashSchema }).strict(),
+      trace_id: AutomationWorkerTraceIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('job_started'),
+      payload: z.object({}).strict(),
+      trace_id: AutomationWorkerTraceIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('step_started'),
+      payload: z.object({ step_id: UuidSchema }).strict(),
+      trace_id: AutomationWorkerTraceIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('step_completed'),
+      payload: z
+        .object({
+          step_id: UuidSchema,
+          evidence_reference: z
+            .string()
+            .refine(
+              (value) =>
+                value.startsWith('evidence:') &&
+                UuidSchema.safeParse(value.slice('evidence:'.length)).success,
+              'evidence reference must be an evidence UUID',
+            ),
+        })
+        .strict(),
+      trace_id: AutomationWorkerTraceIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('job_succeeded'),
+      payload: z.object({}).strict(),
+      trace_id: AutomationWorkerTraceIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('job_failed'),
+      payload: z
+        .object({ cleanup_error_count: z.number().int().nonnegative(), project_id: UuidSchema })
+        .strict(),
+      trace_id: AutomationWorkerTraceIdSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('kill_switch_activated'),
+      payload: z
+        .object({
+          project_id: UuidSchema,
+          reason: z.enum(['generation_changed', 'signal_abort']),
+        })
+        .strict(),
+      trace_id: AutomationWorkerTraceIdSchema,
+    })
+    .strict(),
+]);
+export type AutomationWorkerHeartbeatEventIntent = z.infer<
+  typeof AutomationWorkerHeartbeatEventIntentSchema
+>;
+
+export const AutomationWorkerHeartbeatEnvelopeSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    account_id: UuidSchema,
+    project_id: UuidSchema,
+    job_id: UuidSchema,
+    lease_id: UuidSchema,
+    lease_owner: z.string().trim().min(1).max(128),
+    kill_switch_generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    worker_id: z.string().trim().min(1).max(128),
+    ordinal: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    observed_at: DateTimeSchema,
+    event: AutomationWorkerUnvalidatedEventIntentSchema,
+  })
+  .strict();
+
+export const AutomationWorkerHeartbeatSchema = AutomationWorkerHeartbeatEnvelopeSchema.extend({
+  event: AutomationWorkerHeartbeatEventIntentSchema,
+}).strict();
+export type AutomationWorkerHeartbeat = z.infer<typeof AutomationWorkerHeartbeatSchema>;
+
+export const AutomationWorkerHeartbeatAcceptedSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    accepted: z.literal(true),
+    event: AutomationEventSchema,
+  })
+  .strict();
+export type AutomationWorkerHeartbeatAccepted = z.infer<
+  typeof AutomationWorkerHeartbeatAcceptedSchema
+>;
 
 export const AutomationJobSchema = z
   .object({

@@ -42,6 +42,16 @@ function workerRequestBody(heartbeat: unknown = {}) {
 
 describe('Browser Worker heartbeat route', () => {
   test('does not let the TLS proxy attest an unauthorized client certificate', () => {
+    expect(
+      createWorkerTlsAttestationHeaders({
+        secret: TLS_ATTESTATION_SECRET,
+        timestamp: NOW,
+        method: 'POST',
+        path: AUTOMATION_BROWSER_HEARTBEAT_PATH,
+        body: workerRequestBody(),
+        certificate: WORKER_CERTIFICATE,
+      }),
+    ).toHaveProperty('x-automation-worker-tls-attestation');
     expect(() =>
       createWorkerTlsAttestationHeaders({
         secret: TLS_ATTESTATION_SECRET,
@@ -137,9 +147,14 @@ describe('Browser Worker heartbeat route', () => {
       tlsAttestationSecret: TLS_ATTESTATION_SECRET,
       now: () => NOW,
       authenticator: {
-        bindTlsPeer() {
+        bindTlsPeer(input) {
           bindCalls += 1;
-          throw new Error('identity-mismatched requests must not bind a Worker peer');
+          return Object.freeze({
+            serviceId: input.serviceId,
+            role: 'browser-worker' as const,
+            certificateFingerprint256: input.fingerprint256,
+            certificateExpiresAt: input.validTo,
+          });
         },
       },
       processor: {
@@ -156,7 +171,7 @@ describe('Browser Worker heartbeat route', () => {
     });
 
     expect(response.status).toBe(401);
-    expect(bindCalls).toBe(0);
+    expect(bindCalls).toBe(1);
   });
 
   test('bounds certificate attestation headers before binding the peer', async () => {

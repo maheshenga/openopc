@@ -1,4 +1,3 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import {
   AUTOMATION_BROWSER_HEARTBEAT_PATH,
   type AutomationErrorCode,
@@ -16,23 +15,16 @@ import {
   WorkerAuthenticationError,
   type WorkerServiceProof,
 } from './worker-auth';
+import { authenticateWorkerHttpRequest } from './worker-http-auth';
 /*
  * The route authenticates two separate statements: a trusted proxy attests the TLS certificate,
  * then the Worker proof authenticates the heartbeat body. Neither statement can replace the
  * other.
  */
 
-const HEADER = {
-  serviceId: 'x-automation-worker-service-id',
-  certificateFingerprint: 'x-automation-worker-certificate-fingerprint',
-  certificateValidTo: 'x-automation-worker-certificate-valid-to',
-  attestedAt: 'x-automation-worker-tls-attested-at',
-  attestation: 'x-automation-worker-tls-attestation',
-} as const;
-
 export { AUTOMATION_BROWSER_HEARTBEAT_PATH };
+export { createWorkerTlsAttestationHeaders } from './worker-http-auth';
 
-const ServiceIdSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
 const WorkerRequestSchema = z
   .object({
     protocol_version: z.literal('automation.v1'),
@@ -62,61 +54,6 @@ export type BrowserWorkerHeartbeatRouteDependencies = Readonly<{
   maxBodyBytes?: number;
   bodyReadTimeoutMs?: number;
 }>;
-
-type TlsAttestationInput = Readonly<{
-  secret: string;
-  timestamp: Date;
-  method: string;
-  path: string;
-  body: string | Uint8Array;
-  certificate: TlsPeerCertificate;
-}>;
-
-function bodyHash(body: string | Uint8Array): string {
-  return `sha256:${createHash('sha256').update(body).digest('hex')}`;
-}
-
-function canonicalTlsAttestation(input: Omit<TlsAttestationInput, 'secret'>): string {
-  return [
-    input.timestamp.toISOString(),
-    input.certificate.serviceId,
-    input.certificate.fingerprint256,
-    input.certificate.validTo,
-    input.method.toUpperCase(),
-    input.path,
-    bodyHash(input.body),
-  ].join('\n');
-}
-
-function attestationSignature(input: TlsAttestationInput): string {
-  return `hmac-sha256:${createHmac('sha256', input.secret)
-    .update(canonicalTlsAttestation(input))
-    .digest('hex')}`;
-}
-
-function signaturesEqual(left: string, right: string): boolean {
-  const leftBytes = Buffer.from(left);
-  const rightBytes = Buffer.from(right);
-  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
-}
-
-export function createWorkerTlsAttestationHeaders(
-  input: TlsAttestationInput,
-): Record<string, string> {
-  if (!input.certificate.authorized) {
-    throw new Error('TLS proxy cannot attest an unauthorized Worker certificate');
-  }
-  if (input.secret.length < 32) {
-    throw new Error('TLS proxy attestation secret is not configured');
-  }
-  return {
-    [HEADER.serviceId]: input.certificate.serviceId,
-    [HEADER.certificateFingerprint]: input.certificate.fingerprint256,
-    [HEADER.certificateValidTo]: input.certificate.validTo,
-    [HEADER.attestedAt]: input.timestamp.toISOString(),
-    [HEADER.attestation]: attestationSignature(input),
-  };
-}
 
 function protocolError(
   status: number,
@@ -195,61 +132,6 @@ function unavailable(): Response {
   );
 }
 
-type BoundedBodyResult =
-  | { accepted: true; body: Uint8Array }
-  | { accepted: false; reason: 'too_large' | 'timed_out' };
-
-async function readBoundedBody(
-  request: Request,
-  maxBodyBytes: number,
-  bodyReadTimeoutMs: number,
-): Promise<BoundedBodyResult> {
-  const contentLength = request.headers.get('content-length');
-  if (contentLength !== null) {
-    const declared = Number(contentLength);
-    if (!Number.isSafeInteger(declared) || declared < 0 || declared > maxBodyBytes) {
-      return { accepted: false, reason: 'too_large' };
-    }
-  }
-  if (request.body === null) return { accepted: true, body: new Uint8Array() };
-
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<{ type: 'timed_out' }>((resolve) => {
-    timeout = setTimeout(() => resolve({ type: 'timed_out' }), bodyReadTimeoutMs);
-  });
-  try {
-    while (true) {
-      const next = await Promise.race([
-        reader.read().then((result) => ({ type: 'read' as const, result })),
-        deadline,
-      ]);
-      if (next.type === 'timed_out') {
-        void reader.cancel('Browser Worker heartbeat body read timed out').catch(() => {});
-        return { accepted: false, reason: 'timed_out' };
-      }
-      if (next.result.done) break;
-      total += next.result.value.byteLength;
-      if (total > maxBodyBytes) {
-        void reader.cancel('Browser Worker heartbeat body is too large').catch(() => {});
-        return { accepted: false, reason: 'too_large' };
-      }
-      chunks.push(next.result.value);
-    }
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return { accepted: true, body: bytes };
-}
-
 export function createBrowserWorkerHeartbeatRoute(
   dependencies: BrowserWorkerHeartbeatRouteDependencies,
 ) {
@@ -276,68 +158,35 @@ export function createBrowserWorkerHeartbeatRoute(
   }
 
   app.post(AUTOMATION_BROWSER_HEARTBEAT_PATH, async (context) => {
-    const headers = context.req.raw.headers;
-    const serviceId = headers.get(HEADER.serviceId) ?? '';
-    const fingerprint256 = headers.get(HEADER.certificateFingerprint) ?? '';
-    const validTo = headers.get(HEADER.certificateValidTo) ?? '';
-    const attestedAtText = headers.get(HEADER.attestedAt) ?? '';
-    const receivedAttestation = headers.get(HEADER.attestation) ?? '';
-    const attestedAt = new Date(attestedAtText);
     const checkedAt = now();
-    const url = new URL(context.req.url);
-    const path = `${url.pathname}${url.search}`;
-    const certificate: TlsPeerCertificate = {
-      authorized: true,
-      serviceId,
-      fingerprint256,
-      validTo,
-    };
-    if (
-      !ServiceIdSchema.safeParse(serviceId).success ||
-      fingerprint256.length === 0 ||
-      fingerprint256.length > 256 ||
-      validTo.length > 64 ||
-      attestedAtText.length > 64 ||
-      !Number.isFinite(Date.parse(validTo)) ||
-      Date.parse(validTo) <= checkedAt.getTime() ||
-      !Number.isFinite(attestedAt.getTime()) ||
-      Math.abs(checkedAt.getTime() - attestedAt.getTime()) > maxSkewMs ||
-      !/^hmac-sha256:[a-f0-9]{64}$/.test(receivedAttestation)
-    ) {
+    const authenticated = await authenticateWorkerHttpRequest({
+      request: context.req.raw,
+      expectedPath: AUTOMATION_BROWSER_HEARTBEAT_PATH,
+      tlsAttestationSecret: dependencies.tlsAttestationSecret,
+      authenticator: dependencies.authenticator,
+      now: checkedAt,
+      maxSkewMs,
+      maxBodyBytes,
+      bodyReadTimeoutMs,
+    });
+    if (!authenticated.accepted) {
+      if (authenticated.reason === 'too_large') return payloadTooLarge();
+      if (authenticated.reason === 'timed_out') return requestTimeout();
+      if (authenticated.reason === 'unavailable') return unavailable();
       return unauthorized();
     }
-    let boundedBody: BoundedBodyResult;
-    try {
-      boundedBody = await readBoundedBody(context.req.raw, maxBodyBytes, bodyReadTimeoutMs);
-    } catch {
-      return unavailable();
-    }
-    if (!boundedBody.accepted) {
-      return boundedBody.reason === 'timed_out' ? requestTimeout() : payloadTooLarge();
-    }
-    const rawBodyBytes = boundedBody.body;
-    const expectedAttestation = attestationSignature({
-      secret: dependencies.tlsAttestationSecret,
-      timestamp: attestedAt,
-      method: context.req.method,
-      path,
-      body: rawBodyBytes,
-      certificate,
-    });
-    if (!signaturesEqual(receivedAttestation, expectedAttestation)) return unauthorized();
 
     let request: z.infer<typeof WorkerRequestSchema>;
     try {
-      const rawBody = new TextDecoder('utf-8', { fatal: true }).decode(rawBodyBytes);
+      const rawBody = new TextDecoder('utf-8', { fatal: true }).decode(authenticated.body);
       request = WorkerRequestSchema.parse(JSON.parse(rawBody));
     } catch {
       return invalidRequest();
     }
-    if (request.proof.service_id !== serviceId) return unauthorized();
+    if (request.proof.service_id !== authenticated.peer.serviceId) return unauthorized();
     try {
-      const peer = dependencies.authenticator.bindTlsPeer(certificate);
       const event = await dependencies.processor.handle({
-        peer,
+        peer: authenticated.peer,
         proof: request.proof,
         heartbeat: request.heartbeat as WorkerHeartbeat,
       });

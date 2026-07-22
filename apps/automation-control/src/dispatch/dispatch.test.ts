@@ -29,7 +29,8 @@ const APPROVAL_TOKEN = `approval.v1.${'A'.repeat(43)}`;
 const ACTION_HASH = `sha256:${'a'.repeat(64)}` as const;
 const POLICY_HASH = `sha256:${'b'.repeat(64)}`;
 const TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
-const NOW = new Date('2026-07-22T08:00:00.000Z');
+// Keep schema-level "future" checks deterministic without letting this fixture expire.
+const NOW = new Date('2099-07-22T08:00:00.000Z');
 
 function requestHash(request: AutomationJobRequest): `sha256:${string}` {
   return `sha256:${createHash('sha256')
@@ -72,7 +73,7 @@ function browserRequest(): AutomationJobRequest {
     },
     desktop_policy: null,
     idempotency_key: 'dispatch-browser-0001',
-    deadline_at: '2026-07-22T08:05:00.000Z',
+    deadline_at: '2099-07-22T08:05:00.000Z',
     traceparent: TRACEPARENT,
   });
 }
@@ -111,7 +112,7 @@ function desktopRequest(options?: {
       kill_switch_generation: 7,
     },
     idempotency_key: 'dispatch-desktop-001',
-    deadline_at: '2026-07-22T08:05:00.000Z',
+    deadline_at: '2099-07-22T08:05:00.000Z',
     traceparent: TRACEPARENT,
   });
 }
@@ -126,8 +127,8 @@ function job(request: AutomationJobRequest): AutomationJob {
     status: 'dispatched',
     policy_version: POLICY_HASH,
     kill_switch_generation: request.desktop_policy?.kill_switch_generation ?? 0,
-    created_at: '2026-07-22T07:59:00.000Z',
-    updated_at: '2026-07-22T07:59:30.000Z',
+    created_at: '2099-07-22T07:59:00.000Z',
+    updated_at: '2099-07-22T07:59:30.000Z',
     terminal_at: null,
   });
 }
@@ -142,8 +143,8 @@ function lease(request: AutomationJobRequest, permissionId: string | null = null
     permission_id: permissionId,
     request_hash: requestHash(request),
     kill_switch_generation: request.desktop_policy?.kill_switch_generation ?? 0,
-    issued_at: '2026-07-22T07:59:45.000Z',
-    expires_at: '2026-07-22T08:01:00.000Z',
+    issued_at: '2099-07-22T07:59:45.000Z',
+    expires_at: '2099-07-22T08:01:00.000Z',
     signature: `hmac-sha256:${'c'.repeat(64)}`,
   });
 }
@@ -170,13 +171,13 @@ function authentication() {
     authorized: true,
     serviceId: 'automation-control',
     fingerprint256: 'AA:CONTROL',
-    validTo: '2026-07-23T08:00:00.000Z',
+    validTo: '2099-07-23T08:00:00.000Z',
   });
   const workerPeer = authenticator.bindTlsPeer({
     authorized: true,
     serviceId: 'browser-worker-1',
     fingerprint256: 'BB:WORKER',
-    validTo: '2026-07-23T08:00:00.000Z',
+    validTo: '2099-07-23T08:00:00.000Z',
   });
   return { authenticator, controlPeer, workerPeer };
 }
@@ -256,7 +257,7 @@ describe('automation dispatch boundary', () => {
     const request = browserRequest();
     const currentLease = AutomationLeaseSchema.parse({
       ...lease(request),
-      expires_at: '2026-07-22T08:10:00.000Z',
+      expires_at: '2099-07-22T08:10:00.000Z',
     });
     const { authenticator, workerPeer } = authentication();
     let nowCalls = 0;
@@ -268,7 +269,7 @@ describe('automation dispatch boundary', () => {
       nextNonce: () => 1,
       now: () => {
         nowCalls += 1;
-        return nowCalls === 1 ? NOW : new Date('2026-07-22T08:05:01.000Z');
+        return nowCalls === 1 ? NOW : new Date('2099-07-22T08:05:01.000Z');
       },
       isLeaseCurrent: async () => true,
       isLeaseSignatureValid: async () => true,
@@ -348,7 +349,7 @@ describe('automation dispatch boundary', () => {
         authorized: true,
         serviceId: 'browser-worker-1',
         fingerprint256: 'CC:ATTACKER',
-        validTo: '2026-07-23T08:00:00.000Z',
+        validTo: '2099-07-23T08:00:00.000Z',
       }),
     ).toThrow(/certificate/i);
 
@@ -492,6 +493,7 @@ describe('automation dispatch boundary', () => {
       tunnelId: DEVICE_ID,
       accountId: ACCOUNT_ID,
       method: 'desktop.cua.click',
+      requiredPermissionId: PERMISSION_ID,
       params: {
         x: 12,
         y: 24,
@@ -797,18 +799,18 @@ describe('automation dispatch boundary', () => {
   test('blocks transport when full-access expires after its final repository check', async () => {
     const request = desktopRequest({
       approvalPolicy: 'full-access',
-      fullAccessExpiresAt: '2026-07-22T08:04:00.000Z',
+      fullAccessExpiresAt: '2099-07-22T08:04:00.000Z',
     });
     const currentLease = AutomationLeaseSchema.parse({
       ...lease(request, PERMISSION_ID),
-      expires_at: '2026-07-22T08:10:00.000Z',
+      expires_at: '2099-07-22T08:10:00.000Z',
     });
     let nowCalls = 0;
     let tunnelCalls = 0;
     const dispatcher = createDesktopDispatcher({
       now: () => {
         nowCalls += 1;
-        return nowCalls < 3 ? NOW : new Date('2026-07-22T08:04:01.000Z');
+        return nowCalls < 3 ? NOW : new Date('2099-07-22T08:04:01.000Z');
       },
       isLeaseCurrent: async () => true,
       isLeaseSignatureValid: async () => true,
@@ -873,7 +875,7 @@ describe('automation dispatch boundary', () => {
     const request = desktopRequest();
     const currentLease = AutomationLeaseSchema.parse({
       ...lease(request, PERMISSION_ID),
-      expires_at: '2026-07-22T08:10:00.000Z',
+      expires_at: '2099-07-22T08:10:00.000Z',
     });
     let currentTime = NOW;
     let leaseChecks = 0;
@@ -882,7 +884,7 @@ describe('automation dispatch boundary', () => {
       now: () => currentTime,
       isLeaseCurrent: async () => {
         leaseChecks += 1;
-        if (leaseChecks === 2) currentTime = new Date('2026-07-22T08:05:01.000Z');
+        if (leaseChecks === 2) currentTime = new Date('2099-07-22T08:05:01.000Z');
         return true;
       },
       isLeaseSignatureValid: async () => true,

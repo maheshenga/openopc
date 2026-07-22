@@ -112,6 +112,7 @@ export type TunnelRpcExecutor = (input: {
   tunnelId: string;
   accountId: string;
   method: string;
+  requiredPermissionId: string;
   params: Record<string, unknown>;
 }) => Promise<TunnelRpcOutcome>;
 
@@ -294,6 +295,7 @@ export function createDesktopDispatcher(input: {
         tunnelId: raw.tunnelId,
         accountId: job.account_id,
         method: args.method,
+        requiredPermissionId: raw.permissionId,
         params: {
           ...args.params,
           permissionId: raw.permissionId,

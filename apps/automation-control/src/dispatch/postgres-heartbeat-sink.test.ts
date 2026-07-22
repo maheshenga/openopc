@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { type Database, automationJobSteps, automationJobs } from '@kortix/db';
+import {
+  type Database,
+  automationApprovals,
+  automationJobEvents,
+  automationJobSteps,
+  automationJobs,
+} from '@kortix/db';
 import { automationLeaseOwnerPrefix } from '../lease-manager';
 import { createPostgresHeartbeatEventSink } from './postgres-heartbeat-sink';
 
@@ -8,9 +14,13 @@ const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
 const JOB_ID = '30000000-0000-4000-a000-000000000001';
 const LEASE_ID = '40000000-0000-4000-a000-000000000001';
 const STEP_ID = '50000000-0000-4000-a000-000000000001';
+const PREVIOUS_STEP_ID = '50000000-0000-4000-a000-000000000002';
+const NEXT_STEP_ID = '50000000-0000-4000-a000-000000000003';
 const EVIDENCE_REFERENCE = 'evidence:60000000-0000-4000-a000-000000000001';
 const APPROVAL_ID = '70000000-0000-4000-a000-000000000001';
 const ACTION_HASH = `sha256:${'a'.repeat(64)}` as const;
+const PREVIOUS_HASH = `sha256:${'b'.repeat(64)}` as const;
+const NEXT_HASH = `sha256:${'c'.repeat(64)}` as const;
 const NOW = new Date('2026-07-22T10:00:00.000Z');
 
 const BINDING = {
@@ -23,10 +33,12 @@ const BINDING = {
 } as const;
 
 type UpdateTarget = 'job' | 'step';
+type InsertTarget = 'approval' | 'event';
 
 type FakeState = {
   selections: unknown[][];
   inserts: Array<Record<string, unknown>>;
+  insertTargets: InsertTarget[];
   updates: Array<Record<string, unknown>>;
   updateTargets: UpdateTarget[];
   transactions: number;
@@ -37,6 +49,7 @@ type FakeState = {
 
 type FakeDatabaseOptions = {
   failInsert?: boolean;
+  failInsertTarget?: InsertTarget;
   updateReturning?: Partial<Record<UpdateTarget, unknown[]>>;
 };
 
@@ -64,6 +77,7 @@ function fakeDatabase(
   const state: FakeState = {
     selections: [...selectionResults],
     inserts: [],
+    insertTargets: [],
     updates: [],
     updateTargets: [],
     transactions: 0,
@@ -74,7 +88,7 @@ function fakeDatabase(
   const db = {
     async transaction<T>(callback: (tx: unknown) => Promise<T>): Promise<T> {
       state.transactions += 1;
-      const pendingInserts: Array<Record<string, unknown>> = [];
+      const pendingInserts: Array<{ target: InsertTarget; values: Record<string, unknown> }> = [];
       const pendingUpdates: Array<{ target: UpdateTarget; values: Record<string, unknown> }> = [];
       const transaction = {
         select: () =>
@@ -106,16 +120,27 @@ function fakeDatabase(
             };
           },
         }),
-        insert: () => ({
+        insert: (table: unknown) => ({
           values: async (values: Record<string, unknown>) => {
-            if (options.failInsert) throw new Error('fake event insert failed');
-            pendingInserts.push(values);
+            const target: InsertTarget =
+              table === automationApprovals
+                ? 'approval'
+                : table === automationJobEvents
+                  ? 'event'
+                  : (() => {
+                      throw new Error('unexpected fake insert target');
+                    })();
+            if (options.failInsert || options.failInsertTarget === target) {
+              throw new Error(`fake ${target} insert failed`);
+            }
+            pendingInserts.push({ target, values });
           },
         }),
       };
       try {
         const result = await callback(transaction);
-        state.inserts.push(...pendingInserts);
+        state.inserts.push(...pendingInserts.map(({ values }) => values));
+        state.insertTargets.push(...pendingInserts.map(({ target }) => target));
         state.updates.push(...pendingUpdates.map(({ values }) => values));
         state.updateTargets.push(...pendingUpdates.map(({ target }) => target));
         state.commits += 1;
@@ -601,7 +626,14 @@ describe('PostgreSQL heartbeat event sink', () => {
 
   test('projects enabled worker approval into a lease-fenced transaction', async () => {
     const { db, state } = fakeDatabase([
-      [{ jobId: JOB_ID, status: 'running' }],
+      [
+        {
+          jobId: JOB_ID,
+          status: 'running',
+          deadlineAt: '2026-07-22T10:30:00.000Z',
+          deadlineCurrent: true,
+        },
+      ],
       [{ value: 0 }],
     ]);
     const input = {
@@ -624,6 +656,118 @@ describe('PostgreSQL heartbeat event sink', () => {
     expect(state.rowLocks).toBe(2);
     expect(state.updates).toHaveLength(0);
     expect(state.inserts).toHaveLength(0);
+  });
+
+  test('atomically pauses a valid browser step and creates its durable approval', async () => {
+    const { db, state } = fakeDatabase([
+      [
+        {
+          jobId: JOB_ID,
+          status: 'running',
+          deadlineAt: '2026-07-22T10:30:00.000Z',
+          deadlineCurrent: true,
+        },
+      ],
+      [{ value: 0 }],
+      [
+        {
+          stepId: PREVIOUS_STEP_ID,
+          sequence: 10,
+          status: 'succeeded',
+          risk: 'observe',
+          actionHash: PREVIOUS_HASH,
+          approvalId: null,
+        },
+        {
+          stepId: STEP_ID,
+          sequence: 20,
+          status: 'pending',
+          risk: 'operate',
+          actionHash: ACTION_HASH,
+          approvalId: null,
+        },
+        {
+          stepId: NEXT_STEP_ID,
+          sequence: 30,
+          status: 'pending',
+          risk: 'observe',
+          actionHash: NEXT_HASH,
+          approvalId: null,
+        },
+      ],
+      [{ value: 4 }],
+    ]);
+    const input = {
+      ...heartbeatInput(),
+      event: {
+        type: 'approval_required' as const,
+        payload: { step_id: STEP_ID, action_hash: ACTION_HASH },
+        trace_id: null,
+      },
+    };
+
+    const result = await createPostgresHeartbeatEventSink(db, {
+      durableApprovalPauseEnabled: true,
+      approvalTtlMs: 600_000,
+      newApprovalId: () => APPROVAL_ID,
+    }).append(input);
+
+    expect(result).toMatchObject({
+      accepted: true,
+      event: {
+        job_id: JOB_ID,
+        sequence: 5,
+        type: 'approval_required',
+        status: 'awaiting_approval',
+        payload: {
+          step_id: STEP_ID,
+          action_hash: ACTION_HASH,
+          approval_id: APPROVAL_ID,
+          expires_at: '2026-07-22T10:10:00.000Z',
+          resume_after_sequence: 10,
+        },
+      },
+    });
+    expect(state.transactions).toBe(1);
+    expect(state.commits).toBe(1);
+    expect(state.rollbacks).toBe(0);
+    expect(state.rowLocks).toBe(2);
+    expect(state.updateTargets).toEqual(['step', 'job']);
+    expect(state.insertTargets).toEqual(['approval', 'event']);
+    expect(state.updates[0]).toMatchObject({
+      status: 'awaiting_approval',
+      approvalId: APPROVAL_ID,
+    });
+    expect(state.updates[1]).toMatchObject({
+      status: 'awaiting_approval',
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+    expect(state.inserts[0]).toMatchObject({
+      approvalId: APPROVAL_ID,
+      jobId: JOB_ID,
+      stepId: STEP_ID,
+      actionHash: ACTION_HASH,
+      status: 'pending',
+      expiresAt: '2026-07-22T10:10:00.000Z',
+      createdAt: NOW.toISOString(),
+    });
+    expect(state.inserts[1]).toMatchObject({
+      jobId: JOB_ID,
+      sequence: 5,
+      type: 'approval_required',
+      status: 'awaiting_approval',
+      workerId: 'browser-worker-1',
+      workerLeaseId: LEASE_ID,
+      workerOrdinal: 1,
+      payload: {
+        step_id: STEP_ID,
+        action_hash: ACTION_HASH,
+        approval_id: APPROVAL_ID,
+        expires_at: '2026-07-22T10:10:00.000Z',
+        resume_after_sequence: 10,
+      },
+    });
   });
 
   test('rejects worker payload project substitution as a semantic mismatch', async () => {

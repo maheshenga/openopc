@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { type Database, automationJobEvents, automationJobSteps, automationJobs } from '@kortix/db';
+import {
+  type Database,
+  automationApprovals,
+  automationJobEvents,
+  automationJobSteps,
+  automationJobs,
+} from '@kortix/db';
 import type { AutomationJobStatus } from '@kortix/intelligence-contracts';
-import { and, eq, gt, max, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, max, sql } from 'drizzle-orm';
 import {
   type AppendAutomationEventInput,
   AutomationEventStatusMismatchError,
@@ -29,6 +35,13 @@ export type PostgresHeartbeatEventSinkOptions = {
   approvalTtlMs?: number;
   newApprovalId?: () => string;
 };
+
+class DurableApprovalPauseConflictError extends Error {
+  constructor() {
+    super('Durable approval pause lost its locked job state');
+    this.name = 'DurableApprovalPauseConflictError';
+  }
+}
 
 function projectWorkerEvent(
   projectId: string,
@@ -185,7 +198,7 @@ export function createPostgresHeartbeatEventSink(
         approvalPause.enabled,
       );
       if (!projected) return { accepted: false, reason: 'semantic_mismatch' };
-      const eventInput: AppendAutomationEventInput = {
+      let eventInput: AppendAutomationEventInput = {
         accountId: input.binding.accountId,
         projectId: input.binding.projectId,
         jobId: input.binding.jobId,
@@ -201,9 +214,15 @@ export function createPostgresHeartbeatEventSink(
       }
       const observedAt = input.observedAt.toISOString();
 
-      return db.transaction(async (tx) => {
+      try {
+        return await db.transaction(async (tx) => {
         const [job] = await tx
-          .select({ jobId: automationJobs.jobId, status: automationJobs.status })
+          .select({
+            jobId: automationJobs.jobId,
+            status: automationJobs.status,
+            deadlineAt: automationJobs.deadlineAt,
+            deadlineCurrent: sql<boolean>`${automationJobs.deadlineAt} > GREATEST(clock_timestamp(), ${observedAt}::timestamptz)`,
+          })
           .from(automationJobs)
           .where(
             and(
@@ -248,18 +267,91 @@ export function createPostgresHeartbeatEventSink(
         }
 
         if (input.event.type === 'approval_required') {
+          if (job.status !== 'running' || !job.deadlineCurrent) {
+            return { accepted: false, reason: 'semantic_mismatch' } as const;
+          }
           const steps = await tx
-            .select({ stepId: automationJobSteps.stepId })
+            .select({
+              stepId: automationJobSteps.stepId,
+              sequence: automationJobSteps.sequence,
+              status: automationJobSteps.status,
+              risk: automationJobSteps.risk,
+              actionHash: automationJobSteps.actionHash,
+              approvalId: automationJobSteps.approvalId,
+            })
             .from(automationJobSteps)
             .where(eq(automationJobSteps.jobId, input.binding.jobId))
             .for('update');
-          if (steps.length === 0) {
+          const orderedSteps = [...steps].sort((left, right) => left.sequence - right.sequence);
+          const targetIndex = orderedSteps.findIndex(
+            (step) => step.stepId === input.event.payload.step_id,
+          );
+          const target = orderedSteps[targetIndex];
+          if (
+            !target ||
+            target.status !== 'pending' ||
+            target.approvalId !== null ||
+            target.actionHash !== input.event.payload.action_hash ||
+            target.risk === 'observe'
+          ) {
+            return { accepted: false, reason: 'semantic_mismatch' } as const;
+          }
+          const previousSteps = orderedSteps.slice(0, targetIndex);
+          const laterSteps = orderedSteps.slice(targetIndex + 1);
+          if (
+            previousSteps.some((step) => step.status !== 'succeeded') ||
+            laterSteps.some((step) => step.status !== 'pending')
+          ) {
             return { accepted: false, reason: 'semantic_mismatch' } as const;
           }
 
-          // The enabled path remains fail-closed until the atomic approval,
-          // step, and job mutations are composed in the next implementation task.
-          return { accepted: false, reason: 'semantic_mismatch' } as const;
+          const resumeAfterSequence = previousSteps.at(-1)?.sequence ?? 0;
+          const deadlineAtMs = Date.parse(job.deadlineAt);
+          const expiresAt = new Date(
+            Math.min(input.observedAt.getTime() + approvalPause.ttlMs, deadlineAtMs),
+          ).toISOString();
+          const approvalId = approvalPause.newApprovalId();
+          eventInput = {
+            ...eventInput,
+            event: {
+              ...eventInput.event,
+              payload: {
+                step_id: target.stepId,
+                action_hash: target.actionHash,
+                approval_id: approvalId,
+                expires_at: expiresAt,
+                resume_after_sequence: resumeAfterSequence,
+              },
+            },
+          };
+          materializeAutomationEvent(eventInput, 1);
+
+          const [updatedStep] = await tx
+            .update(automationJobSteps)
+            .set({ status: 'awaiting_approval', approvalId })
+            .where(
+              and(
+                eq(automationJobSteps.jobId, input.binding.jobId),
+                eq(automationJobSteps.stepId, target.stepId),
+                eq(automationJobSteps.status, 'pending'),
+                eq(automationJobSteps.actionHash, target.actionHash),
+                isNull(automationJobSteps.approvalId),
+              ),
+            )
+            .returning({ stepId: automationJobSteps.stepId });
+          if (!updatedStep) {
+            return { accepted: false, reason: 'semantic_mismatch' } as const;
+          }
+
+          await tx.insert(automationApprovals).values({
+            approvalId,
+            jobId: input.binding.jobId,
+            stepId: target.stepId,
+            actionHash: target.actionHash,
+            status: 'pending',
+            expiresAt,
+            createdAt: observedAt,
+          });
         }
 
         if (input.event.type === 'step_started') {
@@ -369,7 +461,12 @@ export function createPostgresHeartbeatEventSink(
               ),
             )
             .returning({ jobId: automationJobs.jobId });
-          if (!updated) return { accepted: false, reason: 'stale_lease' } as const;
+          if (!updated) {
+            if (input.event.type === 'approval_required') {
+              throw new DurableApprovalPauseConflictError();
+            }
+            return { accepted: false, reason: 'stale_lease' } as const;
+          }
         }
 
         await tx.insert(automationJobEvents).values({
@@ -386,7 +483,13 @@ export function createPostgresHeartbeatEventSink(
           createdAt: event.created_at,
         });
         return { accepted: true, event } as const;
-      });
+        });
+      } catch (error) {
+        if (error instanceof DurableApprovalPauseConflictError) {
+          return { accepted: false, reason: 'semantic_mismatch' } as const;
+        }
+        throw error;
+      }
     },
   };
 }

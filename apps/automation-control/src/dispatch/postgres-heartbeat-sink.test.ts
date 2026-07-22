@@ -16,11 +16,13 @@ const LEASE_ID = '40000000-0000-4000-a000-000000000001';
 const STEP_ID = '50000000-0000-4000-a000-000000000001';
 const PREVIOUS_STEP_ID = '50000000-0000-4000-a000-000000000002';
 const NEXT_STEP_ID = '50000000-0000-4000-a000-000000000003';
+const UNKNOWN_STEP_ID = '50000000-0000-4000-a000-000000000099';
 const EVIDENCE_REFERENCE = 'evidence:60000000-0000-4000-a000-000000000001';
 const APPROVAL_ID = '70000000-0000-4000-a000-000000000001';
 const ACTION_HASH = `sha256:${'a'.repeat(64)}` as const;
 const PREVIOUS_HASH = `sha256:${'b'.repeat(64)}` as const;
 const NEXT_HASH = `sha256:${'c'.repeat(64)}` as const;
+const MISMATCH_HASH = `sha256:${'d'.repeat(64)}` as const;
 const NOW = new Date('2026-07-22T10:00:00.000Z');
 
 const BINDING = {
@@ -166,6 +168,68 @@ function heartbeatInput(ordinal = 1) {
       trace_id: null,
     },
   };
+}
+
+function approvalInput(stepId = STEP_ID, actionHash: `sha256:${string}` = ACTION_HASH) {
+  return {
+    ...heartbeatInput(),
+    event: {
+      type: 'approval_required' as const,
+      payload: { step_id: stepId, action_hash: actionHash },
+      trace_id: null,
+    },
+  };
+}
+
+function currentApprovalJob(overrides: Record<string, unknown> = {}) {
+  return {
+    jobId: JOB_ID,
+    status: 'running',
+    deadlineAt: '2026-07-22T10:30:00.000Z',
+    deadlineCurrent: true,
+    ...overrides,
+  };
+}
+
+function validApprovalSteps() {
+  return [
+    {
+      stepId: PREVIOUS_STEP_ID,
+      sequence: 10,
+      status: 'succeeded',
+      risk: 'observe',
+      actionHash: PREVIOUS_HASH,
+      approvalId: null,
+    },
+    {
+      stepId: STEP_ID,
+      sequence: 20,
+      status: 'pending',
+      risk: 'operate',
+      actionHash: ACTION_HASH,
+      approvalId: null,
+    },
+    {
+      stepId: NEXT_STEP_ID,
+      sequence: 30,
+      status: 'pending',
+      risk: 'observe',
+      actionHash: NEXT_HASH,
+      approvalId: null,
+    },
+  ];
+}
+
+function enabledApprovalSink(db: Database) {
+  return createPostgresHeartbeatEventSink(db, {
+    durableApprovalPauseEnabled: true,
+    approvalTtlMs: 600_000,
+    newApprovalId: () => APPROVAL_ID,
+  });
+}
+
+function validApprovalSelections() {
+  return [[currentApprovalJob()], [{ value: 0 }], validApprovalSteps(), [{ value: 4 }]];
 }
 
 describe('PostgreSQL heartbeat event sink', () => {
@@ -768,6 +832,211 @@ describe('PostgreSQL heartbeat event sink', () => {
         resume_after_sequence: 10,
       },
     });
+  });
+
+  test('rejects invalid durable approval snapshots without mutating state', async () => {
+    const scenarios = [
+      {
+        name: 'unknown target',
+        job: currentApprovalJob(),
+        steps: validApprovalSteps(),
+        input: approvalInput(UNKNOWN_STEP_ID),
+      },
+      {
+        name: 'hash mismatch',
+        job: currentApprovalJob(),
+        steps: validApprovalSteps(),
+        input: approvalInput(STEP_ID, MISMATCH_HASH),
+      },
+      {
+        name: 'observe risk',
+        job: currentApprovalJob(),
+        steps: validApprovalSteps().map((step) =>
+          step.stepId === STEP_ID ? { ...step, risk: 'observe' } : step,
+        ),
+        input: approvalInput(),
+      },
+      {
+        name: 'non-pending target',
+        job: currentApprovalJob(),
+        steps: validApprovalSteps().map((step) =>
+          step.stepId === STEP_ID ? { ...step, status: 'running' } : step,
+        ),
+        input: approvalInput(),
+      },
+      {
+        name: 'existing approval id',
+        job: currentApprovalJob(),
+        steps: validApprovalSteps().map((step) =>
+          step.stepId === STEP_ID ? { ...step, approvalId: APPROVAL_ID } : step,
+        ),
+        input: approvalInput(),
+      },
+      {
+        name: 'incomplete prior step',
+        job: currentApprovalJob(),
+        steps: validApprovalSteps().map((step) =>
+          step.stepId === PREVIOUS_STEP_ID ? { ...step, status: 'pending' } : step,
+        ),
+        input: approvalInput(),
+      },
+      {
+        name: 'started later step',
+        job: currentApprovalJob(),
+        steps: validApprovalSteps().map((step) =>
+          step.stepId === NEXT_STEP_ID ? { ...step, status: 'running' } : step,
+        ),
+        input: approvalInput(),
+      },
+      {
+        name: 'non-running job',
+        job: currentApprovalJob({ status: 'dispatched' }),
+        steps: validApprovalSteps(),
+        input: approvalInput(),
+      },
+      {
+        name: 'expired deadline',
+        job: currentApprovalJob({ deadlineCurrent: false }),
+        steps: validApprovalSteps(),
+        input: approvalInput(),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const { db, state } = fakeDatabase([[scenario.job], [{ value: 0 }], scenario.steps]);
+
+      await expect(enabledApprovalSink(db).append(scenario.input)).resolves.toEqual({
+        accepted: false,
+        reason: 'semantic_mismatch',
+      });
+      expect(state.updateTargets).toEqual([]);
+      expect(state.insertTargets).toEqual([]);
+      expect(state.updates).toEqual([]);
+      expect(state.inserts).toEqual([]);
+    }
+  });
+
+  test('derives approval resume cursors from sparse step sequences', async () => {
+    const scenarios = [
+      {
+        job: currentApprovalJob({ deadlineAt: '2026-07-22T10:05:00.000Z' }),
+        steps: [
+          {
+            stepId: STEP_ID,
+            sequence: 40,
+            status: 'pending',
+            risk: 'external_effect',
+            actionHash: ACTION_HASH,
+            approvalId: null,
+          },
+          {
+            stepId: NEXT_STEP_ID,
+            sequence: 90,
+            status: 'pending',
+            risk: 'observe',
+            actionHash: NEXT_HASH,
+            approvalId: null,
+          },
+        ],
+        expectedCursor: 0,
+        expectedExpiry: '2026-07-22T10:05:00.000Z',
+      },
+      {
+        job: currentApprovalJob(),
+        steps: [
+          {
+            stepId: PREVIOUS_STEP_ID,
+            sequence: 10,
+            status: 'succeeded',
+            risk: 'observe',
+            actionHash: PREVIOUS_HASH,
+            approvalId: null,
+          },
+          {
+            stepId: STEP_ID,
+            sequence: 40,
+            status: 'pending',
+            risk: 'operate',
+            actionHash: ACTION_HASH,
+            approvalId: null,
+          },
+        ],
+        expectedCursor: 10,
+        expectedExpiry: '2026-07-22T10:10:00.000Z',
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const { db } = fakeDatabase([[scenario.job], [{ value: 0 }], scenario.steps, [{ value: 0 }]]);
+
+      const result = await enabledApprovalSink(db).append(approvalInput());
+
+      expect(result.accepted).toBeTrue();
+      if (!result.accepted) throw new Error('expected durable approval pause to be accepted');
+      expect(result.event.payload.resume_after_sequence).toBe(scenario.expectedCursor);
+      expect(result.event.payload.expires_at).toBe(scenario.expectedExpiry);
+    }
+  });
+
+  test('does not mutate state when the approval step update loses its condition', async () => {
+    const { db, state } = fakeDatabase(validApprovalSelections(), {
+      updateReturning: { step: [] },
+    });
+
+    await expect(enabledApprovalSink(db).append(approvalInput())).resolves.toEqual({
+      accepted: false,
+      reason: 'semantic_mismatch',
+    });
+    expect(state.updates).toEqual([]);
+    expect(state.updateTargets).toEqual([]);
+    expect(state.inserts).toEqual([]);
+    expect(state.insertTargets).toEqual([]);
+  });
+
+  test('rolls back the approval step when approval insertion fails', async () => {
+    const { db, state } = fakeDatabase(validApprovalSelections(), {
+      failInsertTarget: 'approval',
+    });
+
+    await expect(enabledApprovalSink(db).append(approvalInput())).rejects.toThrow(
+      'fake approval insert failed',
+    );
+    expect(state.rollbacks).toBe(1);
+    expect(state.updates).toEqual([]);
+    expect(state.updateTargets).toEqual([]);
+    expect(state.inserts).toEqual([]);
+    expect(state.insertTargets).toEqual([]);
+  });
+
+  test('rolls back and reports a semantic conflict when the approval job update loses its lease', async () => {
+    const { db, state } = fakeDatabase(validApprovalSelections(), {
+      updateReturning: { job: [] },
+    });
+
+    await expect(enabledApprovalSink(db).append(approvalInput())).resolves.toEqual({
+      accepted: false,
+      reason: 'semantic_mismatch',
+    });
+    expect(state.rollbacks).toBe(1);
+    expect(state.updates).toEqual([]);
+    expect(state.updateTargets).toEqual([]);
+    expect(state.inserts).toEqual([]);
+    expect(state.insertTargets).toEqual([]);
+  });
+
+  test('rolls back the complete approval pause when final event insertion fails', async () => {
+    const { db, state } = fakeDatabase(validApprovalSelections(), {
+      failInsertTarget: 'event',
+    });
+
+    await expect(enabledApprovalSink(db).append(approvalInput())).rejects.toThrow(
+      'fake event insert failed',
+    );
+    expect(state.rollbacks).toBe(1);
+    expect(state.updates).toEqual([]);
+    expect(state.updateTargets).toEqual([]);
+    expect(state.inserts).toEqual([]);
+    expect(state.insertTargets).toEqual([]);
   });
 
   test('rejects worker payload project substitution as a semantic mismatch', async () => {

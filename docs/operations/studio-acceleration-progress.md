@@ -1,6 +1,6 @@
 # Studio Acceleration Progress
 
-**Updated:** 2026-07-21
+**Updated:** 2026-07-22
 
 **Branch:** `studio-platform`
 
@@ -16,6 +16,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence protocol     | implemented                                             | REST, SDK, MCP, A2A, task/event commits                                                                                                     | retained regression gates                                         |
 | Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
 | OpenOPC Milestone A       | implemented, disabled by default                        | catalog, project SSE projection, SDK subscription, and focused contract/API/SDK/CLI gates verified locally                                  | production rollout and later milestones                           |
+| Automation Task 8A        | secure dispatch contracts implemented; runtime open     | commit `920375679`; focused Automation Control tests, typecheck, Biome, and diff gates green                                                  | coordinator and production execution-domain adapters              |
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                                            | focused Web hardening without full-suite reruns                   |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
@@ -213,3 +214,27 @@ Android/iOS work is deferred by product priority as of 2026-07-20. The mobile
 implementation remains in the branch, but no additional native development or
 acceptance is scheduled. Current execution priority is Web first and
 Desktop/Electron second.
+
+## Automation Task 8A Dispatch Contract Slice
+
+Commit `920375679` adds the secure Automation Control dispatch boundary without
+creating a second desktop RPC channel. Browser dispatch binds the signed job
+envelope, policy version, proof nonce, exact lease, receipt, deadline, and
+pre/post lease checks. Desktop dispatch uses only the injected existing Tunnel
+adapter, forwards the complete signed lease under controlled parameters, and
+fences permission, action hash, device, generation, one-time approval,
+full-access expiry, deadline, and lease currentness immediately before RPC.
+
+Heartbeat inputs are restricted to worker-owned event schemas. Evidence is an
+opaque `evidence:<UUID>` reference, and the durable sink contract requires one
+transaction to revalidate the exact lease, worker ordinal, and event semantics
+before allocating sequence and inserting the event. Reclaimed leases receive a
+new per-claim fencing token, and unknown or external-effect outcomes do not
+automatically retry.
+
+The focused gate passed `34/34` tests with `143` assertions, Automation Control
+typecheck, scoped Biome over nine files, and working/staged diff checks. No full
+suite was run. This records Task 8A only: the production coordinator, durable
+shared nonce and heartbeat implementations, authenticated Browser Worker
+transport, Control-to-API Tunnel adapter, restart recovery, and readiness
+wiring remain open, so complete Task 8 and production readiness are not claimed.

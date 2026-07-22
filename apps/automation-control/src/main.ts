@@ -3,7 +3,9 @@ import { RedisClient } from 'bun';
 import { sql } from 'drizzle-orm';
 import { createPostgresApprovalService } from './approval-service';
 import { loadAutomationControlConfig } from './config';
+import { createBrowserWorkerHeartbeatRuntime } from './dispatch/heartbeat-runtime';
 import { startAutomationDispatchPolling } from './dispatch/poller';
+import { createPostgresHeartbeatEventSink } from './dispatch/postgres-heartbeat-sink';
 import { createAutomationDesktopDispatchRuntime } from './dispatch/runtime';
 import {
   createPostgresKillSwitchService,
@@ -38,6 +40,18 @@ const checkRedis = redis
     }
   : async () => false;
 
+const workerRoutes =
+  db && redis && leaseManager && config.browserHeartbeatEnabled
+    ? createBrowserWorkerHeartbeatRuntime({
+        config,
+        redis: {
+          send: (command, args) => redis.send(command, args),
+        },
+        leaseManager,
+        eventSink: createPostgresHeartbeatEventSink(db),
+      })
+    : undefined;
+
 const routes =
   db && redis && repository
     ? (() => {
@@ -67,7 +81,13 @@ const routes =
       })()
     : undefined;
 
-const app = createAutomationControlApp({ config, checkDatabase, checkRedis, routes });
+const app = createAutomationControlApp({
+  config,
+  checkDatabase,
+  checkRedis,
+  routes,
+  workerRoutes,
+});
 const server = Bun.serve({
   hostname: '0.0.0.0',
   port: config.port,
@@ -80,6 +100,7 @@ console.info(
     service_id: config.serviceId,
     enabled: config.enabled,
     desktop_coordinator_enabled: config.desktopCoordinatorEnabled,
+    browser_heartbeat_enabled: config.browserHeartbeatEnabled,
     port: server.port,
   }),
 );

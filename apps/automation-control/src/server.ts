@@ -10,6 +10,7 @@ export type AutomationControlServerDependencies = Readonly<{
   checkDatabase: () => Promise<boolean>;
   checkRedis: () => Promise<boolean>;
   routes?: Hono<InternalAutomationEnv>;
+  workerRoutes?: Hono;
 }>;
 
 async function probe(check: () => Promise<boolean>): Promise<DependencyStatus> {
@@ -83,6 +84,13 @@ export function createAutomationControlApp(
 
   if (dependencies.config.enabled && dependencies.routes) {
     app.route('/', dependencies.routes);
+  }
+  if (
+    dependencies.config.enabled &&
+    dependencies.config.browserHeartbeatEnabled &&
+    dependencies.workerRoutes
+  ) {
+    app.route('/', dependencies.workerRoutes);
   }
 
   return app;

@@ -34,8 +34,20 @@ export interface WorkerNonceStore {
   consume(serviceId: string, nonce: number): Promise<boolean>;
 }
 
+export type WorkerAuthenticationFailureReason =
+  | 'unauthorized'
+  | 'replayed_proof'
+  | 'invalid_configuration';
+
 export class WorkerAuthenticationError extends Error {
   override readonly name = 'WorkerAuthenticationError';
+
+  constructor(
+    message: string,
+    readonly reason: WorkerAuthenticationFailureReason = 'unauthorized',
+  ) {
+    super(message);
+  }
 }
 
 export class MemoryWorkerNonceStore implements WorkerNonceStore {
@@ -52,6 +64,51 @@ export class MemoryWorkerNonceStore implements WorkerNonceStore {
 
 export function createMemoryWorkerNonceStore(): WorkerNonceStore {
   return new MemoryWorkerNonceStore();
+}
+
+export type WorkerRedisCommandClient = Readonly<{
+  send(command: string, args: string[]): Promise<unknown>;
+}>;
+
+const REDIS_MONOTONIC_NONCE_SCRIPT = [
+  "local current = redis.call('GET', KEYS[1])",
+  'local candidate = tonumber(ARGV[1])',
+  'if candidate == nil then return 0 end',
+  'if current ~= false and candidate <= tonumber(current) then return 0 end',
+  "redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])",
+  'return 1',
+].join('\n');
+
+/** Shared production replay store. Redis expiry bounds proof state across replicas. */
+export function createRedisWorkerNonceStore(
+  client: WorkerRedisCommandClient,
+  options?: { keyPrefix?: string; ttlMs?: number },
+): WorkerNonceStore {
+  const keyPrefix = options?.keyPrefix ?? 'automation:worker-proof:nonce:v1';
+  const ttlMs = options?.ttlMs ?? 120_000;
+  if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 10 * 60_000) {
+    throw new WorkerAuthenticationError('worker nonce TTL is invalid', 'invalid_configuration');
+  }
+  return {
+    async consume(serviceId, nonce) {
+      if (
+        !/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/.test(serviceId) ||
+        !Number.isSafeInteger(nonce) ||
+        nonce < 1
+      ) {
+        return false;
+      }
+      const keyDigest = createHash('sha256').update(serviceId).digest('hex');
+      const reserved = await client.send('EVAL', [
+        REDIS_MONOTONIC_NONCE_SCRIPT,
+        '1',
+        `${keyPrefix}:${keyDigest}`,
+        String(nonce),
+        String(ttlMs),
+      ]);
+      return reserved === 1 || reserved === '1';
+    },
+  };
 }
 
 type TrustedPeer = Readonly<{
@@ -129,21 +186,31 @@ export function createWorkerServiceAuthenticator(options: AuthenticatorOptions) 
   const now = options.now ?? (() => new Date());
   const maxSkewMs = options.maxSkewMs ?? 60_000;
   if (!Number.isSafeInteger(maxSkewMs) || maxSkewMs < 1 || maxSkewMs > 5 * 60_000) {
-    throw new WorkerAuthenticationError('worker authentication skew is invalid');
+    throw new WorkerAuthenticationError(
+      'worker authentication skew is invalid',
+      'invalid_configuration',
+    );
   }
   for (const [serviceId, peer] of Object.entries(options.trustedPeers)) {
     assertServiceId(serviceId);
     if (peer.fingerprints.length === 0 || peer.sharedSecret.length < 32) {
-      throw new WorkerAuthenticationError('trusted worker configuration is invalid');
+      throw new WorkerAuthenticationError(
+        'trusted worker configuration is invalid',
+        'invalid_configuration',
+      );
     }
   }
   const verifiedPeers = new WeakSet<object>();
+  const trustedPeerFor = (serviceId: string): TrustedPeer | undefined =>
+    Object.prototype.hasOwnProperty.call(options.trustedPeers, serviceId)
+      ? options.trustedPeers[serviceId]
+      : undefined;
 
   const assertPeer = (peer: VerifiedWorkerPeer, expectedRole: WorkerServiceRole): TrustedPeer => {
     if (!verifiedPeers.has(peer)) {
       throw new WorkerAuthenticationError('worker peer was not bound by the TLS adapter');
     }
-    const trusted = options.trustedPeers[peer.serviceId];
+    const trusted = trustedPeerFor(peer.serviceId);
     if (
       trusted === undefined ||
       trusted.role !== expectedRole ||
@@ -165,7 +232,7 @@ export function createWorkerServiceAuthenticator(options: AuthenticatorOptions) 
      */
     bindTlsPeer(certificate: TlsPeerCertificate): VerifiedWorkerPeer {
       assertServiceId(certificate.serviceId);
-      const trusted = options.trustedPeers[certificate.serviceId];
+      const trusted = trustedPeerFor(certificate.serviceId);
       const certificateExpiry = Date.parse(certificate.validTo);
       if (
         !certificate.authorized ||
@@ -191,8 +258,8 @@ export function createWorkerServiceAuthenticator(options: AuthenticatorOptions) 
     },
 
     sign(input: SignInput): WorkerServiceProof {
-      const trusted = options.trustedPeers[input.serviceId];
       assertServiceId(input.serviceId);
+      const trusted = trustedPeerFor(input.serviceId);
       if (
         trusted === undefined ||
         !trusted.fingerprints.includes(input.certificateFingerprint256) ||
@@ -242,7 +309,10 @@ export function createWorkerServiceAuthenticator(options: AuthenticatorOptions) 
         throw new WorkerAuthenticationError('worker service signature is invalid');
       }
       if (!(await options.nonceStore.consume(input.peer.serviceId, input.proof.nonce))) {
-        throw new WorkerAuthenticationError('worker service proof replay was rejected');
+        throw new WorkerAuthenticationError(
+          'worker service proof replay was rejected',
+          'replayed_proof',
+        );
       }
     },
   };

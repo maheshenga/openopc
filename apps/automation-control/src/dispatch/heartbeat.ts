@@ -148,8 +148,24 @@ export interface HeartbeatEventSink {
   }): Promise<HeartbeatEventAppendResult>;
 }
 
+export type WorkerHeartbeatFailureReason =
+  | 'identity_mismatch'
+  | 'sensitive_payload'
+  | 'invalid_payload'
+  | 'stale_observation'
+  | 'stale_lease'
+  | 'replayed_ordinal'
+  | 'semantic_mismatch';
+
 export class WorkerHeartbeatError extends Error {
   override readonly name = 'WorkerHeartbeatError';
+
+  constructor(
+    readonly reason: WorkerHeartbeatFailureReason,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 const SENSITIVE_KEY =
@@ -182,10 +198,20 @@ export function createHeartbeatProcessor(input: {
       proof: WorkerServiceProof;
       heartbeat: WorkerHeartbeat;
     }): Promise<AutomationEvent> {
-      const unvalidatedHeartbeat = WorkerHeartbeatEnvelopeSchema.parse(raw.heartbeat);
+      const envelope = WorkerHeartbeatEnvelopeSchema.safeParse(raw.heartbeat);
+      if (!envelope.success) {
+        throw new WorkerHeartbeatError(
+          'invalid_payload',
+          'heartbeat envelope is not a valid worker payload',
+        );
+      }
+      const unvalidatedHeartbeat = envelope.data;
       input.authenticator.assertPeer(raw.peer, 'browser-worker');
       if (unvalidatedHeartbeat.worker_id !== raw.peer.serviceId) {
-        throw new WorkerHeartbeatError('heartbeat worker identity does not match its TLS peer');
+        throw new WorkerHeartbeatError(
+          'identity_mismatch',
+          'heartbeat worker identity does not match its TLS peer',
+        );
       }
       await input.authenticator.verify({
         peer: raw.peer,
@@ -194,11 +220,17 @@ export function createHeartbeatProcessor(input: {
         body: unvalidatedHeartbeat,
       });
       if (containsSensitiveKey(unvalidatedHeartbeat.event.payload)) {
-        throw new WorkerHeartbeatError('heartbeat payload contains a forbidden sensitive field');
+        throw new WorkerHeartbeatError(
+          'sensitive_payload',
+          'heartbeat payload contains a forbidden sensitive field',
+        );
       }
       const heartbeat = WorkerHeartbeatSchema.safeParse(unvalidatedHeartbeat);
       if (!heartbeat.success) {
-        throw new WorkerHeartbeatError('heartbeat event is not a valid worker payload');
+        throw new WorkerHeartbeatError(
+          'invalid_payload',
+          'heartbeat event is not a valid worker payload',
+        );
       }
       const observedAt = new Date(heartbeat.data.observed_at);
       if (
@@ -206,7 +238,10 @@ export function createHeartbeatProcessor(input: {
         maxObservedSkewMs < 1 ||
         Math.abs(now().getTime() - observedAt.getTime()) > maxObservedSkewMs
       ) {
-        throw new WorkerHeartbeatError('heartbeat observation timestamp is stale');
+        throw new WorkerHeartbeatError(
+          'stale_observation',
+          'heartbeat observation timestamp is stale',
+        );
       }
       const binding: DispatchLeaseBinding = {
         accountId: heartbeat.data.account_id,
@@ -217,7 +252,7 @@ export function createHeartbeatProcessor(input: {
         killSwitchGeneration: heartbeat.data.kill_switch_generation,
       };
       if (!(await input.isLeaseBindingCurrent(binding))) {
-        throw new WorkerHeartbeatError('heartbeat lease is not current');
+        throw new WorkerHeartbeatError('stale_lease', 'heartbeat lease is not current');
       }
       const appendResult = await input.eventSink.append({
         binding,
@@ -229,13 +264,20 @@ export function createHeartbeatProcessor(input: {
       if (!appendResult.accepted) {
         if (appendResult.reason === 'stale_lease') {
           throw new WorkerHeartbeatError(
+            'stale_lease',
             'heartbeat lease is not current at the durable event boundary',
           );
         }
         if (appendResult.reason === 'replayed_ordinal') {
-          throw new WorkerHeartbeatError('heartbeat worker ordinal was replayed at durable append');
+          throw new WorkerHeartbeatError(
+            'replayed_ordinal',
+            'heartbeat worker ordinal was replayed at durable append',
+          );
         }
-        throw new WorkerHeartbeatError('heartbeat event does not match the current job semantics');
+        throw new WorkerHeartbeatError(
+          'semantic_mismatch',
+          'heartbeat event does not match the current job semantics',
+        );
       }
       return AutomationEventSchema.parse(appendResult.event);
     },

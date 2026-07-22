@@ -7,18 +7,32 @@ import { createAutomationControlApp } from './server';
 const ENABLED_CONFIG: AutomationControlConfig = {
   enabled: true,
   desktopCoordinatorEnabled: false,
+  browserHeartbeatEnabled: false,
   port: 4011,
   automationApiUrl: 'https://api.example.test',
   databaseUrl: 'postgresql://automation:password@db.example.test/automation',
   redisUrl: 'redis://redis.example.test:6379',
   serviceId: 'automation-control-test',
   sharedSecret: 'test-shared-secret-that-is-at-least-32-bytes',
+  browserWorkerPeers: {},
+  workerTlsAttestationSecret: '',
+  workerProofSkewMs: 60_000,
+  workerHeartbeatMaxBodyBytes: 64 * 1024,
+  workerHeartbeatBodyReadTimeoutMs: 5_000,
   leaseMs: 30_000,
   coordinatorPollMs: 1_000,
   coordinatorBatchSize: 4,
 };
 
 describe('automation control configuration', () => {
+  test('keeps the Browser Worker heartbeat runtime disabled by default', () => {
+    const config = loadAutomationControlConfig({});
+
+    expect(config.browserHeartbeatEnabled).toBeFalse();
+    expect(config.browserWorkerPeers).toEqual({});
+    expect(config.workerTlsAttestationSecret).toBe('');
+  });
+
   test('defaults the service to disabled without requiring infrastructure credentials', () => {
     const config = loadAutomationControlConfig({});
 
@@ -45,6 +59,93 @@ describe('automation control configuration', () => {
     expect(() =>
       loadAutomationControlConfig({
         AUTOMATION_DESKTOP_COORDINATOR_ENABLED: 'true',
+      }),
+    ).toThrow();
+  });
+
+  test('does not allow Browser Worker heartbeat while the control service is disabled', () => {
+    expect(() =>
+      loadAutomationControlConfig({
+        AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'true',
+      }),
+    ).toThrow();
+  });
+
+  test('requires trusted Worker and TLS proxy configuration before enabling heartbeat', () => {
+    expect(() =>
+      loadAutomationControlConfig({
+        AUTOMATION_CONTROL_ENABLED: 'true',
+        AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'true',
+        DATABASE_URL: 'postgresql://db.example.test/automation',
+        REDIS_URL: 'redis://redis.example.test:6379',
+        AUTOMATION_CONTROL_SHARED_SECRET: 'control-shared-secret-at-least-thirty-two-bytes',
+      }),
+    ).toThrow();
+  });
+
+  test('parses strict Browser Worker trust and heartbeat limits', () => {
+    const config = loadAutomationControlConfig({
+      AUTOMATION_CONTROL_ENABLED: 'true',
+      AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'true',
+      DATABASE_URL: 'postgresql://db.example.test/automation',
+      REDIS_URL: 'redis://redis.example.test:6379',
+      AUTOMATION_CONTROL_SHARED_SECRET: 'control-shared-secret-at-least-thirty-two-bytes',
+      AUTOMATION_BROWSER_WORKER_TRUST_JSON: JSON.stringify({
+        'browser-worker-1': {
+          fingerprints: ['AA:BB:CC:DD'],
+          shared_secret: 'worker-shared-secret-at-least-thirty-two-bytes',
+        },
+      }),
+      AUTOMATION_WORKER_TLS_ATTESTATION_SECRET:
+        'trusted-proxy-attestation-secret-at-least-thirty-two-bytes',
+      AUTOMATION_WORKER_PROOF_SKEW_MS: '45000',
+      AUTOMATION_WORKER_HEARTBEAT_MAX_BODY_BYTES: '32768',
+      AUTOMATION_WORKER_HEARTBEAT_BODY_READ_TIMEOUT_MS: '2500',
+    });
+
+    expect(config.browserHeartbeatEnabled).toBeTrue();
+    expect(config.browserWorkerPeers).toEqual({
+      'browser-worker-1': {
+        role: 'browser-worker',
+        fingerprints: ['AA:BB:CC:DD'],
+        sharedSecret: 'worker-shared-secret-at-least-thirty-two-bytes',
+      },
+    });
+    expect(config.workerTlsAttestationSecret).toBe(
+      'trusted-proxy-attestation-secret-at-least-thirty-two-bytes',
+    );
+    expect(config.workerProofSkewMs).toBe(45_000);
+    expect(config.workerHeartbeatMaxBodyBytes).toBe(32_768);
+    expect(config.workerHeartbeatBodyReadTimeoutMs).toBe(2_500);
+  });
+
+  test('rejects malformed or non-strict Browser Worker trust JSON', () => {
+    const base = {
+      AUTOMATION_CONTROL_ENABLED: 'true',
+      AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'true',
+      DATABASE_URL: 'postgresql://db.example.test/automation',
+      REDIS_URL: 'redis://redis.example.test:6379',
+      AUTOMATION_CONTROL_SHARED_SECRET: 'control-shared-secret-at-least-thirty-two-bytes',
+      AUTOMATION_WORKER_TLS_ATTESTATION_SECRET:
+        'trusted-proxy-attestation-secret-at-least-thirty-two-bytes',
+    } as const;
+
+    expect(() =>
+      loadAutomationControlConfig({
+        ...base,
+        AUTOMATION_BROWSER_WORKER_TRUST_JSON: '{not-json',
+      }),
+    ).toThrow();
+    expect(() =>
+      loadAutomationControlConfig({
+        ...base,
+        AUTOMATION_BROWSER_WORKER_TRUST_JSON: JSON.stringify({
+          'browser-worker-1': {
+            fingerprints: ['AA:BB:CC:DD'],
+            shared_secret: 'worker-shared-secret-at-least-thirty-two-bytes',
+            injected_role: 'automation-control',
+          },
+        }),
       }),
     ).toThrow();
   });
@@ -151,5 +252,31 @@ describe('automation control health endpoints', () => {
 
     expect((await enabled.request('/v1/automation/jobs')).status).toBe(200);
     expect((await disabled.request('/v1/automation/jobs')).status).toBe(404);
+  });
+
+  test('mounts the Worker heartbeat route only behind its dedicated flag', async () => {
+    const workerRoutes = new Hono();
+    workerRoutes.post('/internal/automation/browser/heartbeat', (context) =>
+      context.json({ accepted: true }),
+    );
+    const enabled = createAutomationControlApp({
+      config: { ...ENABLED_CONFIG, browserHeartbeatEnabled: true },
+      checkDatabase: async () => true,
+      checkRedis: async () => true,
+      workerRoutes,
+    });
+    const disabled = createAutomationControlApp({
+      config: ENABLED_CONFIG,
+      checkDatabase: async () => true,
+      checkRedis: async () => true,
+      workerRoutes,
+    });
+
+    expect(
+      (await enabled.request('/internal/automation/browser/heartbeat', { method: 'POST' })).status,
+    ).toBe(200);
+    expect(
+      (await disabled.request('/internal/automation/browser/heartbeat', { method: 'POST' })).status,
+    ).toBe(404);
   });
 });

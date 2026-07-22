@@ -1043,6 +1043,24 @@ describe('automation dispatch boundary', () => {
     expect(calls).toBe(1);
   });
 
+  test('classifies a malformed heartbeat envelope as an invalid Worker payload', async () => {
+    const processor = createHeartbeatProcessor({
+      authenticator: {} as never,
+      isLeaseBindingCurrent: async () => {
+        throw new Error('malformed heartbeat must fail before the lease check');
+      },
+      eventSink: {
+        async append() {
+          throw new Error('malformed heartbeat must fail before persistence');
+        },
+      },
+    });
+
+    await expect(
+      processor.handle({ peer: {} as never, proof: {} as never, heartbeat: {} as never }),
+    ).rejects.toMatchObject({ name: 'WorkerHeartbeatError', reason: 'invalid_payload' });
+  });
+
   test('authenticates heartbeat intent, checks the exact lease, and leaves durable sequencing to the sink', async () => {
     const { authenticator, workerPeer } = authentication();
     const currentLease = lease(browserRequest());

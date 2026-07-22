@@ -240,6 +240,144 @@ describe('OpenOPC automation wire contract', () => {
     ).toBeFalse();
   });
 
+  test('parses a versioned Browser approval-resume dispatch envelope', () => {
+    const request = AutomationJobRequestSchema.parse({
+      ...browserRequest(),
+      steps: [
+        {
+          ...browserRequest().steps[0],
+          action: 'browser.submit',
+          args: { selector: '#confirm' },
+          risk: 'external_effect',
+        },
+      ],
+    });
+    const lease = AutomationLeaseSchema.parse({
+      lease_id: LEASE_ID,
+      job_id: JOB_ID,
+      project_id: PROJECT_ID,
+      execution_domain: 'browser',
+      owner: `automation-control:${LEASE_ID}`,
+      permission_id: null,
+      request_hash: REQUEST_HASH,
+      kill_switch_generation: 2,
+      issued_at: '2026-07-23T00:00:00.000Z',
+      expires_at: FUTURE_AT,
+      signature: `hmac-sha256:${'d'.repeat(64)}`,
+    });
+    const resumeEnvelope = automation.AutomationBrowserDispatchEnvelopeSchema.parse({
+      protocol_version: 'automation.v1',
+      dispatch_kind: 'browser.approval-resume.v1',
+      request,
+      lease,
+      policy_version: 'policy-v1',
+      resume_after_sequence: 0,
+      dispatched_at: '2026-07-23T00:00:01.000Z',
+      approval_resume: {
+        approval_id: APPROVAL_ID,
+        attempt_id: '71000000-0000-4000-a000-000000000001',
+        step_id: STEP_ID,
+        action_hash: ACTION_HASH,
+        token: `approval-resume.v1.${'A'.repeat(43)}`,
+        expires_at: '2998-01-01T00:00:00.000Z',
+      },
+    });
+
+    if (!('dispatch_kind' in resumeEnvelope)) {
+      throw new Error('Expected Browser approval-resume envelope');
+    }
+    expect(automation.AUTOMATION_BROWSER_APPROVAL_CONSUME_PATH).toBe(
+      '/internal/automation/browser/approvals/consume',
+    );
+    expect(resumeEnvelope.dispatch_kind).toBe('browser.approval-resume.v1');
+    expect(
+      automation.AutomationBrowserDispatchEnvelopeSchema.safeParse({
+        ...resumeEnvelope,
+        approval_resume: {
+          ...resumeEnvelope.approval_resume,
+          action_hash: `sha256:${'0'.repeat(64)}`,
+        },
+      }).success,
+    ).toBeFalse();
+  });
+
+  test('defines strict Browser approval-resume consumption contracts', () => {
+    const attemptId = '71000000-0000-4000-a000-000000000001';
+    const proof = AutomationWorkerServiceProofSchema.parse({
+      service_id: 'browser-worker-1',
+      timestamp: '2026-07-23T00:00:02.000Z',
+      nonce: 14,
+      signature: `hmac-sha256:${'f'.repeat(64)}`,
+    });
+    const request = automation.AutomationBrowserApprovalConsumeRequestSchema.parse({
+      protocol_version: 'automation.v1',
+      proof,
+      consume: {
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        job_id: JOB_ID,
+        approval_id: APPROVAL_ID,
+        attempt_id: attemptId,
+        step_id: STEP_ID,
+        action_hash: ACTION_HASH,
+        lease_id: LEASE_ID,
+        lease_owner: `automation-control:${LEASE_ID}`,
+        kill_switch_generation: 2,
+        resume_after_sequence: 0,
+        token: `approval-resume.v1.${'A'.repeat(43)}`,
+        requested_at: proof.timestamp,
+      },
+    });
+    const accepted = automation.AutomationBrowserApprovalConsumeAcceptedSchema.parse({
+      protocol_version: 'automation.v1',
+      consumed: true,
+      idempotent: false,
+      approval_id: APPROVAL_ID,
+      attempt_id: attemptId,
+      job_id: JOB_ID,
+      step_id: STEP_ID,
+      started_at: proof.timestamp,
+    });
+
+    expect(request.consume.token).toStartWith('approval-resume.v1.');
+    expect(accepted).not.toHaveProperty('token');
+    expect(
+      automation.AutomationBrowserApprovalConsumeRequestSchema.safeParse({
+        ...request,
+        consume: { ...request.consume, injected: true },
+      }).success,
+    ).toBeFalse();
+  });
+
+  test('negotiates Browser approval-resume capability without breaking legacy receipts', () => {
+    const legacyReceipt = {
+      protocol_version: 'automation.v1',
+      accepted: true,
+      job_id: JOB_ID,
+      lease_id: LEASE_ID,
+      worker_id: 'browser-worker-1',
+      dispatch_envelope_hash: REQUEST_HASH,
+      dispatch_proof_nonce: 15,
+      received_at: '2026-07-23T00:00:02.000Z',
+    };
+
+    expect(
+      automation.AutomationBrowserDispatchReceiptSchema.parse(legacyReceipt),
+    ).not.toHaveProperty('capabilities');
+    expect(
+      automation.AutomationBrowserDispatchReceiptSchema.parse({
+        ...legacyReceipt,
+        capabilities: ['browser.approval-resume.v1'],
+      }).capabilities,
+    ).toEqual(['browser.approval-resume.v1']);
+    expect(
+      automation.AutomationBrowserDispatchReceiptSchema.safeParse({
+        ...legacyReceipt,
+        capabilities: ['browser.unversioned'],
+      }).success,
+    ).toBeFalse();
+  });
+
   test('defines the complete executable browser action catalog', () => {
     const cases = [
       ['browser.navigate', { url: 'https://example.test/dashboard' }, 'operate'],

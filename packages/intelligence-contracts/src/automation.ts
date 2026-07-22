@@ -4,6 +4,8 @@ import { AutomationProtocolVersionSchema } from './compatibility.js';
 export const AUTOMATION_MAX_STEPS = 128 as const;
 export const AUTOMATION_BROWSER_HEARTBEAT_PATH = '/internal/automation/browser/heartbeat' as const;
 export const AUTOMATION_BROWSER_DISPATCH_PATH = '/internal/automation/browser/dispatch' as const;
+export const AUTOMATION_BROWSER_APPROVAL_CONSUME_PATH =
+  '/internal/automation/browser/approvals/consume' as const;
 
 const UuidSchema = z.string().uuid();
 const DateTimeSchema = z.string().datetime({ offset: true });
@@ -685,54 +687,170 @@ export const AutomationLeaseSchema = z
   });
 export type AutomationLease = z.infer<typeof AutomationLeaseSchema>;
 
-export const AutomationBrowserDispatchEnvelopeSchema = z
+const AutomationBrowserDispatchCommonShape = {
+  protocol_version: AutomationProtocolVersionSchema,
+  request: AutomationJobRequestSchema,
+  lease: AutomationLeaseSchema,
+  policy_version: z.string().trim().min(1).max(128),
+  resume_after_sequence: z.number().int().nonnegative().max(AUTOMATION_MAX_STEPS),
+  dispatched_at: DateTimeSchema,
+} as const;
+
+type AutomationBrowserDispatchCommon = {
+  request: AutomationJobRequest;
+  lease: AutomationLease;
+  resume_after_sequence: number;
+  dispatched_at: string;
+};
+
+function validateBrowserDispatchEnvelope(
+  envelope: AutomationBrowserDispatchCommon,
+  context: z.RefinementCtx,
+): void {
+  if (
+    envelope.request.execution_domain !== 'browser' ||
+    envelope.request.browser_policy === null ||
+    envelope.lease.execution_domain !== 'browser' ||
+    envelope.lease.project_id !== envelope.request.project_id
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['lease'],
+      message: 'browser dispatch authority is inconsistent',
+    });
+  }
+  const dispatchedAt = Date.parse(envelope.dispatched_at);
+  if (
+    Date.parse(envelope.lease.issued_at) > dispatchedAt ||
+    Date.parse(envelope.lease.expires_at) <= dispatchedAt ||
+    Date.parse(envelope.request.deadline_at) <= dispatchedAt
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['dispatched_at'],
+      message: 'browser dispatch is outside its authority window',
+    });
+  }
+  if (
+    envelope.resume_after_sequence !== 0 &&
+    !envelope.request.steps.some((step) => step.sequence === envelope.resume_after_sequence)
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['resume_after_sequence'],
+      message: 'browser dispatch resume cursor is invalid',
+    });
+  }
+}
+
+export const AutomationBrowserStandardDispatchEnvelopeSchema = z
+  .object(AutomationBrowserDispatchCommonShape)
+  .strict()
+  .superRefine(validateBrowserDispatchEnvelope);
+export type AutomationBrowserStandardDispatchEnvelope = z.infer<
+  typeof AutomationBrowserStandardDispatchEnvelopeSchema
+>;
+
+export const AutomationBrowserApprovalResumeBindingSchema = z
   .object({
-    protocol_version: AutomationProtocolVersionSchema,
-    request: AutomationJobRequestSchema,
-    lease: AutomationLeaseSchema,
-    policy_version: z.string().trim().min(1).max(128),
-    resume_after_sequence: z.number().int().nonnegative().max(AUTOMATION_MAX_STEPS),
-    dispatched_at: DateTimeSchema,
+    approval_id: UuidSchema,
+    attempt_id: UuidSchema,
+    step_id: UuidSchema,
+    action_hash: Sha256HashSchema,
+    token: z.string().regex(/^approval-resume\.v1\.[A-Za-z0-9_-]{43}$/),
+    expires_at: DateTimeSchema,
+  })
+  .strict();
+export type AutomationBrowserApprovalResumeBinding = z.infer<
+  typeof AutomationBrowserApprovalResumeBindingSchema
+>;
+
+export const AutomationBrowserCapabilitySchema = z.enum(['browser.approval-resume.v1']);
+export type AutomationBrowserCapability = z.infer<typeof AutomationBrowserCapabilitySchema>;
+
+export const AutomationBrowserApprovalResumeDispatchEnvelopeSchema = z
+  .object({
+    ...AutomationBrowserDispatchCommonShape,
+    dispatch_kind: z.literal('browser.approval-resume.v1'),
+    approval_resume: AutomationBrowserApprovalResumeBindingSchema,
   })
   .strict()
   .superRefine((envelope, context) => {
+    validateBrowserDispatchEnvelope(envelope, context);
+    const step = envelope.request.steps.find(
+      (candidate) => candidate.step_id === envelope.approval_resume.step_id,
+    );
     if (
-      envelope.request.execution_domain !== 'browser' ||
-      envelope.request.browser_policy === null ||
-      envelope.lease.execution_domain !== 'browser' ||
-      envelope.lease.project_id !== envelope.request.project_id
+      step === undefined ||
+      step.action_hash !== envelope.approval_resume.action_hash ||
+      step.sequence <= envelope.resume_after_sequence ||
+      Date.parse(envelope.approval_resume.expires_at) > Date.parse(envelope.lease.expires_at)
     ) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['lease'],
-        message: 'browser dispatch authority is inconsistent',
-      });
-    }
-    const dispatchedAt = Date.parse(envelope.dispatched_at);
-    if (
-      Date.parse(envelope.lease.issued_at) > dispatchedAt ||
-      Date.parse(envelope.lease.expires_at) <= dispatchedAt ||
-      Date.parse(envelope.request.deadline_at) <= dispatchedAt
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['dispatched_at'],
-        message: 'browser dispatch is outside its authority window',
-      });
-    }
-    if (
-      envelope.resume_after_sequence !== 0 &&
-      !envelope.request.steps.some((step) => step.sequence === envelope.resume_after_sequence)
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['resume_after_sequence'],
-        message: 'browser dispatch resume cursor is invalid',
+        path: ['approval_resume'],
+        message: 'browser approval resume binding is inconsistent',
       });
     }
   });
+export type AutomationBrowserApprovalResumeDispatchEnvelope = z.infer<
+  typeof AutomationBrowserApprovalResumeDispatchEnvelopeSchema
+>;
+
+export const AutomationBrowserDispatchEnvelopeSchema = z.union([
+  AutomationBrowserStandardDispatchEnvelopeSchema,
+  AutomationBrowserApprovalResumeDispatchEnvelopeSchema,
+]);
 export type AutomationBrowserDispatchEnvelope = z.infer<
   typeof AutomationBrowserDispatchEnvelopeSchema
+>;
+
+export const AutomationBrowserApprovalConsumeInputSchema = z
+  .object({
+    account_id: UuidSchema,
+    project_id: UuidSchema,
+    job_id: UuidSchema,
+    approval_id: UuidSchema,
+    attempt_id: UuidSchema,
+    step_id: UuidSchema,
+    action_hash: Sha256HashSchema,
+    lease_id: UuidSchema,
+    lease_owner: z.string().trim().min(1).max(128),
+    kill_switch_generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    resume_after_sequence: z.number().int().nonnegative().max(AUTOMATION_MAX_STEPS),
+    token: z.string().regex(/^approval-resume\.v1\.[A-Za-z0-9_-]{43}$/),
+    requested_at: DateTimeSchema,
+  })
+  .strict();
+export type AutomationBrowserApprovalConsumeInput = z.infer<
+  typeof AutomationBrowserApprovalConsumeInputSchema
+>;
+
+export const AutomationBrowserApprovalConsumeRequestSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    proof: AutomationWorkerServiceProofSchema,
+    consume: AutomationBrowserApprovalConsumeInputSchema,
+  })
+  .strict();
+export type AutomationBrowserApprovalConsumeRequest = z.infer<
+  typeof AutomationBrowserApprovalConsumeRequestSchema
+>;
+
+export const AutomationBrowserApprovalConsumeAcceptedSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    consumed: z.literal(true),
+    idempotent: z.boolean(),
+    approval_id: UuidSchema,
+    attempt_id: UuidSchema,
+    job_id: UuidSchema,
+    step_id: UuidSchema,
+    started_at: DateTimeSchema,
+  })
+  .strict();
+export type AutomationBrowserApprovalConsumeAccepted = z.infer<
+  typeof AutomationBrowserApprovalConsumeAcceptedSchema
 >;
 
 export const AutomationBrowserDispatchRequestSchema = z
@@ -756,6 +874,7 @@ export const AutomationBrowserDispatchReceiptSchema = z
     dispatch_envelope_hash: Sha256HashSchema,
     dispatch_proof_nonce: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     received_at: DateTimeSchema,
+    capabilities: z.array(AutomationBrowserCapabilitySchema).max(16).optional(),
   })
   .strict();
 export type AutomationBrowserDispatchReceipt = z.infer<

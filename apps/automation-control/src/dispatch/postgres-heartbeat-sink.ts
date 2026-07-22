@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { type Database, automationJobEvents, automationJobSteps, automationJobs } from '@kortix/db';
 import type { AutomationJobStatus } from '@kortix/intelligence-contracts';
 import { and, eq, gt, max, sql } from 'drizzle-orm';
@@ -19,15 +20,35 @@ const TERMINAL_STATUSES: ReadonlySet<AutomationJobStatus> = new Set([
   'expired',
 ]);
 
+const DEFAULT_APPROVAL_TTL_MS = 600_000;
+const MIN_APPROVAL_TTL_MS = 60_000;
+const MAX_APPROVAL_TTL_MS = 3_600_000;
+
+export type PostgresHeartbeatEventSinkOptions = {
+  durableApprovalPauseEnabled?: boolean;
+  approvalTtlMs?: number;
+  newApprovalId?: () => string;
+};
+
 function projectWorkerEvent(
   projectId: string,
   event: WorkerHeartbeat['event'],
+  durableApprovalPauseEnabled: boolean,
 ): Pick<AppendAutomationEventInput, 'event' | 'transition'> | null {
   switch (event.type) {
     case 'approval_required':
-      // Approval requires a durable pause/resume handoff. Reject it until that
-      // runtime is composed.
-      return null;
+      return durableApprovalPauseEnabled
+        ? {
+            event: {
+              protocol_version: 'automation.v1',
+              type: event.type,
+              status: 'awaiting_approval',
+              payload: event.payload,
+              trace_id: event.trace_id,
+            },
+            transition: { type: 'execution_approval_required' },
+          }
+        : null;
     case 'step_started':
       return {
         event: {
@@ -126,7 +147,25 @@ function isSemanticError(error: unknown): boolean {
   );
 }
 
-export function createPostgresHeartbeatEventSink(db: Database): HeartbeatEventSink {
+export function createPostgresHeartbeatEventSink(
+  db: Database,
+  options: PostgresHeartbeatEventSinkOptions = {},
+): HeartbeatEventSink {
+  const approvalPause = {
+    enabled: options.durableApprovalPauseEnabled ?? false,
+    ttlMs: options.approvalTtlMs ?? DEFAULT_APPROVAL_TTL_MS,
+    newApprovalId: options.newApprovalId ?? randomUUID,
+  };
+  if (
+    !Number.isSafeInteger(approvalPause.ttlMs) ||
+    approvalPause.ttlMs < MIN_APPROVAL_TTL_MS ||
+    approvalPause.ttlMs > MAX_APPROVAL_TTL_MS
+  ) {
+    throw new RangeError(
+      `approvalTtlMs must be an integer between ${MIN_APPROVAL_TTL_MS} and ${MAX_APPROVAL_TTL_MS}`,
+    );
+  }
+
   return {
     async append(input) {
       if (
@@ -140,7 +179,11 @@ export function createPostgresHeartbeatEventSink(db: Database): HeartbeatEventSi
       if (input.binding.owner !== expectedOwner) {
         return { accepted: false, reason: 'stale_lease' };
       }
-      const projected = projectWorkerEvent(input.binding.projectId, input.event);
+      const projected = projectWorkerEvent(
+        input.binding.projectId,
+        input.event,
+        approvalPause.enabled,
+      );
       if (!projected) return { accepted: false, reason: 'semantic_mismatch' };
       const eventInput: AppendAutomationEventInput = {
         accountId: input.binding.accountId,
@@ -202,6 +245,21 @@ export function createPostgresHeartbeatEventSink(db: Database): HeartbeatEventSi
             return { accepted: false, reason: 'semantic_mismatch' } as const;
           }
           throw error;
+        }
+
+        if (input.event.type === 'approval_required') {
+          const steps = await tx
+            .select({ stepId: automationJobSteps.stepId })
+            .from(automationJobSteps)
+            .where(eq(automationJobSteps.jobId, input.binding.jobId))
+            .for('update');
+          if (steps.length === 0) {
+            return { accepted: false, reason: 'semantic_mismatch' } as const;
+          }
+
+          // The enabled path remains fail-closed until the atomic approval,
+          // step, and job mutations are composed in the next implementation task.
+          return { accepted: false, reason: 'semantic_mismatch' } as const;
         }
 
         if (input.event.type === 'step_started') {

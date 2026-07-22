@@ -9,6 +9,8 @@ const JOB_ID = '30000000-0000-4000-a000-000000000001';
 const LEASE_ID = '40000000-0000-4000-a000-000000000001';
 const STEP_ID = '50000000-0000-4000-a000-000000000001';
 const EVIDENCE_REFERENCE = 'evidence:60000000-0000-4000-a000-000000000001';
+const APPROVAL_ID = '70000000-0000-4000-a000-000000000001';
+const ACTION_HASH = `sha256:${'a'.repeat(64)}` as const;
 const NOW = new Date('2026-07-22T10:00:00.000Z');
 
 const BINDING = {
@@ -557,7 +559,7 @@ describe('PostgreSQL heartbeat event sink', () => {
         type: 'approval_required' as const,
         payload: {
           step_id: '50000000-0000-4000-a000-000000000001',
-          action_hash: `sha256:${'a'.repeat(64)}`,
+          action_hash: ACTION_HASH,
         },
         trace_id: null,
       },
@@ -572,6 +574,56 @@ describe('PostgreSQL heartbeat event sink', () => {
     expect(state.updateTargets).toHaveLength(0);
     expect(state.inserts).toHaveLength(0);
     expect(state.rowLocks).toBe(0);
+  });
+
+  test('validates durable approval pause TTL bounds at construction', () => {
+    const { db } = fakeDatabase([]);
+
+    expect(() =>
+      createPostgresHeartbeatEventSink(db, {
+        durableApprovalPauseEnabled: true,
+        approvalTtlMs: 59_999,
+      }),
+    ).toThrow();
+    expect(() =>
+      createPostgresHeartbeatEventSink(db, {
+        durableApprovalPauseEnabled: true,
+        approvalTtlMs: 3_600_001,
+      }),
+    ).toThrow();
+    expect(() =>
+      createPostgresHeartbeatEventSink(db, {
+        durableApprovalPauseEnabled: true,
+        approvalTtlMs: 600_000,
+      }),
+    ).not.toThrow();
+  });
+
+  test('projects enabled worker approval into a lease-fenced transaction', async () => {
+    const { db, state } = fakeDatabase([
+      [{ jobId: JOB_ID, status: 'running' }],
+      [{ value: 0 }],
+    ]);
+    const input = {
+      ...heartbeatInput(),
+      event: {
+        type: 'approval_required' as const,
+        payload: { step_id: STEP_ID, action_hash: ACTION_HASH },
+        trace_id: null,
+      },
+    };
+
+    await expect(
+      createPostgresHeartbeatEventSink(db, {
+        durableApprovalPauseEnabled: true,
+        approvalTtlMs: 600_000,
+        newApprovalId: () => APPROVAL_ID,
+      }).append(input),
+    ).resolves.toEqual({ accepted: false, reason: 'semantic_mismatch' });
+    expect(state.transactions).toBe(1);
+    expect(state.rowLocks).toBe(2);
+    expect(state.updates).toHaveLength(0);
+    expect(state.inserts).toHaveLength(0);
   });
 
   test('rejects worker payload project substitution as a semantic mismatch', async () => {

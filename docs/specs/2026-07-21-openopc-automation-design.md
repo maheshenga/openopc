@@ -259,6 +259,24 @@ Web 是主入口，桌面端沿用同一套视觉语言并增加设备专属视�
 - Web 只访问公开控制 API，不直接连接 Worker。
 - Desktop Edge Agent 只建立出站 mTLS WebSocket，不要求设备开放入站端口。
 
+#### Browser Worker 认证任务源
+
+Automation Control 使用一条持久的 mTLS WebSocket 向 Browser Worker 推送任务，
+不引入第二套 Redis 队列，也不让 Worker 轮询数据库。Worker 的 TLS 代理只在
+WebSocket upgrade 时证明 Control 客户端证书；每个 dispatch message 仍必须携带
+覆盖完整 job envelope 的 Control HMAC proof 和单调 nonce，不能用连接级证明替代
+消息级认证。
+
+每个 Worker 同时只允许一个已接收但尚未 acknowledge/reject 的任务。认证、schema、
+deadline、lease binding 或队列容量任一校验失败时都不入队；连接中断会中止该连接
+拥有的任务，未知结果不会自动重试。Worker 在成功认证并有界入队后立即返回绑定
+job、lease、dispatch envelope hash 和请求 nonce 的签名 receipt。Control 必须验证
+Worker receipt proof 后才把派发视为已接受。
+
+该任务源和连接适配器独立于执行器组合。只有 durable step 状态、终态提交、审批
+恢复、证据存储和运行时 authority adapter 都可用时，Browser Worker `/ready` 才能
+报告完整执行就绪；在此之前入口保持默认关闭并 fail closed。
+
 ### 8.2 浏览器隔离
 
 - 每个临时任务运行在 rootless OCI 容器中。

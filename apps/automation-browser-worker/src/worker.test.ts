@@ -11,6 +11,7 @@ import {
   canonicalAutomationRequestJson,
 } from '@kortix/intelligence-contracts';
 import type { Browser, Download, LaunchOptions } from 'playwright';
+import type { ConsumedApprovalBinding } from './action-runner';
 import {
   type AuthenticatedRequestSource,
   type AutomationAuditIntent,
@@ -345,6 +346,49 @@ describe('isolated browser worker', () => {
       releaseApproval();
       await running.catch(() => undefined);
     }
+  });
+
+  test('threads an atomic Resume binding without emitting a duplicate step start', async () => {
+    const fake = runtime();
+    const fixture = dependencies(fake);
+    const cursorStep = {
+      ...step('browser.wait', { milliseconds: 1 }),
+      step_id: '10000000-0000-4000-a000-000000000002',
+      sequence: 2,
+    };
+    const approvedStep = {
+      ...step('browser.payment', { selector: '#pay' }),
+      sequence: 3,
+    };
+    const request = browserRequest(policy, [cursorStep, approvedStep]);
+    const currentLease = { ...lease, request_hash: requestHash(request) };
+    const consumed: ConsumedApprovalBinding = {
+      actionHash: approvedStep.action_hash,
+      jobId: currentLease.job_id,
+      projectId: currentLease.project_id,
+      stepId: approvedStep.step_id,
+      approvalId: '40000000-0000-4000-a000-000000000001',
+      attemptId: '50000000-0000-4000-a000-000000000001',
+      leaseId: currentLease.lease_id,
+      killSwitchGeneration: currentLease.kill_switch_generation,
+      resumeAfterSequence: 2,
+      stepStartedAtomically: true,
+    };
+
+    const events = await runIsolatedBrowserRequest({
+      ...fixture.input,
+      consumeApproval: async () => consumed,
+      lease: currentLease,
+      request,
+      resumeAfterSequence: 2,
+      waitForApproval: async () => {
+        throw new Error('atomic Resume must not wait for approval');
+      },
+    });
+
+    expect(events.map((event) => event.type)).toEqual(['step_completed']);
+    expect(fixture.actionEvents.map((event) => event.type)).toEqual(['step_completed']);
+    expect(fake.lifecycle.filter((event) => event === 'click')).toHaveLength(1);
   });
 
   test('refuses execution before resource allocation without runtime isolation attestation', async () => {

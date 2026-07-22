@@ -16,6 +16,7 @@ import {
   type ApprovalBinding,
   type BrowserActionEventIntent,
   BrowserKillSwitchError,
+  type ConsumedApprovalBinding,
   createBrowserActionRunner,
 } from './action-runner';
 import { browserWorkerConfig } from './config';
@@ -77,7 +78,7 @@ export async function runBrowserWorkerLoop<T>(input: {
   }
 }
 
-type BrowserWorkerInput = Readonly<{
+export type BrowserWorkerInput = Readonly<{
   lease: AutomationLease;
   request: AutomationJobRequest;
   resumeAfterSequence: number;
@@ -94,7 +95,9 @@ type BrowserWorkerInput = Readonly<{
     request: AutomationJobRequest;
     resumeAfterSequence: number;
   }) => Promise<boolean>;
-  consumeApproval: (input: ApprovalBinding) => Promise<ApprovalBinding | null>;
+  consumeApproval: (
+    input: ApprovalBinding,
+  ) => Promise<ConsumedApprovalBinding | ApprovalBinding | null>;
   evidenceStore: EvidenceStore;
   auditSink: AutomationAuditSink;
   actionEventSink: { write(intent: BrowserActionEventIntent): Promise<void> };

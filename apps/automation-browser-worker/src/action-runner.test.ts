@@ -8,10 +8,16 @@ import {
   AUTOMATION_MAX_STEPS,
   browserAutomationRiskForAction,
 } from '@kortix/intelligence-contracts';
-import { type BrowserPageAdapter, createBrowserActionRunner } from './action-runner';
+import {
+  type BrowserPageAdapter,
+  type ConsumedApprovalBinding,
+  createBrowserActionRunner,
+} from './action-runner';
 
 const ID = '10000000-0000-4000-a000-000000000001';
 const HASH = `sha256:${'a'.repeat(64)}`;
+const APPROVAL_ID = '40000000-0000-4000-a000-000000000001';
+const ATTEMPT_ID = '50000000-0000-4000-a000-000000000001';
 const policy: BrowserPolicy = {
   allowed_origins: ['https://console.example.test'],
   network_mode: 'allowlist',
@@ -81,12 +87,8 @@ function runner(
   options?: {
     actionHash?: boolean;
     approval?: boolean;
-    approvalGrant?: Partial<{
-      actionHash: string;
-      jobId: string;
-      projectId: string;
-      stepId: string;
-    }>;
+    approvalGrant?: Partial<ConsumedApprovalBinding>;
+    emitted?: Array<Record<string, unknown>>;
     generation?: number;
     generations?: number[];
     fullAccessGrant?: boolean;
@@ -108,6 +110,9 @@ function runner(
       options?.approvalInputs?.push(input);
       if (!(options?.approval ?? false)) return null;
       return { ...input, ...options?.approvalGrant };
+    },
+    emitEvent: async (intent) => {
+      options?.emitted?.push(intent);
     },
     isAllowedUrl: async (url) => options?.isAllowedUrl?.(url) ?? true,
     writeEvidence: async (_step, contentType, body) =>
@@ -188,6 +193,87 @@ describe('browser action runner', () => {
 
     expect(events.map((event) => event.type)).toEqual(['step_started', 'step_completed']);
     expect(fake.calls).toEqual([]);
+  });
+
+  test('executes an atomically started Resume effect without a duplicate start event', async () => {
+    const fake = page();
+    const emitted: Array<Record<string, unknown>> = [];
+    const approvedStep = {
+      ...step('browser.payment', { selector: '#pay' }),
+      sequence: 3,
+    };
+    const currentLease = lease();
+    const consumed: ConsumedApprovalBinding = {
+      actionHash: approvedStep.action_hash,
+      jobId: currentLease.job_id,
+      projectId: currentLease.project_id,
+      stepId: approvedStep.step_id,
+      approvalId: APPROVAL_ID,
+      attemptId: ATTEMPT_ID,
+      leaseId: currentLease.lease_id,
+      killSwitchGeneration: currentLease.kill_switch_generation,
+      resumeAfterSequence: 2,
+      stepStartedAtomically: true,
+    };
+
+    const events = await runner(fake.page, {
+      approval: true,
+      approvalGrant: consumed,
+      emitted,
+    }).run({
+      lease: currentLease,
+      policy,
+      signal: new AbortController().signal,
+      steps: [approvedStep],
+    });
+
+    expect(fake.calls).toEqual(['click:#pay']);
+    expect(events.map((event) => event.type)).toEqual(['step_completed']);
+    expect(emitted.map((event) => event.type)).toEqual(['step_completed']);
+  });
+
+  test('rejects invalid atomic-start bindings before an external effect', async () => {
+    const approvedStep = {
+      ...step('browser.payment', { selector: '#pay' }),
+      sequence: 3,
+    };
+    const currentLease = lease();
+    const valid: ConsumedApprovalBinding = {
+      actionHash: approvedStep.action_hash,
+      jobId: currentLease.job_id,
+      projectId: currentLease.project_id,
+      stepId: approvedStep.step_id,
+      approvalId: APPROVAL_ID,
+      attemptId: ATTEMPT_ID,
+      leaseId: currentLease.lease_id,
+      killSwitchGeneration: currentLease.kill_switch_generation,
+      resumeAfterSequence: 2,
+      stepStartedAtomically: true,
+    };
+    const cases: Array<Partial<ConsumedApprovalBinding>> = [
+      { approvalId: '' },
+      { attemptId: '' },
+      { leaseId: '90000000-0000-4000-a000-000000000001' },
+      { killSwitchGeneration: currentLease.kill_switch_generation + 1 },
+      { resumeAfterSequence: approvedStep.sequence },
+      { stepId: '90000000-0000-4000-a000-000000000002' },
+      { actionHash: `sha256:${'9'.repeat(64)}` },
+    ];
+
+    for (const override of cases) {
+      const fake = page();
+      const events = await runner(fake.page, {
+        approval: true,
+        approvalGrant: { ...valid, ...override },
+      }).run({
+        lease: currentLease,
+        policy,
+        signal: new AbortController().signal,
+        steps: [approvedStep],
+      });
+      expect(events.map((event) => event.type)).toEqual(['approval_required']);
+      expect(fake.calls).toEqual([]);
+    }
   });
 
   test('rejects malformed action arguments before attempting to consume approval', async () => {

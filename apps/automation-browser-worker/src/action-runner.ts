@@ -48,7 +48,9 @@ type RunnerDependencies = Readonly<{
   isLeaseCurrent: (lease: AutomationLease) => Promise<boolean>;
   currentKillSwitchGeneration: (lease: AutomationLease) => Promise<number>;
   isActionHashCurrent: (step: AutomationStep, lease: AutomationLease) => Promise<boolean>;
-  consumeApproval: (input: ApprovalBinding) => Promise<ApprovalBinding | null>;
+  consumeApproval: (
+    input: ApprovalBinding,
+  ) => Promise<ConsumedApprovalBinding | ApprovalBinding | null>;
   emitEvent?: (intent: BrowserActionEventIntent) => Promise<void>;
   onStepCompleted?: (completedStepCount: number) => void;
   isFullAccessGrantCurrent: (lease: AutomationLease) => Promise<boolean>;
@@ -86,6 +88,16 @@ export type ApprovalBinding = Readonly<{
   projectId: string;
   stepId: string;
 }>;
+
+export type ConsumedApprovalBinding = ApprovalBinding &
+  Readonly<{
+    approvalId: string;
+    attemptId: string;
+    leaseId: string;
+    killSwitchGeneration: number;
+    resumeAfterSequence: number;
+    stepStartedAtomically: true;
+  }>;
 
 const executableActions = new Set([
   'browser.navigate',
@@ -186,15 +198,30 @@ async function checkCurrentPageOrigin(
 }
 
 function approvalMatches(
-  consumedApproval: ApprovalBinding | null,
+  consumedApproval: ConsumedApprovalBinding | ApprovalBinding | null,
   expectedApproval: ApprovalBinding,
+  lease: AutomationLease,
+  currentStep: AutomationStep,
 ): boolean {
-  return (
+  const baseMatches =
     consumedApproval !== null &&
     consumedApproval.actionHash === expectedApproval.actionHash &&
     consumedApproval.jobId === expectedApproval.jobId &&
     consumedApproval.projectId === expectedApproval.projectId &&
-    consumedApproval.stepId === expectedApproval.stepId
+    consumedApproval.stepId === expectedApproval.stepId;
+  if (!baseMatches || consumedApproval === null) return false;
+  if (
+    !('stepStartedAtomically' in consumedApproval) ||
+    consumedApproval.stepStartedAtomically !== true
+  ) {
+    return true;
+  }
+  return (
+    consumedApproval.approvalId.length > 0 &&
+    consumedApproval.attemptId.length > 0 &&
+    consumedApproval.leaseId === lease.lease_id &&
+    consumedApproval.killSwitchGeneration === lease.kill_switch_generation &&
+    consumedApproval.resumeAfterSequence < currentStep.sequence
   );
 }
 
@@ -236,7 +263,10 @@ export function createBrowserActionRunner(dependencies: RunnerDependencies): Bro
         let consumedApproval = requiresApproval
           ? await abortablePromise(dependencies.consumeApproval(expectedApproval), signal)
           : null;
-        if (requiresApproval && !approvalMatches(consumedApproval, expectedApproval)) {
+        if (
+          requiresApproval &&
+          !approvalMatches(consumedApproval, expectedApproval, lease, currentStep)
+        ) {
           await pushEvent('approval_required', {
             step_id: currentStep.step_id,
             action_hash: currentStep.action_hash,
@@ -249,7 +279,7 @@ export function createBrowserActionRunner(dependencies: RunnerDependencies): Bro
             dependencies.consumeApproval(expectedApproval),
             signal,
           );
-          if (!approvalMatches(consumedApproval, expectedApproval)) {
+          if (!approvalMatches(consumedApproval, expectedApproval, lease, currentStep)) {
             throw new Error('bound approval was not consumable after approval wait');
           }
         }
@@ -257,7 +287,14 @@ export function createBrowserActionRunner(dependencies: RunnerDependencies): Bro
         await checkCurrentPageOrigin(dependencies, currentStep, policy, signal);
         if (!executableActions.has(currentStep.action) && !approvalActions.has(currentStep.action))
           throw new Error(`unsupported browser action: ${currentStep.action}`);
-        await pushEvent('step_started', { step_id: currentStep.step_id });
+        const stepStartedAtomically =
+          requiresApproval &&
+          consumedApproval !== null &&
+          'stepStartedAtomically' in consumedApproval &&
+          consumedApproval.stepStartedAtomically === true;
+        if (!stepStartedAtomically) {
+          await pushEvent('step_started', { step_id: currentStep.step_id });
+        }
         let evidenceReference: string | undefined;
         switch (currentStep.action) {
           case 'browser.navigate': {

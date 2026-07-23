@@ -35,6 +35,8 @@ import {
   StudioProviderListResponseSchema,
   StudioRecoveryRequestSchema,
   StudioRecoveryResponseSchema,
+  StudioResolveBillingIncidentRequestSchema,
+  StudioResolveBillingIncidentResponseSchema,
   StudioUpdateProviderConfigRequestSchema,
   StudioUploadSchema,
   studioPhase1Capabilities,
@@ -309,6 +311,61 @@ describe('studio phase 1 contracts', () => {
       StudioRecoveryResponseSchema.safeParse({
         ...studioRecoveryResponseFixture(),
         replayed: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  test('accepts bounded billing incident evidence without caller-supplied credits or actors', () => {
+    const request = {
+      decision: 'record_platform_liability',
+      idempotency_key: 'incident-resolution-key-0001',
+      reason: 'Provider evidence confirms that the request was created.',
+      evidence_reference: 'evidence:provider-case-0001',
+    };
+
+    expect(StudioResolveBillingIncidentRequestSchema.safeParse(request).success).toBe(true);
+    expect(
+      StudioResolveBillingIncidentRequestSchema.safeParse({
+        ...request,
+        provider_credits: 99,
+      }).success,
+    ).toBe(false);
+    expect(
+      StudioResolveBillingIncidentRequestSchema.safeParse({
+        ...request,
+        actor_user_id: '20000000-0000-4000-a000-000000000001',
+      }).success,
+    ).toBe(false);
+    expect(
+      StudioResolveBillingIncidentRequestSchema.safeParse({
+        ...request,
+        evidence_reference: 'https://provider.example/case?id=0001&signature=secret',
+      }).success,
+    ).toBe(false);
+  });
+
+  test('returns only the bounded billing incident resolution audit summary', () => {
+    const response = {
+      incident_id: '12000000-0000-4000-a000-000000000001',
+      account_id: '10000000-0000-4000-a000-000000000001',
+      project_id: '11000000-0000-4000-a000-000000000001',
+      job_id: '13000000-0000-4000-a000-000000000001',
+      attempt_id: '14000000-0000-4000-a000-000000000001',
+      status: 'resolved',
+      decision: 'confirm_not_created',
+      evidence_reference: 'evidence:provider-case-0002',
+      verified_cost_credits: 2,
+      potential_liability_credits: 6,
+      provider_liability_credits: 0,
+      resolved_at: '2026-07-24T00:00:00.000Z',
+      resolved_by_user_id: '20000000-0000-4000-a000-000000000001',
+    };
+
+    expect(StudioResolveBillingIncidentResponseSchema.safeParse(response).success).toBe(true);
+    expect(
+      StudioResolveBillingIncidentResponseSchema.safeParse({
+        ...response,
+        idempotency_key: 'must-not-cross-the-wire',
       }).success,
     ).toBe(false);
   });

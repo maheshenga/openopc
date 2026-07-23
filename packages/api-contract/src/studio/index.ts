@@ -413,6 +413,54 @@ export const StudioRecoveryResponseSchema = z
   .strict();
 export type StudioRecoveryResponse = z.infer<typeof StudioRecoveryResponseSchema>;
 
+export const StudioBillingIncidentResolutionDecisionSchema = z.enum([
+  'confirm_not_created',
+  'record_platform_liability',
+]);
+export type StudioBillingIncidentResolutionDecision = z.infer<
+  typeof StudioBillingIncidentResolutionDecisionSchema
+>;
+
+const StudioBillingEvidenceReferenceSchema = z
+  .string()
+  .trim()
+  .min(8)
+  .max(1024)
+  .regex(/^evidence:[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/);
+
+export const StudioResolveBillingIncidentRequestSchema = z
+  .object({
+    decision: StudioBillingIncidentResolutionDecisionSchema,
+    idempotency_key: z.string().min(16).max(255),
+    reason: z.string().trim().min(8).max(2000),
+    evidence_reference: StudioBillingEvidenceReferenceSchema,
+  })
+  .strict();
+export type StudioResolveBillingIncidentRequest = z.infer<
+  typeof StudioResolveBillingIncidentRequestSchema
+>;
+
+export const StudioResolveBillingIncidentResponseSchema = z
+  .object({
+    incident_id: z.string().uuid(),
+    account_id: z.string().uuid(),
+    project_id: z.string().uuid(),
+    job_id: z.string().uuid(),
+    attempt_id: z.string().uuid(),
+    status: z.literal('resolved'),
+    decision: StudioBillingIncidentResolutionDecisionSchema,
+    evidence_reference: StudioBillingEvidenceReferenceSchema,
+    verified_cost_credits: z.number().finite().nonnegative(),
+    potential_liability_credits: z.number().finite().nonnegative(),
+    provider_liability_credits: z.number().finite().nonnegative(),
+    resolved_at: z.string().min(1),
+    resolved_by_user_id: z.string().uuid(),
+  })
+  .strict();
+export type StudioResolveBillingIncidentResponse = z.infer<
+  typeof StudioResolveBillingIncidentResponseSchema
+>;
+
 export const StudioPaginatedResponseSchema = <T extends z.ZodTypeAny>(item: T) =>
   z
     .object({

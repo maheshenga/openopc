@@ -97,6 +97,7 @@ export {
   studioJobs,
   studioJobAttempts,
   studioJobRecoveries,
+  studioBillingIncidents,
   studioJobEvents,
   intelligenceTasks,
   intelligenceTaskEvents,

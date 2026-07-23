@@ -471,14 +471,29 @@ export function createBrowserWorkerHeartbeatClient(input: {
         let response: Response;
         let responseBody: unknown;
         try {
-          response = await transport(endpoint, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body,
-            redirect: 'error',
-            signal: requestSignal.signal,
-          });
+          response = await Promise.race([
+            transport(endpoint, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body,
+              redirect: 'error',
+              signal: requestSignal.signal,
+            }),
+            requestSignal.aborted,
+          ]);
+          if (requestSignal.signal.aborted) {
+            throw new BrowserWorkerHeartbeatClientError(
+              'transport',
+              'Browser Worker heartbeat transport failed',
+            );
+          }
           responseBody = await readBoundedJson(response, requestSignal.signal);
+          if (requestSignal.signal.aborted) {
+            throw new BrowserWorkerHeartbeatClientError(
+              'transport',
+              'Browser Worker heartbeat transport failed',
+            );
+          }
         } catch (error) {
           state.failed = true;
           if (error instanceof BrowserWorkerHeartbeatClientError) throw error;

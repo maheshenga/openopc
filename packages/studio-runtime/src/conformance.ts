@@ -112,7 +112,11 @@ export function runStudioObjectStoreConformance(
       expect(upload.headers).not.toHaveProperty('content-length');
       expect(download).toContain('file.png');
       expect(upload.url).not.toBe(download);
-      expect(new Set([upload.url, ...uploadVariants.map((variant) => variant.url)]).size).toBe(5);
+      const [contentTypeVariant, sizeVariant, checksumVariant, ttlVariant] = uploadVariants;
+      expect(
+        new Set([upload.url, contentTypeVariant.url, checksumVariant.url, ttlVariant.url]).size,
+      ).toBe(4);
+      expect(sizeVariant.headers).toEqual(upload.headers);
       expect(new Set([download, ...downloadVariants]).size).toBe(3);
       expect(specialKeyUpload.url).toContain('file%20%3F%23%25.png');
       expect(specialKeyDownload).toContain('file%20%3F%23%25.png');

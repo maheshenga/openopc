@@ -44,7 +44,9 @@ function principalsProxy(provided: Partial<Principals>): Principals {
 }
 
 export async function buildWorld(env: Env, flows: RegisteredFlow[]): Promise<World> {
-  const needsAuth = flows.some((f) => !PUBLIC_DOMAINS.has(f.meta.domain));
+  const needsAuth = flows.some(
+    (f) => !f.meta.publicOnly && !PUBLIC_DOMAINS.has(f.meta.domain),
+  );
 
   if (!needsAuth) {
     log.info(log.dim("world: public-only run — no principals provisioned"));

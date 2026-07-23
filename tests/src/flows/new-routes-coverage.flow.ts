@@ -14,12 +14,14 @@ flow(
   'COV-1',
   {
     domain: 'coverage',
+    publicOnly: true,
     routes: ['GET /metrics', 'GET /v1/router/health'],
   },
   async (ctx) => {
     await ctx.step('metrics endpoint is mounted or explicitly disabled', async () => {
       const r = await ctx.client.as(ctx.P.ANON).get('/metrics');
-      r.status([200, 404]);
+      // /metrics is intentionally protected by the internal observability key.
+      r.status([200, 401, 404]);
     });
     await ctx.step('LLM gateway health endpoint is mounted', async () => {
       const r = await ctx.client.as(ctx.P.ANON).get('/v1/router/health');
@@ -189,6 +191,7 @@ flow(
   'COV-6',
   {
     domain: 'coverage',
+    publicOnly: true,
     routes: [
       'POST /internal/gateway/authenticate',
       'POST /internal/gateway/billing',
@@ -211,7 +214,9 @@ flow(
     ]) {
       await ctx.step(`${route} rejects unauthenticated internal call`, async () => {
         const r = await ctx.client.as(ctx.P.ANON).post(route, {});
-        r.status([400, 401, 403]);
+        // The standalone gateway is disabled by default; preserve that
+        // explicit fail-closed boundary alongside auth/validation responses.
+        r.status([400, 401, 403, 503]);
       });
     }
   },
@@ -221,6 +226,7 @@ flow(
   'COV-7',
   {
     domain: 'coverage',
+    publicOnly: true,
     routes: ['POST /v1/webhooks/sandbox/daytona', 'POST /v1/webhooks/sandbox/platinum'],
   },
   async (ctx) => {
@@ -239,6 +245,7 @@ flow(
   'COV-8',
   {
     domain: 'coverage',
+    publicOnly: true,
     routes: [
       'GET /v1/projects/:projectId/llm-catalog',
       'POST /v1/projects/:projectId/marketplace/install-session',
@@ -295,6 +302,7 @@ flow(
   'COV-9',
   {
     domain: 'coverage',
+    publicOnly: true,
     routes: [
       'DELETE /v1/automation/browser-profiles/:profileId',
       'DELETE /v1/projects/:projectId/studio/providers/:providerConfigId',

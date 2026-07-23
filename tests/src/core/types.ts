@@ -92,6 +92,8 @@ export interface Fixtures {
 export interface FlowMeta {
   domain: string;
   tags?: string[];
+  /** The flow uses only the anonymous principal and needs no provisioning. */
+  publicOnly?: boolean;
   /** Serialize against shared account state. */
   serial?: boolean;
   /** Touches a global singleton (cron/ops); run last, one at a time. */

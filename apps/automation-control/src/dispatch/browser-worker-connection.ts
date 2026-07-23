@@ -41,6 +41,15 @@ export class BrowserWorkerConnectionError extends Error {
   }
 }
 
+export type BrowserWorkerConnectionState = 'connecting' | 'ready' | 'unusable';
+
+export type ObservableBrowserWorkerConnection = BrowserWorkerConnection &
+  Readonly<{
+    state(): BrowserWorkerConnectionState;
+    subscribe(listener: (state: BrowserWorkerConnectionState) => void): () => void;
+    close(reason?: string): void;
+  }>;
+
 type EnabledDispatchConfig = Extract<AutomationBrowserDispatchConfig, { enabled: true }>;
 type DispatchSendInput = Parameters<BrowserWorkerConnection['send']>[0];
 type DispatchSendResult = Awaited<ReturnType<BrowserWorkerConnection['send']>>;
@@ -99,7 +108,7 @@ export function createBrowserWorkerConnection(input: {
   config: AutomationBrowserDispatchConfig;
   peer: VerifiedWorkerPeer;
   webSocketFactory?: BrowserDispatchWebSocketFactory;
-}): BrowserWorkerConnection & Readonly<{ close(reason?: string): void }> {
+}): ObservableBrowserWorkerConnection {
   if (!input.config.enabled) {
     throw new BrowserWorkerConnectionError(
       'Browser Worker connection is not enabled',
@@ -126,8 +135,15 @@ export function createBrowserWorkerConnection(input: {
     },
     perMessageDeflate: false,
   });
-  let open = socket.readyState === WebSocket.OPEN;
-  let unusable = socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED;
+  let connectionState: BrowserWorkerConnectionState =
+    socket.readyState === WebSocket.OPEN
+      ? 'ready'
+      : socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED
+        ? 'unusable'
+        : 'connecting';
+  let open = connectionState === 'ready';
+  let unusable = connectionState === 'unusable';
+  const listeners = new Set<(state: BrowserWorkerConnectionState) => void>();
   let inFlight:
     | {
         body: string;
@@ -144,9 +160,22 @@ export function createBrowserWorkerConnection(input: {
       // The connection is already unusable; closing is best-effort only.
     }
   };
+  const setState = (state: BrowserWorkerConnectionState): void => {
+    if (connectionState === state) return;
+    connectionState = state;
+    for (const listener of listeners) {
+      try {
+        listener(state);
+      } catch {
+        // Lifecycle observers cannot make the transport fail.
+      }
+    }
+  };
   const failUnknown = (): void => {
+    if (unusable) return;
     unusable = true;
     open = false;
+    setState('unusable');
     const pending = inFlight;
     inFlight = undefined;
     if (pending !== undefined) {
@@ -171,6 +200,7 @@ export function createBrowserWorkerConnection(input: {
     }
     open = true;
     transmit();
+    if (!unusable) setState('ready');
   });
   socket.addEventListener('message', (event) => {
     const pending = inFlight;
@@ -204,6 +234,11 @@ export function createBrowserWorkerConnection(input: {
 
   return Object.freeze({
     peer: input.peer,
+    state: () => connectionState,
+    subscribe(listener: (state: BrowserWorkerConnectionState) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     send(raw: DispatchSendInput): Promise<DispatchSendResult> {
       if (unusable) return Promise.reject(connectionError('unavailable'));
       if (inFlight !== undefined) return Promise.reject(connectionError('in_flight'));
@@ -243,6 +278,7 @@ export function createBrowserWorkerConnection(input: {
       }
       unusable = true;
       open = false;
+      setState('unusable');
       closeSocket(1000, reason.slice(0, 123));
     },
   });

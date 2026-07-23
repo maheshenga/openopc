@@ -132,6 +132,9 @@ const enabledEnvironment = {
   AUTOMATION_CONTROL_MTLS_CERT_PATH: resolve('secrets/automation-control.crt'),
   AUTOMATION_CONTROL_MTLS_KEY_PATH: resolve('secrets/automation-control.key'),
   AUTOMATION_CONTROL_MTLS_CA_PATH: resolve('secrets/browser-worker-ca.crt'),
+  AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256: '11:22:33:44',
+  AUTOMATION_CONTROL_WORKER_SHARED_SECRET:
+    'browser-worker-control-secret-at-least-thirty-two-bytes',
   AUTOMATION_BROWSER_DISPATCH_TIMEOUT_MS: '5000',
   AUTOMATION_BROWSER_DISPATCH_MAX_MESSAGE_BYTES: '65536',
 } as const;
@@ -158,6 +161,8 @@ type ConnectionModule = Readonly<{
     webSocketFactory?: SocketFactory;
   }): Readonly<{
     peer: VerifiedWorkerPeer;
+    state(): 'connecting' | 'ready' | 'unusable';
+    subscribe(listener: (state: 'connecting' | 'ready' | 'unusable') => void): () => void;
     send(input: {
       envelope: AutomationBrowserDispatchEnvelope;
       proof: AutomationWorkerServiceProof;
@@ -283,6 +288,31 @@ test('opens only the shared dispatch path with pinned Bun mTLS and no proxy atte
   expect(capturedOptions?.perMessageDeflate).toBeFalse();
   expect(capturedOptions?.headers).toBeUndefined();
   expect(connection.peer).toBe(workerPeer);
+});
+
+test('reports connecting, ready, and unusable socket lifecycle transitions', async () => {
+  const module = await connectionModule();
+  expect(module).not.toBeNull();
+  if (module === null) return;
+  const socket = new FakeWebSocket();
+  const connection = module.createBrowserWorkerConnection({
+    config: config(),
+    peer: workerPeer,
+    webSocketFactory: () => socket,
+  });
+  const states: Array<'connecting' | 'ready' | 'unusable'> = [];
+  const unsubscribe = connection.subscribe((state) => states.push(state));
+
+  expect(connection.state()).toBe('connecting');
+  socket.open();
+  expect(connection.state()).toBe('ready');
+  socket.remoteClose();
+  expect(connection.state()).toBe('unusable');
+  expect(states).toEqual(['ready', 'unusable']);
+
+  unsubscribe();
+  socket.dispatchEvent(new Event('close'));
+  expect(states).toEqual(['ready', 'unusable']);
 });
 
 test('sends one strict dispatch and returns the exact accepted receipt for Dispatcher verification', async () => {

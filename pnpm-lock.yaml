@@ -199,6 +199,12 @@ importers:
       '@kortix/intelligence-contracts':
         specifier: workspace:*
         version: link:../../packages/intelligence-contracts
+      '@kortix/studio-adapters':
+        specifier: workspace:*
+        version: link:../../packages/studio-adapters
+      '@kortix/studio-runtime':
+        specifier: workspace:*
+        version: link:../../packages/studio-runtime
       ipaddr.js:
         specifier: 2.4.0
         version: 2.4.0

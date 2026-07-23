@@ -42,10 +42,8 @@ export class StudioAdapterConfigurationError extends Error {
 }
 
 const BooleanStringSchema = z.enum(['true', 'false']);
-const EnabledEnvironmentSchema = z
+const StorageEnvironmentSchema = z
   .object({
-    STUDIO_FAKE_PROVIDER_ENABLED: BooleanStringSchema.default('false'),
-    STUDIO_OPENAI_COMPATIBLE_ENABLED: BooleanStringSchema.default('false'),
     STUDIO_OBJECT_STORE_MODE: z.enum(['memory', 's3']),
     STUDIO_ALLOW_EPHEMERAL_STORAGE: BooleanStringSchema.default('false'),
     STUDIO_OBJECT_STORE_BUCKET: z.string().trim().min(1).optional(),
@@ -61,10 +59,32 @@ const EnabledEnvironmentSchema = z
     STUDIO_S3_SESSION_TOKEN: z.string().trim().min(1).optional(),
     STUDIO_S3_SSE: z.enum(['AES256', 'aws:kms']).optional(),
     STUDIO_S3_KMS_KEY_ID: z.string().trim().min(1).optional(),
-    STUDIO_PROVIDER_PRIVATE_ORIGIN_ALLOWLIST: z.string().default(''),
     STUDIO_ALLOW_INSECURE_LOCAL_ENDPOINTS: BooleanStringSchema.default('false'),
   })
   .passthrough();
+
+const EnabledEnvironmentSchema = StorageEnvironmentSchema.extend({
+  STUDIO_FAKE_PROVIDER_ENABLED: BooleanStringSchema.default('false'),
+  STUDIO_OPENAI_COMPATIBLE_ENABLED: BooleanStringSchema.default('false'),
+  STUDIO_PROVIDER_PRIVATE_ORIGIN_ALLOWLIST: z.string().default(''),
+});
+
+type ParsedStorageEnvironment = z.infer<typeof StorageEnvironmentSchema>;
+
+export function parseStudioStorageEnvironment(
+  env: Record<string, string | undefined> = process.env,
+  options: { test?: boolean } = {},
+): StudioMemoryStorageConfig | StudioS3StorageConfig {
+  const parsedResult = StorageEnvironmentSchema.safeParse(env);
+  if (!parsedResult.success) {
+    throw new StudioAdapterConfigurationError(
+      uniqueFields(parsedResult.error.issues.map((issue) => String(issue.path[0]))),
+    );
+  }
+  return parsedResult.data.STUDIO_OBJECT_STORE_MODE === 'memory'
+    ? parseMemoryStorage(parsedResult.data, options)
+    : parseS3Storage(parsedResult.data, options);
+}
 
 export function parseStudioAdapterEnvironment(
   env: Record<string, string | undefined> = process.env,
@@ -86,30 +106,19 @@ export function parseStudioAdapterEnvironment(
   const parsed = parsedResult.data;
   const fakeProviderEnabled = parsed.STUDIO_FAKE_PROVIDER_ENABLED === 'true';
   const openAiCompatibleEnabled = parsed.STUDIO_OPENAI_COMPATIBLE_ENABLED === 'true';
-  const allowEphemeralStorage = parsed.STUDIO_ALLOW_EPHEMERAL_STORAGE === 'true';
-  const insecureRequested = parsed.STUDIO_ALLOW_INSECURE_LOCAL_ENDPOINTS === 'true';
-  const insecureAuthorized = options.test === true || allowEphemeralStorage;
 
   if (!fakeProviderEnabled && !openAiCompatibleEnabled) {
     throw configurationError('STUDIO_FAKE_PROVIDER_ENABLED', 'STUDIO_OPENAI_COMPATIBLE_ENABLED');
   }
-  if (insecureRequested && !insecureAuthorized) {
-    throw configurationError(
-      'STUDIO_ALLOW_INSECURE_LOCAL_ENDPOINTS',
-      ...(parsed.STUDIO_S3_ENDPOINT?.startsWith('http:') ? ['STUDIO_S3_ENDPOINT'] : []),
-    );
-  }
 
-  const allowInsecureLocalEndpoints = insecureRequested && insecureAuthorized;
+  const allowInsecureLocalEndpoints = resolveAllowInsecureLocalEndpoints(parsed, options);
   const privateProviderOrigins = parseOriginAllowlist(
     parsed.STUDIO_PROVIDER_PRIVATE_ORIGIN_ALLOWLIST,
     allowInsecureLocalEndpoints,
   );
+  const storage = parseStudioStorageEnvironment(env, options);
 
-  if (parsed.STUDIO_OBJECT_STORE_MODE === 'memory') {
-    if (!allowEphemeralStorage) {
-      throw configurationError('STUDIO_ALLOW_EPHEMERAL_STORAGE');
-    }
+  if (storage.mode === 'memory') {
     if (openAiCompatibleEnabled && options.test !== true) {
       throw configurationError('STUDIO_OPENAI_COMPATIBLE_ENABLED', 'STUDIO_OBJECT_STORE_MODE');
     }
@@ -117,11 +126,38 @@ export function parseStudioAdapterEnvironment(
       enabled: true,
       fakeProviderEnabled,
       openAiCompatibleEnabled,
-      storage: { mode: 'memory', namespace: 'studio-memory', ephemeral: true },
+      storage,
       privateProviderOrigins,
       allowInsecureLocalEndpoints,
     };
   }
+
+  return {
+    enabled: true,
+    fakeProviderEnabled,
+    openAiCompatibleEnabled,
+    storage,
+    privateProviderOrigins,
+    allowInsecureLocalEndpoints,
+  };
+}
+
+function parseMemoryStorage(
+  parsed: ParsedStorageEnvironment,
+  options: { test?: boolean },
+): StudioMemoryStorageConfig {
+  resolveAllowInsecureLocalEndpoints(parsed, options);
+  if (parsed.STUDIO_ALLOW_EPHEMERAL_STORAGE !== 'true') {
+    throw configurationError('STUDIO_ALLOW_EPHEMERAL_STORAGE');
+  }
+  return { mode: 'memory', namespace: 'studio-memory', ephemeral: true };
+}
+
+function parseS3Storage(
+  parsed: ParsedStorageEnvironment,
+  options: { test?: boolean },
+): StudioS3StorageConfig {
+  const allowInsecureLocalEndpoints = resolveAllowInsecureLocalEndpoints(parsed, options);
 
   const requiredFields = [
     ['STUDIO_OBJECT_STORE_BUCKET', parsed.STUDIO_OBJECT_STORE_BUCKET],
@@ -180,29 +216,38 @@ export function parseStudioAdapterEnvironment(
     : null;
 
   return {
-    enabled: true,
-    fakeProviderEnabled,
-    openAiCompatibleEnabled,
-    storage: {
-      mode: 's3',
-      bucket: parsed.STUDIO_OBJECT_STORE_BUCKET as string,
-      prefix: parsed.STUDIO_OBJECT_STORE_PREFIX as string,
-      endpoint,
-      publicEndpoint,
-      region: parsed.STUDIO_S3_REGION as string,
-      forcePathStyle: parsed.STUDIO_S3_FORCE_PATH_STYLE === 'true',
-      expectedBucketOwner: parsed.STUDIO_S3_EXPECTED_BUCKET_OWNER ?? null,
-      credentialMode,
-      accessKeyId: credentialMode === 'static' ? (parsed.STUDIO_S3_ACCESS_KEY_ID ?? null) : null,
-      secretAccessKey:
-        credentialMode === 'static' ? (parsed.STUDIO_S3_SECRET_ACCESS_KEY ?? null) : null,
-      sessionToken: credentialMode === 'static' ? (parsed.STUDIO_S3_SESSION_TOKEN ?? null) : null,
-      sse,
-      kmsKeyId: sse === 'aws:kms' ? (parsed.STUDIO_S3_KMS_KEY_ID ?? null) : null,
-    },
-    privateProviderOrigins,
-    allowInsecureLocalEndpoints,
+    mode: 's3',
+    bucket: parsed.STUDIO_OBJECT_STORE_BUCKET as string,
+    prefix: parsed.STUDIO_OBJECT_STORE_PREFIX as string,
+    endpoint,
+    publicEndpoint,
+    region: parsed.STUDIO_S3_REGION as string,
+    forcePathStyle: parsed.STUDIO_S3_FORCE_PATH_STYLE === 'true',
+    expectedBucketOwner: parsed.STUDIO_S3_EXPECTED_BUCKET_OWNER ?? null,
+    credentialMode,
+    accessKeyId: credentialMode === 'static' ? (parsed.STUDIO_S3_ACCESS_KEY_ID ?? null) : null,
+    secretAccessKey:
+      credentialMode === 'static' ? (parsed.STUDIO_S3_SECRET_ACCESS_KEY ?? null) : null,
+    sessionToken: credentialMode === 'static' ? (parsed.STUDIO_S3_SESSION_TOKEN ?? null) : null,
+    sse,
+    kmsKeyId: sse === 'aws:kms' ? (parsed.STUDIO_S3_KMS_KEY_ID ?? null) : null,
   };
+}
+
+function resolveAllowInsecureLocalEndpoints(
+  parsed: ParsedStorageEnvironment,
+  options: { test?: boolean },
+): boolean {
+  const insecureRequested = parsed.STUDIO_ALLOW_INSECURE_LOCAL_ENDPOINTS === 'true';
+  const insecureAuthorized =
+    options.test === true || parsed.STUDIO_ALLOW_EPHEMERAL_STORAGE === 'true';
+  if (insecureRequested && !insecureAuthorized) {
+    throw configurationError(
+      'STUDIO_ALLOW_INSECURE_LOCAL_ENDPOINTS',
+      ...(parsed.STUDIO_S3_ENDPOINT?.startsWith('http:') ? ['STUDIO_S3_ENDPOINT'] : []),
+    );
+  }
+  return insecureRequested && insecureAuthorized;
 }
 
 function parseEndpoint(value: string, field: string, allowInsecure: boolean): URL {

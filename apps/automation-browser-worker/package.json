@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@kortix/intelligence-contracts": "workspace:*",
+    "@kortix/studio-adapters": "workspace:*",
+    "@kortix/studio-runtime": "workspace:*",
     "ipaddr.js": "2.4.0",
     "playwright": "1.61.1"
   },

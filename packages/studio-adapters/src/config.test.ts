@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseStudioAdapterEnvironment } from './config';
+import { parseStudioAdapterEnvironment, parseStudioStorageEnvironment } from './config';
 
 const S3_BASE = {
   STUDIO_ENABLED: 'true',
@@ -14,6 +14,25 @@ const S3_BASE = {
 } as const;
 
 describe('parseStudioAdapterEnvironment', () => {
+  test('parses S3 storage without requiring Studio or an AI provider to be enabled', () => {
+    expect(
+      parseStudioStorageEnvironment({
+        STUDIO_OBJECT_STORE_MODE: 's3',
+        STUDIO_OBJECT_STORE_BUCKET: 'openopc-private',
+        STUDIO_OBJECT_STORE_PREFIX: 'browser',
+        STUDIO_S3_ENDPOINT: 'https://oss.example.test',
+        STUDIO_S3_REGION: 'cn-shanghai',
+        STUDIO_S3_CREDENTIAL_MODE: 'default-chain',
+        STUDIO_S3_SSE: 'AES256',
+      }),
+    ).toMatchObject({
+      mode: 's3',
+      bucket: 'openopc-private',
+      prefix: 'browser',
+      endpoint: new URL('https://oss.example.test'),
+    });
+  });
+
   test('returns disabled before validating provider or storage fields', () => {
     expect(
       parseStudioAdapterEnvironment({

@@ -1,5 +1,9 @@
 import { isAbsolute } from 'node:path';
 import { AUTOMATION_MAX_STEPS } from '@kortix/intelligence-contracts';
+import {
+  parseStudioStorageEnvironment,
+  type StudioS3StorageConfig,
+} from '@kortix/studio-adapters';
 
 function positiveInteger(name: string, fallback: number): number {
   const value = process.env[name];
@@ -49,6 +53,26 @@ export type BrowserWorkerDispatchConfig =
       maxMessageBytes: number;
       proofSkewMs: number;
     }>;
+
+export type BrowserWorkerEvidenceConfig =
+  | Readonly<{ enabled: false }>
+  | Readonly<{ enabled: true; storage: StudioS3StorageConfig }>;
+
+export function loadBrowserWorkerEvidenceConfig(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): BrowserWorkerEvidenceConfig {
+  const dispatchEnabled = environment.AUTOMATION_BROWSER_DISPATCH_ENABLED ?? 'false';
+  if (dispatchEnabled !== 'true' && dispatchEnabled !== 'false') {
+    throw new Error('AUTOMATION_BROWSER_DISPATCH_ENABLED must be true or false');
+  }
+  if (dispatchEnabled === 'false') return Object.freeze({ enabled: false });
+
+  const storage = parseStudioStorageEnvironment(environment);
+  if (storage.mode !== 's3') {
+    throw new Error('Browser Worker dispatch requires STUDIO_OBJECT_STORE_MODE=s3');
+  }
+  return Object.freeze({ enabled: true, storage });
+}
 
 function boundedInteger(
   environment: Readonly<Record<string, string | undefined>>,

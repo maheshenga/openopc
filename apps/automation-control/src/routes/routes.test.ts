@@ -425,14 +425,19 @@ describe('internal automation routes', () => {
         }),
       }),
     );
+    const resolvedPayload = await resolved.json();
 
     expect(listed.status).toBe(200);
     expect(listedPayload).toEqual({ approvals: pendingSnapshot });
     expect(resolved.status).toBe(200);
-    expect(await resolved.json()).toMatchObject({
+    expect(resolvedPayload).toMatchObject({
       approval_id: APPROVAL_ID,
       status: 'approved',
+      token: expect.stringMatching(/^approval\.v1\.[A-Za-z0-9_-]{43}$/),
     });
+    expect(JSON.stringify(resolvedPayload)).not.toContain('approval-resume.v1.');
+    expect(resolvedPayload).not.toHaveProperty('approval_resume');
+    expect(JSON.stringify(listedPayload)).not.toContain('approval-resume.v1.');
   });
 
   test('normalizes unknown service errors without leaking internal details', async () => {

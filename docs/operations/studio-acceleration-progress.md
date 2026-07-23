@@ -86,6 +86,10 @@ HELP metadata across `56` lines. This confirms the API scrape surface and
 fail-closed auth locally; Worker scraping, deployed service monitors, alert
 rules, and long-lived time-series behavior remain open.
 
+The focused `@kortix/studio-worker` typecheck also passed. No Worker process
+was started because its real PostgreSQL lease store, object store identity,
+and provider credentials are intentionally unavailable in this environment.
+
 ## Canonical Client Contract
 
 `kortix.project(projectId).intelligence` is the only product-facing SDK facade for capability discovery, Agent Cards, task creation/events, and governed workflows. Milestone 0-1 adds image estimates, Studio jobs, uploads, and assets as typed projections under that existing facade. The unimplemented `kortix.project(projectId).studio` proposal is superseded and must not be introduced.

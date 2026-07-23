@@ -13,6 +13,7 @@ test('container pins matching Playwright and Bun runtimes and applies rootless p
   expect(dockerfile).toContain('chmod -R a-w /app');
   expect(dockerfile).toContain('TMPDIR=/tmp/openopc-browser');
   expect(dockerfile).toContain('set -eu;');
+  expect(dockerfile).toContain('ENV AUTOMATION_BROWSER_MAX_MEMORY_MB=4096');
   expect(dockerfile).not.toContain('chown -R pwuser:pwuser /app');
   expect(dockerfile).toContain('ulimit -t');
   expect(dockerfile).toContain('ulimit -v');

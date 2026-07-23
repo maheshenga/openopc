@@ -19,6 +19,14 @@ type ReconnectTimer = {
   handle: unknown;
 };
 
+function bestEffort(action: () => void): void {
+  try {
+    action();
+  } catch {
+    // Lifecycle cleanup is isolated so every resource gets a cleanup attempt.
+  }
+}
+
 export function createManagedBrowserWorkerConnection(input: {
   peer: VerifiedWorkerPeer;
   connect(): ObservableBrowserWorkerConnection;
@@ -44,8 +52,8 @@ export function createManagedBrowserWorkerConnection(input: {
     owned = undefined;
     ready = false;
     if (current === undefined) return;
-    current.unsubscribe();
-    current.connection.close(reason);
+    bestEffort(current.unsubscribe);
+    bestEffort(() => current.connection.close(reason));
   };
 
   const scheduleReconnect = (): void => {
@@ -86,7 +94,7 @@ export function createManagedBrowserWorkerConnection(input: {
       return;
     }
     if (connection.peer !== input.peer) {
-      connection.close('Browser Worker peer mismatch');
+      bestEffort(() => connection.close('Browser Worker peer mismatch'));
       scheduleReconnect();
       return;
     }
@@ -133,7 +141,7 @@ export function createManagedBrowserWorkerConnection(input: {
       ready = false;
       const timer = reconnectTimer;
       reconnectTimer = undefined;
-      if (timer !== undefined) input.cancel(timer.handle);
+      if (timer !== undefined) bestEffort(() => input.cancel(timer.handle));
       disposeOwned(reason);
     },
   });

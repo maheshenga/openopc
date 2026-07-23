@@ -39,9 +39,17 @@ class FakeConnection implements TestConnection {
   readonly peer = peer;
   readonly sends: unknown[] = [];
   readonly closeReasons: Array<string | undefined> = [];
+  unsubscribeAttempts = 0;
   #state: State = 'connecting';
   #listeners = new Set<(state: State) => void>();
   #nextFailure: BrowserWorkerConnectionError | undefined;
+
+  constructor(
+    private readonly options: {
+      throwOnUnsubscribe?: boolean;
+      throwOnClose?: boolean;
+    } = {},
+  ) {}
 
   state(): State {
     return this.#state;
@@ -49,7 +57,11 @@ class FakeConnection implements TestConnection {
 
   subscribe(listener: (state: State) => void): () => void {
     this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
+    return () => {
+      this.unsubscribeAttempts += 1;
+      this.#listeners.delete(listener);
+      if (this.options.throwOnUnsubscribe) throw new Error('unsubscribe hook failed');
+    };
   }
 
   emitState(state: State): void {
@@ -70,13 +82,15 @@ class FakeConnection implements TestConnection {
 
   close(reason?: string): void {
     this.closeReasons.push(reason);
+    if (this.options.throwOnClose) throw new Error('connection close failed');
     this.emitState('unusable');
   }
 }
 
-function createScheduler() {
+function createScheduler(options: { throwOnCancel?: boolean } = {}) {
   type Scheduled = { callback: () => void; delayMs: number; cancelled: boolean };
   const scheduled: Scheduled[] = [];
+  let cancelAttempts = 0;
   return {
     scheduled,
     schedule: (callback: () => void, delayMs: number): Scheduled => {
@@ -85,8 +99,11 @@ function createScheduler() {
       return handle;
     },
     cancel: (raw: unknown): void => {
+      cancelAttempts += 1;
+      if (options.throwOnCancel) throw new Error('timer cancel failed');
       (raw as Scheduled).cancelled = true;
     },
+    cancelAttempts: (): number => cancelAttempts,
     runNext(): void {
       const next = scheduled.find((entry) => !entry.cancelled);
       if (next === undefined) throw new Error('no scheduled reconnect');
@@ -191,6 +208,104 @@ test('does not replace or retry a connection for an in-flight rejection', async 
   await expect(managed.send({ lease: 'current' })).rejects.toMatchObject({ reason: 'in_flight' });
   expect(managed.isReady()).toBeTrue();
   expect(connection.closeReasons).toHaveLength(0);
+  expect(scheduler.activeCount()).toBe(0);
+});
+
+test('preserves unknown-result classification and bounded reconnect when disposal hooks throw', async () => {
+  const module = await managedModule();
+  expect(module).not.toBeNull();
+  if (module === null) return;
+  const first = new FakeConnection({ throwOnUnsubscribe: true, throwOnClose: true });
+  const second = new FakeConnection();
+  const connections = [first, second];
+  const scheduler = createScheduler();
+  const managed = module.createManagedBrowserWorkerConnection({
+    peer,
+    connect: () => connections.shift() as FakeConnection,
+    schedule: scheduler.schedule,
+    cancel: scheduler.cancel,
+    initialBackoffMs: 10_000,
+    maxBackoffMs: 60_000,
+  });
+  first.emitState('ready');
+  first.rejectNext(new BrowserWorkerConnectionError('unknown', 'unknown_result'));
+
+  await expect(managed.send({ lease: 'current' })).rejects.toMatchObject({
+    message: 'unknown',
+    reason: 'unknown_result',
+  });
+  expect(first.unsubscribeAttempts).toBe(1);
+  expect(first.closeReasons).toHaveLength(1);
+  expect(scheduler.activeCount()).toBe(1);
+  expect(scheduler.scheduled.at(-1)?.delayMs).toBe(5_000);
+
+  scheduler.runNext();
+  second.emitState('ready');
+  expect(managed.isReady()).toBeTrue();
+  expect(second.sends).toHaveLength(0);
+});
+
+test('shutdown attempts independent cleanup when every hook throws and remains idempotent', async () => {
+  const module = await managedModule();
+  expect(module).not.toBeNull();
+  if (module === null) return;
+  const connection = new FakeConnection({ throwOnUnsubscribe: true, throwOnClose: true });
+  const scheduler = createScheduler({ throwOnCancel: true });
+  let factoryCalls = 0;
+  const managed = module.createManagedBrowserWorkerConnection({
+    peer,
+    connect: () => {
+      factoryCalls += 1;
+      return connection;
+    },
+    schedule: scheduler.schedule,
+    cancel: scheduler.cancel,
+    initialBackoffMs: 250,
+    maxBackoffMs: 5_000,
+  });
+  connection.emitState('unusable');
+
+  expect(() => managed.close('shutdown')).not.toThrow();
+  expect(() => managed.close('again')).not.toThrow();
+  expect(scheduler.cancelAttempts()).toBe(1);
+  expect(connection.unsubscribeAttempts).toBe(1);
+  expect(connection.closeReasons).toEqual(['shutdown']);
+  await expect(managed.send({ lease: 'future' })).rejects.toMatchObject({
+    reason: 'unavailable',
+  });
+
+  scheduler.runNext();
+  expect(factoryCalls).toBe(1);
+  expect(scheduler.activeCount()).toBe(0);
+});
+
+test('bounds retries when the connection factory fails synchronously', async () => {
+  const module = await managedModule();
+  expect(module).not.toBeNull();
+  if (module === null) return;
+  const recovered = new FakeConnection();
+  const scheduler = createScheduler();
+  let factoryCalls = 0;
+  const managed = module.createManagedBrowserWorkerConnection({
+    peer,
+    connect: () => {
+      factoryCalls += 1;
+      if (factoryCalls < 3) throw new Error('connection factory failed');
+      return recovered;
+    },
+    schedule: scheduler.schedule,
+    cancel: scheduler.cancel,
+    initialBackoffMs: 250,
+    maxBackoffMs: 5_000,
+  });
+
+  expect(scheduler.scheduled.at(-1)?.delayMs).toBe(250);
+  scheduler.runNext();
+  expect(scheduler.scheduled.at(-1)?.delayMs).toBe(500);
+  scheduler.runNext();
+  recovered.emitState('ready');
+  expect(factoryCalls).toBe(3);
+  expect(managed.isReady()).toBeTrue();
   expect(scheduler.activeCount()).toBe(0);
 });
 

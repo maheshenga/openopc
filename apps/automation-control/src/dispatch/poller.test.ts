@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { AutomationDispatchCoordinatorStats } from './coordinator';
-import { startAutomationDispatchPolling } from './poller';
+import { composeAutomationDispatchPollingRunner, startAutomationDispatchPolling } from './poller';
 
 const EMPTY_STATS: AutomationDispatchCoordinatorStats = {
   candidates: 0,
@@ -26,6 +26,85 @@ async function flushPollingTurn(): Promise<void> {
 }
 
 describe('automation desktop coordinator polling', () => {
+  test('composes absent or single runners without creating a second scheduler', () => {
+    const desktop = { async runOnce() {} };
+    expect(
+      composeAutomationDispatchPollingRunner({ desktop: null, browserApprovalResume: null }),
+    ).toBeNull();
+    expect(composeAutomationDispatchPollingRunner({ desktop, browserApprovalResume: null })).toBe(
+      desktop,
+    );
+  });
+
+  test('runs Desktop and Browser resume work within one poll tick with one signal', async () => {
+    const order: string[] = [];
+    const signals: Array<AbortSignal | undefined> = [];
+    const runner = composeAutomationDispatchPollingRunner({
+      desktop: {
+        async runOnce(options) {
+          order.push('desktop');
+          signals.push(options?.signal);
+        },
+      },
+      browserApprovalResume: {
+        async runOnce(options) {
+          order.push('browser');
+          signals.push(options?.signal);
+        },
+      },
+    });
+    if (runner === null) throw new Error('Expected composed runner');
+    const controller = new AbortController();
+
+    await runner.runOnce({ signal: controller.signal });
+
+    expect(order).toEqual(['desktop', 'browser']);
+    expect(signals).toEqual([controller.signal, controller.signal]);
+  });
+
+  test('does not starve Browser resume when Desktop fails', async () => {
+    let browserRuns = 0;
+    const runner = composeAutomationDispatchPollingRunner({
+      desktop: {
+        async runOnce() {
+          throw new Error('private desktop failure');
+        },
+      },
+      browserApprovalResume: {
+        async runOnce() {
+          browserRuns += 1;
+        },
+      },
+    });
+    if (runner === null) throw new Error('Expected composed runner');
+
+    await expect(runner.runOnce()).rejects.toMatchObject({ failedRunners: ['desktop'] });
+    expect(browserRuns).toBe(1);
+  });
+
+  test('does not call either runner when the shared signal is already aborted', async () => {
+    let runs = 0;
+    const runner = composeAutomationDispatchPollingRunner({
+      desktop: {
+        async runOnce() {
+          runs += 1;
+        },
+      },
+      browserApprovalResume: {
+        async runOnce() {
+          runs += 1;
+        },
+      },
+    });
+    if (runner === null) throw new Error('Expected composed runner');
+    const controller = new AbortController();
+    controller.abort('shutdown');
+
+    await runner.runOnce({ signal: controller.signal });
+
+    expect(runs).toBe(0);
+  });
+
   test('waits for each run to finish before scheduling the next bounded poll', async () => {
     const pendingRuns = [deferred(), deferred()];
     const scheduled: Array<{ callback: () => void; delayMs: number }> = [];

@@ -1,5 +1,3 @@
-import type { AutomationDispatchCoordinator } from './coordinator';
-
 export type AutomationDispatchPollingFailure = Readonly<{
   event: 'automation_desktop_coordinator_poll_failed';
 }>;
@@ -8,7 +6,47 @@ export type AutomationDispatchPoller = Readonly<{
   stop(): Promise<void>;
 }>;
 
-type PollingCoordinator = Pick<AutomationDispatchCoordinator, 'runOnce'>;
+export type AutomationDispatchPollingRunner = Readonly<{
+  runOnce(options?: { signal?: AbortSignal }): Promise<unknown>;
+}>;
+
+export class AutomationDispatchCompositeError extends Error {
+  override readonly name = 'AutomationDispatchCompositeError';
+
+  constructor(readonly failedRunners: readonly ('desktop' | 'browser_approval_resume')[]) {
+    super('one or more automation dispatch runners failed');
+  }
+}
+
+export function composeAutomationDispatchPollingRunner(input: {
+  desktop: AutomationDispatchPollingRunner | null;
+  browserApprovalResume: AutomationDispatchPollingRunner | null;
+}): AutomationDispatchPollingRunner | null {
+  if (input.desktop === null) return input.browserApprovalResume;
+  if (input.browserApprovalResume === null) return input.desktop;
+  const runners = [
+    ['desktop', input.desktop],
+    ['browser_approval_resume', input.browserApprovalResume],
+  ] as const;
+  return Object.freeze({
+    async runOnce(options = {}) {
+      const failedRunners: Array<'desktop' | 'browser_approval_resume'> = [];
+      for (const [name, runner] of runners) {
+        if (options.signal?.aborted) break;
+        try {
+          await runner.runOnce(options);
+        } catch {
+          failedRunners.push(name);
+        }
+      }
+      if (failedRunners.length > 0) {
+        throw new AutomationDispatchCompositeError(Object.freeze(failedRunners));
+      }
+    },
+  });
+}
+
+type PollingCoordinator = AutomationDispatchPollingRunner;
 
 type PollingDependencies = Readonly<{
   coordinator: PollingCoordinator;

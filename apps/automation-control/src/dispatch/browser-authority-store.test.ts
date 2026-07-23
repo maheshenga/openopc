@@ -70,6 +70,16 @@ describe('Browser authority store', () => {
     });
   });
 
+  test('fails closed when the authority snapshot reader throws', async () => {
+    const store = createBrowserAuthorityStore(async () => {
+      throw new Error('PostgreSQL failed: database_password=do-not-disclose');
+    });
+
+    await expect(
+      store.check(authorityInput({ kind: 'lease' }), NOW),
+    ).resolves.toEqual({ accepted: false, reason: 'dispatch_mismatch' });
+  });
+
   test.each([
     ['stale lease owner', { lease_owner: `browser-worker-2:${LEASE_ID}` }, snapshot(), 'stale_lease'],
     [

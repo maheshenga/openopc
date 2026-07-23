@@ -90,7 +90,12 @@ export function createBrowserAuthorityStore(
   return {
     async check(input, now) {
       if (!Number.isFinite(now.getTime())) return rejected('stale_lease');
-      const snapshot = await readSnapshot(input);
+      let snapshot: BrowserAuthoritySnapshot;
+      try {
+        snapshot = await readSnapshot(input);
+      } catch {
+        return rejected('dispatch_mismatch');
+      }
       const job = snapshot.job;
       if (
         job === null ||

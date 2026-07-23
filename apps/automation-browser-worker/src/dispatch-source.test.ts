@@ -587,3 +587,30 @@ test('serves the authenticated source over a bounded WebSocket and reports conne
     await app.close();
   }
 });
+
+test('requires execution-loop readiness before reporting ready or accepting an upgrade', async () => {
+  const dispatchSource = await import('./dispatch-source');
+  const runtime = dispatchSource.createBrowserWorkerDispatchSource({
+    config,
+    now: () => NOW,
+    nextNonce: () => 11,
+  });
+  const authenticatedRuntime = {
+    ...runtime,
+    isReady: () => true,
+  } as typeof runtime;
+  const app = dispatchSource.startBrowserWorkerDispatchServer({
+    hostname: '127.0.0.1',
+    port: 0,
+    config,
+    runtime: authenticatedRuntime,
+    isExecutionReady: () => false,
+  });
+  try {
+    const ready = await fetch(`http://127.0.0.1:${app.server.port}/ready`);
+    expect(ready.status).toBe(503);
+    expect(await ready.json()).toMatchObject({ status: 'waiting_for_execution_loop' });
+  } finally {
+    await app.close();
+  }
+});

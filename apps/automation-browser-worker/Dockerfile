@@ -19,4 +19,4 @@ ENV TMPDIR=/tmp/openopc-browser
 ENV AUTOMATION_BROWSER_MAX_MEMORY_MB=512
 ENV AUTOMATION_BROWSER_MAX_CPU_SECONDS=120
 WORKDIR /app/apps/automation-browser-worker
-CMD ["sh", "-c", "set -eu; case \"$AUTOMATION_BROWSER_MAX_CPU_SECONDS:$AUTOMATION_BROWSER_MAX_MEMORY_MB\" in *[!0-9:]*) exit 64;; esac; ulimit -t \"$AUTOMATION_BROWSER_MAX_CPU_SECONDS\"; ulimit -v \"$((AUTOMATION_BROWSER_MAX_MEMORY_MB * 1024))\"; exec bun run src/worker.ts"]
+CMD ["sh", "-c", "set -eu; case \"$AUTOMATION_BROWSER_MAX_CPU_SECONDS:$AUTOMATION_BROWSER_MAX_MEMORY_MB\" in *[!0-9:]*) exit 64;; esac; ulimit -t \"$AUTOMATION_BROWSER_MAX_CPU_SECONDS\"; ulimit -v \"$((AUTOMATION_BROWSER_MAX_MEMORY_MB * 1024))\"; exec bun run src/main.ts"]

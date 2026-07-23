@@ -73,8 +73,13 @@ export async function runBrowserWorkerLoop<T>(input: {
       await input.source.reject(envelope.request, 'worker request authentication failed');
       continue;
     }
-    await input.execute(envelope.request);
-    await input.source.acknowledge(envelope.request);
+    try {
+      await input.execute(envelope.request);
+      await input.source.acknowledge(envelope.request);
+    } catch (error) {
+      await input.source.reject(envelope.request, 'browser execution failed');
+      throw error;
+    }
   }
 }
 

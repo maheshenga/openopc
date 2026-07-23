@@ -233,6 +233,7 @@ export function createBrowserWorkerDispatchSource(input: {
   config: BrowserWorkerDispatchConfig;
   now?: () => Date;
   nextNonce: () => number;
+  onReadinessChange?: (ready: boolean) => void;
 }) {
   if (!input.config.enabled) {
     throw new BrowserWorkerDispatchSourceError('Browser Worker dispatch source is not enabled');
@@ -243,6 +244,7 @@ export function createBrowserWorkerDispatchSource(input: {
   let lastControlNonce = 0;
   let lastWorkerNonce = 0;
   let closed = false;
+  let reportedReady = false;
   let pending:
     | Readonly<{
         request: BrowserDispatchWorkItem;
@@ -258,6 +260,13 @@ export function createBrowserWorkerDispatchSource(input: {
         onAbort: () => void;
       }>
     | undefined;
+
+  const reportReadiness = (): void => {
+    const ready = sessionOpen && !closed;
+    if (ready === reportedReady) return;
+    reportedReady = ready;
+    input.onReadinessChange?.(ready);
+  };
 
   const activatePending = (): BrowserWorkerEnvelope<BrowserDispatchWorkItem> | null => {
     if (pending === undefined) return null;
@@ -320,6 +329,7 @@ export function createBrowserWorkerDispatchSource(input: {
         throw new BrowserWorkerDispatchSourceError('Control connection is already open');
       }
       sessionOpen = true;
+      reportReadiness();
       const session = Symbol('control-dispatch-session');
       let sessionClosed = false;
       return {
@@ -435,6 +445,7 @@ export function createBrowserWorkerDispatchSource(input: {
             active = undefined;
           }
           sessionOpen = false;
+          reportReadiness();
         },
       };
     },
@@ -445,6 +456,7 @@ export function createBrowserWorkerDispatchSource(input: {
       pending = undefined;
       active = undefined;
       sessionOpen = false;
+      reportReadiness();
       if (waiter !== undefined) {
         const current = waiter;
         waiter = undefined;
@@ -462,6 +474,7 @@ export function startBrowserWorkerDispatchServer(input: {
   port: number;
   config: BrowserWorkerDispatchConfig;
   runtime: BrowserWorkerDispatchRuntime;
+  isExecutionReady?: () => boolean;
 }) {
   if (!input.config.enabled) {
     throw new BrowserWorkerDispatchSourceError('Browser Worker dispatch server is not enabled');
@@ -470,6 +483,8 @@ export function startBrowserWorkerDispatchServer(input: {
     throw new BrowserWorkerDispatchSourceError('Browser Worker dispatch port is invalid');
   }
   type DispatchSession = ReturnType<BrowserWorkerDispatchRuntime['openSession']>;
+  const isExecutionReady = input.isExecutionReady ?? (() => true);
+  const readiness = () => input.runtime.isReady() && isExecutionReady();
   const server = Bun.serve<{ session: DispatchSession }>({
     hostname: input.hostname ?? '0.0.0.0',
     port: input.port,
@@ -482,11 +497,16 @@ export function startBrowserWorkerDispatchServer(input: {
         });
       }
       if (path === '/ready') {
-        const ready = input.runtime.isReady();
+        const authenticatedControlConnected = input.runtime.isReady();
+        const ready = readiness();
         return Response.json(
           {
-            status: ready ? 'ready' : 'waiting_for_authenticated_control',
-            authenticated_control_connected: ready,
+            status: ready
+              ? 'ready'
+              : authenticatedControlConnected
+                ? 'waiting_for_execution_loop'
+                : 'waiting_for_authenticated_control',
+            authenticated_control_connected: authenticatedControlConnected,
           },
           { status: ready ? 200 : 503 },
         );
@@ -499,6 +519,10 @@ export function startBrowserWorkerDispatchServer(input: {
         session = input.runtime.openSession(request);
       } catch {
         return Response.json({ code: 'AUTOMATION_UNAUTHORIZED' }, { status: 401 });
+      }
+      if (!readiness()) {
+        session.close();
+        return Response.json({ code: 'AUTOMATION_EXECUTION_UNAVAILABLE' }, { status: 503 });
       }
       const upgraded = bunServer.upgrade(request, { data: { session } });
       if (!upgraded) {

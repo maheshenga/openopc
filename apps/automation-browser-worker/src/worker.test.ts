@@ -1184,6 +1184,29 @@ test('worker loop consumes only authenticated requests', async () => {
   expect(acknowledged).toEqual([2]);
 });
 
+test('worker loop rejects an authenticated request once when execution fails', async () => {
+  const rejected: Array<{ request: number; reason: string }> = [];
+  const source: AuthenticatedRequestSource<number> = {
+    next: async () => ({ authenticated: true, request: 7 }),
+    acknowledge: async () => undefined,
+    reject: async (request, reason) => {
+      rejected.push({ request, reason });
+    },
+  };
+
+  await expect(
+    runBrowserWorkerLoop({
+      source,
+      execute: async () => {
+        throw new Error('execution failed');
+      },
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrow('execution failed');
+
+  expect(rejected).toEqual([{ request: 7, reason: 'browser execution failed' }]);
+});
+
 test('worker loop does not execute a request returned after shutdown begins', async () => {
   const controller = new AbortController();
   const executed: number[] = [];

@@ -1,3 +1,7 @@
+import {
+  createStudioWorkerObservabilityServer,
+  parseStudioWorkerObservabilityEnvironment,
+} from './observability-server';
 import { buildStudioWorkerRuntime } from './runtime';
 
 export {
@@ -70,6 +74,12 @@ export async function runStudioWorkerBootstrap<
 
 async function main(): Promise<void> {
   const controller = new AbortController();
+  const observability =
+    process.env.STUDIO_ENABLED === 'true'
+      ? createStudioWorkerObservabilityServer(
+          parseStudioWorkerObservabilityEnvironment(process.env),
+        )
+      : null;
   const stop = () => controller.abort();
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
@@ -77,48 +87,62 @@ async function main(): Promise<void> {
     await runStudioWorkerBootstrap({
       controller,
       async buildRuntime(signal) {
-        const runtime = await buildStudioWorkerRuntime(process.env, { signal });
+        const runtime = await buildStudioWorkerRuntime(process.env, {
+          signal,
+          ...(observability ? { telemetry: observability.telemetry } : {}),
+        });
         if (!runtime.enabled) {
           console.info('[studio-worker] STUDIO_ENABLED is not true; worker remains disabled');
         }
         return runtime;
       },
       async runRuntime(runtime, signal) {
+        if (!observability) throw new Error('Studio worker observability is unavailable');
+        observability.setReadinessProbe(runtime.assertReadyBeforeClaim);
+        const listener = observability.start();
         let nextMaintenanceAt = 0;
         console.info('[studio-worker] started', {
           workerId: runtime.workerId,
           fakeProviderEnabled: runtime.fakeProviderEnabled,
           openAiCompatibleEnabled: runtime.openAiCompatibleEnabled,
+          observabilityHost: listener.hostname,
+          observabilityPort: listener.port,
         });
-        await runStudioWorkerLoop({
-          signal,
-          idleMs: runtime.idleMs,
-          async tick() {
-            const tick = await runStudioWorkerTick({
-              signal,
-              assertReady: runtime.assertReadyBeforeClaim,
-              claim: () => runtime.worker.runOnce(),
-            });
-            if (tick.ready && tick.result.kind === 'error') {
-              console.error('[studio-worker] tick failed', {
-                code: tick.result.code,
-                jobId: tick.result.jobId,
+        try {
+          await runStudioWorkerLoop({
+            signal,
+            idleMs: runtime.idleMs,
+            async tick() {
+              const tick = await runStudioWorkerTick({
+                signal,
+                assertReady: runtime.assertReadyBeforeClaim,
+                claim: () => runtime.worker.runOnce(),
               });
-            }
-            const now = Date.now();
-            if (now >= nextMaintenanceAt) {
-              await runStudioMaintenanceOnce({
-                async runOnce() {
-                  await runtime.maintenance.runOnce();
-                },
-              });
-              nextMaintenanceAt = now + runtime.maintenanceMs;
-            }
-          },
-        });
+              if (tick.ready && tick.result.kind === 'error') {
+                console.error('[studio-worker] tick failed', {
+                  code: tick.result.code,
+                  jobId: tick.result.jobId,
+                });
+              }
+              const now = Date.now();
+              if (now >= nextMaintenanceAt) {
+                await runStudioMaintenanceOnce({
+                  async runOnce() {
+                    await runtime.maintenance.runOnce();
+                  },
+                });
+                nextMaintenanceAt = now + runtime.maintenanceMs;
+              }
+            },
+          });
+        } finally {
+          observability.setReadinessProbe(null);
+          await observability.stop();
+        }
       },
     });
   } finally {
+    await observability?.stop();
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
   }

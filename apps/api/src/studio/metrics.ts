@@ -1,4 +1,5 @@
 import type { StudioObjectStore } from '@kortix/studio-runtime';
+import { type PrometheusRegistry, applicationPrometheusRegistry } from '../lib/metrics';
 
 export const STUDIO_TELEMETRY_PROFILES = ['fake', 'openai-images-v1-generic'] as const;
 
@@ -168,6 +169,42 @@ const RESERVATION_WARNING_SECONDS = 24 * 60 * 60;
 const RESERVATION_CRITICAL_SECONDS = 7 * 24 * 60 * 60;
 const RESERVATION_HOLD_CAP_SECONDS = 30 * 24 * 60 * 60;
 
+const COUNTER_DEFINITIONS = [
+  [
+    'studio_provider_requests_total',
+    'Studio provider requests by operation, outcome, and profile.',
+  ],
+  ['studio_unknown_outcomes_total', 'Studio provider outcomes requiring explicit reconciliation.'],
+  ['studio_storage_operations_total', 'Studio object storage operations by operation and outcome.'],
+  [
+    'studio_estimate_violations_total',
+    'Studio jobs whose settled usage exceeded the accepted estimate.',
+  ],
+  ['studio_platform_loss_credits_total', 'Studio credits absorbed as platform loss.'],
+  ['studio_recovery_decisions_total', 'Studio recovery decisions by bounded decision and outcome.'],
+] as const;
+
+const GAUGE_DEFINITIONS = [
+  ['studio_storage_readiness', 'Studio object storage readiness by runtime role.'],
+  ['studio_queue_oldest_age_seconds', 'Age in seconds of the oldest queued Studio job.'],
+  [
+    'studio_reservation_oldest_age_seconds',
+    'Age in seconds of the oldest Studio reservation by state.',
+  ],
+  ['studio_orphan_staging_objects', 'Number of orphan Studio staging objects awaiting cleanup.'],
+] as const;
+
+const HISTOGRAM_DEFINITIONS = [
+  [
+    'studio_provider_request_duration_seconds',
+    'Studio provider request latency by operation and profile.',
+  ],
+  [
+    'studio_storage_operation_duration_seconds',
+    'Studio object storage operation latency by operation.',
+  ],
+] as const;
+
 function assertAllowed(value: unknown, allowed: readonly string[], field: string): void {
   if (typeof value !== 'string' || !allowed.includes(value)) {
     throw new TypeError(`Invalid Studio telemetry ${field}`);
@@ -194,6 +231,40 @@ export function createInMemoryStudioTelemetrySink(): InMemoryStudioTelemetrySink
     counter: (emission) => emissions.push(emission),
     gauge: (emission) => emissions.push(emission),
     histogram: (emission) => emissions.push(emission),
+  };
+}
+
+export function createPrometheusStudioTelemetrySink(
+  registry: PrometheusRegistry = applicationPrometheusRegistry,
+): StudioTelemetrySinks {
+  const counters = new Map(
+    COUNTER_DEFINITIONS.map(([name, help]) => [name, registry.registerCounter(name, help)]),
+  );
+  const gauges = new Map(
+    GAUGE_DEFINITIONS.map(([name, help]) => [name, registry.registerGauge(name, help)]),
+  );
+  const histograms = new Map(
+    HISTOGRAM_DEFINITIONS.map(([name, help]) => [name, registry.registerHistogram(name, help)]),
+  );
+  return {
+    counter(emission) {
+      requirePrometheusMetric(counters.get(emission.name), emission.name).inc(
+        emission.labels,
+        emission.value,
+      );
+    },
+    gauge(emission) {
+      requirePrometheusMetric(gauges.get(emission.name), emission.name).set(
+        emission.value,
+        emission.labels,
+      );
+    },
+    histogram(emission) {
+      requirePrometheusMetric(histograms.get(emission.name), emission.name).observe(
+        emission.value,
+        emission.labels,
+      );
+    },
   };
 }
 
@@ -319,6 +390,15 @@ export function createStudioTelemetry(sinks: StudioTelemetrySinks): StudioTeleme
       });
     },
   };
+}
+
+export const applicationStudioTelemetry = createStudioTelemetry(
+  createPrometheusStudioTelemetrySink(),
+);
+
+function requirePrometheusMetric<T>(metric: T | undefined, name: string): T {
+  if (!metric) throw new Error(`Studio Prometheus metric is not registered: ${name}`);
+  return metric;
 }
 
 /**

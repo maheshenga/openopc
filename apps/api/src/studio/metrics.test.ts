@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { InMemoryStudioObjectStore } from '@kortix/studio-runtime';
+import { createPrometheusRegistry, renderMetrics } from '../lib/metrics';
 import {
   type StudioMetricEmission,
+  applicationStudioTelemetry,
+  createPrometheusStudioTelemetrySink,
   createStudioTelemetry,
   instrumentStudioObjectStore,
 } from './metrics';
@@ -19,6 +22,45 @@ function recordingTelemetry() {
 }
 
 describe('Studio API telemetry', () => {
+  test('publishes production Studio telemetry through the API metrics payload', () => {
+    applicationStudioTelemetry.storageReadiness({ role: 'api', ready: false });
+    expect(renderMetrics()).toContain('studio_storage_readiness{role="api"} 0');
+  });
+
+  test('renders every Studio series through the API Prometheus registry', () => {
+    const registry = createPrometheusRegistry();
+    const telemetry = createStudioTelemetry(createPrometheusStudioTelemetrySink(registry));
+
+    telemetry.providerRequest({ operation: 'submit', outcome: 'succeeded', profile: 'fake' });
+    telemetry.providerRequestDuration({ operation: 'submit', profile: 'fake', seconds: 0.25 });
+    telemetry.storageReadiness({ role: 'api', ready: true });
+
+    const rendered = registry.render();
+    for (const name of [
+      'studio_provider_requests_total',
+      'studio_provider_request_duration_seconds',
+      'studio_unknown_outcomes_total',
+      'studio_storage_operations_total',
+      'studio_storage_operation_duration_seconds',
+      'studio_storage_readiness',
+      'studio_queue_oldest_age_seconds',
+      'studio_reservation_oldest_age_seconds',
+      'studio_orphan_staging_objects',
+      'studio_estimate_violations_total',
+      'studio_platform_loss_credits_total',
+      'studio_recovery_decisions_total',
+    ]) {
+      expect(rendered).toContain(`# HELP ${name} `);
+    }
+    expect(rendered).toContain(
+      'studio_provider_requests_total{operation="submit",outcome="succeeded",profile="fake"} 1',
+    );
+    expect(rendered).toContain('studio_storage_readiness{role="api"} 1');
+    expect(rendered).not.toMatch(
+      /account_id|project_id|job_id|object_key|signed|credential|error_message/,
+    );
+  });
+
   test('classifies reservation age at the warning, escalation, and hold-cap thresholds', () => {
     const { telemetry, emissions } = recordingTelemetry();
 

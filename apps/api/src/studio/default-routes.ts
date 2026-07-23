@@ -13,8 +13,8 @@ import { assertAuthorized } from '../iam/dispatcher';
 import { buildProjectAgentCard } from '../intelligence/agent-cards';
 import {
   type CatalogExecutorSource,
-  createExecutorCatalogSource,
   type ProjectCapabilityCatalogPort,
+  createExecutorCatalogSource,
   createProjectCapabilityCatalog,
 } from '../intelligence/capability-catalog';
 import { createProjectCapabilityRegistry } from '../intelligence/capability-registry';
@@ -39,7 +39,11 @@ import {
   type StudioProjectRouteDeps,
   createStudioProjectRoutes,
 } from './index';
-import { type StudioTelemetry, instrumentStudioObjectStore } from './metrics';
+import {
+  type StudioTelemetry,
+  applicationStudioTelemetry,
+  instrumentStudioObjectStore,
+} from './metrics';
 import { StudioProviderConfigService, createStudioProviderOriginValidator } from './providers';
 import { type StudioRecoveryRepository, StudioRecoveryService } from './recovery';
 import {
@@ -102,7 +106,10 @@ export function getDefaultStudioApiRuntime(
   env: Record<string, string | undefined> = process.env,
   options: StudioApiRuntimeOptions = {},
 ): StudioApiRuntime {
-  defaultStudioApiRuntime ??= buildStudioApiRuntime(env, options);
+  defaultStudioApiRuntime ??= buildStudioApiRuntime(env, {
+    ...options,
+    telemetry: options.telemetry ?? applicationStudioTelemetry,
+  });
   return defaultStudioApiRuntime;
 }
 
@@ -248,7 +255,8 @@ export function createDefaultIntelligenceProjectRoutes(
     });
   const executorCatalogSource = input.executorCatalogSource ?? createDefaultExecutorCatalogSource();
   const capabilityCatalog =
-    input.capabilityCatalog ?? createProjectCapabilityCatalog({ capabilityRegistry, executorSource: executorCatalogSource });
+    input.capabilityCatalog ??
+    createProjectCapabilityCatalog({ capabilityRegistry, executorSource: executorCatalogSource });
 
   let taskExecutor = input.taskExecutor;
   let taskEventReader = input.taskEventReader;

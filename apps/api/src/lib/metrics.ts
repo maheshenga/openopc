@@ -3,13 +3,11 @@
 // registry and rendering the text format directly. Scope is the SLO signals:
 // request rate, errors, and latency — plus event-loop lag and basic process gauges.
 
-const DURATION_BUCKETS = [
-  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
-];
+const DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 
-type Labels = Record<string, string>;
+export type PrometheusLabels = Readonly<Record<string, string>>;
 
-function seriesKey(labels: Labels): string {
+function seriesKey(labels: PrometheusLabels): string {
   return Object.keys(labels)
     .sort()
     .map((k) => `${k}="${escapeLabel(labels[k])}"`)
@@ -21,12 +19,12 @@ function escapeLabel(v: string): string {
 }
 
 class Counter {
-  private values = new Map<string, { labels: Labels; value: number }>();
+  private values = new Map<string, { labels: PrometheusLabels; value: number }>();
   constructor(
     readonly name: string,
     readonly help: string,
   ) {}
-  inc(labels: Labels, by = 1): void {
+  inc(labels: PrometheusLabels, by = 1): void {
     const key = seriesKey(labels);
     const cur = this.values.get(key);
     if (cur) cur.value += by;
@@ -42,15 +40,15 @@ class Counter {
 }
 
 class Gauge {
-  private values = new Map<string, { labels: Labels; value: number }>();
+  private values = new Map<string, { labels: PrometheusLabels; value: number }>();
   constructor(
     readonly name: string,
     readonly help: string,
   ) {}
-  set(value: number, labels: Labels = {}): void {
+  set(value: number, labels: PrometheusLabels = {}): void {
     this.values.set(seriesKey(labels), { labels, value });
   }
-  inc(by = 1, labels: Labels = {}): void {
+  inc(by = 1, labels: PrometheusLabels = {}): void {
     const key = seriesKey(labels);
     const cur = this.values.get(key);
     if (cur) cur.value += by;
@@ -69,14 +67,14 @@ class Gauge {
 class Histogram {
   private series = new Map<
     string,
-    { labels: Labels; counts: number[]; sum: number; count: number }
+    { labels: PrometheusLabels; counts: number[]; sum: number; count: number }
   >();
   constructor(
     readonly name: string,
     readonly help: string,
     readonly buckets: number[] = DURATION_BUCKETS,
   ) {}
-  observe(value: number, labels: Labels): void {
+  observe(value: number, labels: PrometheusLabels): void {
     const key = seriesKey(labels);
     let s = this.series.get(key);
     if (!s) {
@@ -95,15 +93,104 @@ class Histogram {
       const base = seriesKey(s.labels);
       for (let i = 0; i < this.buckets.length; i++) {
         const le = `le="${this.buckets[i]}"`;
-        lines.push(`${this.name}_bucket{${base ? base + ',' : ''}${le}} ${s.counts[i]}`);
+        lines.push(`${this.name}_bucket{${base ? `${base},` : ''}${le}} ${s.counts[i]}`);
       }
-      lines.push(`${this.name}_bucket{${base ? base + ',' : ''}le="+Inf"} ${s.count}`);
+      lines.push(`${this.name}_bucket{${base ? `${base},` : ''}le="+Inf"} ${s.count}`);
       lines.push(`${this.name}_sum{${base}} ${s.sum}`);
       lines.push(`${this.name}_count{${base}} ${s.count}`);
     }
     return lines.join('\n');
   }
 }
+
+export interface PrometheusCounter {
+  inc(labels: PrometheusLabels, by?: number): void;
+}
+
+export interface PrometheusGauge {
+  set(value: number, labels?: PrometheusLabels): void;
+}
+
+export interface PrometheusHistogram {
+  observe(value: number, labels: PrometheusLabels): void;
+}
+
+export interface PrometheusRegistry {
+  registerCounter(name: string, help: string): PrometheusCounter;
+  registerGauge(name: string, help: string): PrometheusGauge;
+  registerHistogram(name: string, help: string, buckets?: readonly number[]): PrometheusHistogram;
+  render(): string;
+}
+
+type RegisteredMetric =
+  | { kind: 'counter'; help: string; metric: Counter }
+  | { kind: 'gauge'; help: string; metric: Gauge }
+  | { kind: 'histogram'; help: string; buckets: string; metric: Histogram };
+
+class InMemoryPrometheusRegistry implements PrometheusRegistry {
+  private readonly metrics = new Map<string, RegisteredMetric>();
+
+  registerCounter(name: string, help: string): PrometheusCounter {
+    const existing = this.resolve(name, help, 'counter');
+    if (existing) return existing.metric;
+    const metric = new Counter(name, help);
+    this.metrics.set(name, { kind: 'counter', help, metric });
+    return metric;
+  }
+
+  registerGauge(name: string, help: string): PrometheusGauge {
+    const existing = this.resolve(name, help, 'gauge');
+    if (existing) return existing.metric;
+    const metric = new Gauge(name, help);
+    this.metrics.set(name, { kind: 'gauge', help, metric });
+    return metric;
+  }
+
+  registerHistogram(
+    name: string,
+    help: string,
+    buckets: readonly number[] = DURATION_BUCKETS,
+  ): PrometheusHistogram {
+    const bucketKey = buckets.join(',');
+    const existing = this.resolve(name, help, 'histogram');
+    if (existing) {
+      if (existing.buckets !== bucketKey) {
+        throw new Error(`Prometheus metric ${name} was registered with different buckets`);
+      }
+      return existing.metric;
+    }
+    const metric = new Histogram(name, help, [...buckets]);
+    this.metrics.set(name, { kind: 'histogram', help, buckets: bucketKey, metric });
+    return metric;
+  }
+
+  render(): string {
+    return [...this.metrics.values()].map(({ metric }) => metric.render()).join('\n\n');
+  }
+
+  private resolve<K extends RegisteredMetric['kind']>(
+    name: string,
+    help: string,
+    kind: K,
+  ): Extract<RegisteredMetric, { kind: K }> | null {
+    if (!/^[a-zA-Z_:][a-zA-Z0-9_:]*$/.test(name)) {
+      throw new Error(`Invalid Prometheus metric name: ${name}`);
+    }
+    if (!help.trim()) throw new Error(`Prometheus metric ${name} requires help text`);
+    const existing = this.metrics.get(name);
+    if (!existing) return null;
+    if (existing.kind !== kind || existing.help !== help) {
+      throw new Error(`Prometheus metric ${name} was registered with a conflicting definition`);
+    }
+    return existing as Extract<RegisteredMetric, { kind: K }>;
+  }
+}
+
+export function createPrometheusRegistry(): PrometheusRegistry {
+  return new InMemoryPrometheusRegistry();
+}
+
+export const applicationPrometheusRegistry = createPrometheusRegistry();
 
 const httpRequestsTotal = new Counter(
   'http_requests_total',
@@ -113,10 +200,7 @@ const httpRequestDuration = new Histogram(
   'http_request_duration_seconds',
   'HTTP request latency in seconds by method and route.',
 );
-const httpRequestsInFlight = new Gauge(
-  'http_requests_in_flight',
-  'In-flight HTTP requests.',
-);
+const httpRequestsInFlight = new Gauge('http_requests_in_flight', 'In-flight HTTP requests.');
 const eventLoopLag = new Gauge(
   'nodejs_eventloop_lag_seconds',
   'Sampled event-loop lag in seconds.',
@@ -158,14 +242,15 @@ export function renderMetrics(): string {
   const mem = process.memoryUsage();
   processGauges.rss.set(mem.rss);
   processGauges.uptime.set(process.uptime());
-  return (
-    [
-      httpRequestsTotal.render(),
-      httpRequestDuration.render(),
-      httpRequestsInFlight.render(),
-      eventLoopLag.render(),
-      processGauges.rss.render(),
-      processGauges.uptime.render(),
-    ].join('\n\n') + '\n'
-  );
+  return `${[
+    httpRequestsTotal.render(),
+    httpRequestDuration.render(),
+    httpRequestsInFlight.render(),
+    eventLoopLag.render(),
+    processGauges.rss.render(),
+    processGauges.uptime.render(),
+    applicationPrometheusRegistry.render(),
+  ]
+    .filter(Boolean)
+    .join('\n\n')}\n`;
 }

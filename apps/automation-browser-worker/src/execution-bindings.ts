@@ -7,14 +7,14 @@ import type {
 import { createDispatchApprovalConsumer } from './approval-resume';
 import type { BrowserApprovalResumeClient } from './approval-resume-client';
 import type { BrowserAuthorityClient, BrowserAuthorityInput } from './authority-client';
-import type { EvidenceStore } from './evidence-writer';
 import type { BrowserDispatchWorkItem } from './dispatch-source';
+import type { EvidenceStore } from './evidence-writer';
 import type { BrowserWorkerAuthenticatedEventEmitter } from './heartbeat-client';
 import type { RuntimeIsolationAttestor } from './runtime-isolation';
 import {
-  runIsolatedBrowserRequest,
   type AutomationAuditIntent,
   type BrowserWorkerInput,
+  runIsolatedBrowserRequest,
 } from './worker';
 
 type EventChannelState = { usable: boolean; terminalWritten: boolean };

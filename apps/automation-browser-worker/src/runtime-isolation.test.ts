@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  type RuntimeIsolationSnapshot,
   createRuntimeIsolationAttestor,
   isolationSnapshotIsCurrent,
-  type RuntimeIsolationSnapshot,
 } from './runtime-isolation';
 
 function isolationProbe(

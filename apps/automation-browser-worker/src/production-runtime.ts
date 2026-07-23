@@ -37,6 +37,7 @@ type WorkerProductionResources = Readonly<{
   objectStore: Readonly<{ assertReady(): Promise<void>; close(): Promise<void> }>;
   isolation: Readonly<{ attest(): Promise<boolean> }>;
   dependenciesReady(): boolean;
+  onDependenciesChanged?(listener: () => void): void;
   execute(workItem: BrowserDispatchWorkItem): Promise<unknown>;
 }>;
 
@@ -79,6 +80,28 @@ export type StartBrowserWorkerProductionRuntimeInput = Readonly<{
 
 function closeObjectStore(store: { destroy?: () => void }): Promise<void> {
   return Promise.resolve().then(() => store.destroy?.());
+}
+
+async function closeEnabledResources(input: {
+  controller?: AbortController;
+  loop?: Promise<void>;
+  resources: WorkerProductionResources;
+  server?: RuntimeServer;
+}): Promise<unknown[]> {
+  const failures: unknown[] = [];
+  const attempt = async (operation: () => Promise<void> | void): Promise<void> => {
+    try {
+      await operation();
+    } catch (error) {
+      failures.push(error);
+    }
+  };
+  input.controller?.abort('Browser Worker shutting down');
+  if (input.loop !== undefined) await attempt(() => input.loop?.then(() => undefined));
+  await attempt(() => input.resources.dispatchSource.close('Browser Worker shutting down'));
+  if (input.server !== undefined) await attempt(() => input.server?.close());
+  await attempt(() => input.resources.objectStore.close());
+  return failures;
 }
 
 function defaultDependencies(
@@ -199,23 +222,30 @@ export async function startBrowserWorkerProductionRuntime(
   const nextNonce = createWorkerProofNonceSource();
   let loopReady = true;
   let observedReady = false;
-  const observeReadiness = (ready: boolean): void => {
+  let resources: WorkerProductionResources | undefined;
+  const observeReadiness = (): void => {
+    const ready =
+      resources?.dispatchSource.isReady() === true && loopReady && resources.dependenciesReady();
     if (ready === observedReady) return;
     observedReady = ready;
     dependencies.observe({
       event: ready ? 'automation_browser_worker_ready' : 'automation_browser_worker_disconnected',
     });
   };
-  const resources = await dependencies.createResources(config, {
+  resources = await dependencies.createResources(config, {
     dispatchReceiptNonce: nextNonce,
     heartbeatNonce: nextNonce,
     controlRequestNonce: nextNonce,
     onReadinessChange: observeReadiness,
   });
-  await resources.objectStore.assertReady();
-  if (!(await resources.isolation.attest())) {
-    await resources.objectStore.close();
-    throw new Error('Browser runtime isolation is invalid');
+  resources.onDependenciesChanged?.(observeReadiness);
+  try {
+    await resources.objectStore.assertReady();
+    if (!(await resources.isolation.attest()))
+      throw new Error('Browser runtime isolation is invalid');
+  } catch (error) {
+    await closeEnabledResources({ resources });
+    throw error;
   }
   const controller = new AbortController();
   const loop = runBrowserWorkerLoop({
@@ -224,15 +254,22 @@ export async function startBrowserWorkerProductionRuntime(
     execute: (workItem) => resources.execute(workItem).then(() => undefined),
   }).catch((error) => {
     loopReady = false;
+    observeReadiness();
     resources.dispatchSource.close('Browser execution loop failed');
     throw error;
   });
   void loop.catch(() => undefined);
-  const server = dependencies.startDispatchServer({
-    config,
-    runtime: resources.dispatchSource,
-    isExecutionReady: () => loopReady && resources.dependenciesReady(),
-  });
+  let server: RuntimeServer;
+  try {
+    server = dependencies.startDispatchServer({
+      config,
+      runtime: resources.dispatchSource,
+      isExecutionReady: () => loopReady && resources.dependenciesReady(),
+    });
+  } catch (error) {
+    await closeEnabledResources({ controller, loop, resources });
+    throw error;
+  }
   dependencies.observe({ event: 'automation_browser_worker_started' });
 
   let closePromise: Promise<void> | undefined;
@@ -240,12 +277,11 @@ export async function startBrowserWorkerProductionRuntime(
     origin: server.server.url.toString(),
     close() {
       closePromise ??= (async () => {
-        controller.abort('Browser Worker shutting down');
-        await loop.catch(() => undefined);
-        resources.dispatchSource.close('Browser Worker shutting down');
-        await server.close();
-        await resources.objectStore.close();
+        const failures = await closeEnabledResources({ controller, loop, resources, server });
         dependencies.observe({ event: 'automation_browser_worker_shutdown' });
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1)
+          throw new AggregateError(failures, 'Browser Worker shutdown failed');
       })();
       return closePromise;
     },

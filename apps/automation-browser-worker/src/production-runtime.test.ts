@@ -13,7 +13,12 @@ const fullyEnabledEnvironment = {
   AUTOMATION_BROWSER_TLS_ATTESTATION_SECRET: 't'.repeat(32),
 };
 
-function responseServer(input: { ready: () => boolean; closed: string[]; label: string }) {
+function responseServer(input: {
+  ready: () => boolean;
+  closed: string[];
+  label: string;
+  closeError?: Error;
+}) {
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -33,16 +38,28 @@ function responseServer(input: { ready: () => boolean; closed: string[]; label: 
     close: async () => {
       input.closed.push(input.label);
       server.stop(true);
+      if (input.closeError !== undefined) throw input.closeError;
     },
   };
 }
 
-function runtimeHarness() {
+function runtimeHarness(
+  options: {
+    objectStoreReadyError?: Error;
+    isolationAttested?: boolean;
+    serverStartError?: Error;
+    sourceCloseError?: Error;
+    serverCloseError?: Error;
+    objectStoreCloseError?: Error;
+  } = {},
+) {
   const created: string[] = [];
   const closed: string[] = [];
   const observations: Array<{ event: string }> = [];
   let authenticated = false;
+  let dependenciesReady = true;
   let transition: ((ready: boolean) => void) | undefined;
+  let dependenciesTransition: (() => void) | undefined;
   const dispatchSource = {
     source: {
       next: (signal: AbortSignal) =>
@@ -68,6 +85,7 @@ function runtimeHarness() {
     },
     close: () => {
       closed.push('dispatch-source');
+      if (options.sourceCloseError !== undefined) throw options.sourceCloseError;
     },
   };
   const dependencies = {
@@ -84,27 +102,45 @@ function runtimeHarness() {
       return {
         dispatchSource,
         objectStore: {
-          assertReady: async () => undefined,
+          assertReady: async () => {
+            if (options.objectStoreReadyError !== undefined) throw options.objectStoreReadyError;
+          },
           close: async () => {
             closed.push('object-store');
+            if (options.objectStoreCloseError !== undefined) throw options.objectStoreCloseError;
           },
         },
-        isolation: { attest: async () => true },
-        dependenciesReady: () => true,
+        isolation: { attest: async () => options.isolationAttested ?? true },
+        dependenciesReady: () => dependenciesReady,
+        onDependenciesChanged(listener: () => void) {
+          dependenciesTransition = listener;
+        },
         execute: async () => undefined,
       };
     },
     startDispatchServer: (input: { isExecutionReady: () => boolean }) => {
+      if (options.serverStartError !== undefined) throw options.serverStartError;
       created.push('server');
       return responseServer({
         ready: () => dispatchSource.isReady() && input.isExecutionReady(),
         closed,
         label: 'server',
+        closeError: options.serverCloseError,
       });
     },
     observe: (event: { event: string }) => observations.push(event),
   };
-  return { created, closed, observations, dispatchSource, dependencies };
+  return {
+    created,
+    closed,
+    observations,
+    dispatchSource,
+    dependencies,
+    setDependenciesReady(ready: boolean) {
+      dependenciesReady = ready;
+      dependenciesTransition?.();
+    },
+  };
 }
 
 test('starts fail closed by default', async () => {
@@ -162,4 +198,89 @@ test('becomes ready only for an authenticated control session and shuts down ide
     'automation_browser_worker_shutdown',
   ]);
   expect(JSON.stringify(harness.observations)).not.toMatch(/secret|token|signature|authorization/i);
+});
+
+test('cleans resources when object-store readiness fails', async () => {
+  const { startBrowserWorkerProductionRuntime } = await import('./production-runtime');
+  const harness = runtimeHarness({ objectStoreReadyError: new Error('object store unavailable') });
+
+  await expect(
+    startBrowserWorkerProductionRuntime({
+      environment: fullyEnabledEnvironment,
+      dependencies: harness.dependencies as never,
+    }),
+  ).rejects.toThrow('object store unavailable');
+
+  expect(harness.closed).toEqual(['dispatch-source', 'object-store']);
+});
+
+test('cleans resources when isolation attestation fails', async () => {
+  const { startBrowserWorkerProductionRuntime } = await import('./production-runtime');
+  const harness = runtimeHarness({ isolationAttested: false });
+
+  await expect(
+    startBrowserWorkerProductionRuntime({
+      environment: fullyEnabledEnvironment,
+      dependencies: harness.dependencies as never,
+    }),
+  ).rejects.toThrow('Browser runtime isolation is invalid');
+
+  expect(harness.closed).toEqual(['dispatch-source', 'object-store']);
+});
+
+test('cleans the started loop and resources when dispatch-server startup fails', async () => {
+  const { startBrowserWorkerProductionRuntime } = await import('./production-runtime');
+  const harness = runtimeHarness({ serverStartError: new Error('dispatch server unavailable') });
+
+  await expect(
+    startBrowserWorkerProductionRuntime({
+      environment: fullyEnabledEnvironment,
+      dependencies: harness.dependencies as never,
+    }),
+  ).rejects.toThrow('dispatch server unavailable');
+
+  expect(harness.closed).toEqual(['worker-loop', 'dispatch-source', 'object-store']);
+});
+
+test('observes only composite readiness transitions', async () => {
+  const { startBrowserWorkerProductionRuntime } = await import('./production-runtime');
+  const harness = runtimeHarness();
+  harness.setDependenciesReady(false);
+  const runtime = await startBrowserWorkerProductionRuntime({
+    environment: fullyEnabledEnvironment,
+    dependencies: harness.dependencies as never,
+  });
+  try {
+    harness.dispatchSource.connectAuthenticatedControl();
+    expect(harness.observations.map((event) => event.event)).toEqual([
+      'automation_browser_worker_started',
+    ]);
+    harness.setDependenciesReady(true);
+    harness.setDependenciesReady(false);
+    expect(harness.observations.map((event) => event.event)).toEqual([
+      'automation_browser_worker_started',
+      'automation_browser_worker_ready',
+      'automation_browser_worker_disconnected',
+    ]);
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('continues ordered shutdown after a close failure and shares its result', async () => {
+  const { startBrowserWorkerProductionRuntime } = await import('./production-runtime');
+  const harness = runtimeHarness({ sourceCloseError: new Error('source close failed') });
+  const runtime = await startBrowserWorkerProductionRuntime({
+    environment: fullyEnabledEnvironment,
+    dependencies: harness.dependencies as never,
+  });
+
+  const first = runtime.close();
+  const second = runtime.close();
+  expect(first).toBe(second);
+  await expect(first).rejects.toThrow('source close failed');
+  expect(harness.closed).toEqual(['worker-loop', 'dispatch-source', 'server', 'object-store']);
+  expect(harness.observations.map((event) => event.event)).toContain(
+    'automation_browser_worker_shutdown',
+  );
 });

@@ -9,6 +9,7 @@ export type AutomationControlServerDependencies = Readonly<{
   config: AutomationControlConfig;
   checkDatabase: () => Promise<boolean>;
   checkRedis: () => Promise<boolean>;
+  checkBrowserRuntime?: () => Promise<boolean>;
   routes?: Hono<InternalAutomationEnv>;
   workerRoutes?: Hono;
 }>;
@@ -42,6 +43,14 @@ async function dependencySnapshot(dependencies: AutomationControlServerDependenc
   return { database, redis };
 }
 
+async function readinessSnapshot(dependencies: AutomationControlServerDependencies) {
+  const status: Record<string, DependencyStatus> = await dependencySnapshot(dependencies);
+  if (dependencies.config.browserApprovalResumeEnabled) {
+    status.browser_dispatch = await probe(dependencies.checkBrowserRuntime ?? (async () => false));
+  }
+  return status;
+}
+
 export function createAutomationControlApp(
   dependencies: AutomationControlServerDependencies,
 ): Hono<InternalAutomationEnv> {
@@ -68,8 +77,8 @@ export function createAutomationControlApp(
       return context.json(disabledSnapshot(dependencies.config), 503);
     }
 
-    const status = await dependencySnapshot(dependencies);
-    const ready = status.database === 'available' && status.redis === 'available';
+    const status = await readinessSnapshot(dependencies);
+    const ready = Object.values(status).every((dependency) => dependency === 'available');
     return context.json(
       {
         protocol_version: AUTOMATION_PROTOCOL_VERSION,

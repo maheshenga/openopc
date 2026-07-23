@@ -227,8 +227,7 @@ describe('automation control configuration', () => {
     expect(() =>
       loadAutomationControlConfig({
         ...enabledBrowserDispatchEnvironment,
-        AUTOMATION_CONTROL_WORKER_SHARED_SECRET:
-          'control-shared-secret-at-least-thirty-two-bytes',
+        AUTOMATION_CONTROL_WORKER_SHARED_SECRET: 'control-shared-secret-at-least-thirty-two-bytes',
       }),
     ).toThrow(/secret.*collision/i);
   });
@@ -237,8 +236,7 @@ describe('automation control configuration', () => {
     expect(() =>
       loadAutomationControlConfig({
         ...enabledBrowserDispatchEnvironment,
-        AUTOMATION_CONTROL_WORKER_SHARED_SECRET:
-          'worker-shared-secret-at-least-thirty-two-bytes',
+        AUTOMATION_CONTROL_WORKER_SHARED_SECRET: 'worker-shared-secret-at-least-thirty-two-bytes',
       }),
     ).toThrow(/secret.*collision/i);
   });
@@ -300,6 +298,52 @@ describe('automation control health endpoints', () => {
     expect(await degradedResponse.json()).toMatchObject({
       status: 'not_ready',
       dependencies: { database: 'unavailable', redis: 'available' },
+    });
+  });
+
+  test('requires Browser dispatch only for readiness while approval resume is enabled', async () => {
+    const browserConfig: AutomationControlConfig = {
+      ...ENABLED_CONFIG,
+      browserHeartbeatEnabled: true,
+      browserApprovalResumeEnabled: true,
+      browserDispatch: {
+        enabled: true,
+        workerUrl: 'wss://browser-worker.example.test/',
+        mtlsCertificatePath: 'C:\\certs\\control.crt',
+        mtlsPrivateKeyPath: 'C:\\certs\\control.key',
+        mtlsCaPath: 'C:\\certs\\worker-ca.crt',
+        requestTimeoutMs: 5_000,
+        maxMessageBytes: 64 * 1024,
+      },
+    };
+    const disconnected = createAutomationControlApp({
+      config: browserConfig,
+      checkDatabase: async () => true,
+      checkRedis: async () => true,
+      checkBrowserRuntime: async () => false,
+    });
+    const connected = createAutomationControlApp({
+      config: browserConfig,
+      checkDatabase: async () => true,
+      checkRedis: async () => true,
+      checkBrowserRuntime: async () => true,
+    });
+
+    const health = await disconnected.request('/health');
+    const disconnectedReadiness = await disconnected.request('/ready');
+    const connectedReadiness = await connected.request('/ready');
+
+    expect(health.status).toBe(200);
+    expect(await health.json()).not.toHaveProperty('dependencies.browser_dispatch');
+    expect(disconnectedReadiness.status).toBe(503);
+    expect(await disconnectedReadiness.json()).toMatchObject({
+      status: 'not_ready',
+      dependencies: { browser_dispatch: 'unavailable' },
+    });
+    expect(connectedReadiness.status).toBe(200);
+    expect(await connectedReadiness.json()).toMatchObject({
+      status: 'ready',
+      dependencies: { browser_dispatch: 'available' },
     });
   });
 

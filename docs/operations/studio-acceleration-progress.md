@@ -79,6 +79,13 @@ and size rejection, conditional writes/deletes, and bounded prefix listing.
 The container was stopped and removed. Alibaba Cloud OSS, live provider calls,
 and production bucket readiness remain unverified.
 
+With the same isolated dummy API configuration, the local metrics probe
+returned `401` without the internal observability key, `200` with the key,
+and `200` for `/health/live`. The authenticated response contained Prometheus
+HELP metadata across `56` lines. This confirms the API scrape surface and
+fail-closed auth locally; Worker scraping, deployed service monitors, alert
+rules, and long-lived time-series behavior remain open.
+
 ## Canonical Client Contract
 
 `kortix.project(projectId).intelligence` is the only product-facing SDK facade for capability discovery, Agent Cards, task creation/events, and governed workflows. Milestone 0-1 adds image estimates, Studio jobs, uploads, and assets as typed projections under that existing facade. The unimplemented `kortix.project(projectId).studio` proposal is superseded and must not be introduced.

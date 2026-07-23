@@ -115,6 +115,9 @@ export type AutomationControlProductionDependencies = Readonly<{
   createBrowserApprovalResumeRuntime?: (
     input: BrowserApprovalResumeRuntimeDependencies,
   ) => AutomationDispatchPollingRunner | null;
+  createDesktopRuntime?: (
+    input: Parameters<typeof createAutomationDesktopDispatchRuntime>[0],
+  ) => AutomationDispatchPollingRunner | null;
   composePollingRunner?: typeof composeAutomationDispatchPollingRunner;
   startPoller?: typeof startAutomationDispatchPolling;
   serve?: (app: AutomationControlApp, port: number) => HttpServer;
@@ -135,6 +138,21 @@ export type StartAutomationControlProductionRuntimeInput = Readonly<{
 }>;
 
 const SHUTDOWN_STEP_TIMEOUT_MS = 5_000;
+const STARTUP_ERROR_CODE = 'AUTOMATION_CONTROL_STARTUP_FAILED';
+const STARTUP_ERROR_MESSAGE = 'Automation Control failed to start';
+
+export class AutomationControlStartupError extends Error {
+  override readonly name = 'AutomationControlStartupError';
+  readonly code = STARTUP_ERROR_CODE;
+
+  constructor() {
+    super(STARTUP_ERROR_MESSAGE);
+  }
+
+  toJSON(): Readonly<{ code: typeof STARTUP_ERROR_CODE; message: typeof STARTUP_ERROR_MESSAGE }> {
+    return { code: this.code, message: this.message as typeof STARTUP_ERROR_MESSAGE };
+  }
+}
 
 function defaultNonceSource(): () => number {
   let nonce = Date.now() * 1_000;
@@ -226,8 +244,31 @@ function observableConnection(
   });
 }
 
+function gateBrowserApprovalResumePollingRunner(input: {
+  runner: AutomationDispatchPollingRunner;
+  isReady(): boolean;
+  isShuttingDown(): boolean;
+}): AutomationDispatchPollingRunner {
+  return Object.freeze({
+    async runOnce(options) {
+      if (input.isShuttingDown() || !input.isReady()) return;
+      return input.runner.runOnce(options);
+    },
+  });
+}
+
 export async function startAutomationControlProductionRuntime(
   input: StartAutomationControlProductionRuntimeInput = {},
+): Promise<AutomationControlProductionRuntime> {
+  try {
+    return await startAutomationControlProductionRuntimeUnsafe(input);
+  } catch {
+    throw new AutomationControlStartupError();
+  }
+}
+
+async function startAutomationControlProductionRuntimeUnsafe(
+  input: StartAutomationControlProductionRuntimeInput,
 ): Promise<AutomationControlProductionRuntime> {
   const config = loadAutomationControlConfig(input.environment);
   const dependencies = input.dependencies ?? {};
@@ -401,16 +442,26 @@ export async function startAutomationControlProductionRuntime(
         }
       }
 
-      desktopRuntime = createAutomationDesktopDispatchRuntime({
+      desktopRuntime = (
+        dependencies.createDesktopRuntime ?? createAutomationDesktopDispatchRuntime
+      )({
         config,
         repository,
         leaseManager,
         now,
       });
+      const browserPollingRuntime =
+        browserResumeRuntime === null
+          ? null
+          : gateBrowserApprovalResumePollingRunner({
+              runner: browserResumeRuntime,
+              isReady: () => managedConnection?.isReady() === true,
+              isShuttingDown: () => shuttingDown,
+            });
       const runners = (dependencies.composePollingRunner ?? composeAutomationDispatchPollingRunner)(
         {
           desktop: desktopRuntime,
-          browserApprovalResume: browserResumeRuntime,
+          browserApprovalResume: browserPollingRuntime,
         },
       );
       poller = runners
@@ -471,8 +522,8 @@ export async function startAutomationControlProductionRuntime(
         return closePromise;
       },
     });
-  } catch (error) {
+  } catch {
     await cleanup();
-    throw error;
+    throw new AutomationControlStartupError();
   }
 }

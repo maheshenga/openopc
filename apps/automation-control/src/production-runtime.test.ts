@@ -55,12 +55,15 @@ const fullyEnabledEnvironment = {
 
 class HarnessConnection implements ObservableBrowserWorkerConnection {
   readonly #listeners = new Set<(state: BrowserWorkerConnectionState) => void>();
-  #state: BrowserWorkerConnectionState = 'ready';
+  #state: BrowserWorkerConnectionState;
 
   constructor(
     readonly peer: VerifiedWorkerPeer,
     private readonly onClose: () => void,
-  ) {}
+    initialState: BrowserWorkerConnectionState = 'ready',
+  ) {
+    this.#state = initialState;
+  }
 
   state(): BrowserWorkerConnectionState {
     return this.#state;
@@ -78,7 +81,15 @@ class HarnessConnection implements ObservableBrowserWorkerConnection {
   }
 
   disconnect(): void {
-    this.#state = 'unusable';
+    this.setState('unusable');
+  }
+
+  ready(): void {
+    this.setState('ready');
+  }
+
+  private setState(state: BrowserWorkerConnectionState): void {
+    this.#state = state;
     for (const listener of this.#listeners) listener(this.#state);
   }
 
@@ -88,7 +99,12 @@ class HarnessConnection implements ObservableBrowserWorkerConnection {
   }
 }
 
-function createHarness(options: { serverCloseThrows?: boolean } = {}) {
+function createHarness(
+  options: {
+    serverCloseThrows?: boolean;
+    connectionInitialState?: BrowserWorkerConnectionState;
+  } = {},
+) {
   const created: string[] = [];
   const closed: string[] = [];
   const observations: AutomationControlProductionObservation[] = [];
@@ -145,7 +161,11 @@ function createHarness(options: { serverCloseThrows?: boolean } = {}) {
       return {
         peer,
         connect: () => {
-          connection = new HarnessConnection(peer, () => closed.push('connection'));
+          connection = new HarnessConnection(
+            peer,
+            () => closed.push('connection'),
+            options.connectionInitialState,
+          );
           return connection;
         },
       };
@@ -194,6 +214,7 @@ function createHarness(options: { serverCloseThrows?: boolean } = {}) {
     pollerInputs,
     dependencies,
     disconnect: () => connection?.disconnect(),
+    ready: () => connection?.ready(),
   };
 }
 
@@ -282,7 +303,7 @@ describe('Automation Control production runtime', () => {
     expect(harness.created).toEqual([]);
   });
 
-  test('fails full activation without a TLS-bound Worker peer adapter', async () => {
+  test('fails full activation without exposing the missing TLS adapter detail', async () => {
     const harness = createHarness();
     const { createTlsBoundBrowserWorkerConnection: _, ...withoutTlsAdapter } = harness.dependencies;
 
@@ -291,7 +312,10 @@ describe('Automation Control production runtime', () => {
         environment: fullyEnabledEnvironment,
         dependencies: withoutTlsAdapter,
       }),
-    ).rejects.toThrow(/TLS-bound.*Worker peer/i);
+    ).rejects.toMatchObject({
+      code: 'AUTOMATION_CONTROL_STARTUP_FAILED',
+      message: 'Automation Control failed to start',
+    });
     expect(harness.created).toEqual([]);
   });
 
@@ -306,7 +330,10 @@ describe('Automation Control production runtime', () => {
           createBrowserApprovalResumeRuntime: () => null,
         },
       }),
-    ).rejects.toThrow(/Browser.*coordinator/i);
+    ).rejects.toMatchObject({
+      code: 'AUTOMATION_CONTROL_STARTUP_FAILED',
+      message: 'Automation Control failed to start',
+    });
 
     expect(harness.created).not.toContain('poller');
     expect(harness.created).not.toContain('http-server');
@@ -329,6 +356,94 @@ describe('Automation Control production runtime', () => {
       error_code: 'poll_failed',
     });
     expect(JSON.stringify(harness.observations)).not.toContain(CONTROL_WORKER_SHARED_SECRET);
+    await runtime.close();
+  });
+
+  test('sanitizes dependency failures after cleaning up partial startup', async () => {
+    const harness = createHarness();
+    const marker = `factory-leak:${CONTROL_SHARED_SECRET}`;
+    let failure: unknown;
+
+    try {
+      await startAutomationControlProductionRuntime({
+        environment: {
+          ...fullyEnabledEnvironment,
+          AUTOMATION_DESKTOP_COORDINATOR_ENABLED: 'false',
+          AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'false',
+          AUTOMATION_BROWSER_DISPATCH_ENABLED: 'false',
+          AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED: 'false',
+        },
+        dependencies: {
+          ...harness.dependencies,
+          createRedis: () => {
+            throw new Error(marker, {
+              cause: {
+                url: fullyEnabledEnvironment.DATABASE_URL,
+                certificatePath: fullyEnabledEnvironment.AUTOMATION_CONTROL_MTLS_KEY_PATH,
+              },
+            });
+          },
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      code: 'AUTOMATION_CONTROL_STARTUP_FAILED',
+      message: 'Automation Control failed to start',
+    });
+    expect((failure as Error & { cause?: unknown }).cause).toBeUndefined();
+    expect(JSON.stringify(failure)).toBe(
+      '{"code":"AUTOMATION_CONTROL_STARTUP_FAILED","message":"Automation Control failed to start"}',
+    );
+    expect(`${String(failure)} ${JSON.stringify(failure)}`).not.toContain(marker);
+    expect(`${String(failure)} ${JSON.stringify(failure)}`).not.toContain(
+      fullyEnabledEnvironment.DATABASE_URL,
+    );
+    expect(harness.closed).toEqual(['database']);
+  });
+
+  test('gates only Browser polling on managed connection readiness', async () => {
+    const harness = createHarness({ connectionInitialState: 'connecting' });
+    let desktopCalls = 0;
+    let browserCalls = 0;
+    const dependencies = {
+      ...harness.dependencies,
+      createDesktopRuntime: () => ({
+        async runOnce() {
+          desktopCalls += 1;
+        },
+      }),
+      createBrowserApprovalResumeRuntime: () => ({
+        async runOnce() {
+          browserCalls += 1;
+        },
+      }),
+    } satisfies AutomationControlProductionDependencies;
+    const runtime = await startAutomationControlProductionRuntime({
+      environment: fullyEnabledEnvironment,
+      dependencies,
+    });
+    const composite = harness.pollerInputs[0]?.coordinator;
+    expect(composite).toBeDefined();
+
+    await composite?.runOnce().catch(() => undefined);
+    expect(desktopCalls).toBe(1);
+    expect(browserCalls).toBe(0);
+
+    harness.ready();
+    await composite?.runOnce();
+    expect(desktopCalls).toBe(2);
+    expect(browserCalls).toBe(1);
+
+    harness.disconnect();
+    await composite?.runOnce();
+    expect(desktopCalls).toBe(3);
+    expect(browserCalls).toBe(1);
+    expect(harness.compositeInputs).toHaveLength(1);
+    expect(harness.pollerInputs).toHaveLength(1);
+    expect(harness.created.filter((resource) => resource === 'poller')).toHaveLength(1);
     await runtime.close();
   });
 });

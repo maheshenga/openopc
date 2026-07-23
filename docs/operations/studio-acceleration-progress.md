@@ -90,6 +90,22 @@ The focused `@kortix/studio-worker` typecheck also passed. No Worker process
 was started because its real PostgreSQL lease store, object store identity,
 and provider credentials are intentionally unavailable in this environment.
 
+## Task 14 Deployment and Observability Gate
+
+The API billing-incident, API metrics, observability configuration, Worker
+metrics, and Worker observability-server focused suites passed `25/25` tests
+with `124` assertions. API and Worker typechecks passed. Compose rendering with
+`--profile all` produced the frontend, API, MinIO, MinIO init, and Worker
+services (with expected blank frontend environment warnings when no local
+Supabase values are supplied). Docker Helm rendering plus kubeconform validated
+`68/68` resources for `kortix-api` and `kortix-gateway` across dev, preview,
+prod, qa, and staging, plus `qa-portal/qa`.
+
+The repository Helm wrapper could not run directly from this Windows checkout
+because its CRLF working copy is interpreted by WSL as part of shell tokens;
+the equivalent pinned-container render and schema-validation commands passed.
+This is a host execution issue, not evidence of a production deployment.
+
 ## Canonical Client Contract
 
 `kortix.project(projectId).intelligence` is the only product-facing SDK facade for capability discovery, Agent Cards, task creation/events, and governed workflows. Milestone 0-1 adds image estimates, Studio jobs, uploads, and assets as typed projections under that existing facade. The unimplemented `kortix.project(projectId).studio` proposal is superseded and must not be introduced.

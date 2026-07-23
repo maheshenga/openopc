@@ -28,7 +28,7 @@ import {
 } from './context-manager';
 import { type EvidenceStore, createEvidenceWriter } from './evidence-writer';
 import {
-  type BrowserWorkerHeartbeatEmitter,
+  type BrowserWorkerHeartbeatLoopEmitter,
   runBrowserWorkerHeartbeatLoop,
 } from './heartbeat-client';
 import { type BrowserNetworkProxy, startBrowserNetworkProxy } from './network-proxy';
@@ -107,7 +107,7 @@ export type BrowserWorkerInput = Readonly<{
   maxRuntimeMs?: number;
   launchBrowser?: (options: LaunchOptions) => Promise<Browser>;
   startProxy?: typeof startBrowserNetworkProxy;
-  heartbeat?: BrowserWorkerHeartbeatEmitter;
+  heartbeat?: BrowserWorkerHeartbeatLoopEmitter;
 }>;
 
 function workerAuditIntent(

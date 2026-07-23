@@ -36,17 +36,18 @@ export type BrowserWorkerEventSendInput = Readonly<{
   signal?: AbortSignal;
 }>;
 
-export type BrowserWorkerHeartbeatEmitter = Readonly<{
+export type BrowserWorkerHeartbeatLoopEmitter = Readonly<{
   intervalMs: number;
-  emit?(input: BrowserWorkerEventSendInput): Promise<AutomationEvent>;
   send(input: BrowserWorkerHeartbeatSendInput): Promise<AutomationEvent>;
   closeLease?(leaseId: string): void;
 }>;
 
-export type BrowserWorkerAuthenticatedEventEmitter = BrowserWorkerHeartbeatEmitter &
+export type BrowserWorkerHeartbeatEmitter = BrowserWorkerHeartbeatLoopEmitter &
   Readonly<{
     emit(input: BrowserWorkerEventSendInput): Promise<AutomationEvent>;
   }>;
+
+export type BrowserWorkerAuthenticatedEventEmitter = BrowserWorkerHeartbeatEmitter;
 
 export class BrowserWorkerHeartbeatClientError extends Error {
   override readonly name = 'BrowserWorkerHeartbeatClientError';
@@ -203,6 +204,7 @@ function createRequestSignal(
   timeoutMs: number,
 ): {
   signal: AbortSignal;
+  aborted: Promise<never>;
   cleanup(): void;
 } {
   const controller = new AbortController();
@@ -210,11 +212,26 @@ function createRequestSignal(
   if (caller?.aborted) onCallerAbort();
   else caller?.addEventListener('abort', onCallerAbort, { once: true });
   const timeout = setTimeout(() => controller.abort('heartbeat request timed out'), timeoutMs);
+  let onAbort: () => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () =>
+      reject(
+        new BrowserWorkerHeartbeatClientError(
+          'transport',
+          'Browser Worker heartbeat transport failed',
+        ),
+      );
+    if (controller.signal.aborted) onAbort();
+    else controller.signal.addEventListener('abort', onAbort, { once: true });
+  });
+  void aborted.catch(() => undefined);
   return {
     signal: controller.signal,
+    aborted,
     cleanup() {
       clearTimeout(timeout);
       caller?.removeEventListener('abort', onCallerAbort);
+      controller.signal.removeEventListener('abort', onAbort);
     },
   };
 }
@@ -243,7 +260,7 @@ export function createBrowserWorkerHeartbeatClient(input: {
   transport: BrowserWorkerHeartbeatTransport;
   now?: () => Date;
   nextNonce?: () => number;
-}): BrowserWorkerAuthenticatedEventEmitter {
+}): BrowserWorkerHeartbeatEmitter {
   const intervalMs = input.intervalMs ?? 10_000;
   const requestTimeoutMs = input.requestTimeoutMs ?? 5_000;
   const endpoint = assertClientOptions({
@@ -262,14 +279,19 @@ export function createBrowserWorkerHeartbeatClient(input: {
       return lastGeneratedNonce;
     });
   let lastIssuedNonce = 0;
-  const leaseStates = new Map<string, { nextOrdinal: number; failed: boolean }>();
-  const closedLeaseIds = new Set<string>();
+  const leaseStates = new Map<
+    string,
+    { nextOrdinal: number; failed: boolean; expiresAtMs: number }
+  >();
+  const closedLeaseExpiries = new Map<string, number>();
   let tail: Promise<void> = Promise.resolve();
 
   const emit = async (raw: BrowserWorkerEventSendInput): Promise<AutomationEvent> => {
+    const requestSignal = createRequestSignal(raw.signal, requestTimeoutMs);
     const parsedLease = AutomationLeaseSchema.safeParse(raw.lease);
     const parsedRequest = AutomationJobRequestSchema.safeParse(raw.request);
     if (!parsedLease.success || !parsedRequest.success) {
+      requestSignal.cleanup();
       throw new BrowserWorkerHeartbeatClientError(
         'protocol',
         'Browser Worker heartbeat binding is invalid',
@@ -277,6 +299,29 @@ export function createBrowserWorkerHeartbeatClient(input: {
     }
     const lease = parsedLease.data;
     const request = parsedRequest.data;
+    let validationTime: number;
+    try {
+      validationTime = now().getTime();
+    } catch {
+      requestSignal.cleanup();
+      throw new BrowserWorkerHeartbeatClientError(
+        'transport',
+        'Browser Worker heartbeat transport failed',
+      );
+    }
+    if (!Number.isFinite(validationTime)) {
+      requestSignal.cleanup();
+      throw new BrowserWorkerHeartbeatClientError(
+        'protocol',
+        'Browser Worker heartbeat lease is expired',
+      );
+    }
+    for (const [leaseId, expiresAtMs] of closedLeaseExpiries) {
+      if (expiresAtMs <= validationTime) closedLeaseExpiries.delete(leaseId);
+    }
+    for (const [leaseId, state] of leaseStates) {
+      if (state.expiresAtMs <= validationTime) leaseStates.delete(leaseId);
+    }
     if (
       lease.execution_domain !== 'browser' ||
       lease.job_id.length === 0 ||
@@ -285,12 +330,14 @@ export function createBrowserWorkerHeartbeatClient(input: {
       (raw.event.type === 'heartbeat' &&
         raw.event.payload.last_completed_step > request.steps.length)
     ) {
+      requestSignal.cleanup();
       throw new BrowserWorkerHeartbeatClientError(
         'protocol',
         'Browser Worker heartbeat binding is invalid',
       );
     }
-    if (closedLeaseIds.has(lease.lease_id)) {
+    if (closedLeaseExpiries.has(lease.lease_id)) {
+      requestSignal.cleanup();
       throw new BrowserWorkerHeartbeatClientError(
         'protocol',
         'Browser Worker heartbeat lease is already closed',
@@ -299,122 +346,12 @@ export function createBrowserWorkerHeartbeatClient(input: {
     const state = leaseStates.get(lease.lease_id) ?? {
       nextOrdinal: 1,
       failed: false,
+      expiresAtMs: Date.parse(lease.expires_at),
     };
+    state.expiresAtMs = Math.max(state.expiresAtMs, Date.parse(lease.expires_at));
     leaseStates.set(lease.lease_id, state);
 
     const operation = tail.then(async () => {
-      if (state.failed) {
-        throw new BrowserWorkerHeartbeatClientError(
-          'transport',
-          'Browser Worker heartbeat stream is no longer usable',
-        );
-      }
-      let hasSensitiveKey: boolean;
-      try {
-        hasSensitiveKey = containsSensitiveKey(raw.event.payload);
-      } catch {
-        state.failed = true;
-        throw new BrowserWorkerHeartbeatClientError(
-          'protocol',
-          'Browser Worker event payload is invalid',
-        );
-      }
-      if (hasSensitiveKey) {
-        state.failed = true;
-        throw new BrowserWorkerHeartbeatClientError(
-          'protocol',
-          'Browser Worker event payload is invalid',
-        );
-      }
-      let observedAt: Date;
-      try {
-        observedAt = now();
-      } catch {
-        state.failed = true;
-        throw new BrowserWorkerHeartbeatClientError(
-          'transport',
-          'Browser Worker heartbeat transport failed',
-        );
-      }
-      if (
-        !Number.isFinite(observedAt.getTime()) ||
-        Date.parse(lease.expires_at) <= observedAt.getTime() ||
-        Date.parse(request.deadline_at) <= observedAt.getTime()
-      ) {
-        state.failed = true;
-        throw new BrowserWorkerHeartbeatClientError(
-          'protocol',
-          'Browser Worker heartbeat lease is expired',
-        );
-      }
-      const ordinal = state.nextOrdinal;
-      state.nextOrdinal += 1;
-      const parsedHeartbeat = AutomationWorkerHeartbeatSchema.safeParse({
-        protocol_version: 'automation.v1',
-        account_id: request.tenant_id,
-        project_id: lease.project_id,
-        job_id: lease.job_id,
-        lease_id: lease.lease_id,
-        lease_owner: lease.owner,
-        kill_switch_generation: lease.kill_switch_generation,
-        worker_id: input.serviceId,
-        ordinal,
-        observed_at: observedAt.toISOString(),
-        event: raw.event,
-      });
-      if (!parsedHeartbeat.success) {
-        state.failed = true;
-        throw new BrowserWorkerHeartbeatClientError(
-          'protocol',
-          'Browser Worker event payload is invalid',
-        );
-      }
-      const heartbeat: AutomationWorkerHeartbeat = parsedHeartbeat.data;
-      let nonce: number;
-      try {
-        nonce = nextNonce();
-      } catch {
-        state.failed = true;
-        throw new BrowserWorkerHeartbeatClientError(
-          'configuration',
-          'Browser Worker heartbeat nonce source is invalid',
-        );
-      }
-      if (!Number.isSafeInteger(nonce) || nonce < 1 || nonce <= lastIssuedNonce) {
-        state.failed = true;
-        throw new BrowserWorkerHeartbeatClientError(
-          'configuration',
-          'Browser Worker heartbeat nonce source is invalid',
-        );
-      }
-      lastIssuedNonce = nonce;
-      const bodySha256 = createHash('sha256')
-        .update(canonicalAutomationRequestJson(heartbeat))
-        .digest('hex');
-      const signature = createHmac('sha256', input.sharedSecret)
-        .update(
-          canonicalAutomationWorkerProof({
-            timestamp: heartbeat.observed_at,
-            serviceId: input.serviceId,
-            certificateFingerprint256: input.certificateFingerprint256,
-            nonce,
-            bodySha256,
-          }),
-        )
-        .digest('hex');
-      const body = JSON.stringify({
-        protocol_version: 'automation.v1',
-        proof: {
-          service_id: input.serviceId,
-          timestamp: heartbeat.observed_at,
-          nonce,
-          signature: `hmac-sha256:${signature}`,
-        },
-        heartbeat,
-      });
-      const requestSignal = createRequestSignal(raw.signal, requestTimeoutMs);
-      let response: Response;
-      let responseBody: unknown;
       try {
         if (requestSignal.signal.aborted) {
           throw new BrowserWorkerHeartbeatClientError(
@@ -422,65 +359,179 @@ export function createBrowserWorkerHeartbeatClient(input: {
             'Browser Worker heartbeat transport failed',
           );
         }
-        response = await transport(endpoint, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body,
-          redirect: 'error',
-          signal: requestSignal.signal,
+        if (state.failed) {
+          throw new BrowserWorkerHeartbeatClientError(
+            'transport',
+            'Browser Worker heartbeat stream is no longer usable',
+          );
+        }
+        let hasSensitiveKey: boolean;
+        try {
+          hasSensitiveKey = containsSensitiveKey(raw.event.payload);
+        } catch {
+          state.failed = true;
+          throw new BrowserWorkerHeartbeatClientError(
+            'protocol',
+            'Browser Worker event payload is invalid',
+          );
+        }
+        if (hasSensitiveKey) {
+          state.failed = true;
+          throw new BrowserWorkerHeartbeatClientError(
+            'protocol',
+            'Browser Worker event payload is invalid',
+          );
+        }
+        let observedAt: Date;
+        try {
+          observedAt = now();
+        } catch {
+          state.failed = true;
+          throw new BrowserWorkerHeartbeatClientError(
+            'transport',
+            'Browser Worker heartbeat transport failed',
+          );
+        }
+        if (
+          !Number.isFinite(observedAt.getTime()) ||
+          Date.parse(lease.expires_at) <= observedAt.getTime() ||
+          Date.parse(request.deadline_at) <= observedAt.getTime()
+        ) {
+          state.failed = true;
+          throw new BrowserWorkerHeartbeatClientError(
+            'protocol',
+            'Browser Worker heartbeat lease is expired',
+          );
+        }
+        const ordinal = state.nextOrdinal;
+        state.nextOrdinal += 1;
+        const parsedHeartbeat = AutomationWorkerHeartbeatSchema.safeParse({
+          protocol_version: 'automation.v1',
+          account_id: request.tenant_id,
+          project_id: lease.project_id,
+          job_id: lease.job_id,
+          lease_id: lease.lease_id,
+          lease_owner: lease.owner,
+          kill_switch_generation: lease.kill_switch_generation,
+          worker_id: input.serviceId,
+          ordinal,
+          observed_at: observedAt.toISOString(),
+          event: raw.event,
         });
-        responseBody = await readBoundedJson(response, requestSignal.signal);
-      } catch (error) {
-        state.failed = true;
-        if (error instanceof BrowserWorkerHeartbeatClientError) throw error;
-        throw new BrowserWorkerHeartbeatClientError(
-          'transport',
-          'Browser Worker heartbeat transport failed',
-        );
-      } finally {
-        requestSignal.cleanup();
-      }
-      if (!response.ok) {
-        state.failed = true;
-        const error = AutomationErrorSchema.safeParse(responseBody);
-        if (!error.success) {
+        if (!parsedHeartbeat.success) {
+          state.failed = true;
+          throw new BrowserWorkerHeartbeatClientError(
+            'protocol',
+            'Browser Worker event payload is invalid',
+          );
+        }
+        const heartbeat: AutomationWorkerHeartbeat = parsedHeartbeat.data;
+        let nonce: number;
+        try {
+          nonce = nextNonce();
+        } catch {
+          state.failed = true;
+          throw new BrowserWorkerHeartbeatClientError(
+            'configuration',
+            'Browser Worker heartbeat nonce source is invalid',
+          );
+        }
+        if (!Number.isSafeInteger(nonce) || nonce < 1 || nonce <= lastIssuedNonce) {
+          state.failed = true;
+          throw new BrowserWorkerHeartbeatClientError(
+            'configuration',
+            'Browser Worker heartbeat nonce source is invalid',
+          );
+        }
+        lastIssuedNonce = nonce;
+        const bodySha256 = createHash('sha256')
+          .update(canonicalAutomationRequestJson(heartbeat))
+          .digest('hex');
+        const signature = createHmac('sha256', input.sharedSecret)
+          .update(
+            canonicalAutomationWorkerProof({
+              timestamp: heartbeat.observed_at,
+              serviceId: input.serviceId,
+              certificateFingerprint256: input.certificateFingerprint256,
+              nonce,
+              bodySha256,
+            }),
+          )
+          .digest('hex');
+        const body = JSON.stringify({
+          protocol_version: 'automation.v1',
+          proof: {
+            service_id: input.serviceId,
+            timestamp: heartbeat.observed_at,
+            nonce,
+            signature: `hmac-sha256:${signature}`,
+          },
+          heartbeat,
+        });
+        let response: Response;
+        let responseBody: unknown;
+        try {
+          response = await transport(endpoint, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body,
+            redirect: 'error',
+            signal: requestSignal.signal,
+          });
+          responseBody = await readBoundedJson(response, requestSignal.signal);
+        } catch (error) {
+          state.failed = true;
+          if (error instanceof BrowserWorkerHeartbeatClientError) throw error;
+          throw new BrowserWorkerHeartbeatClientError(
+            'transport',
+            'Browser Worker heartbeat transport failed',
+          );
+        }
+        if (!response.ok) {
+          state.failed = true;
+          const error = AutomationErrorSchema.safeParse(responseBody);
+          if (!error.success) {
+            throw new BrowserWorkerHeartbeatClientError(
+              'protocol',
+              'Browser Worker heartbeat response is invalid',
+            );
+          }
+          throw new BrowserWorkerHeartbeatClientError(
+            'rejected',
+            'Browser Worker heartbeat was rejected',
+            {
+              status: response.status,
+              code: error.data.code,
+              retryable: error.data.retryable,
+            },
+          );
+        }
+        const accepted = AutomationWorkerHeartbeatAcceptedSchema.safeParse(responseBody);
+        if (
+          !accepted.success ||
+          accepted.data.event.job_id !== heartbeat.job_id ||
+          accepted.data.event.type !== heartbeat.event.type ||
+          canonicalAutomationRequestJson(accepted.data.event.payload) !==
+            canonicalAutomationRequestJson(heartbeat.event.payload) ||
+          accepted.data.event.trace_id !== heartbeat.event.trace_id ||
+          (heartbeat.event.type === 'heartbeat' && accepted.data.event.status !== null)
+        ) {
+          state.failed = true;
           throw new BrowserWorkerHeartbeatClientError(
             'protocol',
             'Browser Worker heartbeat response is invalid',
           );
         }
-        throw new BrowserWorkerHeartbeatClientError(
-          'rejected',
-          'Browser Worker heartbeat was rejected',
-          {
-            status: response.status,
-            code: error.data.code,
-            retryable: error.data.retryable,
-          },
-        );
+        return accepted.data.event;
+      } finally {
+        requestSignal.cleanup();
       }
-      const accepted = AutomationWorkerHeartbeatAcceptedSchema.safeParse(responseBody);
-      if (
-        !accepted.success ||
-        accepted.data.event.job_id !== heartbeat.job_id ||
-        accepted.data.event.type !== heartbeat.event.type ||
-        canonicalAutomationRequestJson(accepted.data.event.payload) !==
-          canonicalAutomationRequestJson(heartbeat.event.payload) ||
-        accepted.data.event.trace_id !== heartbeat.event.trace_id
-      ) {
-        state.failed = true;
-        throw new BrowserWorkerHeartbeatClientError(
-          'protocol',
-          'Browser Worker heartbeat response is invalid',
-        );
-      }
-      return accepted.data.event;
     });
     tail = operation.then(
       () => undefined,
       () => undefined,
     );
-    return operation;
+    return Promise.race([operation, requestSignal.aborted]);
   };
 
   const send = (raw: BrowserWorkerHeartbeatSendInput): Promise<AutomationEvent> =>
@@ -501,20 +552,17 @@ export function createBrowserWorkerHeartbeatClient(input: {
     send,
     closeLease(leaseId: string) {
       const state = leaseStates.get(leaseId);
-      if (state !== undefined) state.failed = true;
+      if (state === undefined) return;
+      state.failed = true;
       leaseStates.delete(leaseId);
-      closedLeaseIds.add(leaseId);
-      if (closedLeaseIds.size > 1_024) {
-        const oldest = closedLeaseIds.values().next().value;
-        if (oldest !== undefined) closedLeaseIds.delete(oldest);
-      }
+      closedLeaseExpiries.set(leaseId, state.expiresAtMs);
     },
   });
 }
 
 export function createConfiguredBrowserWorkerHeartbeatClient(
   config: BrowserWorkerHeartbeatConfig,
-): BrowserWorkerAuthenticatedEventEmitter | undefined {
+): BrowserWorkerHeartbeatEmitter | undefined {
   if (!config.enabled) return undefined;
   return createBrowserWorkerHeartbeatClient({
     controlUrl: config.controlUrl,
@@ -544,7 +592,7 @@ function waitForInterval(intervalMs: number, signal: AbortSignal): Promise<void>
 }
 
 export async function runBrowserWorkerHeartbeatLoop(input: {
-  emitter: BrowserWorkerHeartbeatEmitter;
+  emitter: BrowserWorkerHeartbeatLoopEmitter;
   lease: AutomationLease;
   request: AutomationJobRequest;
   getLastCompletedStep: () => number;

@@ -11,6 +11,7 @@ import {
 import { loadBrowserWorkerHeartbeatConfig } from './config';
 import * as workerConfig from './config';
 import {
+  type BrowserWorkerHeartbeatEmitter,
   BrowserWorkerHeartbeatClientError,
   createBrowserWorkerHeartbeatClient,
   createBrowserWorkerMtlsHeartbeatTransport,
@@ -352,10 +353,11 @@ describe('Browser Worker heartbeat client', () => {
         });
       },
     });
+    const documentedEmitter: BrowserWorkerHeartbeatEmitter = client;
 
     await Promise.all([
       client.send({ lease, request, lastCompletedStep: 0 }),
-      client.emit({
+      documentedEmitter.emit({
         lease,
         request,
         event: {
@@ -367,7 +369,7 @@ describe('Browser Worker heartbeat client', () => {
           trace_id: 'd'.repeat(32),
         },
       }),
-      client.emit({
+      documentedEmitter.emit({
         lease,
         request,
         event: { type: 'job_succeeded', payload: {}, trace_id: null },
@@ -511,6 +513,208 @@ describe('Browser Worker heartbeat client', () => {
     expect(recorded.map((entry) => entry.proof.nonce)).toEqual([651, 652]);
   });
 
+  test('rejects an already-aborted queued event promptly without consuming its lease stream', async () => {
+    const otherLease = {
+      ...lease,
+      lease_id: OTHER_LEASE_ID,
+      job_id: OTHER_JOB_ID,
+      owner: `${WORKER_ID}:${OTHER_LEASE_ID}`,
+    };
+    const recorded: HeartbeatWireBody[] = [];
+    let markFirstStarted: () => void = () => undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    let releaseFirst: () => void = () => undefined;
+    const firstResponse = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let nonce = 675;
+    const client = createBrowserWorkerHeartbeatClient({
+      controlUrl: 'https://automation-control.internal:4011',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      now: () => NOW,
+      nextNonce: () => ++nonce,
+      requestTimeoutMs: 1_000,
+      transport: async (_url, init) => {
+        const body = JSON.parse(String(init.body)) as HeartbeatWireBody;
+        recorded.push(body);
+        if (recorded.length === 1) {
+          markFirstStarted();
+          await firstResponse;
+        }
+        return Response.json({
+          protocol_version: 'automation.v1',
+          accepted: true,
+          event: acceptedWorkerEvent(recorded.length, body.heartbeat),
+        });
+      },
+    });
+
+    const first = client.send({ lease, request, lastCompletedStep: 0 });
+    await firstStarted;
+    const controller = new AbortController();
+    controller.abort('queued event cancelled');
+    const queued = client.send({
+      lease: otherLease,
+      request,
+      lastCompletedStep: 0,
+      signal: controller.signal,
+    });
+    const queuedOutcome = queued.then(
+      () => 'resolved' as const,
+      (error: unknown) => error,
+    );
+    const promptOutcome = await Promise.race([
+      queuedOutcome,
+      Bun.sleep(30).then(() => 'still waiting' as const),
+    ]);
+    releaseFirst();
+    await first;
+    await queuedOutcome;
+
+    expect(promptOutcome).toMatchObject({
+      reason: 'transport',
+      message: 'Browser Worker heartbeat transport failed',
+    });
+    await expect(
+      client.send({ lease: otherLease, request, lastCompletedStep: 0 }),
+    ).resolves.toMatchObject({ job_id: OTHER_JOB_ID, type: 'heartbeat' });
+    expect(recorded.map((entry) => [entry.heartbeat.lease_id, entry.heartbeat.ordinal])).toEqual([
+      [LEASE_ID, 1],
+      [OTHER_LEASE_ID, 1],
+    ]);
+    expect(recorded.map((entry) => entry.proof.nonce)).toEqual([676, 677]);
+  });
+
+  test('applies the request timeout while an event waits in the serial queue', async () => {
+    const otherLease = {
+      ...lease,
+      lease_id: OTHER_LEASE_ID,
+      job_id: OTHER_JOB_ID,
+      owner: `${WORKER_ID}:${OTHER_LEASE_ID}`,
+    };
+    const recorded: HeartbeatWireBody[] = [];
+    let markFirstStarted: () => void = () => undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    let releaseFirst: () => void = () => undefined;
+    const firstResponse = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let nonce = 680;
+    const client = createBrowserWorkerHeartbeatClient({
+      controlUrl: 'https://automation-control.internal:4011',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      now: () => NOW,
+      nextNonce: () => ++nonce,
+      requestTimeoutMs: 20,
+      transport: async (_url, init) => {
+        const body = JSON.parse(String(init.body)) as HeartbeatWireBody;
+        recorded.push(body);
+        if (recorded.length === 1) {
+          markFirstStarted();
+          await firstResponse;
+        }
+        return Response.json({
+          protocol_version: 'automation.v1',
+          accepted: true,
+          event: acceptedWorkerEvent(recorded.length, body.heartbeat),
+        });
+      },
+    });
+
+    const firstRequest = client.send({ lease, request, lastCompletedStep: 0 });
+    await firstStarted;
+    const queuedRequest = client.send({ lease: otherLease, request, lastCompletedStep: 0 });
+    const queued = await queuedRequest.then(
+      (value) => ({ status: 'fulfilled' as const, value }),
+      (reason: unknown) => ({ status: 'rejected' as const, reason }),
+    );
+    releaseFirst();
+    const first = await firstRequest.then(
+      (value) => ({ status: 'fulfilled' as const, value }),
+      (reason: unknown) => ({ status: 'rejected' as const, reason }),
+    );
+
+    expect(first.status).toBe('rejected');
+    expect(queued).toMatchObject({
+      status: 'rejected',
+      reason: {
+        reason: 'transport',
+        message: 'Browser Worker heartbeat transport failed',
+      },
+    });
+    expect(recorded).toHaveLength(1);
+    await expect(
+      client.send({ lease: otherLease, request, lastCompletedStep: 0 }),
+    ).resolves.toMatchObject({ job_id: OTHER_JOB_ID, type: 'heartbeat' });
+    expect(recorded[1]?.heartbeat).toMatchObject({
+      lease_id: OTHER_LEASE_ID,
+      ordinal: 1,
+    });
+    expect(recorded.map((entry) => entry.proof.nonce)).toEqual([681, 682]);
+  });
+
+  test('prunes expired closed leases without reopening an unexpired closed lease', async () => {
+    let current = NOW;
+    const shortLease = {
+      ...lease,
+      lease_id: OTHER_LEASE_ID,
+      job_id: OTHER_JOB_ID,
+      owner: `${WORKER_ID}:${OTHER_LEASE_ID}`,
+      expires_at: '2026-07-23T05:00:00.000Z',
+    };
+    const recorded: AutomationWorkerHeartbeat[] = [];
+    let nonce = 690;
+    const client = createBrowserWorkerHeartbeatClient({
+      controlUrl: 'https://automation-control.internal:4011',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      now: () => current,
+      nextNonce: () => ++nonce,
+      transport: async (_url, init) => {
+        const body = JSON.parse(String(init.body)) as HeartbeatWireBody;
+        recorded.push(body.heartbeat);
+        return Response.json({
+          protocol_version: 'automation.v1',
+          accepted: true,
+          event: acceptedWorkerEvent(recorded.length, body.heartbeat),
+        });
+      },
+    });
+
+    await client.send({ lease, request, lastCompletedStep: 0 });
+    await client.send({ lease: shortLease, request, lastCompletedStep: 0 });
+    client.closeLease?.(LEASE_ID);
+    client.closeLease?.(OTHER_LEASE_ID);
+    current = new Date('2026-07-23T05:30:00.000Z');
+    const renewedShortLease = {
+      ...shortLease,
+      issued_at: '2026-07-23T05:00:00.000Z',
+      expires_at: '2026-07-23T06:00:00.000Z',
+    };
+
+    await expect(
+      client.send({ lease: renewedShortLease, request, lastCompletedStep: 0 }),
+    ).resolves.toMatchObject({ job_id: OTHER_JOB_ID, type: 'heartbeat' });
+    await expect(client.send({ lease, request, lastCompletedStep: 0 })).rejects.toMatchObject({
+      reason: 'protocol',
+      message: 'Browser Worker heartbeat lease is already closed',
+    });
+    expect(recorded.map((entry) => [entry.lease_id, entry.ordinal])).toEqual([
+      [LEASE_ID, 1],
+      [OTHER_LEASE_ID, 1],
+      [OTHER_LEASE_ID, 1],
+    ]);
+  });
+
   test('rejects accepted responses not bound to the exact sent event', async () => {
     const sentEvent = {
       type: 'step_completed' as const,
@@ -550,6 +754,30 @@ describe('Browser Worker heartbeat client', () => {
         message: 'Browser Worker heartbeat response is invalid',
       });
     }
+  });
+
+  test('rejects a heartbeat response with a non-null projected status', async () => {
+    const client = createBrowserWorkerHeartbeatClient({
+      controlUrl: 'https://automation-control.internal:4011',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      now: () => NOW,
+      nextNonce: () => 750,
+      transport: async (_url, init) => {
+        const body = JSON.parse(String(init.body)) as HeartbeatWireBody;
+        return Response.json({
+          protocol_version: 'automation.v1',
+          accepted: true,
+          event: { ...acceptedWorkerEvent(1, body.heartbeat), status: 'running' },
+        });
+      },
+    });
+
+    await expect(client.send({ lease, request, lastCompletedStep: 0 })).rejects.toMatchObject({
+      reason: 'protocol',
+      message: 'Browser Worker heartbeat response is invalid',
+    });
   });
 
   test('rejects secret-shaped payload keys before transport without leaking details', async () => {

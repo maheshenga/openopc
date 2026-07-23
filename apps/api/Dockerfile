@@ -20,6 +20,7 @@ COPY apps/kortix-sandbox-agent-server/package.json apps/kortix-sandbox-agent-ser
 RUN bun install --frozen-lockfile
 
 COPY apps/kortix-sandbox-agent-server/ ./
+RUN sed -i 's/\r$//' scripts/build.sh
 RUN BUN_COMPILE_TARGET=${KORTIX_AGENT_BUN_TARGET} bash scripts/build.sh
 
 # ---- CLI Stage ----
@@ -37,7 +38,9 @@ ARG KORTIX_AGENT_BUN_TARGET=bun-linux-x64
 # Minimal workspace so bun resolves the `@kortix/*` packages the CLI imports
 # to their source, then compile (inlines them + smol-toml into one binary).
 COPY apps/cli ./apps/cli
+COPY packages/api-contract ./packages/api-contract
 COPY packages/executor-sdk ./packages/executor-sdk
+COPY packages/intelligence-contracts ./packages/intelligence-contracts
 COPY packages/manifest-schema ./packages/manifest-schema
 COPY packages/registry ./packages/registry
 COPY packages/starter ./packages/starter
@@ -49,6 +52,7 @@ COPY infra/terraform/modules/enterprise-state ./infra/terraform/modules/enterpri
 COPY infra/terraform/modules/enterprise-vpc ./infra/terraform/modules/enterprise-vpc
 COPY infra/terraform/modules/network ./infra/terraform/modules/network
 COPY infra/terraform/scripts/guard-enterprise-plan.ts ./infra/terraform/scripts/guard-enterprise-plan.ts
+RUN sed -i 's/\r$//' apps/cli/scripts/build.sh
 RUN printf '{"name":"kortix-cli-build","private":true,"workspaces":["apps/cli","packages/*"]}\n' > package.json \
     && bun install --no-save \
     && BUN_COMPILE_TARGET=${KORTIX_AGENT_BUN_TARGET} bash apps/cli/scripts/build.sh
@@ -66,15 +70,20 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 
 # Copy the target app and workspace packages it depends on
 COPY ${SERVICE} ./${SERVICE}
+COPY apps/studio-worker ./apps/studio-worker
 COPY packages/api-contract ./packages/api-contract
 COPY packages/shared ./packages/shared
 COPY packages/llm-catalog ./packages/llm-catalog
 COPY packages/db ./packages/db
 COPY packages/agent-tunnel ./packages/agent-tunnel
+COPY packages/intelligence-contracts ./packages/intelligence-contracts
+COPY packages/intelligence-orchestration ./packages/intelligence-orchestration
 COPY packages/starter ./packages/starter
 COPY packages/manifest-schema ./packages/manifest-schema
 COPY packages/registry ./packages/registry
 COPY packages/llm-gateway ./packages/llm-gateway
+COPY packages/studio-adapters ./packages/studio-adapters
+COPY packages/studio-runtime ./packages/studio-runtime
 
 # Install pnpm and deps for this app + workspace packages it depends on.
 # --shamefully-hoist flattens node_modules (no symlinks) so COPY works on all Docker versions.
@@ -84,7 +93,7 @@ COPY packages/llm-gateway ./packages/llm-gateway
 # with `bun packages/db/scripts/migrate.ts up`. node-pg-migrate lives at the root
 # (not @kortix/db) to keep the db package's drizzle-orm resolution single.
 RUN corepack enable pnpm && \
-    pnpm install --filter ./${SERVICE}... --filter kortix --shamefully-hoist --prod=false --ignore-scripts
+    pnpm install --filter ./${SERVICE}... --filter @kortix/studio-worker... --filter kortix --shamefully-hoist --prod=false --ignore-scripts
 
 # ---- Runner Stage ----
 FROM base AS runner
@@ -143,6 +152,8 @@ COPY --from=deps /app/packages/db/scripts/migrate.ts ./packages/db/scripts/migra
 COPY --from=deps /app/packages/db/drizzle/0000_bootstrap.sql ./packages/db/drizzle/0000_bootstrap.sql
 COPY --from=deps /app/packages/agent-tunnel/src ./packages/agent-tunnel/src
 COPY --from=deps /app/packages/agent-tunnel/package.json ./packages/agent-tunnel/package.json
+COPY --from=deps /app/packages/intelligence-contracts ./packages/intelligence-contracts
+COPY --from=deps /app/packages/intelligence-orchestration ./packages/intelligence-orchestration
 COPY --from=deps /app/packages/starter/src ./packages/starter/src
 COPY --from=deps /app/packages/starter/package.json ./packages/starter/package.json
 COPY --from=deps /app/packages/starter/tsconfig.json ./packages/starter/tsconfig.json
@@ -157,9 +168,13 @@ COPY --from=deps /app/packages/manifest-schema/tsconfig.json ./packages/manifest
 COPY --from=deps /app/packages/api-contract/src ./packages/api-contract/src
 COPY --from=deps /app/packages/api-contract/package.json ./packages/api-contract/package.json
 COPY --from=deps /app/packages/api-contract/tsconfig.json ./packages/api-contract/tsconfig.json
+COPY --from=deps /app/packages/api-contract/node_modules ./packages/api-contract/node_modules
 COPY --from=deps /app/packages/registry/src ./packages/registry/src
 COPY --from=deps /app/packages/registry/package.json ./packages/registry/package.json
 COPY --from=deps /app/packages/registry/tsconfig.json ./packages/registry/tsconfig.json
+COPY --from=deps /app/packages/studio-adapters ./packages/studio-adapters
+COPY --from=deps /app/packages/studio-runtime ./packages/studio-runtime
+COPY --from=deps /app/apps/studio-worker ./apps/studio-worker
 
 # Migrations are NOT bundled into the image: deployed ensureSchema() is warn-only
 # (it never applies at boot), and migrations run in the deploy pipeline's
@@ -171,6 +186,7 @@ COPY --from=sandbox-cli /cli/apps/cli/dist/kortix ./apps/cli/dist/kortix
 COPY apps/sandbox/entrypoint.sh ./apps/sandbox/entrypoint.sh
 COPY apps/sandbox/slack-cli ./apps/sandbox/slack-cli
 COPY packages/executor-sdk ./packages/executor-sdk
+RUN sed -i 's/\r$//' apps/sandbox/entrypoint.sh
 
 # Source the layered-snapshot builder fingerprints at RUNTIME. It hashes the
 # SOURCE (not the compiled binaries above, which `bun build --compile` produces
@@ -201,7 +217,9 @@ RUN rm -rf \
     apps/cli/src/__tests__ \
     packages/starter/src/__tests__ \
     packages/manifest-schema/src/__tests__ \
-    packages/api-contract/src/__tests__
+    packages/api-contract/src/__tests__ && \
+    find apps/studio-worker/src packages/studio-adapters/src packages/studio-runtime/src \
+      -type f \( -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.test.mts' \) -delete
 
 WORKDIR /app/${SERVICE}
 

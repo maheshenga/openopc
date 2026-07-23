@@ -6,26 +6,35 @@ import { join } from 'node:path';
 import { parse } from 'yaml';
 
 import {
-  officialSupabaseDockerAssets,
-  renderFullDockerCompose,
   SUPABASE_IMAGE_DIGESTS,
   SUPABASE_UPSTREAM_COMMIT,
+  officialSupabaseDockerAssets,
+  renderFullDockerCompose,
   supabaseUpstreamDockerAssets,
   supabaseVendorAssets,
   writeOfficialSupabaseDockerAssets,
   writeSupabaseVendorAssets,
 } from '../compose-assets.ts';
 
+function requireOfficialSupabaseAsset(path: string): string {
+  const asset = officialSupabaseDockerAssets[path];
+  if (asset === undefined) throw new Error(`missing official Supabase asset: ${path}`);
+  return asset;
+}
+
 describe('full self-host Docker distribution', () => {
   test('renders the complete pinned Supabase and Kortix service set', () => {
     const document = parse(renderFullDockerCompose('kortix-enterprise')) as {
-      services: Record<string, {
-        image?: string;
-        container_name?: string;
-        ports?: string[];
-        depends_on?: Record<string, unknown>;
-        healthcheck?: { test?: string[] };
-      }>;
+      services: Record<
+        string,
+        {
+          image?: string;
+          container_name?: string;
+          ports?: string[];
+          depends_on?: Record<string, unknown>;
+          healthcheck?: { test?: string[] };
+        }
+      >;
     };
 
     expect(Object.keys(document.services).sort()).toEqual([
@@ -33,6 +42,7 @@ describe('full self-host Docker distribution', () => {
       'kortix-api',
       'kortix-migrate',
       'llm-gateway',
+      'studio-worker',
       'supabase-analytics',
       'supabase-auth',
       'supabase-db',
@@ -47,16 +57,31 @@ describe('full self-host Docker distribution', () => {
       'supabase-supavisor',
       'supabase-vector',
     ]);
-    expect(document.services['supabase-db']?.image).toBe(`supabase/postgres:17.6.1.136@${SUPABASE_IMAGE_DIGESTS['supabase/postgres:17.6.1.136']}`);
-    expect(document.services['supabase-studio']?.image).toBe(`supabase/studio:2026.07.07-sha-a6a04f2@${SUPABASE_IMAGE_DIGESTS['supabase/studio:2026.07.07-sha-a6a04f2']}`);
-    expect(document.services['supabase-analytics']?.image).toBe(`supabase/logflare:1.43.1@${SUPABASE_IMAGE_DIGESTS['supabase/logflare:1.43.1']}`);
+    expect(document.services['studio-worker']).toMatchObject({
+      image: '${API_IMAGE}',
+      command: ['bun', 'run', '/app/apps/studio-worker/src/index.ts'],
+      environment: { STUDIO_ENABLED: '${STUDIO_ENABLED:-false}' },
+      profiles: ['studio'],
+    });
+    expect(document.services['supabase-db']?.image).toBe(
+      `supabase/postgres:17.6.1.136@${SUPABASE_IMAGE_DIGESTS['supabase/postgres:17.6.1.136']}`,
+    );
+    expect(document.services['supabase-studio']?.image).toBe(
+      `supabase/studio:2026.07.07-sha-a6a04f2@${SUPABASE_IMAGE_DIGESTS['supabase/studio:2026.07.07-sha-a6a04f2']}`,
+    );
+    expect(document.services['supabase-analytics']?.image).toBe(
+      `supabase/logflare:1.43.1@${SUPABASE_IMAGE_DIGESTS['supabase/logflare:1.43.1']}`,
+    );
     expect(document.services['supabase-db']?.healthcheck?.test).toEqual([
       'CMD-SHELL',
-      'tr \'\\0\' \' \' </proc/1/cmdline | grep -q \'/postgres \' && PGPASSWORD="$${POSTGRES_PASSWORD}" psql -h supabase-db -U supabase_auth_admin -d "$${POSTGRES_DB}" -tAc \'select 1\' >/dev/null',
+      "tr '\\0' ' ' </proc/1/cmdline | grep -q '/postgres ' && PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -h supabase-db -U supabase_auth_admin -d \"$${POSTGRES_DB}\" -tAc 'select 1' >/dev/null",
     ]);
 
     for (const [name, service] of Object.entries(document.services)) {
-      expect(service.container_name, `${name} must support multiple Kortix instances`).toBeUndefined();
+      expect(
+        service.container_name,
+        `${name} must support multiple Kortix instances`,
+      ).toBeUndefined();
       if (service.image && !service.image.startsWith('${')) {
         if (name.startsWith('supabase-')) {
           expect(service.image, `${name} image must be immutable`).toMatch(/@sha256:[a-f0-9]{64}$/);
@@ -68,7 +93,10 @@ describe('full self-host Docker distribution', () => {
         expect(port, `${name} must bind only on loopback`).toStartWith('127.0.0.1:');
       }
       for (const dependency of Object.keys(service.depends_on ?? {})) {
-        expect(document.services[dependency], `${name} depends on missing ${dependency}`).toBeDefined();
+        expect(
+          document.services[dependency],
+          `${name} depends on missing ${dependency}`,
+        ).toBeDefined();
       }
     }
   });
@@ -109,13 +137,15 @@ describe('full self-host Docker distribution', () => {
   });
 
   test('exports a Supabase-only official Docker distribution for AWS hosts', () => {
-    expect(Object.keys(officialSupabaseDockerAssets).sort()).toEqual([
-      'docker-compose.logs.yml',
-      'docker-compose.yml',
-      ...Object.keys(supabaseVendorAssets),
-    ].sort());
+    expect(Object.keys(officialSupabaseDockerAssets).sort()).toEqual(
+      [
+        'docker-compose.logs.yml',
+        'docker-compose.yml',
+        ...Object.keys(supabaseVendorAssets),
+      ].sort(),
+    );
 
-    const document = parse(officialSupabaseDockerAssets['docker-compose.yml']!) as {
+    const document = parse(requireOfficialSupabaseAsset('docker-compose.yml')) as {
       services: Record<string, unknown>;
     };
     expect(Object.keys(document.services).sort()).toEqual([
@@ -131,7 +161,7 @@ describe('full self-host Docker distribution', () => {
       'studio',
       'supavisor',
     ]);
-    const logs = parse(officialSupabaseDockerAssets['docker-compose.logs.yml']!) as {
+    const logs = parse(requireOfficialSupabaseAsset('docker-compose.logs.yml')) as {
       services: Record<string, unknown>;
     };
     expect(Object.keys(logs.services).sort()).toEqual(['analytics', 'studio', 'vector']);
@@ -162,8 +192,14 @@ describe('full self-host Docker distribution', () => {
     expect(lock.commit).toBe(SUPABASE_UPSTREAM_COMMIT);
 
     const embeddedFiles: Record<string, string> = {
-      'docker-compose.yml': readFileSync(new URL('../assets/supabase/docker-compose.yml', import.meta.url), 'utf8'),
-      'docker-compose.logs.yml': readFileSync(new URL('../assets/supabase/docker-compose.logs.yml', import.meta.url), 'utf8'),
+      'docker-compose.yml': readFileSync(
+        new URL('../assets/supabase/docker-compose.yml', import.meta.url),
+        'utf8',
+      ),
+      'docker-compose.logs.yml': readFileSync(
+        new URL('../assets/supabase/docker-compose.logs.yml', import.meta.url),
+        'utf8',
+      ),
       ...Object.fromEntries(
         Object.entries(supabaseVendorAssets).map(([path, content]) => [
           path.endsWith('/index.ts') ? `${path}.txt` : path,
@@ -178,21 +214,26 @@ describe('full self-host Docker distribution', () => {
   });
 
   test('locks every official Supabase image tag to a reviewed OCI digest', () => {
-    const upstreamReferences = Object.values(supabaseUpstreamDockerAssets).flatMap((compose) => {
-      const document = parse(compose) as { services: Record<string, { image?: string }> };
-      return Object.values(document.services).flatMap((service) => service.image ? [service.image] : []);
-    }).sort();
+    const upstreamReferences = Object.values(supabaseUpstreamDockerAssets)
+      .flatMap((compose) => {
+        const document = parse(compose) as { services: Record<string, { image?: string }> };
+        return Object.values(document.services).flatMap((service) =>
+          service.image ? [service.image] : [],
+        );
+      })
+      .sort();
     expect(Object.keys(SUPABASE_IMAGE_DIGESTS).sort()).toEqual(upstreamReferences);
 
     for (const compose of [
-      officialSupabaseDockerAssets['docker-compose.yml']!,
-      officialSupabaseDockerAssets['docker-compose.logs.yml']!,
+      requireOfficialSupabaseAsset('docker-compose.yml'),
+      requireOfficialSupabaseAsset('docker-compose.logs.yml'),
     ]) {
       const document = parse(compose) as { services: Record<string, { image?: string }> };
       for (const [name, service] of Object.entries(document.services)) {
         if (!service.image) continue;
         const [reference, digest] = service.image.split('@');
-        expect(digest, name).toBe(SUPABASE_IMAGE_DIGESTS[reference!]);
+        if (!reference) throw new Error(`${name} has an invalid image reference`);
+        expect(digest, name).toBe(SUPABASE_IMAGE_DIGESTS[reference]);
       }
     }
   });

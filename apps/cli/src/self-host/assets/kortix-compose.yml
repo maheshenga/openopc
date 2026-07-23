@@ -80,6 +80,24 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  studio-worker:
+    image: ${API_IMAGE}
+    command: ["bun", "run", "/app/apps/studio-worker/src/index.ts"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@supabase-db:5432/postgres
+      SUPABASE_URL: http://supabase-kong:8000
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      STUDIO_ENABLED: ${STUDIO_ENABLED:-false}
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+      kortix-migrate:
+        condition: service_completed_successfully
+    profiles: [studio]
+    restart: on-failure
+
   llm-gateway:
     image: ${GATEWAY_IMAGE}
     extra_hosts:

@@ -127,4 +127,20 @@ describe('private browser evidence storage', () => {
     }
     expect(objectStore.puts).toEqual([]);
   });
+
+  test('rejects non-canonical uppercase scope IDs and evidence references', async () => {
+    const objectStore = recordingObjectStore();
+    const evidence = createStudioBrowserEvidenceStore(objectStore);
+
+    await expect(
+      evidence.put({ ...validInput(), tenantId: ACCOUNT_ID.toUpperCase() }),
+    ).rejects.toThrow('tenantId');
+    await expect(
+      evidence.put({
+        ...validInput(),
+        reference: `evidence:${EVIDENCE_ID.toUpperCase()}`,
+      }),
+    ).rejects.toThrow('reference');
+    expect(objectStore.puts).toEqual([]);
+  });
 });

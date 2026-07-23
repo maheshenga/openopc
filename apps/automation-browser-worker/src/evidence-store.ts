@@ -3,8 +3,10 @@ import type { StudioObjectStore } from '@kortix/studio-runtime';
 import type { EvidenceStore } from './evidence-writer';
 
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const EVIDENCE_REFERENCE_PATTERN = new RegExp(`^evidence:(${UUID_PATTERN.source.slice(1, -1)})$`, 'i');
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const EVIDENCE_REFERENCE_PATTERN = new RegExp(
+  `^evidence:(${UUID_PATTERN.source.slice(1, -1)})$`,
+);
 
 type EvidenceInput = Parameters<EvidenceStore['put']>[0];
 

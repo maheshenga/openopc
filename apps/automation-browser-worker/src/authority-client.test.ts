@@ -64,28 +64,31 @@ describe('Browser authority client', () => {
     });
   });
 
-  test('rejects an accepted response bound to another job without leaking its body', async () => {
-    const client = createWorkerControlClient({
-      controlUrl: 'https://control.internal',
-      serviceId: WORKER_ID,
-      certificateFingerprint256: WORKER_FINGERPRINT,
-      sharedSecret: WORKER_SECRET,
-      requestTimeoutMs: 5_000,
-      nextNonce: () => 102,
-      now: () => NOW,
-      transport: async () =>
-        Response.json({
-          ...ACCEPTED,
-          job_id: '40000000-0000-4000-a000-000000000099',
-        }),
-    });
+  test('rejects accepted responses with wrong job, lease, or check without leaking the body', async () => {
+    for (const overrides of [
+      { job_id: '40000000-0000-4000-a000-000000000099' },
+      { lease_id: '80000000-0000-4000-a000-000000000099' },
+      { check: 'lease' as const },
+    ]) {
+      const client = createWorkerControlClient({
+        controlUrl: 'https://control.internal',
+        serviceId: WORKER_ID,
+        certificateFingerprint256: WORKER_FINGERPRINT,
+        sharedSecret: WORKER_SECRET,
+        requestTimeoutMs: 5_000,
+        nextNonce: () => 102,
+        now: () => NOW,
+        transport: async () => Response.json({ ...ACCEPTED, ...overrides }),
+      });
 
-    const authority = createBrowserAuthorityClient({ client, now: () => NOW });
-    await expect(authority.check(AUTHORITY_INPUT)).rejects.toMatchObject({
-      name: 'BrowserAuthorityClientError',
-      reason: 'protocol',
-      message: 'Browser authority check response is invalid',
-    });
-    await expect(authority.check(AUTHORITY_INPUT)).rejects.not.toThrow(/40000000|secret|token/i);
+      const authority = createBrowserAuthorityClient({ client, now: () => NOW });
+      const error = await authority.check(AUTHORITY_INPUT).catch((caught) => caught);
+      expect(error).toMatchObject({
+        name: 'BrowserAuthorityClientError',
+        reason: 'protocol',
+        message: 'Browser authority check response is invalid',
+      });
+      expect(String(error)).not.toMatch(/40000000-0000-4000-a000-000000000099|secret|token/i);
+    }
   });
 });

@@ -99,6 +99,34 @@ describe('Worker Control client', () => {
     ).toEqual([101, 102]);
   });
 
+  test('rejects a replayed local nonce before a second transport call', async () => {
+    const nonces = [701, 701];
+    let calls = 0;
+    const client = createWorkerControlClient({
+      controlUrl: 'https://control.internal',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      requestTimeoutMs: 5_000,
+      transport: async () => {
+        calls += 1;
+        return Response.json(accepted());
+      },
+      nextNonce: () => nonces.shift() ?? 701,
+      now: () => NOW,
+    });
+    const call = {
+      path: '/internal/automation/browser/approval/consume',
+      bodyKey: 'consume',
+      body: CONSUME_INPUT,
+      schema: AutomationBrowserApprovalConsumeAcceptedSchema,
+    } as const;
+
+    await expect(client.request(call)).resolves.toMatchObject({ ok: true });
+    await expect(client.request(call)).rejects.toMatchObject({ reason: 'configuration' });
+    expect(calls).toBe(1);
+  });
+
   test('returns stable rejection metadata without exposing Control response text', async () => {
     const secret = 'approval-resume.v1.secret-token';
     const client = createWorkerControlClient({

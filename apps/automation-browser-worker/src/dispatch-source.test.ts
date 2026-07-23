@@ -1,12 +1,17 @@
 import { expect, test } from 'bun:test';
 import { createHash, createHmac } from 'node:crypto';
 import {
+  AutomationBrowserApprovalConsumeInputSchema,
   AutomationBrowserDispatchAcceptedSchema,
   AutomationJobRequestSchema,
   canonicalAutomationRequestJson,
   canonicalAutomationWorkerProof,
 } from '@kortix/intelligence-contracts';
+import { createBrowserApprovalResumeClient } from './approval-resume-client';
+import { createBrowserAuthorityClient } from './authority-client';
 import { loadBrowserWorkerDispatchConfig } from './config';
+import { createBrowserWorkerHeartbeatClient } from './heartbeat-client';
+import { createWorkerControlClient, createWorkerProofNonceSource } from './worker-control-client';
 
 const NOW = new Date('2026-07-23T06:00:00.000Z');
 const CONTROL_ID = 'automation-control';
@@ -172,6 +177,127 @@ async function openRuntime(nextNonce = () => 11, runtimeConfig: typeof config = 
   );
   return { dispatchSource, runtime, session };
 }
+
+test('shares one Worker proof nonce source across receipt, heartbeat, approval, and authority', async () => {
+  const nextNonce = createWorkerProofNonceSource(() => NOW);
+  const observedNonces: number[] = [];
+  const dispatch = await openRuntime(nextNonce);
+  const receipt = await dispatch.session.receive(dispatchMessage(700));
+  observedNonces.push(receipt.proof.nonce);
+
+  const heartbeat = createBrowserWorkerHeartbeatClient({
+    controlUrl: 'https://control.internal',
+    serviceId: WORKER_ID,
+    certificateFingerprint256: WORKER_FINGERPRINT,
+    sharedSecret: WORKER_SECRET,
+    requestTimeoutMs: 5_000,
+    nextNonce,
+    now: () => NOW,
+    transport: async (_url, init) => {
+      const wire = JSON.parse(String(init.body)) as {
+        proof: { nonce: number };
+        heartbeat: { job_id: string; event: { payload: unknown; trace_id: string | null } };
+      };
+      observedNonces.push(wire.proof.nonce);
+      return Response.json({
+        protocol_version: 'automation.v1',
+        accepted: true,
+        event: {
+          protocol_version: 'automation.v1',
+          event_id: '90000000-0000-4000-a000-000000000001',
+          job_id: wire.heartbeat.job_id,
+          sequence: 1,
+          type: 'heartbeat',
+          status: null,
+          payload: wire.heartbeat.event.payload,
+          trace_id: wire.heartbeat.event.trace_id,
+          created_at: NOW.toISOString(),
+        },
+      });
+    },
+  });
+  await heartbeat.send({ lease: envelope.lease, request, lastCompletedStep: 0 });
+
+  const consumeInput = AutomationBrowserApprovalConsumeInputSchema.parse({
+    account_id: ACCOUNT_ID,
+    project_id: PROJECT_ID,
+    job_id: JOB_ID,
+    approval_id: APPROVAL_ID,
+    attempt_id: ATTEMPT_ID,
+    step_id: STEP_ID,
+    action_hash: request.steps[0]?.action_hash,
+    lease_id: LEASE_ID,
+    lease_owner: envelope.lease.owner,
+    kill_switch_generation: envelope.lease.kill_switch_generation,
+    resume_after_sequence: 0,
+    token: `approval-resume.v1.${'A'.repeat(43)}`,
+    requested_at: NOW.toISOString(),
+  });
+  const approval = createBrowserApprovalResumeClient({
+    controlUrl: 'https://control.internal',
+    serviceId: WORKER_ID,
+    certificateFingerprint256: WORKER_FINGERPRINT,
+    sharedSecret: WORKER_SECRET,
+    requestTimeoutMs: 5_000,
+    nextNonce,
+    now: () => NOW,
+    transport: async (_url, init) => {
+      const wire = JSON.parse(String(init.body)) as { proof: { nonce: number } };
+      observedNonces.push(wire.proof.nonce);
+      return Response.json({
+        protocol_version: 'automation.v1',
+        consumed: true,
+        idempotent: false,
+        approval_id: APPROVAL_ID,
+        attempt_id: ATTEMPT_ID,
+        job_id: JOB_ID,
+        step_id: STEP_ID,
+        started_at: NOW.toISOString(),
+      });
+    },
+  });
+  await approval.consume(consumeInput);
+
+  const control = createWorkerControlClient({
+    controlUrl: 'https://control.internal',
+    serviceId: WORKER_ID,
+    certificateFingerprint256: WORKER_FINGERPRINT,
+    sharedSecret: WORKER_SECRET,
+    requestTimeoutMs: 5_000,
+    nextNonce,
+    now: () => NOW,
+    transport: async (_url, init) => {
+      const wire = JSON.parse(String(init.body)) as { proof: { nonce: number } };
+      observedNonces.push(wire.proof.nonce);
+      return Response.json({
+        protocol_version: 'automation.v1',
+        authorized: true,
+        check: 'generation',
+        job_id: JOB_ID,
+        lease_id: LEASE_ID,
+        kill_switch_generation: envelope.lease.kill_switch_generation,
+        full_access_grant_current: false,
+        checked_at: NOW.toISOString(),
+      });
+    },
+  });
+  const authority = createBrowserAuthorityClient({ client: control, now: () => NOW });
+  await authority.check({
+    account_id: ACCOUNT_ID,
+    project_id: PROJECT_ID,
+    job_id: JOB_ID,
+    lease_id: LEASE_ID,
+    lease_owner: envelope.lease.owner,
+    request_hash: envelope.lease.request_hash,
+    kill_switch_generation: envelope.lease.kill_switch_generation,
+    check: { kind: 'generation' },
+  });
+
+  const firstNonce = NOW.getTime() * 1_000;
+  expect(observedNonces).toEqual([firstNonce, firstNonce + 1, firstNonce + 2, firstNonce + 3]);
+  dispatch.session.close();
+  dispatch.runtime.close();
+});
 
 test('keeps approval resume disabled by default and requires dispatch when enabled', () => {
   expect(loadBrowserWorkerDispatchConfig({})).toEqual({ enabled: false });

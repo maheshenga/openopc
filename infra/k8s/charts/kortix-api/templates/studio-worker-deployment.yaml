@@ -1,0 +1,121 @@
+{{- if .Values.studioWorker.enabled }}
+{{- if ne (toString (index .Values.studioWorker.env "STUDIO_ENABLED")) "true" }}
+{{- fail "studioWorker.enabled requires studioWorker.env.STUDIO_ENABLED=\"true\"" }}
+{{- end }}
+{{- if not .Values.studioWorker.serviceAccountName }}
+{{- fail "studioWorker.serviceAccountName is required when the Studio worker is enabled" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kortix-api.studioWorkerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kortix-api.studioWorkerLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.studioWorker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "kortix-api.studioWorkerSelectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "kortix-api.studioWorkerSelectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/secret-name: {{ .Values.externalSecrets.targetSecretName | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Values.studioWorker.serviceAccountName }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      {{- if .Values.security.enabled }}
+      securityContext:
+        runAsNonRoot: {{ .Values.security.runAsNonRoot }}
+        runAsUser: {{ .Values.security.runAsUser }}
+        runAsGroup: {{ .Values.security.runAsGroup }}
+        fsGroup: {{ .Values.security.runAsGroup }}
+        seccompProfile:
+          type: {{ .Values.security.seccompProfile }}
+      {{- end }}
+      containers:
+        - name: studio-worker
+          image: {{ include "kortix-api.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["bun", "run", "/app/apps/studio-worker/src/index.ts"]
+          ports:
+            - name: observability
+              containerPort: {{ .Values.studioWorker.observabilityPort }}
+              protocol: TCP
+          env:
+            - name: STUDIO_ENABLED
+              value: {{ index .Values.studioWorker.env "STUDIO_ENABLED" | quote }}
+            - name: STUDIO_WORKER_OBSERVABILITY_HOST
+              value: "0.0.0.0"
+            - name: STUDIO_WORKER_OBSERVABILITY_PORT
+              value: {{ .Values.studioWorker.observabilityPort | quote }}
+            {{- if .Values.env.internalKortixEnv }}
+            - name: INTERNAL_KORTIX_ENV
+              value: {{ .Values.env.internalKortixEnv | quote }}
+            {{- end }}
+            {{- range $k, $v := .Values.studioWorker.extraEnv }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- if .Values.externalSecrets.targetSecretName }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.externalSecrets.targetSecretName }}
+          {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: observability
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: {{ .Values.studioWorker.health.startupFailureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: observability
+            periodSeconds: {{ .Values.studioWorker.health.livenessPeriodSeconds }}
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: observability
+            periodSeconds: {{ .Values.studioWorker.health.readinessPeriodSeconds }}
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.studioWorker.resources | nindent 12 }}
+          {{- if .Values.security.enabled }}
+          securityContext:
+            allowPrivilegeEscalation: {{ .Values.security.allowPrivilegeEscalation }}
+            readOnlyRootFilesystem: {{ .Values.security.readOnlyRootFilesystem }}
+            {{- if .Values.security.dropAllCapabilities }}
+            capabilities:
+              drop: ["ALL"]
+            {{- end }}
+          {{- end }}
+          {{- if and .Values.security.enabled .Values.security.readOnlyRootFilesystem }}
+          volumeMounts:
+            {{- range $i, $p := .Values.security.writableMounts }}
+            - name: writable-{{ $i }}
+              mountPath: {{ $p }}
+            {{- end }}
+          {{- end }}
+      {{- if and .Values.security.enabled .Values.security.readOnlyRootFilesystem }}
+      volumes:
+        {{- range $i, $p := .Values.security.writableMounts }}
+        - name: writable-{{ $i }}
+          emptyDir: {}
+        {{- end }}
+      {{- end }}
+{{- end }}

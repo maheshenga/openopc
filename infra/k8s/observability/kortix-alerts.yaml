@@ -65,3 +65,96 @@ spec:
             summary: "Platform component {{ $labels.deployment }} is down"
             description: "A devops-platform component (console/observability) has no available replicas."
             runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/runbooks/incident-response.md"
+    - name: studio-runtime.rules
+      rules:
+        - record: studio:unknown_outcomes:increase15m
+          expr: sum by (phase, profile) (increase(studio_unknown_outcomes_total[15m]))
+        - record: studio:estimate_violations:increase1h
+          expr: sum by (profile) (increase(studio_estimate_violations_total[1h]))
+        - record: studio:platform_loss_credits:increase1h
+          expr: sum by (profile) (increase(studio_platform_loss_credits_total[1h]))
+        - alert: StudioUnknownProviderOutcome
+          expr: studio:unknown_outcomes:increase15m > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Studio provider outcome requires reconciliation"
+            description: "At least one bounded Studio provider outcome remained unknown in the last 15m."
+            runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/operations/studio-provider-storage.md"
+        - alert: StudioReservationOlderThan24Hours
+          expr: |
+            (studio_reservation_oldest_age_seconds{state="active"} >= 86400)
+              and (studio_reservation_oldest_age_seconds{state="active"} < 604800)
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Studio reservation is older than 24 hours"
+            description: "An active Studio reservation has exceeded the warning threshold."
+            runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/operations/studio-provider-storage.md"
+        - alert: StudioReservationOlderThanSevenDays
+          expr: |
+            (studio_reservation_oldest_age_seconds{state="active"} >= 604800)
+              and (studio_reservation_oldest_age_seconds{state="active"} < 2592000)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Studio reservation is older than seven days"
+            description: "An active Studio reservation reached the critical escalation threshold."
+            runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/operations/studio-provider-storage.md"
+        - alert: StudioBillingIncidentTransferOverdue
+          expr: studio_reservation_oldest_age_seconds{state="active"} >= 2592000
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Studio 30-day billing incident transfer is overdue"
+            description: "An active reservation survived beyond the mandatory billing-incident transfer window."
+            runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/operations/studio-provider-storage.md"
+        - alert: StudioStorageReadinessFailed
+          expr: max_over_time(studio_storage_readiness[5m]) == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Studio object storage is not ready for {{ $labels.role }}"
+            description: "The Studio {{ $labels.role }} storage readiness probe has continuously failed."
+            runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/operations/studio-provider-storage.md"
+        - alert: StudioEstimateViolationDetected
+          expr: studio:estimate_violations:increase1h > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Studio estimate violation detected"
+            description: "Settled Studio usage exceeded an accepted estimate in the last hour."
+            runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/operations/studio-provider-storage.md"
+        - alert: StudioPlatformLossDetected
+          expr: studio:platform_loss_credits:increase1h > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Studio platform loss recorded"
+            description: "The platform absorbed Studio provider credits in the last hour."
+            runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/operations/studio-provider-storage.md"
+        - alert: StudioQueueAgeHigh
+          expr: studio_queue_oldest_age_seconds > 300
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Studio queue age is high"
+            description: "The oldest queued Studio job has waited more than five minutes."
+            runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/operations/studio-provider-storage.md"
+        - alert: StudioOrphanStagingObjectsPresent
+          expr: studio_orphan_staging_objects > 0
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Studio orphan staging objects require cleanup"
+            description: "Studio staging objects remain orphaned beyond the normal cleanup cycle."
+            runbook_url: "https://github.com/kortix-ai/suna/blob/main/docs/operations/studio-provider-storage.md"

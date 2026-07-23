@@ -34,6 +34,10 @@ extraEnv:
 # data plane). At cutover, flip this to true here AND disable the ECS dev service.
 workers:
   enabled: false
+studioWorker:
+  enabled: false
+  env:
+    STUDIO_ENABLED: "false"
 # Dev sizing (≤100 users): 1 replica floor, burst to 2. Far below prod's 3→12.
 replicas: 1
 autoscaling:

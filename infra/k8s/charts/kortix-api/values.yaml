@@ -195,6 +195,41 @@ serviceMonitor:
   path: /metrics
   interval: 30s
   labels: {}
+  authorization:
+    enabled: true
+    # Empty uses externalSecrets.targetSecretName. The Prometheus operator reads
+    # only this key and sends it as a Bearer token to the API's internal route.
+    secretName: ""
+    secretKey: INTERNAL_SERVICE_KEY
+
+# Independent Studio worker process using the same digest-pinned API image.
+# Both gates must be explicitly enabled. Keeping the runtime flag in values makes
+# it impossible for a stale shared Secret to turn Studio on accidentally.
+studioWorker:
+  enabled: false
+  replicas: 1
+  serviceAccountName: ""
+  observabilityPort: 9090
+  env:
+    STUDIO_ENABLED: "false"
+  extraEnv: {}
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+      ephemeral-storage: "1Gi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+      ephemeral-storage: "4Gi"
+  health:
+    startupFailureThreshold: 30
+    livenessPeriodSeconds: 15
+    readinessPeriodSeconds: 10
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
 
 # Default-deny NetworkPolicy. OFF by default: ingress is restricted to the API
 # port from allowIngressCidrs (the ALB), egress is open to the internet EXCEPT the

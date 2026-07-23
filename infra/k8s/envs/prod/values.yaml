@@ -35,6 +35,11 @@ extraEnv:
 workers:
   enabled: true
 
+studioWorker:
+  enabled: false
+  env:
+    STUDIO_ENABLED: "false"
+
 # Drizzle migrations as a PreSync hook before each rollout (gates the release on
 # schema). The hook (templates/migrate-job.yaml) is in place and ready, but is
 # DISABLED on prod until the prod Drizzle ledger is baselined: prod's schema was

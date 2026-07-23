@@ -23,6 +23,11 @@ env:
 workers:
   enabled: false
 
+studioWorker:
+  enabled: false
+  env:
+    STUDIO_ENABLED: "false"
+
 # Ephemeral + low-traffic: one small replica, no HPA/PDB/spread.
 replicas: 1
 autoscaling:

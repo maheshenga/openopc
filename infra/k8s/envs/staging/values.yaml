@@ -21,6 +21,10 @@ extraEnv:
 # production rehearsal instead of a read-only preview.
 workers:
   enabled: true
+studioWorker:
+  enabled: false
+  env:
+    STUDIO_ENABLED: "false"
 replicas: 2
 autoscaling:
   enabled: true

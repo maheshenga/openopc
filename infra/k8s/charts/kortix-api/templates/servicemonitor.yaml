@@ -17,4 +17,11 @@ spec:
     - port: http
       path: {{ .Values.serviceMonitor.path }}
       interval: {{ .Values.serviceMonitor.interval }}
+      {{- if .Values.serviceMonitor.authorization.enabled }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.serviceMonitor.authorization.secretName | default .Values.externalSecrets.targetSecretName }}
+          key: {{ .Values.serviceMonitor.authorization.secretKey }}
+      {{- end }}
 {{- end }}

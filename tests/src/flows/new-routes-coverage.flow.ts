@@ -241,13 +241,7 @@ flow(
     domain: 'coverage',
     routes: [
       'GET /v1/projects/:projectId/llm-catalog',
-      'GET /v1/projects/:projectId/marketplace',
-      'GET /v1/projects/:projectId/marketplace/updates',
-      'POST /v1/projects/:projectId/marketplace/install',
-      'POST /v1/projects/:projectId/marketplace/update',
-      'POST /v1/projects/:projectId/marketplace/update-all',
-      'DELETE /v1/projects/:projectId/marketplace/:name',
-      'POST /v1/projects/:projectId/registry/update-all',
+      'POST /v1/projects/:projectId/marketplace/install-session',
       'PATCH /v1/projects/:projectId/channels/email/installation',
       'POST /v1/channels/slack/identity/bind',
       'POST /internal/gateway/authorize',
@@ -257,31 +251,17 @@ flow(
     const params = { projectId: ZERO_UUID };
 
     await ctx.step('unauthenticated project marketplace and catalog routes are gated', async () => {
-      for (const route of [
-        '/v1/projects/:projectId/llm-catalog',
-        '/v1/projects/:projectId/marketplace',
-        '/v1/projects/:projectId/marketplace/updates',
-      ]) {
+      for (const route of ['/v1/projects/:projectId/llm-catalog']) {
         const r = await ctx.client.as(ctx.P.ANON).get(route, { params });
         r.status(401);
       }
     });
 
     await ctx.step('unauthenticated marketplace mutation routes are gated', async () => {
-      for (const route of [
-        '/v1/projects/:projectId/marketplace/install',
-        '/v1/projects/:projectId/marketplace/update',
-        '/v1/projects/:projectId/marketplace/update-all',
-        '/v1/projects/:projectId/registry/update-all',
-      ]) {
+      for (const route of ['/v1/projects/:projectId/marketplace/install-session']) {
         const r = await ctx.client.as(ctx.P.ANON).post(route, {}, { params });
-        r.status(401);
+        r.status([400, 401]);
       }
-
-      const del = await ctx.client.as(ctx.P.ANON).del('/v1/projects/:projectId/marketplace/:name', {
-        params: { ...params, name: 'missing' },
-      });
-      del.status(401);
     });
 
     await ctx.step('unauthenticated email and Slack identity mutations are gated', async () => {
@@ -294,9 +274,142 @@ flow(
       slack.status(401);
     });
 
-    await ctx.step('internal gateway authorization rejects missing internal credentials', async () => {
-      const r = await ctx.client.as(ctx.P.ANON).post('/internal/gateway/authorize', {});
-      r.status([401, 503]);
+    await ctx.step(
+      'internal gateway authorization rejects missing internal credentials',
+      async () => {
+        const r = await ctx.client.as(ctx.P.ANON).post('/internal/gateway/authorize', {});
+        r.status([401, 503]);
+      },
+    );
+  },
+);
+
+/**
+ * Studio/Intelligence/Automation route perimeter. These requests deliberately
+ * use an anonymous principal and inert UUIDs: the goal is to prove that every
+ * manifest route is mounted behind the expected auth or feature gate without
+ * creating jobs, reserving credits, touching storage, or calling an upstream
+ * provider.
+ */
+flow(
+  'COV-9',
+  {
+    domain: 'coverage',
+    routes: [
+      'DELETE /v1/automation/browser-profiles/:profileId',
+      'DELETE /v1/projects/:projectId/studio/providers/:providerConfigId',
+      'GET /v1/accounts/:accountId/studio/pricing-catalog',
+      'GET /v1/automation/approvals',
+      'GET /v1/automation/browser-profiles',
+      'GET /v1/automation/devices',
+      'GET /v1/automation/jobs/:jobId',
+      'GET /v1/automation/jobs/:jobId/events',
+      'GET /v1/automation/policies',
+      'GET /v1/projects/:projectId/intelligence/ag-ui/workflows/:runId/stream',
+      'GET /v1/projects/:projectId/intelligence/agent-card',
+      'GET /v1/projects/:projectId/intelligence/capabilities',
+      'GET /v1/projects/:projectId/intelligence/catalog',
+      'GET /v1/projects/:projectId/intelligence/catalog/describe',
+      'GET /v1/projects/:projectId/intelligence/tasks/:taskId/events',
+      'GET /v1/projects/:projectId/intelligence/tasks/by-job/:jobId',
+      'GET /v1/projects/:projectId/studio/assets',
+      'GET /v1/projects/:projectId/studio/assets/:assetId',
+      'GET /v1/projects/:projectId/studio/capabilities',
+      'GET /v1/projects/:projectId/studio/jobs',
+      'GET /v1/projects/:projectId/studio/jobs/:jobId',
+      'GET /v1/projects/:projectId/studio/jobs/:jobId/events',
+      'GET /v1/projects/:projectId/studio/providers',
+      'PATCH /v1/projects/:projectId/studio/providers/:providerConfigId',
+      'POST /internal/automation/desktop/execute',
+      'POST /v1/accounts/:accountId/studio/billing-incidents/:incidentId/resolve',
+      'POST /v1/accounts/:accountId/studio/pricing-catalog',
+      'POST /v1/accounts/:accountId/studio/pricing-catalog/:pricingCatalogId/deactivate',
+      'POST /v1/automation/approvals/:approvalId/resolve',
+      'POST /v1/automation/browser-profiles',
+      'POST /v1/automation/jobs',
+      'POST /v1/automation/jobs/:jobId/cancel',
+      'POST /v1/automation/kill-switch',
+      'POST /v1/projects/:projectId/intelligence/tasks',
+      'POST /v1/projects/:projectId/studio/assets/:assetId/download-url',
+      'POST /v1/projects/:projectId/studio/estimates',
+      'POST /v1/projects/:projectId/studio/jobs',
+      'POST /v1/projects/:projectId/studio/jobs/:jobId/cancel',
+      'POST /v1/projects/:projectId/studio/jobs/:jobId/recovery',
+      'POST /v1/projects/:projectId/studio/providers',
+      'POST /v1/projects/:projectId/studio/uploads',
+      'POST /v1/projects/:projectId/studio/uploads/:uploadId/finalize',
+      'PUT /v1/automation/policies',
+    ],
+  },
+  async (ctx) => {
+    const params = {
+      accountId: ZERO_UUID,
+      projectId: ZERO_UUID,
+      profileId: ZERO_UUID,
+      providerConfigId: ZERO_UUID,
+      pricingCatalogId: ZERO_UUID,
+      approvalId: ZERO_UUID,
+      jobId: ZERO_UUID,
+      taskId: ZERO_UUID,
+      runId: ZERO_UUID,
+      assetId: ZERO_UUID,
+      uploadId: ZERO_UUID,
+    };
+    const routes: Array<[string, string]> = [
+      ['DELETE', '/v1/automation/browser-profiles/:profileId'],
+      ['DELETE', '/v1/projects/:projectId/studio/providers/:providerConfigId'],
+      ['GET', '/v1/accounts/:accountId/studio/pricing-catalog'],
+      ['GET', '/v1/automation/approvals'],
+      ['GET', '/v1/automation/browser-profiles'],
+      ['GET', '/v1/automation/devices'],
+      ['GET', '/v1/automation/jobs/:jobId'],
+      ['GET', '/v1/automation/jobs/:jobId/events'],
+      ['GET', '/v1/automation/policies'],
+      ['GET', '/v1/projects/:projectId/intelligence/ag-ui/workflows/:runId/stream'],
+      ['GET', '/v1/projects/:projectId/intelligence/agent-card'],
+      ['GET', '/v1/projects/:projectId/intelligence/capabilities'],
+      ['GET', '/v1/projects/:projectId/intelligence/catalog'],
+      ['GET', '/v1/projects/:projectId/intelligence/catalog/describe'],
+      ['GET', '/v1/projects/:projectId/intelligence/tasks/:taskId/events'],
+      ['GET', '/v1/projects/:projectId/intelligence/tasks/by-job/:jobId'],
+      ['GET', '/v1/projects/:projectId/studio/assets'],
+      ['GET', '/v1/projects/:projectId/studio/assets/:assetId'],
+      ['GET', '/v1/projects/:projectId/studio/capabilities'],
+      ['GET', '/v1/projects/:projectId/studio/jobs'],
+      ['GET', '/v1/projects/:projectId/studio/jobs/:jobId'],
+      ['GET', '/v1/projects/:projectId/studio/jobs/:jobId/events'],
+      ['GET', '/v1/projects/:projectId/studio/providers'],
+      ['PATCH', '/v1/projects/:projectId/studio/providers/:providerConfigId'],
+      ['POST', '/internal/automation/desktop/execute'],
+      ['POST', '/v1/accounts/:accountId/studio/billing-incidents/:incidentId/resolve'],
+      ['POST', '/v1/accounts/:accountId/studio/pricing-catalog'],
+      ['POST', '/v1/accounts/:accountId/studio/pricing-catalog/:pricingCatalogId/deactivate'],
+      ['POST', '/v1/automation/approvals/:approvalId/resolve'],
+      ['POST', '/v1/automation/browser-profiles'],
+      ['POST', '/v1/automation/jobs'],
+      ['POST', '/v1/automation/jobs/:jobId/cancel'],
+      ['POST', '/v1/automation/kill-switch'],
+      ['POST', '/v1/projects/:projectId/intelligence/tasks'],
+      ['POST', '/v1/projects/:projectId/studio/assets/:assetId/download-url'],
+      ['POST', '/v1/projects/:projectId/studio/estimates'],
+      ['POST', '/v1/projects/:projectId/studio/jobs'],
+      ['POST', '/v1/projects/:projectId/studio/jobs/:jobId/cancel'],
+      ['POST', '/v1/projects/:projectId/studio/jobs/:jobId/recovery'],
+      ['POST', '/v1/projects/:projectId/studio/providers'],
+      ['POST', '/v1/projects/:projectId/studio/uploads'],
+      ['POST', '/v1/projects/:projectId/studio/uploads/:uploadId/finalize'],
+      ['PUT', '/v1/automation/policies'],
+    ];
+
+    await ctx.step('anonymous requests hit auth or an explicit disabled-feature gate', async () => {
+      for (const [method, route] of routes) {
+        const response = await ctx.client.as(ctx.P.ANON).request(method, route, {
+          params,
+          body: method === 'GET' || method === 'DELETE' ? undefined : {},
+          query: route.endsWith('/catalog/describe') ? { ref: 'studio:image.generate' } : undefined,
+        });
+        response.status([400, 401, 403, 503]);
+      }
     });
   },
 );

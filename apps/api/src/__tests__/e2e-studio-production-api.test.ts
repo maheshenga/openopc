@@ -29,7 +29,7 @@ Object.assign(process.env, {
   STUDIO_ALLOW_EPHEMERAL_STORAGE: 'true',
 });
 
-mock.module('../shared/db', () => ({ db: {} }));
+mock.module('../shared/db', () => ({ db: {}, hasDatabase: false }));
 mock.module('../config', () => ({
   config: {
     API_KEY_SECRET: 'studio-production-api-secret',

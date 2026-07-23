@@ -22,6 +22,37 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
 | Developer Center          | planned                                                 | acceleration design Milestone 4                                                                                                             | separate plan                                                     |
 
+## Task 15 Focused Acceptance Snapshot
+
+**Updated:** 2026-07-24
+
+The route manifest was regenerated from the mounted API (`516` routes). The
+ke2e parity gate now passes with `437/516` routes covered, `9` explicitly
+allowlisted, `70` pre-existing baseline-uncovered, and no new uncovered or
+external routes. The coverage flow was updated to remove stale Marketplace
+paths and to exercise the retained project install-session boundary plus the
+Studio, Intelligence, and Automation route perimeter with anonymous requests.
+
+Focused evidence recorded in this phase:
+
+- API Studio/Intelligence/AG-UI/Billing suite: `32/32` tests passed.
+- Studio adapters: `128` passed, `10` MinIO integration tests skipped because
+  no MinIO endpoint was configured.
+- Studio runtime: `30/30` passed.
+- API Contract and SDK Studio/AG-UI suite: `37/37` passed.
+- Web Studio/Assets suite: `41/41` passed from the Web package working
+  directory.
+- API, API Contract, Studio Runtime, Studio Adapters, and SDK typechecks
+  passed.
+- Cancelled first-party video, voice, 3D, digital-human, and batch-remix
+  Studio pages remain absent from the route/navigation contracts.
+
+Still open for a later protected environment: real local API/database and Web
+browser black-box flows, live API/Worker metrics scrape, MinIO conformance,
+live Provider smoke, Alibaba Cloud OSS smoke, and the 24-hour/7-day/30-day
+incident lifecycle. These are not proven by this local focused snapshot, so
+Studio production enablement remains disabled.
+
 ## Canonical Client Contract
 
 `kortix.project(projectId).intelligence` is the only product-facing SDK facade for capability discovery, Agent Cards, task creation/events, and governed workflows. Milestone 0-1 adds image estimates, Studio jobs, uploads, and assets as typed projections under that existing facade. The unimplemented `kortix.project(projectId).studio` proposal is superseded and must not be introduced.

@@ -1,6 +1,6 @@
 {
   "generatedAt": "static",
-  "count": 503,
+  "count": 516,
   "routes": [
     {
       "method": "GET",
@@ -9,6 +9,10 @@
     {
       "method": "GET",
       "path": "/health/live"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/automation/desktop/execute"
     },
     {
       "method": "POST",
@@ -443,6 +447,22 @@
       "path": "/v1/accounts/:accountId/members/:userId"
     },
     {
+      "method": "POST",
+      "path": "/v1/accounts/:accountId/studio/billing-incidents/:incidentId/resolve"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/accounts/:accountId/studio/pricing-catalog"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/accounts/:accountId/studio/pricing-catalog"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/accounts/:accountId/studio/pricing-catalog/:pricingCatalogId/deactivate"
+    },
+    {
       "method": "GET",
       "path": "/v1/accounts/me"
     },
@@ -517,6 +537,58 @@
     {
       "method": "POST",
       "path": "/v1/auth/logout"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/automation/approvals"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/automation/approvals/:approvalId/resolve"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/automation/browser-profiles"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/automation/browser-profiles"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/automation/browser-profiles/:profileId"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/automation/devices"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/automation/jobs"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/automation/jobs/:jobId"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/automation/jobs/:jobId/cancel"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/automation/jobs/:jobId/events"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/automation/kill-switch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/automation/policies"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/automation/policies"
     },
     {
       "method": "GET",
@@ -805,18 +877,6 @@
     {
       "method": "GET",
       "path": "/v1/health/live"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/llm/chat/completions"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/llm/health"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/llm/models"
     },
     {
       "method": "GET",
@@ -1348,6 +1408,38 @@
     },
     {
       "method": "GET",
+      "path": "/v1/projects/:projectId/intelligence/ag-ui/workflows/:runId/stream"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/intelligence/agent-card"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/intelligence/capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/intelligence/catalog"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/intelligence/catalog/describe"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/intelligence/tasks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/intelligence/tasks/:taskId/events"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/intelligence/tasks/by-job/:jobId"
+    },
+    {
+      "method": "GET",
       "path": "/v1/projects/:projectId/llm-catalog"
     },
     {
@@ -1355,28 +1447,8 @@
       "path": "/v1/projects/:projectId/manifest/validate"
     },
     {
-      "method": "GET",
-      "path": "/v1/projects/:projectId/marketplace"
-    },
-    {
-      "method": "DELETE",
-      "path": "/v1/projects/:projectId/marketplace/:name"
-    },
-    {
       "method": "POST",
-      "path": "/v1/projects/:projectId/marketplace/install"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/projects/:projectId/marketplace/update"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/projects/:projectId/marketplace/update-all"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/projects/:projectId/marketplace/updates"
+      "path": "/v1/projects/:projectId/marketplace/install-session"
     },
     {
       "method": "DELETE",
@@ -1413,30 +1485,6 @@
     {
       "method": "PATCH",
       "path": "/v1/projects/:projectId/onboarding"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/projects/:projectId/registry"
-    },
-    {
-      "method": "DELETE",
-      "path": "/v1/projects/:projectId/registry/:name"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/projects/:projectId/registry/install"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/projects/:projectId/registry/update"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/projects/:projectId/registry/update-all"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/projects/:projectId/registry/updates"
     },
     {
       "method": "GET",
@@ -1643,8 +1691,24 @@
       "path": "/v1/projects/:projectId/studio/jobs/:jobId/events"
     },
     {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/studio/jobs/:jobId/recovery"
+    },
+    {
       "method": "GET",
       "path": "/v1/projects/:projectId/studio/providers"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/studio/providers"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/projects/:projectId/studio/providers/:providerConfigId"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/projects/:projectId/studio/providers/:providerConfigId"
     },
     {
       "method": "POST",
@@ -1845,18 +1909,6 @@
     {
       "method": "GET",
       "path": "/v1/system/status"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/templates"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/templates/:id"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/templates/:id/install"
     },
     {
       "method": "GET",

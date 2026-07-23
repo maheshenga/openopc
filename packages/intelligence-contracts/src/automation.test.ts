@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import * as automation from './automation';
 import {
   AutomationApprovalSchema,
+  AutomationBrowserAuthorityCheckInputSchema,
   AutomationErrorSchema,
   AutomationEventSchema,
   AutomationJobRequestSchema,
@@ -153,6 +154,39 @@ describe('OpenOPC automation wire contract', () => {
         event: { ...heartbeat.event, payload: { last_completed_step: 3, token: 'forbidden' } },
       }).success,
     ).toBeFalse();
+  });
+
+  test('defines strict versioned Browser authority checks without secret fields', () => {
+    const binding = {
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      job_id: JOB_ID,
+      lease_id: LEASE_ID,
+      lease_owner: `browser-worker-1:${LEASE_ID}`,
+      request_hash: `sha256:${'a'.repeat(64)}`,
+      kill_switch_generation: 7,
+      requested_at: '2099-07-23T10:00:00.000Z',
+    };
+
+    for (const check of [
+      { kind: 'lease' },
+      { kind: 'generation' },
+      { kind: 'cursor', resume_after_sequence: 2 },
+      { kind: 'action', step_id: STEP_ID, action_hash: `sha256:${'b'.repeat(64)}` },
+      { kind: 'full_access' },
+    ] as const) {
+      expect(AutomationBrowserAuthorityCheckInputSchema.parse({ ...binding, check }).check).toEqual(
+        check,
+      );
+    }
+
+    expect(() =>
+      AutomationBrowserAuthorityCheckInputSchema.parse({
+        ...binding,
+        check: { kind: 'lease' },
+        token: 'must-not-be-accepted',
+      }),
+    ).toThrow();
   });
 
   test('shares a strict Browser Worker dispatch WebSocket contract', () => {

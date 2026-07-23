@@ -6,6 +6,8 @@ export const AUTOMATION_BROWSER_HEARTBEAT_PATH = '/internal/automation/browser/h
 export const AUTOMATION_BROWSER_DISPATCH_PATH = '/internal/automation/browser/dispatch' as const;
 export const AUTOMATION_BROWSER_APPROVAL_CONSUME_PATH =
   '/internal/automation/browser/approvals/consume' as const;
+export const AUTOMATION_BROWSER_AUTHORITY_CHECK_PATH =
+  '/internal/automation/browser/authority/check' as const;
 
 const UuidSchema = z.string().uuid();
 const DateTimeSchema = z.string().datetime({ offset: true });
@@ -576,6 +578,71 @@ export const AutomationWorkerHeartbeatAcceptedSchema = z
   .strict();
 export type AutomationWorkerHeartbeatAccepted = z.infer<
   typeof AutomationWorkerHeartbeatAcceptedSchema
+>;
+
+const AutomationBrowserAuthorityBindingShape = {
+  account_id: UuidSchema,
+  project_id: UuidSchema,
+  job_id: UuidSchema,
+  lease_id: UuidSchema,
+  lease_owner: z.string().trim().min(1).max(128),
+  request_hash: Sha256HashSchema,
+  kill_switch_generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  requested_at: DateTimeSchema,
+} as const;
+
+export const AutomationBrowserAuthorityCheckInputSchema = z
+  .object({
+    ...AutomationBrowserAuthorityBindingShape,
+    check: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('lease') }).strict(),
+      z.object({ kind: z.literal('generation') }).strict(),
+      z
+        .object({
+          kind: z.literal('cursor'),
+          resume_after_sequence: z.number().int().nonnegative().max(AUTOMATION_MAX_STEPS),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal('action'),
+          step_id: UuidSchema,
+          action_hash: Sha256HashSchema,
+        })
+        .strict(),
+      z.object({ kind: z.literal('full_access') }).strict(),
+    ]),
+  })
+  .strict();
+export type AutomationBrowserAuthorityCheckInput = z.infer<
+  typeof AutomationBrowserAuthorityCheckInputSchema
+>;
+
+export const AutomationBrowserAuthorityCheckRequestSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    proof: AutomationWorkerServiceProofSchema,
+    authority: AutomationBrowserAuthorityCheckInputSchema,
+  })
+  .strict();
+export type AutomationBrowserAuthorityCheckRequest = z.infer<
+  typeof AutomationBrowserAuthorityCheckRequestSchema
+>;
+
+export const AutomationBrowserAuthorityCheckAcceptedSchema = z
+  .object({
+    protocol_version: AutomationProtocolVersionSchema,
+    authorized: z.literal(true),
+    check: z.enum(['lease', 'generation', 'cursor', 'action', 'full_access']),
+    job_id: UuidSchema,
+    lease_id: UuidSchema,
+    kill_switch_generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    full_access_grant_current: z.boolean(),
+    checked_at: DateTimeSchema,
+  })
+  .strict();
+export type AutomationBrowserAuthorityCheckAccepted = z.infer<
+  typeof AutomationBrowserAuthorityCheckAcceptedSchema
 >;
 
 export const AutomationJobSchema = z

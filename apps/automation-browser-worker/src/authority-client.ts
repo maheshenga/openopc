@@ -1,13 +1,13 @@
 import {
   AUTOMATION_BROWSER_AUTHORITY_CHECK_PATH,
-  AutomationBrowserAuthorityCheckAcceptedSchema,
-  AutomationBrowserAuthorityCheckInputSchema,
   type AutomationBrowserAuthorityCheckAccepted,
+  AutomationBrowserAuthorityCheckAcceptedSchema,
   type AutomationBrowserAuthorityCheckInput,
+  AutomationBrowserAuthorityCheckInputSchema,
 } from '@kortix/intelligence-contracts';
 import {
-  WorkerControlClientError,
   type WorkerControlClient,
+  WorkerControlClientError,
   type WorkerControlResponse,
 } from './worker-control-client';
 

@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import type {
   StudioObjectMetadata,
   StudioObjectStore,
@@ -96,7 +96,9 @@ describe('private browser evidence storage', () => {
       key: `automation-evidence/${ACCOUNT_ID}/${PROJECT_ID}/${JOB_ID}/${LEASE_ID}/${STEP_ID}/${EVIDENCE_ID}`,
       content_type: 'image/png',
       size_bytes: 3,
-      checksum_sha256: createHash('sha256').update(new Uint8Array([1, 2, 3])).digest('hex'),
+      checksum_sha256: createHash('sha256')
+        .update(new Uint8Array([1, 2, 3]))
+        .digest('hex'),
       metadata: {
         tenant_id: ACCOUNT_ID,
         project_id: PROJECT_ID,

@@ -154,9 +154,11 @@ describe('Browser authority route', () => {
   test('bounds oversized and timed-out request bodies before proof verification', async () => {
     const oversized = harness({ maxBodyBytes: 128 });
     expect(
-      (await oversized.route.fetch(
-        attestedAuthorityRequest(signedAuthorityBody(oversized.authenticator)),
-      )).status,
+      (
+        await oversized.route.fetch(
+          attestedAuthorityRequest(signedAuthorityBody(oversized.authenticator)),
+        )
+      ).status,
     ).toBe(413);
     expect(oversized.calls).toHaveLength(0);
 

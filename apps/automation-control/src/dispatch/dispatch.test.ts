@@ -226,10 +226,12 @@ describe('automation dispatch boundary', () => {
 
     const dispatcher = createBrowserDispatcher({
       authenticator,
-      signer: controlSigner((() => {
-        let nonce = 0;
-        return () => ++nonce;
-      })()),
+      signer: controlSigner(
+        (() => {
+          let nonce = 0;
+          return () => ++nonce;
+        })(),
+      ),
       now: () => NOW,
       isLeaseCurrent: async (binding) => {
         leaseChecks += 1;

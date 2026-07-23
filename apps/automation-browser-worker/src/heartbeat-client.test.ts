@@ -11,8 +11,8 @@ import {
 import { loadBrowserWorkerHeartbeatConfig } from './config';
 import * as workerConfig from './config';
 import {
-  type BrowserWorkerHeartbeatEmitter,
   BrowserWorkerHeartbeatClientError,
+  type BrowserWorkerHeartbeatEmitter,
   createBrowserWorkerHeartbeatClient,
   createBrowserWorkerMtlsHeartbeatTransport,
   runBrowserWorkerHeartbeatLoop,

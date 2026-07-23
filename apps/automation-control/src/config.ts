@@ -184,7 +184,8 @@ const AutomationControlEnvironmentSchema = z
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256'],
-          message: 'AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256 is required for Browser Worker dispatch',
+          message:
+            'AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256 is required for Browser Worker dispatch',
         });
       }
       if (environment.AUTOMATION_CONTROL_WORKER_SHARED_SECRET.length < 32) {
@@ -304,10 +305,7 @@ const AutomationControlEnvironmentSchema = z
       }
       if (
         browserWorkerPeers !== null &&
-        Object.prototype.hasOwnProperty.call(
-          browserWorkerPeers,
-          environment.AUTOMATION_SERVICE_ID,
-        )
+        Object.prototype.hasOwnProperty.call(browserWorkerPeers, environment.AUTOMATION_SERVICE_ID)
       ) {
         context.addIssue({
           code: z.ZodIssueCode.custom,

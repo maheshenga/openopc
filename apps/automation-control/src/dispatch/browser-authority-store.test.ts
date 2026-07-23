@@ -1,5 +1,5 @@
-import type { AutomationBrowserAuthorityCheckInput } from '@kortix/intelligence-contracts';
 import { describe, expect, test } from 'bun:test';
+import type { AutomationBrowserAuthorityCheckInput } from '@kortix/intelligence-contracts';
 import { createBrowserAuthorityStore } from './browser-authority-store';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
@@ -75,13 +75,19 @@ describe('Browser authority store', () => {
       throw new Error('PostgreSQL failed: database_password=do-not-disclose');
     });
 
-    await expect(
-      store.check(authorityInput({ kind: 'lease' }), NOW),
-    ).resolves.toEqual({ accepted: false, reason: 'dispatch_mismatch' });
+    await expect(store.check(authorityInput({ kind: 'lease' }), NOW)).resolves.toEqual({
+      accepted: false,
+      reason: 'dispatch_mismatch',
+    });
   });
 
   test.each([
-    ['stale lease owner', { lease_owner: `browser-worker-2:${LEASE_ID}` }, snapshot(), 'stale_lease'],
+    [
+      'stale lease owner',
+      { lease_owner: `browser-worker-2:${LEASE_ID}` },
+      snapshot(),
+      'stale_lease',
+    ],
     [
       'lease identifier not bound to the owner',
       { lease_id: '80000000-0000-4000-a000-000000000099' },
@@ -106,8 +112,18 @@ describe('Browser authority store', () => {
       snapshot({ job: { ...snapshot().job, cancelRequestedAt: NOW.toISOString() } }),
       'dispatch_mismatch',
     ],
-    ['wrong account', { account_id: '10000000-0000-4000-a000-000000000099' }, snapshot(), 'dispatch_mismatch'],
-    ['wrong project', { project_id: '20000000-0000-4000-a000-000000000099' }, snapshot(), 'dispatch_mismatch'],
+    [
+      'wrong account',
+      { account_id: '10000000-0000-4000-a000-000000000099' },
+      snapshot(),
+      'dispatch_mismatch',
+    ],
+    [
+      'wrong project',
+      { project_id: '20000000-0000-4000-a000-000000000099' },
+      snapshot(),
+      'dispatch_mismatch',
+    ],
     [
       'wrong request hash',
       { request_hash: `sha256:${'c'.repeat(64)}` },
@@ -127,17 +143,17 @@ describe('Browser authority store', () => {
       snapshot({ step: { ...snapshot().step, status: 'succeeded' } }),
       'dispatch_mismatch',
     ],
-  ] as const)(
-    'rejects %s',
-    async (_caseName, inputOverrides, current, reason) => {
-      const result = await storeFor(current).check(
-        { ...authorityInput({ kind: 'action', step_id: STEP_ID, action_hash: ACTION_HASH }), ...inputOverrides },
-        NOW,
-      );
+  ] as const)('rejects %s', async (_caseName, inputOverrides, current, reason) => {
+    const result = await storeFor(current).check(
+      {
+        ...authorityInput({ kind: 'action', step_id: STEP_ID, action_hash: ACTION_HASH }),
+        ...inputOverrides,
+      },
+      NOW,
+    );
 
-      expect(result).toEqual({ accepted: false, reason });
-    },
-  );
+    expect(result).toEqual({ accepted: false, reason });
+  });
 
   test('rejects an action with a mismatched current step id', async () => {
     const result = await storeFor().check(

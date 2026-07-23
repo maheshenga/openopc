@@ -1,9 +1,4 @@
-import {
-  type Database,
-  automationJobSteps,
-  automationJobs,
-  automationPolicies,
-} from '@kortix/db';
+import { type Database, automationJobSteps, automationJobs, automationPolicies } from '@kortix/db';
 import type { AutomationBrowserAuthorityCheckInput } from '@kortix/intelligence-contracts';
 import { and, eq, max } from 'drizzle-orm';
 
@@ -133,8 +128,7 @@ export function createBrowserAuthorityStore(
         accepted: true,
         checkedAt: now.toISOString(),
         currentGeneration: job.killSwitchGeneration,
-        fullAccessGrantCurrent:
-          job.approvalPolicy === 'full-access' && snapshot.fullAccessAllowed,
+        fullAccessGrantCurrent: job.approvalPolicy === 'full-access' && snapshot.fullAccessAllowed,
       };
     },
   };
@@ -196,10 +190,7 @@ async function loadPostgresAuthoritySnapshot(
     .select({ maxCompletedSequence: max(automationJobSteps.sequence) })
     .from(automationJobSteps)
     .where(
-      and(
-        eq(automationJobSteps.jobId, input.job_id),
-        eq(automationJobSteps.status, 'succeeded'),
-      ),
+      and(eq(automationJobSteps.jobId, input.job_id), eq(automationJobSteps.status, 'succeeded')),
     );
 
   return {

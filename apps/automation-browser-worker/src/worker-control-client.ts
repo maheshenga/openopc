@@ -1,8 +1,8 @@
 import { createHash, createHmac } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import {
-  AutomationErrorSchema,
   type AutomationError,
+  AutomationErrorSchema,
   canonicalAutomationRequestJson,
   canonicalAutomationWorkerProof,
 } from '@kortix/intelligence-contracts';
@@ -10,7 +10,8 @@ import {
 const MAX_RESPONSE_BYTES = 64 * 1024;
 
 type SafeParseResult<T> =
-  Readonly<{ success: true; data: T }> | Readonly<{ success: false; error?: unknown }>;
+  | Readonly<{ success: true; data: T }>
+  | Readonly<{ success: false; error?: unknown }>;
 
 export type WorkerControlResponseSchema<T> = Readonly<{
   safeParse(input: unknown): SafeParseResult<T>;

@@ -5,10 +5,11 @@ import {
   AutomationBrowserApprovalConsumeInputSchema,
 } from '@kortix/intelligence-contracts';
 import {
-  createWorkerControlClient,
-  createWorkerControlMtlsTransport,
+  type WorkerControlClient,
   WorkerControlClientError,
   type WorkerControlTransport,
+  createWorkerControlClient,
+  createWorkerControlMtlsTransport,
 } from './worker-control-client';
 
 export type BrowserApprovalResumeTransport = WorkerControlTransport;
@@ -70,7 +71,7 @@ export function createBrowserApprovalResumeClient(input: {
   nextNonce: () => number;
   now?: () => Date;
 }): BrowserApprovalResumeClient {
-  let client;
+  let client: WorkerControlClient;
   try {
     client = createWorkerControlClient(input);
   } catch (error) {

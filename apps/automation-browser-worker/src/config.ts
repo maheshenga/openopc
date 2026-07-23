@@ -1,9 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { AUTOMATION_MAX_STEPS } from '@kortix/intelligence-contracts';
-import {
-  parseStudioStorageEnvironment,
-  type StudioS3StorageConfig,
-} from '@kortix/studio-adapters';
+import { type StudioS3StorageConfig, parseStudioStorageEnvironment } from '@kortix/studio-adapters';
 
 function positiveInteger(name: string, fallback: number): number {
   const value = process.env[name];

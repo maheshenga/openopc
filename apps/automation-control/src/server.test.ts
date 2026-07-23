@@ -45,6 +45,16 @@ const enabledControlEnvironment = {
   AUTOMATION_CONTROL_MTLS_CA_PATH: 'C:\\certs\\worker-ca.crt',
 } as const;
 
+const enabledBrowserDispatchEnvironment = {
+  ...enabledControlEnvironment,
+  AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'true',
+  AUTOMATION_BROWSER_DISPATCH_ENABLED: 'true',
+  AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED: 'true',
+  AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256: 'AA:CONTROL',
+  AUTOMATION_CONTROL_WORKER_SHARED_SECRET: 'control-worker-secret-at-least-32-bytes',
+  AUTOMATION_APPROVAL_RESUME_TOKEN_PEPPER: 'approval-resume-token-pepper-at-least-32-bytes',
+} as const;
+
 describe('automation control configuration', () => {
   test('keeps the Browser Worker heartbeat runtime disabled by default', () => {
     const config = loadAutomationControlConfig({});
@@ -183,6 +193,54 @@ describe('automation control configuration', () => {
         AUTOMATION_CONTROL_WORKER_SHARED_SECRET: 'control-worker-secret-at-least-32-bytes',
       }),
     ).toThrow(/TOKEN_PEPPER/i);
+  });
+
+  test('rejects a Browser Worker service ID that matches the local Control identity', () => {
+    expect(() =>
+      loadAutomationControlConfig({
+        ...enabledBrowserDispatchEnvironment,
+        AUTOMATION_BROWSER_WORKER_TRUST_JSON: JSON.stringify({
+          'automation-control': {
+            fingerprints: ['BB:WORKER'],
+            shared_secret: 'worker-shared-secret-at-least-thirty-two-bytes',
+          },
+        }),
+      }),
+    ).toThrow(/identity.*collision/i);
+  });
+
+  test('rejects a Browser Worker certificate fingerprint that matches local Control', () => {
+    expect(() =>
+      loadAutomationControlConfig({
+        ...enabledBrowserDispatchEnvironment,
+        AUTOMATION_BROWSER_WORKER_TRUST_JSON: JSON.stringify({
+          'browser-worker-1': {
+            fingerprints: ['AA:CONTROL'],
+            shared_secret: 'worker-shared-secret-at-least-thirty-two-bytes',
+          },
+        }),
+      }),
+    ).toThrow(/certificate.*collision/i);
+  });
+
+  test('rejects a dedicated signing secret that matches the Control shared secret', () => {
+    expect(() =>
+      loadAutomationControlConfig({
+        ...enabledBrowserDispatchEnvironment,
+        AUTOMATION_CONTROL_WORKER_SHARED_SECRET:
+          'control-shared-secret-at-least-thirty-two-bytes',
+      }),
+    ).toThrow(/secret.*collision/i);
+  });
+
+  test('rejects a dedicated signing secret that matches a Browser Worker secret', () => {
+    expect(() =>
+      loadAutomationControlConfig({
+        ...enabledBrowserDispatchEnvironment,
+        AUTOMATION_CONTROL_WORKER_SHARED_SECRET:
+          'worker-shared-secret-at-least-thirty-two-bytes',
+      }),
+    ).toThrow(/secret.*collision/i);
   });
 });
 

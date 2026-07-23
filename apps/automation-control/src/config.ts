@@ -126,6 +126,9 @@ const AutomationControlEnvironmentSchema = z
     AUTOMATION_COORDINATOR_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(4),
   })
   .superRefine((environment, context) => {
+    const browserWorkerPeers = parseBrowserWorkerTrust(
+      environment.AUTOMATION_BROWSER_WORKER_TRUST_JSON,
+    );
     if (
       environment.AUTOMATION_DESKTOP_COORDINATOR_ENABLED === 'true' &&
       environment.AUTOMATION_CONTROL_ENABLED !== 'true'
@@ -195,6 +198,42 @@ const AutomationControlEnvironmentSchema = z
             'AUTOMATION_CONTROL_WORKER_SHARED_SECRET must contain at least 32 characters for Browser Worker dispatch',
         });
       }
+      if (
+        environment.AUTOMATION_CONTROL_WORKER_SHARED_SECRET ===
+        environment.AUTOMATION_CONTROL_SHARED_SECRET
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['AUTOMATION_CONTROL_WORKER_SHARED_SECRET'],
+          message: 'Control Worker signing secret collision with AUTOMATION_CONTROL_SHARED_SECRET',
+        });
+      }
+      if (
+        environment.AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256.length > 0 &&
+        browserWorkerPeers !== null &&
+        Object.values(browserWorkerPeers).some((peer) =>
+          peer.fingerprints.includes(environment.AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256),
+        )
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['AUTOMATION_BROWSER_WORKER_TRUST_JSON'],
+          message:
+            'Browser Worker certificate fingerprint collision with AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256',
+        });
+      }
+      if (
+        browserWorkerPeers !== null &&
+        Object.values(browserWorkerPeers).some(
+          (peer) => peer.sharedSecret === environment.AUTOMATION_CONTROL_WORKER_SHARED_SECRET,
+        )
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['AUTOMATION_CONTROL_WORKER_SHARED_SECRET'],
+          message: 'Control Worker signing secret collision with Browser Worker trust',
+        });
+      }
       if (parseBrowserWorkerUrl(environment.AUTOMATION_BROWSER_WORKER_URL) === null) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -256,11 +295,24 @@ const AutomationControlEnvironmentSchema = z
       });
     }
     if (environment.AUTOMATION_BROWSER_HEARTBEAT_ENABLED === 'true') {
-      if (parseBrowserWorkerTrust(environment.AUTOMATION_BROWSER_WORKER_TRUST_JSON) === null) {
+      if (browserWorkerPeers === null) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['AUTOMATION_BROWSER_WORKER_TRUST_JSON'],
           message: 'Trusted Browser Worker configuration is required when heartbeat is enabled',
+        });
+      }
+      if (
+        browserWorkerPeers !== null &&
+        Object.prototype.hasOwnProperty.call(
+          browserWorkerPeers,
+          environment.AUTOMATION_SERVICE_ID,
+        )
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['AUTOMATION_BROWSER_WORKER_TRUST_JSON'],
+          message: 'Browser Worker service identity collision with AUTOMATION_SERVICE_ID',
         });
       }
       if (environment.AUTOMATION_WORKER_TLS_ATTESTATION_SECRET.length < 32) {

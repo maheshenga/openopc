@@ -106,6 +106,14 @@ because its CRLF working copy is interpreted by WSL as part of shell tokens;
 the equivalent pinned-container render and schema-validation commands passed.
 This is a host execution issue, not evidence of a production deployment.
 
+The disposable PostgreSQL integration gates also passed: API Studio management
+passed `4` tests with `25` assertions, and the Worker repository integration
+passed `8` tests with `39` assertions. These gates used temporary Docker
+databases and covered tenant-scoped pricing/provider mutations, concurrent
+upload finalization, single-claim concurrency, expired lease recovery,
+configuration fencing, credential scope, cancellation-vs-success locking, and
+orphan re-fencing. No production database was used.
+
 ## Canonical Client Contract
 
 `kortix.project(projectId).intelligence` is the only product-facing SDK facade for capability discovery, Agent Cards, task creation/events, and governed workflows. Milestone 0-1 adds image estimates, Studio jobs, uploads, and assets as typed projections under that existing facade. The unimplemented `kortix.project(projectId).studio` proposal is superseded and must not be introduced.

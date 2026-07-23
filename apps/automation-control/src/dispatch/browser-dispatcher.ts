@@ -15,6 +15,7 @@ import type {
   VerifiedWorkerPeer,
   WorkerServiceAuthenticator,
   WorkerServiceProof,
+  WorkerServiceSigner,
 } from './worker-auth';
 
 export type { BrowserDispatchEnvelope, BrowserDispatchReceipt };
@@ -78,9 +79,7 @@ function assertDispatchBinding(job: AutomationJob, lease: AutomationLease, now: 
 
 export function createBrowserDispatcher(input: {
   authenticator: WorkerServiceAuthenticator;
-  localServiceId: string;
-  localCertificateFingerprint256: string;
-  nextNonce: () => number;
+  signer: WorkerServiceSigner;
   now?: () => Date;
   isLeaseSignatureValid: (lease: AutomationLease) => Promise<boolean>;
   isLeaseCurrent: (binding: DispatchLeaseBinding) => Promise<boolean>;
@@ -109,13 +108,7 @@ export function createBrowserDispatcher(input: {
     if (!(await input.isLeaseCurrent(binding))) {
       throw new BrowserDispatchError('browser lease is not current');
     }
-    const proof = input.authenticator.sign({
-      serviceId: input.localServiceId,
-      certificateFingerprint256: input.localCertificateFingerprint256,
-      timestamp: raw.dispatchedAt,
-      nonce: input.nextNonce(),
-      body: raw.envelope,
-    });
+    const proof = input.signer.sign(raw.envelope, raw.dispatchedAt);
     assertDispatchBinding(raw.job, raw.lease, now());
     const response = await raw.connection.send({ envelope: raw.envelope, proof });
     const receipt = BrowserDispatchReceiptSchema.parse(response.receipt);

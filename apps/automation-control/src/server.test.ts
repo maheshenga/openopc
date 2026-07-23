@@ -26,6 +26,25 @@ const ENABLED_CONFIG: AutomationControlConfig = {
   coordinatorBatchSize: 4,
 };
 
+const enabledControlEnvironment = {
+  AUTOMATION_CONTROL_ENABLED: 'true',
+  DATABASE_URL: 'postgresql://db.example.test/automation',
+  REDIS_URL: 'redis://redis.example.test:6379',
+  AUTOMATION_CONTROL_SHARED_SECRET: 'control-shared-secret-at-least-thirty-two-bytes',
+  AUTOMATION_BROWSER_WORKER_TRUST_JSON: JSON.stringify({
+    'browser-worker-1': {
+      fingerprints: ['AA:BB:CC:DD'],
+      shared_secret: 'worker-shared-secret-at-least-thirty-two-bytes',
+    },
+  }),
+  AUTOMATION_WORKER_TLS_ATTESTATION_SECRET:
+    'trusted-proxy-attestation-secret-at-least-thirty-two-bytes',
+  AUTOMATION_BROWSER_WORKER_URL: 'wss://browser-worker.example.test/',
+  AUTOMATION_CONTROL_MTLS_CERT_PATH: 'C:\\certs\\control.crt',
+  AUTOMATION_CONTROL_MTLS_KEY_PATH: 'C:\\certs\\control.key',
+  AUTOMATION_CONTROL_MTLS_CA_PATH: 'C:\\certs\\worker-ca.crt',
+} as const;
+
 describe('automation control configuration', () => {
   test('keeps the Browser Worker heartbeat runtime disabled by default', () => {
     const config = loadAutomationControlConfig({});
@@ -151,6 +170,19 @@ describe('automation control configuration', () => {
         }),
       }),
     ).toThrow();
+  });
+
+  test('requires a dedicated Resume token pepper when Browser dispatch is enabled', () => {
+    expect(() =>
+      loadAutomationControlConfig({
+        ...enabledControlEnvironment,
+        AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'true',
+        AUTOMATION_BROWSER_DISPATCH_ENABLED: 'true',
+        AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED: 'true',
+        AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256: 'AA:BB:CC',
+        AUTOMATION_CONTROL_WORKER_SHARED_SECRET: 'control-worker-secret-at-least-32-bytes',
+      }),
+    ).toThrow(/TOKEN_PEPPER/i);
   });
 });
 

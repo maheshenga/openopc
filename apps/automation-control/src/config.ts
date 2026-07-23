@@ -77,6 +77,9 @@ const AutomationControlEnvironmentSchema = z
       .regex(/^[A-Za-z][A-Za-z0-9._:-]*$/)
       .default('automation-control'),
     AUTOMATION_CONTROL_SHARED_SECRET: z.string().max(4_096).default(''),
+    AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256: z.string().trim().max(256).default(''),
+    AUTOMATION_CONTROL_WORKER_SHARED_SECRET: z.string().max(4_096).default(''),
+    AUTOMATION_APPROVAL_RESUME_TOKEN_PEPPER: z.string().max(4_096).default(''),
     AUTOMATION_BROWSER_WORKER_TRUST_JSON: z.string().trim().default(''),
     AUTOMATION_WORKER_TLS_ATTESTATION_SECRET: z.string().max(4_096).default(''),
     AUTOMATION_WORKER_PROOF_SKEW_MS: z.coerce
@@ -174,6 +177,24 @@ const AutomationControlEnvironmentSchema = z
       });
     }
     if (environment.AUTOMATION_BROWSER_DISPATCH_ENABLED === 'true') {
+      if (environment.AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256.length === 0) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256'],
+          message: 'AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256 is required for Browser Worker dispatch',
+        });
+      }
+      if (environment.AUTOMATION_CONTROL_WORKER_SHARED_SECRET.length < 32) {
+        context.addIssue({
+          code: z.ZodIssueCode.too_small,
+          type: 'string',
+          minimum: 32,
+          inclusive: true,
+          path: ['AUTOMATION_CONTROL_WORKER_SHARED_SECRET'],
+          message:
+            'AUTOMATION_CONTROL_WORKER_SHARED_SECRET must contain at least 32 characters for Browser Worker dispatch',
+        });
+      }
       if (parseBrowserWorkerUrl(environment.AUTOMATION_BROWSER_WORKER_URL) === null) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -194,6 +215,19 @@ const AutomationControlEnvironmentSchema = z
           });
         }
       }
+    }
+    if (
+      environment.AUTOMATION_BROWSER_APPROVAL_RESUME_ENABLED === 'true' &&
+      environment.AUTOMATION_APPROVAL_RESUME_TOKEN_PEPPER.length < 32
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.too_small,
+        type: 'string',
+        minimum: 32,
+        inclusive: true,
+        path: ['AUTOMATION_APPROVAL_RESUME_TOKEN_PEPPER'],
+        message: 'AUTOMATION_APPROVAL_RESUME_TOKEN_PEPPER must contain at least 32 characters',
+      });
     }
     if (environment.AUTOMATION_CONTROL_ENABLED !== 'true') return;
 
@@ -266,6 +300,9 @@ export type AutomationControlConfig = Readonly<{
   redisUrl: string;
   serviceId: string;
   sharedSecret: string;
+  controlCertificateFingerprint256?: string;
+  controlWorkerSharedSecret?: string;
+  browserApprovalResumeTokenPepper?: string;
   browserWorkerPeers: Readonly<
     Record<
       string,
@@ -327,6 +364,9 @@ export function loadAutomationControlConfig(
     redisUrl: parsed.REDIS_URL,
     serviceId: parsed.AUTOMATION_SERVICE_ID,
     sharedSecret: parsed.AUTOMATION_CONTROL_SHARED_SECRET,
+    controlCertificateFingerprint256: parsed.AUTOMATION_CONTROL_CERTIFICATE_FINGERPRINT256,
+    controlWorkerSharedSecret: parsed.AUTOMATION_CONTROL_WORKER_SHARED_SECRET,
+    browserApprovalResumeTokenPepper: parsed.AUTOMATION_APPROVAL_RESUME_TOKEN_PEPPER,
     browserWorkerPeers: browserWorkerPeers ?? Object.freeze({}),
     workerTlsAttestationSecret: parsed.AUTOMATION_WORKER_TLS_ATTESTATION_SECRET,
     workerProofSkewMs: parsed.AUTOMATION_WORKER_PROOF_SKEW_MS,

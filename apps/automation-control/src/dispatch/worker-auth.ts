@@ -24,6 +24,10 @@ export type VerifiedWorkerPeer = Readonly<{
 
 export type WorkerServiceProof = AutomationWorkerServiceProof;
 
+export type WorkerServiceSigner = Readonly<{
+  sign(body: unknown, timestamp: Date): WorkerServiceProof;
+}>;
+
 export interface WorkerNonceStore {
   /**
    * Atomically consumes a nonce for a service identity. Production stores must be shared across
@@ -177,6 +181,42 @@ function assertServiceId(serviceId: string): void {
   if (!/^[A-Za-z][A-Za-z0-9._:-]{0,127}$/.test(serviceId)) {
     throw new WorkerAuthenticationError('worker service identity is invalid');
   }
+}
+
+export function createWorkerServiceSigner(input: {
+  serviceId: string;
+  certificateFingerprint256: string;
+  sharedSecret: string;
+  nextNonce: () => number;
+}): WorkerServiceSigner {
+  let lastNonce = 0;
+  return Object.freeze({
+    sign(body, timestamp) {
+      const nonce = input.nextNonce();
+      if (!Number.isSafeInteger(nonce) || nonce <= lastNonce || nonce < 1) {
+        throw new WorkerAuthenticationError(
+          'worker service signing nonce is invalid',
+          'invalid_configuration',
+        );
+      }
+      lastNonce = nonce;
+      return Object.freeze({
+        service_id: input.serviceId,
+        timestamp: timestamp.toISOString(),
+        nonce,
+        signature: signatureFor(
+          {
+            serviceId: input.serviceId,
+            certificateFingerprint256: input.certificateFingerprint256,
+            timestamp,
+            nonce,
+            body,
+          },
+          input.sharedSecret,
+        ),
+      });
+    },
+  });
 }
 
 export type WorkerServiceAuthenticator = ReturnType<typeof createWorkerServiceAuthenticator>;

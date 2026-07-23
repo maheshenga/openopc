@@ -14,7 +14,11 @@ import {
 import { createBrowserDispatcher } from './browser-dispatcher';
 import { createDesktopDispatcher } from './desktop-dispatcher';
 import { createHeartbeatProcessor } from './heartbeat';
-import { createMemoryWorkerNonceStore, createWorkerServiceAuthenticator } from './worker-auth';
+import {
+  createMemoryWorkerNonceStore,
+  createWorkerServiceAuthenticator,
+  createWorkerServiceSigner,
+} from './worker-auth';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
@@ -186,11 +190,6 @@ function authentication() {
     now: () => NOW,
     nonceStore,
     trustedPeers: {
-      'automation-control': {
-        role: 'automation-control',
-        fingerprints: ['AA:CONTROL'],
-        sharedSecret: 'control-shared-secret-with-at-least-32-bytes',
-      },
       'browser-worker-1': {
         role: 'browser-worker',
         fingerprints: ['BB:WORKER'],
@@ -198,19 +197,22 @@ function authentication() {
       },
     },
   });
-  const controlPeer = authenticator.bindTlsPeer({
-    authorized: true,
-    serviceId: 'automation-control',
-    fingerprint256: 'AA:CONTROL',
-    validTo: '2099-07-23T08:00:00.000Z',
-  });
   const workerPeer = authenticator.bindTlsPeer({
     authorized: true,
     serviceId: 'browser-worker-1',
     fingerprint256: 'BB:WORKER',
     validTo: '2099-07-23T08:00:00.000Z',
   });
-  return { authenticator, controlPeer, workerPeer };
+  return { authenticator, workerPeer };
+}
+
+function controlSigner(nextNonce: () => number) {
+  return createWorkerServiceSigner({
+    serviceId: 'automation-control',
+    certificateFingerprint256: 'AA:CONTROL',
+    sharedSecret: 'control-worker-secret-with-at-least-32-bytes',
+    nextNonce,
+  });
 }
 
 describe('automation dispatch boundary', () => {
@@ -218,18 +220,16 @@ describe('automation dispatch boundary', () => {
     const request = browserRequest();
     const currentJob = job(request);
     const currentLease = lease(request);
-    const { authenticator, controlPeer, workerPeer } = authentication();
+    const { authenticator, workerPeer } = authentication();
     let transportCalls = 0;
     let leaseChecks = 0;
 
     const dispatcher = createBrowserDispatcher({
       authenticator,
-      localCertificateFingerprint256: 'AA:CONTROL',
-      localServiceId: 'automation-control',
-      nextNonce: (() => {
+      signer: controlSigner((() => {
         let nonce = 0;
         return () => ++nonce;
-      })(),
+      })()),
       now: () => NOW,
       isLeaseCurrent: async (binding) => {
         leaseChecks += 1;
@@ -247,12 +247,7 @@ describe('automation dispatch boundary', () => {
           transportCalls += 1;
           expect(message.envelope.policy_version).toBe(POLICY_HASH);
           expect(message.envelope.resume_after_sequence).toBe(99);
-          await authenticator.verify({
-            peer: controlPeer,
-            expectedRole: 'automation-control',
-            body: message.envelope,
-            proof: message.proof,
-          });
+          expect(message.proof).toMatchObject({ service_id: 'automation-control', nonce: 1 });
           const receipt = {
             protocol_version: 'automation.v1' as const,
             accepted: true,
@@ -298,14 +293,12 @@ describe('automation dispatch boundary', () => {
       expiresAt: '2099-07-22T08:00:45.000Z',
       resumeAfterSequence: 2,
     } as const;
-    const { authenticator, controlPeer, workerPeer } = authentication();
+    const { authenticator, workerPeer } = authentication();
     let sentEnvelope: unknown;
     let leaseChecks = 0;
     const dispatcher = createBrowserDispatcher({
       authenticator,
-      localCertificateFingerprint256: 'AA:CONTROL',
-      localServiceId: 'automation-control',
-      nextNonce: () => 31,
+      signer: controlSigner(() => 31),
       now: () => NOW,
       isLeaseCurrent: async () => {
         leaseChecks += 1;
@@ -321,12 +314,7 @@ describe('automation dispatch boundary', () => {
         peer: workerPeer,
         async send(message) {
           sentEnvelope = message.envelope;
-          await authenticator.verify({
-            peer: controlPeer,
-            expectedRole: 'automation-control',
-            body: message.envelope,
-            proof: message.proof,
-          });
+          expect(message.proof).toMatchObject({ service_id: 'automation-control', nonce: 31 });
           const workerReceipt = {
             protocol_version: 'automation.v1' as const,
             accepted: true,
@@ -397,9 +385,7 @@ describe('automation dispatch boundary', () => {
       let sends = 0;
       const dispatcher = createBrowserDispatcher({
         authenticator,
-        localCertificateFingerprint256: 'AA:CONTROL',
-        localServiceId: 'automation-control',
-        nextNonce: () => 41,
+        signer: controlSigner(() => 41),
         now: () => NOW,
         isLeaseCurrent: async () => true,
         isLeaseSignatureValid: async () => true,
@@ -431,9 +417,7 @@ describe('automation dispatch boundary', () => {
       let leaseChecks = 0;
       const dispatcher = createBrowserDispatcher({
         authenticator,
-        localCertificateFingerprint256: 'AA:CONTROL',
-        localServiceId: 'automation-control',
-        nextNonce: () => 51,
+        signer: controlSigner(() => 51),
         now: () => NOW,
         isLeaseCurrent: async () => {
           leaseChecks += 1;
@@ -500,9 +484,7 @@ describe('automation dispatch boundary', () => {
     let transportCalls = 0;
     const dispatcher = createBrowserDispatcher({
       authenticator,
-      localCertificateFingerprint256: 'AA:CONTROL',
-      localServiceId: 'automation-control',
-      nextNonce: () => 1,
+      signer: controlSigner(() => 1),
       now: () => {
         nowCalls += 1;
         return nowCalls === 1 ? NOW : new Date('2099-07-22T08:05:01.000Z');
@@ -534,9 +516,7 @@ describe('automation dispatch boundary', () => {
     let calls = 0;
     const dispatcher = createBrowserDispatcher({
       authenticator,
-      localCertificateFingerprint256: 'AA:CONTROL',
-      localServiceId: 'automation-control',
-      nextNonce: () => 1,
+      signer: controlSigner(() => 1),
       now: () => NOW,
       isLeaseCurrent: async () => true,
       isLeaseSignatureValid: async () => true,
@@ -627,9 +607,7 @@ describe('automation dispatch boundary', () => {
       let leaseChecks = 0;
       const dispatcher = createBrowserDispatcher({
         authenticator,
-        localCertificateFingerprint256: 'AA:CONTROL',
-        localServiceId: 'automation-control',
-        nextNonce: () => 41,
+        signer: controlSigner(() => 41),
         now: () => NOW,
         isLeaseCurrent: async () => {
           leaseChecks += 1;

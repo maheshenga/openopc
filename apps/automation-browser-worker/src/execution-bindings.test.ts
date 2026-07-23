@@ -23,7 +23,13 @@ const JOB_ID = '30000000-0000-4000-a000-000000000001';
 const LEASE_ID = '40000000-0000-4000-a000-000000000001';
 const STEP_ID = '50000000-0000-4000-a000-000000000001';
 
-function workItem(input: { action?: 'browser.wait' | 'browser.payment'; resume?: boolean } = {}) {
+function workItem(
+  input: {
+    action?: 'browser.wait' | 'browser.payment';
+    persistent?: boolean;
+    resume?: boolean;
+  } = {},
+) {
   const action = input.action ?? 'browser.wait';
   const request = AutomationJobRequestSchema.parse({
     protocol_version: 'automation.v1',
@@ -47,7 +53,9 @@ function workItem(input: { action?: 'browser.wait' | 'browser.payment'; resume?:
       allowed_origins: ['https://example.test'],
       network_mode: 'allowlist',
       open_network_expires_at: null,
-      context: { mode: 'temporary', profile_id: null },
+      context: input.persistent
+        ? { mode: 'persistent', profile_id: '90000000-0000-4000-a000-000000000001' }
+        : { mode: 'temporary', profile_id: null },
     },
     desktop_policy: null,
     idempotency_key: `execution-bindings-${action}`,
@@ -227,6 +235,28 @@ describe('browser execution bindings', () => {
       }),
     ).rejects.toThrow(/authority/i);
     expect(launches).toBe(0);
+  });
+
+  test('rejects a persistent profile before launch and emits one redacted job failure', async () => {
+    const fixture = inputFor(workItem({ persistent: true }));
+    let launches = 0;
+    await expect(
+      executeBrowserDispatchWorkItem({
+        ...fixture.input,
+        launchBrowser: (async () => {
+          launches += 1;
+          throw new Error('must not launch');
+        }) as BrowserExecutionBindingInput['launchBrowser'],
+      }),
+    ).rejects.toThrow(/one-time profile broker/i);
+    expect(launches).toBe(0);
+    expect(fixture.events.filter((event) => event.type === 'job_failed')).toEqual([
+      {
+        type: 'job_failed',
+        payload: { cleanup_error_count: 0, project_id: PROJECT_ID },
+        trace_id: null,
+      },
+    ]);
   });
 
   test('binds Resume consumption to its dispatch envelope', async () => {

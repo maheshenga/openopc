@@ -161,11 +161,11 @@ export async function executeBrowserDispatchWorkItem(
   input: BrowserExecutionBindingInput,
 ): Promise<BrowserExecutionResult> {
   const { workItem } = input;
-  if (workItem.envelope.request.browser_policy?.context.mode === 'persistent') {
-    throw new Error('persistent browser profiles require a one-time profile broker');
-  }
   const bindings = createBrowserExecutionBindings(input);
   try {
+    if (workItem.envelope.request.browser_policy?.context.mode === 'persistent') {
+      throw new Error('persistent browser profiles require a one-time profile broker');
+    }
     const events = await runIsolatedBrowserRequest({
       lease: workItem.envelope.lease,
       request: workItem.envelope.request,

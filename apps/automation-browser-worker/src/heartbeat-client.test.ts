@@ -21,8 +21,11 @@ const NOW = new Date('2026-07-23T04:00:00.000Z');
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
 const JOB_ID = '30000000-0000-4000-a000-000000000001';
+const OTHER_JOB_ID = '30000000-0000-4000-a000-000000000002';
 const LEASE_ID = '40000000-0000-4000-a000-000000000001';
+const OTHER_LEASE_ID = '40000000-0000-4000-a000-000000000002';
 const STEP_ID = '50000000-0000-4000-a000-000000000001';
+const EVIDENCE_ID = '70000000-0000-4000-a000-000000000001';
 const EVENT_ID = '60000000-0000-4000-a000-000000000001';
 const WORKER_ID = 'browser-worker-1';
 const WORKER_FINGERPRINT = 'AA:BB:CC:DD';
@@ -97,6 +100,33 @@ function acceptedEvent(sequence: number, payload: Record<string, unknown>): Auto
   };
 }
 
+function acceptedWorkerEvent(
+  sequence: number,
+  heartbeat: AutomationWorkerHeartbeat,
+): AutomationEvent {
+  const status =
+    heartbeat.event.type === 'heartbeat'
+      ? null
+      : heartbeat.event.type === 'job_succeeded'
+        ? 'succeeded'
+        : heartbeat.event.type === 'job_failed'
+          ? 'failed'
+          : heartbeat.event.type === 'approval_required'
+            ? 'awaiting_approval'
+            : 'running';
+  return {
+    protocol_version: 'automation.v1',
+    event_id: EVENT_ID,
+    job_id: heartbeat.job_id,
+    sequence,
+    type: heartbeat.event.type,
+    status,
+    payload: heartbeat.event.payload,
+    trace_id: heartbeat.event.trace_id,
+    created_at: NOW.toISOString(),
+  };
+}
+
 describe('Browser Worker heartbeat client', () => {
   test('keeps inbound dispatch disabled and requires heartbeat plus separate Control trust', () => {
     const loadDispatchConfig = (
@@ -149,7 +179,9 @@ describe('Browser Worker heartbeat client', () => {
   test('keeps outbound heartbeat and mTLS credentials disabled by default', () => {
     expect(loadBrowserWorkerHeartbeatConfig({})).toEqual({ enabled: false });
     expect(() =>
-      loadBrowserWorkerHeartbeatConfig({ AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'yes' }),
+      loadBrowserWorkerHeartbeatConfig({
+        AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'yes',
+      }),
     ).toThrow(/true or false/);
   });
 
@@ -208,7 +240,9 @@ describe('Browser Worker heartbeat client', () => {
       return new Response('{}');
     });
 
-    await transport('https://automation-control.internal:4011/health', { method: 'GET' });
+    await transport('https://automation-control.internal:4011/health', {
+      method: 'GET',
+    });
 
     expect(captured?.tls).toMatchObject({
       rejectUnauthorized: true,
@@ -220,7 +254,11 @@ describe('Browser Worker heartbeat client', () => {
   });
 
   test('sends sequential signed heartbeats without spoofable TLS attestation headers', async () => {
-    const calls: Array<{ url: string; init: RequestInit; body: HeartbeatWireBody }> = [];
+    const calls: Array<{
+      url: string;
+      init: RequestInit;
+      body: HeartbeatWireBody;
+    }> = [];
     const nonces = [101, 102];
     const client = createBrowserWorkerHeartbeatClient({
       controlUrl: 'https://automation-control.internal:4011',
@@ -236,7 +274,11 @@ describe('Browser Worker heartbeat client', () => {
           calls.length,
           body.heartbeat.event.payload as Record<string, unknown>,
         );
-        return Response.json({ protocol_version: 'automation.v1', accepted: true, event });
+        return Response.json({
+          protocol_version: 'automation.v1',
+          accepted: true,
+          event,
+        });
       },
     });
 
@@ -290,6 +332,266 @@ describe('Browser Worker heartbeat client', () => {
     expect(calls).toHaveLength(2);
   });
 
+  test('serializes heartbeat, action, and terminal events through one ordinal and nonce stream', async () => {
+    const recorded: HeartbeatWireBody[] = [];
+    let nonce = 500;
+    const client = createBrowserWorkerHeartbeatClient({
+      controlUrl: 'https://automation-control.internal:4011',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      now: () => NOW,
+      nextNonce: () => ++nonce,
+      transport: async (_url, init) => {
+        const body = JSON.parse(String(init.body)) as HeartbeatWireBody;
+        recorded.push(body);
+        return Response.json({
+          protocol_version: 'automation.v1',
+          accepted: true,
+          event: acceptedWorkerEvent(recorded.length, body.heartbeat),
+        });
+      },
+    });
+
+    await Promise.all([
+      client.send({ lease, request, lastCompletedStep: 0 }),
+      client.emit({
+        lease,
+        request,
+        event: {
+          type: 'step_completed',
+          payload: {
+            step_id: STEP_ID,
+            evidence_reference: `evidence:${EVIDENCE_ID}`,
+          },
+          trace_id: 'd'.repeat(32),
+        },
+      }),
+      client.emit({
+        lease,
+        request,
+        event: { type: 'job_succeeded', payload: {}, trace_id: null },
+      }),
+    ]);
+
+    expect(recorded.map((entry) => entry.heartbeat.ordinal)).toEqual([1, 2, 3]);
+    expect(recorded.map((entry) => entry.heartbeat.event.type)).toEqual([
+      'heartbeat',
+      'step_completed',
+      'job_succeeded',
+    ]);
+    expect(recorded.map((entry) => entry.proof.nonce)).toEqual([501, 502, 503]);
+  });
+
+  test('poisons only the failed lease event stream', async () => {
+    const otherLease = {
+      ...lease,
+      lease_id: OTHER_LEASE_ID,
+      job_id: OTHER_JOB_ID,
+      owner: `${WORKER_ID}:${OTHER_LEASE_ID}`,
+    };
+    const recorded: AutomationWorkerHeartbeat[] = [];
+    let nonce = 600;
+    const client = createBrowserWorkerHeartbeatClient({
+      controlUrl: 'https://automation-control.internal:4011',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      now: () => NOW,
+      nextNonce: () => ++nonce,
+      transport: async (_url, init) => {
+        const body = JSON.parse(String(init.body)) as HeartbeatWireBody;
+        recorded.push(body.heartbeat);
+        if (body.heartbeat.lease_id === LEASE_ID) {
+          return Response.json(
+            {
+              protocol_version: 'automation.v1',
+              code: 'AUTOMATION_LEASE_EXPIRED',
+              message: 'dependency details must stay private',
+              retryable: false,
+              approval_status: null,
+              audit_event_id: null,
+            },
+            { status: 409 },
+          );
+        }
+        return Response.json({
+          protocol_version: 'automation.v1',
+          accepted: true,
+          event: acceptedWorkerEvent(1, body.heartbeat),
+        });
+      },
+    });
+
+    await expect(
+      client.emit({
+        lease,
+        request,
+        event: {
+          type: 'step_completed',
+          payload: {
+            step_id: STEP_ID,
+            evidence_reference: `evidence:${EVIDENCE_ID}`,
+          },
+          trace_id: null,
+        },
+      }),
+    ).rejects.toMatchObject({ reason: 'rejected' });
+    await expect(
+      client.emit({
+        lease,
+        request,
+        event: { type: 'job_succeeded', payload: {}, trace_id: null },
+      }),
+    ).rejects.toMatchObject({
+      reason: 'transport',
+      message: 'Browser Worker heartbeat stream is no longer usable',
+    });
+    await expect(
+      client.send({ lease: otherLease, request, lastCompletedStep: 0 }),
+    ).resolves.toMatchObject({ job_id: OTHER_JOB_ID, type: 'heartbeat' });
+
+    expect(recorded.map((entry) => [entry.lease_id, entry.ordinal])).toEqual([
+      [LEASE_ID, 1],
+      [OTHER_LEASE_ID, 1],
+    ]);
+  });
+
+  test('serializes transport across leases so proof nonces cannot arrive out of order', async () => {
+    const otherLease = {
+      ...lease,
+      lease_id: OTHER_LEASE_ID,
+      job_id: OTHER_JOB_ID,
+      owner: `${WORKER_ID}:${OTHER_LEASE_ID}`,
+    };
+    const recorded: HeartbeatWireBody[] = [];
+    let markFirstStarted: () => void = () => undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    let releaseFirst: () => void = () => undefined;
+    const firstResponse = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let nonce = 650;
+    const client = createBrowserWorkerHeartbeatClient({
+      controlUrl: 'https://automation-control.internal:4011',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      now: () => NOW,
+      nextNonce: () => ++nonce,
+      transport: async (_url, init) => {
+        const body = JSON.parse(String(init.body)) as HeartbeatWireBody;
+        recorded.push(body);
+        if (recorded.length === 1) {
+          markFirstStarted();
+          await firstResponse;
+        }
+        return Response.json({
+          protocol_version: 'automation.v1',
+          accepted: true,
+          event: acceptedWorkerEvent(recorded.length, body.heartbeat),
+        });
+      },
+    });
+
+    const first = client.send({ lease, request, lastCompletedStep: 0 });
+    await firstStarted;
+    const second = client.send({
+      lease: otherLease,
+      request,
+      lastCompletedStep: 0,
+    });
+    await Bun.sleep(0);
+
+    expect(recorded).toHaveLength(1);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(recorded.map((entry) => entry.proof.nonce)).toEqual([651, 652]);
+  });
+
+  test('rejects accepted responses not bound to the exact sent event', async () => {
+    const sentEvent = {
+      type: 'step_completed' as const,
+      payload: {
+        step_id: STEP_ID,
+        evidence_reference: `evidence:${EVIDENCE_ID}`,
+      },
+      trace_id: 'e'.repeat(32),
+    };
+    const mismatches: Array<(event: AutomationEvent) => AutomationEvent> = [
+      (event) => ({ ...event, job_id: OTHER_JOB_ID }),
+      (event) => ({ ...event, type: 'job_started' }),
+      (event) => ({ ...event, payload: {} }),
+      (event) => ({ ...event, trace_id: null }),
+    ];
+
+    for (const mismatch of mismatches) {
+      const client = createBrowserWorkerHeartbeatClient({
+        controlUrl: 'https://automation-control.internal:4011',
+        serviceId: WORKER_ID,
+        certificateFingerprint256: WORKER_FINGERPRINT,
+        sharedSecret: WORKER_SECRET,
+        now: () => NOW,
+        nextNonce: () => 701,
+        transport: async (_url, init) => {
+          const body = JSON.parse(String(init.body)) as HeartbeatWireBody;
+          return Response.json({
+            protocol_version: 'automation.v1',
+            accepted: true,
+            event: mismatch(acceptedWorkerEvent(1, body.heartbeat)),
+          });
+        },
+      });
+
+      await expect(client.emit({ lease, request, event: sentEvent })).rejects.toMatchObject({
+        reason: 'protocol',
+        message: 'Browser Worker heartbeat response is invalid',
+      });
+    }
+  });
+
+  test('rejects secret-shaped payload keys before transport without leaking details', async () => {
+    let calls = 0;
+    const secretValue = 'Bearer private-worker-value';
+    const client = createBrowserWorkerHeartbeatClient({
+      controlUrl: 'https://automation-control.internal:4011',
+      serviceId: WORKER_ID,
+      certificateFingerprint256: WORKER_FINGERPRINT,
+      sharedSecret: WORKER_SECRET,
+      now: () => NOW,
+      nextNonce: () => 801,
+      transport: async () => {
+        calls += 1;
+        throw new Error('dependency exception details');
+      },
+    });
+    const event = {
+      type: 'step_started',
+      payload: { step_id: STEP_ID, nested: { authorization: secretValue } },
+      trace_id: null,
+    } as unknown as AutomationWorkerHeartbeat['event'];
+
+    let thrown: unknown;
+    try {
+      await client.emit({ lease, request, event });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      name: 'BrowserWorkerHeartbeatClientError',
+      reason: 'protocol',
+      message: 'Browser Worker event payload is invalid',
+    });
+    const exposed = `${String(thrown)} ${JSON.stringify(thrown)}`;
+    expect(exposed.toLowerCase()).not.toContain('authorization');
+    expect(exposed).not.toContain(secretValue);
+    expect(exposed).not.toContain('dependency exception details');
+    expect(calls).toBe(0);
+  });
+
   test('fails the lease stream closed after a rejected or malformed response', async () => {
     let calls = 0;
     const client = createBrowserWorkerHeartbeatClient({
@@ -319,7 +621,11 @@ describe('Browser Worker heartbeat client', () => {
       name: 'BrowserWorkerHeartbeatClientError',
       reason: 'rejected',
       message: 'Browser Worker heartbeat was rejected',
-      response: { status: 409, code: 'AUTOMATION_LEASE_EXPIRED', retryable: false },
+      response: {
+        status: 409,
+        code: 'AUTOMATION_LEASE_EXPIRED',
+        retryable: false,
+      },
     });
     await expect(client.send({ lease, request, lastCompletedStep: 0 })).rejects.toMatchObject({
       reason: 'transport',
@@ -388,7 +694,9 @@ describe('Browser Worker heartbeat client', () => {
           sent.push(input.lastCompletedStep);
           if (sent.length === 1) lastCompletedStep = 1;
           if (sent.length === 2) controller.abort('execution completed');
-          return acceptedEvent(sent.length, { last_completed_step: input.lastCompletedStep });
+          return acceptedEvent(sent.length, {
+            last_completed_step: input.lastCompletedStep,
+          });
         },
       },
       lease,

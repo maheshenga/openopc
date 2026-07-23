@@ -1,6 +1,6 @@
 # Studio Acceleration Progress
 
-**Updated:** 2026-07-23
+**Updated:** 2026-07-24
 
 **Branch:** `studio-platform`
 
@@ -52,6 +52,24 @@ browser black-box flows, live API/Worker metrics scrape, MinIO conformance,
 live Provider smoke, Alibaba Cloud OSS smoke, and the 24-hour/7-day/30-day
 incident lifecycle. These are not proven by this local focused snapshot, so
 Studio production enablement remains disabled.
+
+## Anonymous Local Black-Box Continuation
+
+**Updated:** 2026-07-24
+
+Commit `1087b1203` adds explicit `publicOnly` flow metadata so anonymous
+coverage checks do not provision Supabase principals. COV-1, COV-6, COV-7,
+COV-8, and COV-9 passed `5/5` against an isolated local API using dummy
+credentials, an unreachable dummy database, no real provider, and all
+optional gateways disabled. The checks therefore prove HTTP route mounting
+and fail-closed auth/feature boundaries only; they do not prove database,
+provider, object-storage, or production behavior.
+
+The focused API typecheck passed, the changed coverage flow passed scoped
+Biome, and the route coverage gate still reports `newUncovered=0` and
+`newExternal=0`. The tests package typecheck remains environment-blocked by
+the existing missing `@types/pg` declaration in the current install; no full
+repository test suite was run.
 
 ## Canonical Client Contract
 

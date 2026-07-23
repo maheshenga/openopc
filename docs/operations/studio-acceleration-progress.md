@@ -71,6 +71,14 @@ Biome, and the route coverage gate still reports `newUncovered=0` and
 the existing missing `@types/pg` declaration in the current install; no full
 repository test suite was run.
 
+The fixed local MinIO image was available and a temporary
+`openopc-minio-conformance` container was started with the documented test
+credentials. The real S3 integration suite passed `8` tests with `54`
+assertions, including private objects, constrained signed transfers, checksum
+and size rejection, conditional writes/deletes, and bounded prefix listing.
+The container was stopped and removed. Alibaba Cloud OSS, live provider calls,
+and production bucket readiness remain unverified.
+
 ## Canonical Client Contract
 
 `kortix.project(projectId).intelligence` is the only product-facing SDK facade for capability discovery, Agent Cards, task creation/events, and governed workflows. Milestone 0-1 adds image estimates, Studio jobs, uploads, and assets as typed projections under that existing facade. The unimplemented `kortix.project(projectId).studio` proposal is superseded and must not be introduced.

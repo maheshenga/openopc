@@ -2,38 +2,35 @@ import type { AutomationControlConfig } from '../config';
 import type { LeaseManager } from '../lease-manager';
 import { type HeartbeatEventSink, createHeartbeatProcessor } from './heartbeat';
 import { createBrowserWorkerHeartbeatRoute } from './heartbeat-route';
-import {
-  type WorkerRedisCommandClient,
-  createRedisWorkerNonceStore,
-  createWorkerServiceAuthenticator,
-} from './worker-auth';
+import type { WorkerRedisCommandClient, WorkerServiceAuthenticator } from './worker-auth';
 
 export type BrowserWorkerHeartbeatRuntimeDependencies = Readonly<{
   config: AutomationControlConfig;
-  redis: WorkerRedisCommandClient;
+  authenticator: WorkerServiceAuthenticator;
   leaseManager: Pick<LeaseManager, 'isCurrent'>;
   eventSink: HeartbeatEventSink;
   now?: () => Date;
 }>;
 
+type PrecomposedHeartbeatRuntimeDependencies = Readonly<
+  Omit<BrowserWorkerHeartbeatRuntimeDependencies, 'authenticator'> & {
+    redis: WorkerRedisCommandClient;
+    authenticator?: never;
+  }
+>;
+
 export function createBrowserWorkerHeartbeatRuntime(
-  dependencies: BrowserWorkerHeartbeatRuntimeDependencies,
+  dependencies: BrowserWorkerHeartbeatRuntimeDependencies | PrecomposedHeartbeatRuntimeDependencies,
 ) {
   if (!dependencies.config.enabled || !dependencies.config.browserHeartbeatEnabled) {
     throw new Error('Browser Worker heartbeat runtime is not enabled');
   }
+  if (dependencies.authenticator === undefined) {
+    throw new Error('Shared Browser Worker authenticator is not configured');
+  }
   const now = dependencies.now ?? (() => new Date());
-  const nonceStore = createRedisWorkerNonceStore(dependencies.redis, {
-    ttlMs: Math.min(dependencies.config.workerProofSkewMs * 2, 10 * 60_000),
-  });
-  const authenticator = createWorkerServiceAuthenticator({
-    trustedPeers: dependencies.config.browserWorkerPeers,
-    nonceStore,
-    now,
-    maxSkewMs: dependencies.config.workerProofSkewMs,
-  });
   const processor = createHeartbeatProcessor({
-    authenticator,
+    authenticator: dependencies.authenticator,
     now,
     maxObservedSkewMs: dependencies.config.workerProofSkewMs,
     isLeaseBindingCurrent: (binding) =>
@@ -42,7 +39,7 @@ export function createBrowserWorkerHeartbeatRuntime(
   });
   return createBrowserWorkerHeartbeatRoute({
     tlsAttestationSecret: dependencies.config.workerTlsAttestationSecret,
-    authenticator,
+    authenticator: dependencies.authenticator,
     processor,
     now,
     maxSkewMs: dependencies.config.workerProofSkewMs,

@@ -18,7 +18,7 @@ const WORKER_SECRET = 'worker-shared-secret-at-least-thirty-two-bytes';
 const TLS_ATTESTATION_SECRET = 'trusted-proxy-attestation-secret-at-least-thirty-two-bytes';
 
 describe('Browser Worker heartbeat runtime', () => {
-  test('composes Redis proof replay protection, lease fencing, and the durable sink', async () => {
+  test('composes shared proof replay protection, lease fencing, and the durable sink', async () => {
     const config = loadAutomationControlConfig({
       AUTOMATION_CONTROL_ENABLED: 'true',
       AUTOMATION_BROWSER_HEARTBEAT_ENABLED: 'true',
@@ -63,8 +63,6 @@ describe('Browser Worker heartbeat runtime', () => {
       body: heartbeat,
     });
     const body = JSON.stringify({ protocol_version: 'automation.v1', proof, heartbeat });
-    const redisCalls: Array<{ command: string; args: string[] }> = [];
-    const redisReplies: unknown[] = [1, 0];
     const leaseChecks: unknown[] = [];
     const sinkCalls: unknown[] = [];
     const event = {
@@ -80,13 +78,8 @@ describe('Browser Worker heartbeat runtime', () => {
     };
     const app = createBrowserWorkerHeartbeatRuntime({
       config,
+      authenticator: signer,
       now: () => NOW,
-      redis: {
-        async send(command, args) {
-          redisCalls.push({ command, args });
-          return redisReplies.shift();
-        },
-      },
       leaseManager: {
         async isCurrent(jobId, owner, checkedAt) {
           leaseChecks.push({ jobId, owner, checkedAt });
@@ -178,11 +171,6 @@ describe('Browser Worker heartbeat runtime', () => {
       code: 'AUTOMATION_UNAUTHORIZED',
       retryable: false,
     });
-    expect(redisCalls).toHaveLength(2);
-    expect(redisCalls[0]?.command).toBe('EVAL');
-    expect(redisCalls[0]?.args[2]).toMatch(/^automation:worker-proof:nonce:v1:[a-f0-9]{64}$/);
-    expect(redisCalls[0]?.args.slice(3)).toEqual(['11', '120000']);
-    expect(redisCalls[1]).toEqual(redisCalls[0]);
     expect(leaseChecks).toEqual([
       { jobId: JOB_ID, owner: `${WORKER_ID}:${LEASE_ID}`, checkedAt: NOW },
     ]);

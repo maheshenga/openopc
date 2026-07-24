@@ -162,7 +162,7 @@ export function ForYouPanel({
             scale={0.65}
             image="/shaders/heatmap-mark.svg"
             frame={407072.499999992}
-            colors={['var(--kortix-orange)', '#fafafa', '#242424']}
+            colors={['#d18b19', '#fafafa', '#242424']}
             colorBack="#ffffff00"
             className="shrink-0"
             style={{

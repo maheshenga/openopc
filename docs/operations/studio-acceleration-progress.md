@@ -17,7 +17,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
 | OpenOPC Milestone A       | implemented, disabled by default                        | catalog, project SSE projection, SDK subscription, and focused contract/API/SDK/CLI gates verified locally                                  | production rollout and later milestones                           |
 | Automation Task 8A-8B     | authenticated heartbeat plus bounded Browser Worker dispatch transport implemented; desktop observe coordinator implemented; production hardening partial; default-off | heartbeat commits through `5c6ec31d0`; dispatch commits `44ff08329`, `bf3b2a4a2`, `9f7399997`, and `cce38b4ff`; shared schemas, signed receipts, mTLS client options, replay fencing, and package gates verified | main-runtime composition, real mTLS deployment, sink concurrency validation, durable step/approval handling, and unknown-result recovery |
-| Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; browser acceptance green                                                            | focused Web hardening without full-suite reruns                   |
+| Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; Windows launcher adapter and focused browser diagnostics                             | repeat landing-page console verification after host memory relief |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
 | Developer Center          | planned                                                 | acceleration design Milestone 4                                                                                                             | separate plan                                                     |
@@ -52,12 +52,55 @@ the route contract, and the preview-auth dependency graph includes the
 service-account/token/key factory exports required by the current module
 loader.
 
-The Web browser gate remains open. The Windows package `dev` script uses a
-Unix-style inline environment assignment and fails under PowerShell; a direct
-Next dev attempt did not expose port 3000 within 124 seconds. This is a host
-startup blocker, not evidence of a Web production failure. Supabase-backed
-API/database flows, authenticated browser flows, live providers, and
-production enablement remain unverified.
+The original Web browser gate is superseded by the Windows Web continuation
+below. Supabase-backed API/database flows, authenticated application flows,
+live providers, and production enablement remain unverified.
+
+## Windows Web Startup and Public-Page Continuation
+
+**Updated:** 2026-07-24
+
+The Web `dev` and `dev:staging-env` scripts no longer use Unix-only inline
+`NODE_OPTIONS` assignment or `${WEB_PORT:-3000}` expansion. The package now
+declares its own `@dotenvx/dotenvx` development dependency and invokes its
+public `dotenvx` binary. A small Node launcher preserves caller-supplied
+`NODE_OPTIONS`, adds the 32 KiB header-size guard once, selects `WEB_PORT` with
+a `3000` default, and starts the installed Next CLI without shell-specific
+syntax. SIGINT/SIGTERM are forwarded to the Next child and lifecycle listeners
+are removed after exit, preventing timed-out parent commands from leaving an
+orphaned dev server. This keeps the change inside the Web package boundary and
+avoids a dependency on the root package's internal file layout.
+
+Before the final dependency-boundary cleanup, the same launcher reached Next
+15.5.18 `Ready` on Windows at ports `3310` and `3311`. The in-app browser loaded
+both `/` and `/auth`; the isolated `/auth` tab exposed the email field,
+Continue button, and Sign up action without console errors. A separate fresh
+landing-page tab reproduced React errors for SVG `stop-color` / `stop-opacity`
+attributes and shader errors for `var(--kortix-orange)`. Focused RED tests then
+captured both causes. The implementation uses React-compatible `stopColor` /
+`stopOpacity` props and passes the shader a concrete sRGB color matching the
+Kortix orange token instead of an unsupported CSS variable.
+
+Fresh focused evidence:
+
+- launcher and package-boundary tests plus marketing runtime-safety tests:
+  `7/7` passed;
+- the Web package resolves its declared Dotenvx binary (`1.75.1`);
+- scoped Biome for `package.json` and the three launcher/runtime-safety scripts
+  passed;
+- `git diff --check` passed;
+- direct Web TypeScript checking reached the compiler and reported only three
+  pre-existing unrelated script errors in `electron-smoke-launch.test.ts` and
+  `image-studio-smoke.ts`.
+
+The final landing-page browser recheck is still open. After the earlier dev
+process timed out, orphaned Next child processes consumed approximately 8.4 GB
+and the Windows host began returning `The paging file is too small`; the stale
+task-owned children were cleaned up, but a final formal `pnpm --filter ... dev`
+attempt still did not expose port `3311` within 20 seconds. The static
+regressions are green, but this ledger does not claim a clean post-fix browser
+console, a full Web typecheck, a Web build, production readiness, or any full
+repository suite from this continuation.
 
 ## Task 15 Focused Acceptance Snapshot
 

@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "NODE_OPTIONS='--max-http-header-size=32768' dotenvx run --ignore=MISSING_ENV_FILE -f .env.local -f .env -- next dev --turbopack --port ${WEB_PORT:-3000}",
-    "dev:staging-env": "NODE_OPTIONS='--max-http-header-size=32768' dotenvx run --overload -f .env.staging -- next dev --turbopack --port ${WEB_PORT:-3000}",
+    "dev": "dotenvx run --ignore=MISSING_ENV_FILE -f .env.local -f .env -- node scripts/dev-server.mjs",
+    "dev:staging-env": "dotenvx run --overload -f .env.staging -- node scripts/dev-server.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -208,6 +208,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@dotenvx/dotenvx": "^1.69.2",
     "@eslint/eslintrc": "^3",
     "@kortix/manifest-schema": "workspace:*",
     "@playwright/test": "^1.57.0",

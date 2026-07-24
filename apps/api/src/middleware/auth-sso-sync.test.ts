@@ -4,12 +4,18 @@ let verifyResult: unknown;
 let networkUser: unknown;
 
 mock.module('../shared/jwt-verify', () => ({
+  decodeSupabaseJwtPayload: () => null,
   verifySupabaseJwt: async () => verifyResult,
 }));
 
 mock.module('../shared/supabase', () => ({
   getSupabase: () => ({
-    auth: { getUser: async () => ({ data: { user: networkUser }, error: networkUser ? null : { message: 'x' } }) },
+    auth: {
+      getUser: async () => ({
+        data: { user: networkUser },
+        error: networkUser ? null : { message: 'x' },
+      }),
+    },
   }),
 }));
 
@@ -21,7 +27,10 @@ mock.module('../iam/sso-sync', () => ({
   },
 }));
 
-mock.module('../shared/auth-audit', () => ({ auditLoginSuccess: () => {}, auditLoginFail: () => {} }));
+mock.module('../shared/auth-audit', () => ({
+  auditLoginSuccess: () => {},
+  auditLoginFail: () => {},
+}));
 mock.module('../lib/sentry', () => ({ setSentryUser: () => {} }));
 mock.module('../lib/request-context', () => ({ setContextField: () => {} }));
 
@@ -60,7 +69,9 @@ describe('auth middleware runs SAML JIT sync on every Supabase-JWT path', () => 
     await supabaseAuth(c, async () => {});
     expect(syncCalls).toHaveLength(1);
     expect(syncCalls[0].userId).toBe('u1');
-    expect((syncCalls[0].jwtPayload as typeof SSO_PAYLOAD).app_metadata.provider).toBe('sso:prov-123');
+    expect((syncCalls[0].jwtPayload as typeof SSO_PAYLOAD).app_metadata.provider).toBe(
+      'sso:prov-123',
+    );
   });
 
   test('supabaseAuth NETWORK-fallback path syncs (the regression: kid not in cached JWKS)', async () => {
@@ -70,7 +81,9 @@ describe('auth middleware runs SAML JIT sync on every Supabase-JWT path', () => 
     await supabaseAuth(c, async () => {});
     expect(syncCalls).toHaveLength(1);
     expect(syncCalls[0].userId).toBe('u2');
-    expect((syncCalls[0].jwtPayload as typeof SSO_PAYLOAD).app_metadata.provider).toBe('sso:prov-123');
+    expect((syncCalls[0].jwtPayload as typeof SSO_PAYLOAD).app_metadata.provider).toBe(
+      'sso:prov-123',
+    );
   });
 
   test('combinedAuth LOCAL path syncs', async () => {

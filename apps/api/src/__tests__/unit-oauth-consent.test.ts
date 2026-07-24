@@ -1,14 +1,11 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import {
-  accountMembers,
-  oauthAuthorizationCodes,
-  oauthClients,
-} from '@kortix/db';
+import { accountMembers, oauthAuthorizationCodes, oauthClients } from '@kortix/db';
 
 const USER_ID = '00000000-0000-4000-a000-000000000001';
 const ACCOUNT_ID = '00000000-0000-4000-a000-000000000101';
+const CLIENT_ID = '00000000-0000-4000-a000-000000000301';
 
 const insertedCodes: Array<Record<string, unknown>> = [];
 
@@ -33,13 +30,15 @@ mock.module('../shared/db', () => ({
         where: () => ({
           limit: async () => {
             if (table === oauthClients) {
-              return [{
-                clientId: 'client_123',
-                name: 'Trusted Client',
-                redirectUris: ['https://client.example/callback'],
-                scopes: ['profile', 'machines:read'],
-                active: true,
-              }];
+              return [
+                {
+                  clientId: CLIENT_ID,
+                  name: 'Trusted Client',
+                  redirectUris: ['https://client.example/callback'],
+                  scopes: ['profile', 'machines:read'],
+                  active: true,
+                },
+              ];
             }
             if (table === accountMembers) {
               return [{ accountId: ACCOUNT_ID }];
@@ -71,7 +70,7 @@ function createApp() {
 
 function authRequestUrl() {
   const url = new URL('http://api.example/oauth/authorize');
-  url.searchParams.set('client_id', 'client_123');
+  url.searchParams.set('client_id', CLIENT_ID);
   url.searchParams.set('redirect_uri', 'https://client.example/callback');
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', 'profile machines:read');
@@ -106,7 +105,7 @@ describe('OAuth authorization consent request binding', () => {
     });
     expect(metadata.status).toBe(200);
     expect(await metadata.json()).toMatchObject({
-      client_id: 'client_123',
+      client_id: CLIENT_ID,
       client_name: 'Trusted Client',
       scopes: ['profile', 'machines:read'],
     });
@@ -132,7 +131,7 @@ describe('OAuth authorization consent request binding', () => {
     expect(redirect.searchParams.get('code')).toBeTruthy();
     expect(insertedCodes).toHaveLength(1);
     expect(insertedCodes[0]).toMatchObject({
-      clientId: 'client_123',
+      clientId: CLIENT_ID,
       redirectUri: 'https://client.example/callback',
       scopes: ['profile', 'machines:read'],
       codeChallenge: 'challenge_123',

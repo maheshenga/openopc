@@ -13,7 +13,12 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
 const SANDBOX_ID = 'sandbox-xyz';
 let allowedAccounts = new Set<string>(['acct-owner']);
-let allowedUsers = new Set<string>(['user-owner', 'sa-owner', 'pat-user-owner', 'user-fallback-owner']);
+let allowedUsers = new Set<string>([
+  'user-owner',
+  'sa-owner',
+  'pat-user-owner',
+  'user-fallback-owner',
+]);
 let mockSupabaseUser: { id: string } | null = null;
 
 mock.module('../shared/crypto', () => ({
@@ -23,6 +28,18 @@ mock.module('../shared/crypto', () => ({
 }));
 
 mock.module('../repositories/api-keys', () => ({
+  createApiKey: async () => ({
+    keyId: 'test-key',
+    publicKey: 'test-public-key',
+    secretKey: 'kortix_test',
+    title: 'test',
+    description: null,
+    status: 'active',
+    type: 'sandbox',
+    sandboxId: SANDBOX_ID,
+    expiresAt: null,
+    createdAt: new Date(),
+  }),
   validateSecretKey: async (t: string) => {
     if (t === 'kortix_owner') return { isValid: true, accountId: 'acct-owner' };
     if (t === 'kortix_other') return { isValid: true, accountId: 'acct-other' };
@@ -31,6 +48,7 @@ mock.module('../repositories/api-keys', () => ({
 }));
 
 mock.module('../repositories/account-tokens', () => ({
+  createAccountToken: async () => ({ secretKey: 'kortix_pat_test', tokenId: 'test-token' }),
   validateAccountToken: async (t: string) => {
     if (t === 'kortix_pat_owner') return { isValid: true, userId: 'pat-user-owner' };
     if (t === 'kortix_pat_other') return { isValid: true, userId: 'pat-user-other' };
@@ -39,6 +57,7 @@ mock.module('../repositories/account-tokens', () => ({
 }));
 
 mock.module('../repositories/service-accounts', () => ({
+  ensureAgentServiceAccount: async () => 'sa-owner',
   validateServiceAccountToken: async (t: string) => {
     if (t === 'kortix_sa_owner') {
       return { isValid: true, serviceAccountId: 'sa-owner', accountId: 'acct-owner' };
@@ -69,7 +88,10 @@ mock.module('../shared/supabase', () => ({
 }));
 
 mock.module('../shared/preview-ownership', () => ({
-  canAccessPreviewSandbox: async ({ userId, accountId }: { userId?: string; accountId?: string }) => {
+  canAccessPreviewSandbox: async ({
+    userId,
+    accountId,
+  }: { userId?: string; accountId?: string }) => {
     if (accountId && allowedAccounts.has(accountId)) return true;
     if (userId && allowedUsers.has(userId)) return true;
     return false;
@@ -81,7 +103,9 @@ mock.module('../shared/preview-ownership', () => ({
   canAccessSandboxSession: async () => true,
 }));
 
-const { authenticatePreviewPrincipal, extractPreviewToken } = await import('../sandbox-proxy/preview-auth');
+const { authenticatePreviewPrincipal, extractPreviewToken } = await import(
+  '../sandbox-proxy/preview-auth'
+);
 const { previewSubdomainAuthCacheKeyForTest } = await import('../sandbox-proxy/subdomain');
 
 beforeEach(() => {
@@ -98,7 +122,9 @@ describe('authenticatePreviewPrincipal', () => {
 
   // ── PAT (kortix_pat_) — was rejected by the subdomain edge before ──────────
   test('accepts a PAT for an owner and returns the user id', async () => {
-    expect(await authenticatePreviewPrincipal('kortix_pat_owner', SANDBOX_ID)).toBe('pat-user-owner');
+    expect(await authenticatePreviewPrincipal('kortix_pat_owner', SANDBOX_ID)).toBe(
+      'pat-user-owner',
+    );
   });
   test('rejects a valid PAT that lacks sandbox access', async () => {
     expect(await authenticatePreviewPrincipal('kortix_pat_other', SANDBOX_ID)).toBeNull();
@@ -142,7 +168,9 @@ describe('authenticatePreviewPrincipal', () => {
   });
   test('falls back to the network verify path when JWKS is cold', async () => {
     mockSupabaseUser = { id: 'user-fallback-owner' };
-    expect(await authenticatePreviewPrincipal('jwt-fallback', SANDBOX_ID)).toBe('user-fallback-owner');
+    expect(await authenticatePreviewPrincipal('jwt-fallback', SANDBOX_ID)).toBe(
+      'user-fallback-owner',
+    );
   });
   test('rejects network-fallback user without access', async () => {
     mockSupabaseUser = { id: 'user-fallback-other' };
@@ -154,7 +182,9 @@ describe('extractPreviewToken', () => {
   const u = new URL('http://p3000-sbx.localhost:8008/x');
 
   test('prefers Authorization: Bearer', () => {
-    const req = new Request(u, { headers: { Authorization: 'Bearer tok-bearer', 'X-Kortix-Token': 'tok-kx' } });
+    const req = new Request(u, {
+      headers: { Authorization: 'Bearer tok-bearer', 'X-Kortix-Token': 'tok-kx' },
+    });
     expect(extractPreviewToken(req, new URL(req.url))).toBe('tok-bearer');
   });
   test('falls back to X-Kortix-Token', () => {
@@ -188,7 +218,9 @@ describe('preview subdomain auth cache key', () => {
       headers: { 'x-forwarded-for': '198.51.100.10', 'user-agent': 'browser-b' },
     });
 
-    expect(previewSubdomainAuthCacheKeyForTest('sbx', 3000, a)).toBe('p3000-sbx|198.51.100.10|browser-a');
+    expect(previewSubdomainAuthCacheKeyForTest('sbx', 3000, a)).toBe(
+      'p3000-sbx|198.51.100.10|browser-a',
+    );
     expect(previewSubdomainAuthCacheKeyForTest('sbx', 3000, b)).not.toBe(
       previewSubdomainAuthCacheKeyForTest('sbx', 3000, a),
     );

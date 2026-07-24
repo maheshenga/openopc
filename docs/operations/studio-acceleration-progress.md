@@ -22,6 +22,43 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
 | Developer Center          | planned                                                 | acceleration design Milestone 4                                                                                                             | separate plan                                                     |
 
+## Authenticated Local Gate Continuation
+
+**Updated:** 2026-07-24
+
+The bounded local Supabase retry was stopped after 180 seconds without a
+usable stack or listening API endpoint. The CLI had the required images
+available but did not complete container startup on this Windows host; no
+authenticated database or GoTrue acceptance is claimed from that attempt.
+
+The API's local ES256 JWT path was exercised independently with a disposable
+JWKS HTTP endpoint and an ephemeral P-256 key. A valid token resolved the
+expected user, a signature mutation returned `bad-signature`, and an expired
+token returned `expired`.
+
+The focused authentication perimeter then passed `82/82` tests with `140`
+assertions across 11 files (SAML JIT local/network paths, service-account and
+PAT preview ownership, tunnel credential tiers, Telegram sender binding,
+Teams token scopes, Slack OAuth failure handling, OAuth consent request
+binding, git-mirror auth resolution, and billing cron auth). The files were
+run as isolated Bun invocations because their module mocks are process-global;
+running them all in one Bun process would produce false missing-export errors
+from unrelated mocks. API typecheck, scoped Biome, and `git diff --check`
+passed.
+
+The gate also repaired three stale test fixtures: the JWT mock now exposes
+`decodeSupabaseJwtPayload`, the OAuth client fixture uses a UUID accepted by
+the route contract, and the preview-auth dependency graph includes the
+service-account/token/key factory exports required by the current module
+loader.
+
+The Web browser gate remains open. The Windows package `dev` script uses a
+Unix-style inline environment assignment and fails under PowerShell; a direct
+Next dev attempt did not expose port 3000 within 124 seconds. This is a host
+startup blocker, not evidence of a Web production failure. Supabase-backed
+API/database flows, authenticated browser flows, live providers, and
+production enablement remain unverified.
+
 ## Task 15 Focused Acceptance Snapshot
 
 **Updated:** 2026-07-24

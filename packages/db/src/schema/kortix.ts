@@ -6472,13 +6472,8 @@ export const projectModuleInstallations = kortixSchema.table(
       name: 'project_module_installations_project_account_fk',
     }).onDelete('cascade'),
     foreignKey({
-      columns: [table.activeReleaseId, table.accountId, table.moduleId, table.activeVersion],
-      foreignColumns: [
-        developerModuleReleases.releaseId,
-        developerModuleReleases.accountId,
-        developerModuleReleases.moduleId,
-        developerModuleReleases.moduleVersion,
-      ],
+      columns: [table.activeReleaseId],
+      foreignColumns: [developerModuleReleases.releaseId],
       name: 'project_module_installations_release_identity_fk',
     }).onDelete('no action'),
     unique('project_module_installations_project_module_unique').on(
@@ -6523,6 +6518,7 @@ export const projectModuleInstallationEvents = kortixSchema.table(
     toReleaseId: uuid('to_release_id').notNull(),
     expectedRevision: integer('expected_revision').notNull(),
     resultingRevision: integer('resulting_revision').notNull(),
+    idempotencyKey: varchar('idempotency_key', { length: 128 }),
     actorUserId: uuid('actor_user_id').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
@@ -6539,18 +6535,23 @@ export const projectModuleInstallationEvents = kortixSchema.table(
       name: 'project_module_installation_events_installation_identity_fk',
     }).onDelete('cascade'),
     foreignKey({
-      columns: [table.fromReleaseId, table.accountId],
-      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      columns: [table.fromReleaseId],
+      foreignColumns: [developerModuleReleases.releaseId],
       name: 'project_module_installation_events_from_release_account_fk',
     }).onDelete('no action'),
     foreignKey({
-      columns: [table.toReleaseId, table.accountId],
-      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      columns: [table.toReleaseId],
+      foreignColumns: [developerModuleReleases.releaseId],
       name: 'project_module_installation_events_to_release_account_fk',
     }).onDelete('no action'),
     unique('project_module_installation_events_installation_sequence_unique').on(
       table.installationId,
       table.sequence,
+    ),
+    unique('project_module_installation_events_account_project_idempotency_unique').on(
+      table.accountId,
+      table.projectId,
+      table.idempotencyKey,
     ),
     index('idx_project_module_installation_events_account_project_installation_sequence').on(
       table.accountId,
@@ -6566,6 +6567,11 @@ export const projectModuleInstallationEvents = kortixSchema.table(
         AND ${table.expectedRevision} >= 0
         AND ${table.resultingRevision} = ${table.expectedRevision} + 1
         AND ${table.sequence} = ${table.resultingRevision}`,
+    ),
+    check(
+      'project_module_installation_events_idempotency_key_check',
+      sql`${table.idempotencyKey} IS NULL
+        OR ${table.idempotencyKey} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'`,
     ),
     check(
       'project_module_installation_events_transition_check',
@@ -6663,18 +6669,8 @@ export const projectModuleInstallationsRelations = relations(
     }),
     activeRelease: one(developerModuleReleases, {
       relationName: 'project_module_installation_active_release',
-      fields: [
-        projectModuleInstallations.activeReleaseId,
-        projectModuleInstallations.accountId,
-        projectModuleInstallations.moduleId,
-        projectModuleInstallations.activeVersion,
-      ],
-      references: [
-        developerModuleReleases.releaseId,
-        developerModuleReleases.accountId,
-        developerModuleReleases.moduleId,
-        developerModuleReleases.moduleVersion,
-      ],
+      fields: [projectModuleInstallations.activeReleaseId],
+      references: [developerModuleReleases.releaseId],
     }),
     events: many(projectModuleInstallationEvents),
   }),
@@ -6705,13 +6701,13 @@ export const projectModuleInstallationEventsRelations = relations(
     }),
     fromRelease: one(developerModuleReleases, {
       relationName: 'project_module_installation_event_from_release',
-      fields: [projectModuleInstallationEvents.fromReleaseId, projectModuleInstallationEvents.accountId],
-      references: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      fields: [projectModuleInstallationEvents.fromReleaseId],
+      references: [developerModuleReleases.releaseId],
     }),
     toRelease: one(developerModuleReleases, {
       relationName: 'project_module_installation_event_to_release',
-      fields: [projectModuleInstallationEvents.toReleaseId, projectModuleInstallationEvents.accountId],
-      references: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      fields: [projectModuleInstallationEvents.toReleaseId],
+      references: [developerModuleReleases.releaseId],
     }),
   }),
 );

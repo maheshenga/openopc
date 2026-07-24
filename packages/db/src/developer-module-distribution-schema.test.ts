@@ -139,7 +139,7 @@ test('stores one active module pointer per project', () => {
   );
 });
 
-test('binds the installation pointer to one project account and exact release account', () => {
+test('binds the installation pointer to one project account and globally published release', () => {
   expect(uniqueConstraintNames(projectModuleInstallations)).toContain(
     'project_module_installations_project_module_unique',
   );
@@ -154,8 +154,8 @@ test('binds the installation pointer to one project account and exact release ac
       },
       {
         name: 'project_module_installations_release_identity_fk',
-        columns: ['active_release_id', 'account_id', 'module_id', 'active_version'],
-        foreignColumns: ['release_id', 'account_id', 'module_id', 'module_version'],
+        columns: ['active_release_id'],
+        foreignColumns: ['release_id'],
         foreignTable: 'developer_module_releases',
         onDelete: 'no action',
       },
@@ -178,8 +178,8 @@ test('keeps the active module id and version consistent with the exact release',
   );
   expect(foreignKeys(projectModuleInstallations)).toContainEqual({
     name: 'project_module_installations_release_identity_fk',
-    columns: ['active_release_id', 'account_id', 'module_id', 'active_version'],
-    foreignColumns: ['release_id', 'account_id', 'module_id', 'module_version'],
+    columns: ['active_release_id'],
+    foreignColumns: ['release_id'],
     foreignTable: 'developer_module_releases',
     onDelete: 'no action',
   });
@@ -206,6 +206,7 @@ test('stores immutable installation, update, and rollback history', () => {
       'to_release_id',
       'expected_revision',
       'resulting_revision',
+      'idempotency_key',
       'actor_user_id',
       'created_at',
     ]),
@@ -215,6 +216,9 @@ test('stores immutable installation, update, and rollback history', () => {
 test('fences installation history by identity, account, sequence, and revision', () => {
   expect(uniqueConstraintNames(projectModuleInstallationEvents)).toContain(
     'project_module_installation_events_installation_sequence_unique',
+  );
+  expect(uniqueConstraintNames(projectModuleInstallationEvents)).toContain(
+    'project_module_installation_events_account_project_idempotency_unique',
   );
   expect(foreignKeys(projectModuleInstallationEvents)).toEqual(
     expect.arrayContaining([
@@ -227,8 +231,8 @@ test('fences installation history by identity, account, sequence, and revision',
       },
       {
         name: 'project_module_installation_events_to_release_account_fk',
-        columns: ['to_release_id', 'account_id'],
-        foreignColumns: ['release_id', 'account_id'],
+        columns: ['to_release_id'],
+        foreignColumns: ['release_id'],
         foreignTable: 'developer_module_releases',
         onDelete: 'no action',
       },
@@ -246,6 +250,12 @@ test('fences installation history by identity, account, sequence, and revision',
       'project_module_installation_events_transition_check',
     ),
   ).toMatch(/install[\s\S]*update[\s\S]*rollback/);
+  expect(
+    checkConstraintSql(
+      projectModuleInstallationEvents,
+      'project_module_installation_events_idempotency_key_check',
+    ),
+  ).toMatch(/idempotency/);
 });
 
 test('exports distribution tables and enums from the database package', () => {
@@ -298,4 +308,25 @@ test('adds an idempotent service-only migration with append-only event triggers'
   expect(migration).toMatch(/REVOKE ALL[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
   expect(migration).not.toMatch(/GRANT .* TO (?:anon|authenticated)/i);
   expect(migration).not.toMatch(/DROP\s+(?:TABLE|COLUMN)/i);
+});
+
+test('adds cross-account release references and durable idempotency in a follow-up migration', () => {
+  const migration = readFileSync(
+    join(
+      import.meta.dir,
+      '..',
+      'migrations',
+      '20260724210000000_project_module_installation_compatibility.sql',
+    ),
+    'utf8',
+  );
+
+  expect(migration).toContain('ADD COLUMN IF NOT EXISTS idempotency_key');
+  expect(migration).toContain('project_module_installations_release_identity_fk');
+  expect(migration).toContain('FOREIGN KEY (active_release_id)');
+  expect(migration).toContain('FOREIGN KEY (to_release_id)');
+  expect(migration).toContain(
+    'project_module_installation_events_account_project_idempotency_unique',
+  );
+  expect(migration).toContain('project_module_installation_events_idempotency_key_check');
 });

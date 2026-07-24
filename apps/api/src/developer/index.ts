@@ -13,6 +13,8 @@ import {
   DeveloperModuleDistributionService,
 } from './distribution';
 import { createDrizzleDeveloperModuleDistributionRepository } from './distribution.drizzle';
+import { ProjectModuleInstallationService } from './installations';
+import { createDrizzleProjectModuleInstallationRepository as createProjectInstallationRepository } from './installations.drizzle';
 import {
   createConfiguredModuleSigningPort,
   resolveModuleSignerConfig,
@@ -25,6 +27,8 @@ import { createDrizzleDeveloperModuleReviewRepository } from './reviews.drizzle'
 export { createDeveloperApp, type DeveloperAppDependencies } from './app';
 export * from './distribution';
 export { createDrizzleDeveloperModuleDistributionRepository } from './distribution.drizzle';
+export * from './installations';
+export { createDrizzleProjectModuleInstallationRepository } from './installations.drizzle';
 export {
   createConfiguredModuleSigningPort,
   resolveModuleSignerConfig,
@@ -75,6 +79,13 @@ try {
 export const developerModuleDistributionService = new DeveloperModuleDistributionService({
   repository: distributionRepository,
   signer: configuredSigner,
+});
+export const projectModuleInstallationService = new ProjectModuleInstallationService({
+  repository: createProjectInstallationRepository(db),
+  releaseService: developerModuleDistributionService,
+  verifiers: configuredSigner ? [configuredSigner] : [],
+  platformVersion: process.env.OPENOPC_PLATFORM_VERSION ?? '1.0.0',
+  registryVersion: '1.0.0',
 });
 const reviewRepository: DeveloperModuleReviewRepository =
   createDrizzleDeveloperModuleReviewRepository(db);

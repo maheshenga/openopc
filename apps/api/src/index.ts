@@ -56,6 +56,7 @@ import { startAccessControlCache, stopAccessControlCache } from './shared/access
 import { startTmpReaper, stopTmpReaper } from './snapshots/tmp-reaper';
 import { startLeaderElection, stopLeaderElection, isLeader, runsSingletonWorkers } from './shared/leader-election';
 import { marketplaceApp } from './marketplace';
+import { developerApp } from './developer';
 import { oauthApp } from './oauth';
 import {
   projectWebhooksApp,
@@ -697,6 +698,7 @@ app.route('/v1/platform', platformApp); // /v1/platform, /v1/platform/sandbox/ve
 registerSunaMigrationRoutes(projectsApp); // /v1/projects/suna-migration/* (OG Suna → opencode, user-triggered)
 app.route('/v1/projects', projectsApp); // /v1/projects — Git-backed Kortix projects
 app.route('/v1/marketplace', marketplaceApp); // /v1/marketplace — browse the registry catalog
+app.route('/v1/developer', developerApp); // Developer Center — authenticated module authoring APIs
 app.route('/v1/automation', automationApp); // OpenOPC project-scoped browser/desktop automation
 app.route(AUTOMATION_DESKTOP_EXECUTOR_BASE_PATH, automationDesktopExecutorApp);
 

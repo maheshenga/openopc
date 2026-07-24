@@ -20,7 +20,30 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; full Web Bun suite `1078/1078`; Windows launcher adapter and focused browser diagnostics | repeat landing-page console verification after host memory relief |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
-| Developer Center          | planned                                                 | acceleration design Milestone 4                                                                                                             | separate plan                                                     |
+| Developer Center          | active (manifest and validation foundation)             | additive `registry:module` v1 contract, authenticated pure-validation API, typed SDK facade, Registry/SDK full suites and API contract tests | publish/review/sign/sandbox/install/rollback/metering/settlement  |
+
+## Developer Center Foundation
+
+**Updated:** 2026-07-24
+
+`@kortix/registry` remains the Git-native canonical module catalog. The first
+Developer Center slice adds a strict, versioned `registry:module` manifest
+without introducing a second marketplace, database catalog, or agent runtime.
+The validator fails closed on unknown fields, unsafe package entries,
+credential-bearing network origins, foreign capability namespaces, malformed
+permissions, and duplicate declarations.
+
+`POST /v1/developer/modules/validate` is authenticated and read-only. It
+validates one Registry Item and returns typed issues; it does not persist,
+publish, approve, sign, install, execute, meter, or settle a module. The SDK
+exposes the same boundary as `kortix.developer.modules.validate(item)`.
+
+Fresh local evidence for this foundation is Registry `45/45`, SDK `1152/1152`,
+Developer API `4/4`, Registry/API/SDK/test-harness TypeScript checks, and the
+route parity gate at `438/517` covered, `9` allowlisted, and `70` existing
+baseline-uncovered routes. Browser, database-backed publication, package
+signing, sandbox execution, install and rollback, usage metering, revenue
+sharing, and production deployment remain open and are not claimed.
 
 ## Authenticated Local Gate Continuation
 

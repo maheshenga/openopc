@@ -47,6 +47,7 @@ export const KORTIX_ITEM_TYPES = [
   'registry:project', // a whole Kortix project (full repo scaffold)
   'registry:bundle', // a curated set of other items (a "starter"/use-case)
   'registry:template', // an installable use-case: a bundle + declared inputs
+  'registry:module', // a versioned OpenOPC developer module manifest
 ] as const;
 
 export const ALL_ITEM_TYPES = [...SHADCN_ITEM_TYPES, ...KORTIX_ITEM_TYPES] as const;
@@ -110,6 +111,85 @@ export interface RegistryItemFile {
   content?: string;
 }
 
+export const REGISTRY_MODULE_SCHEMA_VERSION = 1 as const;
+
+export const REGISTRY_MODULE_CATEGORIES = [
+  'industry',
+  'ai-application',
+  'automation',
+  'desktop-enhancement',
+  'project-template',
+] as const;
+
+export const REGISTRY_MODULE_EXECUTION_MODES = [
+  'declarative',
+  'agent',
+  'sandboxed-web',
+  'server-adapter',
+  'desktop-native',
+] as const;
+
+export const REGISTRY_MODULE_CAPABILITY_KINDS = ['task', 'tool', 'workflow', 'ui'] as const;
+export const REGISTRY_MODULE_UI_SURFACES = ['page', 'panel', 'form', 'result'] as const;
+
+export type RegistryModuleCategory = (typeof REGISTRY_MODULE_CATEGORIES)[number];
+export type RegistryModuleExecutionMode = (typeof REGISTRY_MODULE_EXECUTION_MODES)[number];
+export type RegistryModuleCapabilityKind = (typeof REGISTRY_MODULE_CAPABILITY_KINDS)[number];
+export type RegistryModuleUiSurfaceKind = (typeof REGISTRY_MODULE_UI_SURFACES)[number];
+
+export interface RegistryModulePublisher {
+  id: string;
+  displayName?: string;
+}
+
+export interface RegistryModuleCompatibility {
+  platform: string;
+  registry?: string;
+}
+
+export interface RegistryModuleExecution {
+  mode: RegistryModuleExecutionMode;
+  entry?: string;
+}
+
+export interface RegistryModuleCapability {
+  id: string;
+  kind: RegistryModuleCapabilityKind;
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  assetKinds?: string[];
+}
+
+export interface RegistryModulePermissions {
+  actions?: string[];
+  secrets?: string[];
+  connectors?: string[];
+  network?: string[];
+  tools?: string[];
+  writes?: string[];
+  desktop?: string[];
+}
+
+export interface RegistryModuleUiSurface {
+  id: string;
+  surface: RegistryModuleUiSurfaceKind;
+  entry?: string;
+}
+
+export interface RegistryModuleManifest {
+  schemaVersion: typeof REGISTRY_MODULE_SCHEMA_VERSION;
+  id: string;
+  version: string;
+  publisher: RegistryModulePublisher;
+  category: RegistryModuleCategory;
+  locales: string[];
+  compatibility: RegistryModuleCompatibility;
+  execution: RegistryModuleExecution;
+  capabilities?: RegistryModuleCapability[];
+  permissions?: RegistryModulePermissions;
+  ui?: RegistryModuleUiSurface[];
+}
+
 /**
  * A parameter a `registry:template` collects at install time and substitutes
  * (Mustache `{{key}}`) into the files/manifest blocks it commits — e.g. a cron
@@ -163,6 +243,8 @@ export interface RegistryItem {
   categories?: string[];
   /** Install-time documentation shown to the user. */
   docs?: string;
+  /** Strict, versioned Developer Center contract for `registry:module`. */
+  module?: RegistryModuleManifest;
   /**
    * Arbitrary metadata. Kortix reads:
    *   icon         — gallery icon id/url

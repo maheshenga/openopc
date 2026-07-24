@@ -421,3 +421,20 @@ flow(
     });
   },
 );
+
+flow(
+  'COV-10',
+  {
+    domain: 'coverage',
+    publicOnly: true,
+    routes: ['POST /v1/developer/modules/validate'],
+  },
+  async (ctx) => {
+    await ctx.step('developer module validation requires authentication', async () => {
+      const response = await ctx.client
+        .as(ctx.P.ANON)
+        .post('/v1/developer/modules/validate', {});
+      response.status(401);
+    });
+  },
+);

@@ -4,7 +4,8 @@
  * with severities) so the CLI can render a consistent report.
  */
 
-import { ALL_ITEM_TYPES, type RegistryItem, type RegistryJson, type RegistryItemType } from './schema';
+import { validateRegistryModuleManifest } from './module-manifest';
+import { ALL_ITEM_TYPES, type RegistryItem, type RegistryItemType, type RegistryJson } from './schema';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning';
@@ -46,6 +47,13 @@ export function validateRegistryItem(item: unknown, basePath = 'item'): Validati
     push('error', `${basePath}.type`, `type must be one of: ${ALL_ITEM_TYPES.join(', ')}`);
   }
 
+  if (it.type === 'registry:module') {
+    const moduleResult = validateRegistryModuleManifest(it.module, `${basePath}.module`);
+    issues.push(...moduleResult.issues);
+  } else if (it.module !== undefined) {
+    push('error', `${basePath}.module`, 'module is only valid for registry:module items');
+  }
+
   const files = it.files;
   if (files !== undefined) {
     if (!Array.isArray(files)) {
@@ -77,7 +85,7 @@ export function validateRegistryItem(item: unknown, basePath = 'item'): Validati
   // bundle (whose whole job is to pull `registryDependencies`).
   const hasFiles = Array.isArray(files) && files.length > 0;
   const hasDeps = Array.isArray(it.registryDependencies) && it.registryDependencies.length > 0;
-  if (!hasFiles && !hasDeps && it.type !== 'registry:bundle') {
+  if (!hasFiles && !hasDeps && it.type !== 'registry:bundle' && it.type !== 'registry:module') {
     push('warning', basePath, 'item declares no files and no registryDependencies');
   }
 

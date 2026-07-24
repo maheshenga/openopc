@@ -287,6 +287,14 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
     },
   };
 
+  /** Developer Center authoring APIs. Validation is pure and does not publish. */
+  const developer = {
+    modules: {
+      validate: (item: Parameters<typeof P.validateDeveloperModule>[0]) =>
+        P.validateDeveloperModule(item),
+    },
+  };
+
   /** Id-bound handle for a single project: every sub-resource, projectId pre-applied. */
   function project(projectId: string) {
     return {
@@ -1002,6 +1010,8 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
     connectStatus,
     /** Public marketplace catalog browse + sources (`/v1/marketplace/*`, not project-scoped). */
     marketplace,
+    /** Developer Center authoring APIs (`/v1/developer/*`, not project-scoped). */
+    developer,
     /** The pasted-API-key UX check — `GET /accounts/me`, never throws. */
     validateToken: P.validateToken,
     /** Escape hatch: the typed opencode client for the active sandbox. */

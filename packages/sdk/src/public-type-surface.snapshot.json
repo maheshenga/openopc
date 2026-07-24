@@ -193,6 +193,8 @@
     "DEFAULT_TRANSCRIPT_OPTIONS",
     "DESTRUCTIVE_PHASES",
     "DetectedLocalhostUrl",
+    "DeveloperModuleValidationIssue",
+    "DeveloperModuleValidationResult",
     "Diagnostic",
     "DiffLine",
     "DiffLineType",
@@ -2385,6 +2387,7 @@
     "upsertCredential",
     "upsertProjectGitCredential",
     "upsertProjectSecret",
+    "validateDeveloperModule",
     "validateProjectManifest",
     "validateToken"
   ],
@@ -4407,6 +4410,8 @@
     "CreatedAccountToken",
     "CreatedGatewayKey",
     "CreatedProjectCliToken",
+    "DeveloperModuleValidationIssue",
+    "DeveloperModuleValidationResult",
     "EmailInstallation",
     "EmailMode",
     "EmailSenderPolicy",
@@ -4911,6 +4916,7 @@
     "uploadSlackChannelFile",
     "upsertProjectGitCredential",
     "upsertProjectSecret",
+    "validateDeveloperModule",
     "validateProjectManifest",
     "validateToken"
   ],

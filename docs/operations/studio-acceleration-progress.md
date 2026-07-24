@@ -114,6 +114,15 @@ upload finalization, single-claim concurrency, expired lease recovery,
 configuration fencing, credential scope, cancellation-vs-success locking, and
 orphan re-fencing. No production database was used.
 
+The 33-test Studio migration/retention integration file was verified in three
+bounded invocations because a single invocation exceeds the host command
+channel's roughly 90-second limit. The batches passed `10/10`, `11/11`, and
+`11/11` with `140` assertions total; the earlier combined invocation was
+terminated by that host limit after reporting its first 21 passes, not by a
+test failure. The complete set covers the 30-day unknown-hold transfer,
+idempotent billing-incident creation, verified-cost settlement, cancellation
+fences, RLS/PostgREST exposure, migration upgrades, and atomic finalizers.
+
 ## Canonical Client Contract
 
 `kortix.project(projectId).intelligence` is the only product-facing SDK facade for capability discovery, Agent Cards, task creation/events, and governed workflows. Milestone 0-1 adds image estimates, Studio jobs, uploads, and assets as typed projections under that existing facade. The unimplemented `kortix.project(projectId).studio` proposal is superseded and must not be introduced.

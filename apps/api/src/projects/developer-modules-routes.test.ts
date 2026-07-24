@@ -65,6 +65,7 @@ function appWith(overrides: Record<string, unknown> = {}) {
     },
     installationService: {
       list: async () => [],
+      history: async () => [],
       install: async (command) => {
         calls.commands.push(command as unknown as Record<string, unknown>);
         return transition();
@@ -89,6 +90,7 @@ describe('project developer module routes', () => {
     const { app, calls } = appWith({
       installationService: {
         list: async () => [transition().installation],
+        history: async () => [],
         install: async () => transition(),
         update: async () => transition(RELEASE_V2),
         rollback: async () => transition(RELEASE_V1),
@@ -107,6 +109,58 @@ describe('project developer module routes', () => {
         projectId: PROJECT_ID,
       },
     ]);
+  });
+
+  test('lists immutable installation history through project read and customize-read gates', async () => {
+    const expectedHistory = [transition().event, transition(RELEASE_V2).event];
+    const { app, calls } = appWith({
+      installationService: {
+        list: async () => [],
+        history: async (input: { accountId: string; projectId: string; moduleId: string }) => {
+          expect(input).toEqual({
+            accountId: ACCOUNT_ID,
+            projectId: PROJECT_ID,
+            moduleId: 'acme.recruiting',
+          });
+          return expectedHistory;
+        },
+        install: async () => transition(),
+        update: async () => transition(RELEASE_V2),
+        rollback: async () => transition(RELEASE_V1),
+      },
+    });
+
+    const response = await app.request(`/${PROJECT_ID}/modules/acme.recruiting/history`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ history: expectedHistory });
+    expect(calls.loads).toEqual([{ projectId: PROJECT_ID, action: 'read' }]);
+    expect(calls.capabilities).toEqual([
+      {
+        action: PROJECT_ACTIONS.PROJECT_CUSTOMIZE_READ,
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+      },
+    ]);
+  });
+
+  test('maps missing installation history to a project module not found response', async () => {
+    const { app } = appWith({
+      installationService: {
+        list: async () => [],
+        history: async () => {
+          throw new ProjectModuleInstallationError('PROJECT_MODULE_NOT_FOUND', 404);
+        },
+        install: async () => transition(),
+        update: async () => transition(RELEASE_V2),
+        rollback: async () => transition(RELEASE_V1),
+      },
+    });
+
+    const response = await app.request(`/${PROJECT_ID}/modules/acme.recruiting/history`);
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'PROJECT_MODULE_NOT_FOUND' });
   });
 
   test('derives account from the loaded project and forwards idempotency on install', async () => {
@@ -181,6 +235,7 @@ describe('project developer module routes', () => {
     const stale = appWith({
       installationService: {
         list: async () => [],
+        history: async () => [],
         install: async () => {
           throw new ProjectModuleInstallationError('PROJECT_MODULE_INSTALL_CONFLICT', 409);
         },
@@ -199,6 +254,7 @@ describe('project developer module routes', () => {
     const revoked = appWith({
       installationService: {
         list: async () => [],
+        history: async () => [],
         install: async () => {
           throw new DeveloperModuleDistributionError('DEVELOPER_MODULE_REVOKED', 409);
         },
@@ -217,6 +273,7 @@ describe('project developer module routes', () => {
     const unknown = appWith({
       installationService: {
         list: async () => [],
+        history: async () => [],
         install: async () => {
           throw new DeveloperModuleDistributionError('DEVELOPER_RELEASE_NOT_FOUND', 404);
         },
@@ -241,6 +298,7 @@ describe('project developer module routes', () => {
       assertProjectCapability: async () => undefined,
       installationService: {
         list: async () => [],
+        history: async () => [],
         install: async () => transition(),
         update: async () => transition(RELEASE_V2),
         rollback: async () => transition(RELEASE_V1),

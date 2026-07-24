@@ -96,6 +96,7 @@ export interface ProjectModuleInstallationRepository {
     command: ProjectModuleInstallPersistenceCommand,
   ): Promise<ProjectModuleInstallationTransition>;
   move(command: ProjectModuleMovePersistenceCommand): Promise<ProjectModuleInstallationTransition>;
+  history(installationId: string): Promise<readonly ProjectModuleInstallationEvent[]>;
   hasHistoricalTarget(installationId: string, releaseId: string): Promise<boolean>;
   findIdempotentResult(
     input: ProjectModuleIdempotencyLookup,
@@ -297,6 +298,20 @@ export class ProjectModuleInstallationService {
     );
   }
 
+  async history(input: {
+    accountId: string;
+    projectId: string;
+    moduleId: string;
+  }): Promise<readonly ProjectModuleInstallationEvent[]> {
+    const installation = await this.input.repository.get(
+      input.accountId,
+      input.projectId,
+      input.moduleId,
+    );
+    if (!installation) fail('PROJECT_MODULE_NOT_FOUND', 404);
+    return (await this.input.repository.history(installation.installation_id)).map(cloneEvent);
+  }
+
   async install(
     command: ProjectModuleInstallCommand,
   ): Promise<ProjectModuleInstallationTransition> {
@@ -460,6 +475,10 @@ export function createMemoryProjectModuleInstallationRepository(input?: {
         )
         .sort((left, right) => left.module_id.localeCompare(right.module_id))
         .map(cloneInstallation);
+    },
+
+    async history(installationId) {
+      return (events.get(installationId) ?? []).slice().sort((left, right) => left.sequence - right.sequence).map(cloneEvent);
     },
 
     async get(accountId, projectId, moduleId) {

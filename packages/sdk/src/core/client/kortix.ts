@@ -345,6 +345,8 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
       /** Exact-release project module installation and lifecycle operations. */
       modules: {
         list: () => P.listProjectModules(projectId),
+        history: (moduleId: string) =>
+          P.listProjectModuleInstallationHistory(projectId, moduleId),
         install: (...a: DropFirst<Parameters<typeof P.installProjectModule>>) =>
           P.installProjectModule(projectId, ...a),
         update: (...a: DropFirst<Parameters<typeof P.updateProjectModule>>) =>

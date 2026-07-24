@@ -1,14 +1,16 @@
 'use client';
 
 import type {
+  ProjectModuleInstallation,
   ProjectModuleInstallationAction,
   ProjectModuleInstallationTransition,
 } from '@kortix/sdk';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   installPublishedProjectModule,
   listInstalledProjectModules,
+  listProjectModuleHistory,
   listPublishedProjectModuleReleases,
   rollbackPublishedProjectModule,
   updatePublishedProjectModule,
@@ -18,6 +20,8 @@ export const projectModuleKeys = {
   all: ['project-modules'] as const,
   installed: (projectId: string) => ['project-modules', projectId, 'installed'] as const,
   releases: () => ['project-modules', 'published-releases'] as const,
+  history: (projectId: string, moduleId: string) =>
+    ['project-modules', projectId, 'history', moduleId] as const,
 };
 
 export const projectModulesQuery = (projectId: string) => ({
@@ -32,12 +36,31 @@ export const projectModuleReleasesQuery = () => ({
   staleTime: 15_000,
 });
 
+export const projectModuleHistoryQuery = (projectId: string, moduleId: string) => ({
+  queryKey: projectModuleKeys.history(projectId, moduleId),
+  queryFn: () => listProjectModuleHistory(projectId, moduleId),
+  staleTime: 15_000,
+});
+
 export function useProjectModules(projectId: string, enabled = true) {
   return useQuery({ ...projectModulesQuery(projectId), enabled: Boolean(projectId) && enabled });
 }
 
 export function useProjectModuleReleases(enabled = true) {
   return useQuery({ ...projectModuleReleasesQuery(), enabled });
+}
+
+export function useProjectModuleHistories(
+  projectId: string,
+  modules: readonly ProjectModuleInstallation[],
+  enabled = true,
+) {
+  return useQueries({
+    queries: modules.map((installation) => ({
+      ...projectModuleHistoryQuery(projectId, installation.module_id),
+      enabled: Boolean(projectId) && enabled,
+    })),
+  });
 }
 
 export interface ProjectModuleMutationInput {
@@ -80,6 +103,9 @@ export function useProjectModuleMutation(
       void queryClient.invalidateQueries({
         queryKey: projectModuleKeys.installed(input.projectId),
       });
+      void queryClient.invalidateQueries({
+        queryKey: projectModuleKeys.history(input.projectId, input.moduleId),
+      });
     },
   });
 }
@@ -94,6 +120,9 @@ export function useInstallProjectModule() {
       onSuccess: (_transition, input) => {
         void queryClient.invalidateQueries({
           queryKey: projectModuleKeys.installed(input.projectId),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: [...projectModuleKeys.all, input.projectId, 'history'],
         });
       },
     },
@@ -128,15 +157,27 @@ const PROJECT_MODULE_ERRORS = new Set<ProjectModuleUiErrorCode>([
 
 export function projectModuleErrorCode(error: unknown): ProjectModuleUiErrorCode {
   if (!error || typeof error !== 'object') return 'PROJECT_MODULE_REQUEST_FAILED';
-  const record = error as { code?: unknown; body?: unknown };
+  const record = error as {
+    code?: unknown;
+    body?: unknown;
+    data?: unknown;
+    details?: unknown;
+  };
   const direct = record.code;
   if (typeof direct === 'string' && PROJECT_MODULE_ERRORS.has(direct as ProjectModuleUiErrorCode)) {
     return direct as ProjectModuleUiErrorCode;
   }
-  const body = record.body;
-  const nested = body && typeof body === 'object' ? (body as { error?: unknown }).error : null;
-  if (typeof nested === 'string' && PROJECT_MODULE_ERRORS.has(nested as ProjectModuleUiErrorCode)) {
-    return nested as ProjectModuleUiErrorCode;
+  for (const payload of [record.body, record.data, record.details]) {
+    if (!payload || typeof payload !== 'object') continue;
+    const nested = payload as { error?: unknown; code?: unknown };
+    for (const candidate of [nested.error, nested.code]) {
+      if (
+        typeof candidate === 'string' &&
+        PROJECT_MODULE_ERRORS.has(candidate as ProjectModuleUiErrorCode)
+      ) {
+        return candidate as ProjectModuleUiErrorCode;
+      }
+    }
   }
   return 'PROJECT_MODULE_REQUEST_FAILED';
 }

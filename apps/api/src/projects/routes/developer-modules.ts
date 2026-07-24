@@ -29,7 +29,7 @@ export interface ProjectDeveloperModuleRouteDependencies {
   assertProjectCapability: AssertProjectCapability;
   installationService: Pick<
     ProjectModuleInstallationService,
-    'list' | 'install' | 'update' | 'rollback'
+    'list' | 'history' | 'install' | 'update' | 'rollback'
   >;
 }
 
@@ -107,6 +107,46 @@ export function createProjectDeveloperModuleRoutes(
         projectId,
       });
       return context.json({ modules: [...modules] }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/{projectId}/modules/{moduleId}/history',
+      tags: ['developer'],
+      summary: 'List immutable installation history for a project developer module',
+      ...auth,
+      request: {
+        params: z.object({ projectId: z.string(), moduleId }),
+      },
+      responses: {
+        200: json(z.object({ history: z.array(z.record(z.unknown())) }), 'Installation history'),
+        ...errors(403, 404),
+      },
+    }),
+    // biome-ignore lint/suspicious/noExplicitAny: Shared auth/error helpers widen OpenAPIHono status unions.
+    async (context: any) => {
+      const params = context.req.valid('param');
+      const loaded = await loadAndAuthorize(
+        context,
+        dependencies,
+        params.projectId,
+        PROJECT_ACTIONS.PROJECT_CUSTOMIZE_READ,
+      );
+      if (loaded instanceof Response) return loaded;
+      try {
+        const history = await dependencies.installationService.history({
+          accountId: loaded.row.accountId,
+          projectId: params.projectId,
+          moduleId: params.moduleId,
+        });
+        return context.json({ history: [...history] }, 200);
+      } catch (error) {
+        const response = installationErrorResponse(context, error);
+        if (response) return response;
+        throw error;
+      }
     },
   );
 

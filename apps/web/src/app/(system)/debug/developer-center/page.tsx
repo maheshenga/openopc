@@ -11,8 +11,11 @@ import {
   type DeveloperModuleReleaseStatus,
   type DeveloperModuleReviewEvent,
   type DeveloperModuleReviewEvidence,
+  type ProjectModuleInstallation,
+  type ProjectModuleInstallationEvent,
+  type ProjectModuleInstallationTransition,
 } from '@kortix/sdk';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { invalidateTokenCache, setBootstrapAuthToken } from '@/lib/auth-token';
@@ -53,14 +56,33 @@ import {
 } from '@/features/developer-center/publisher/release-list-page';
 import { createDeveloperModuleSubmitController } from '@/features/developer-center/publisher/submit-controller';
 import { DeveloperModuleSubmitView } from '@/features/developer-center/publisher/submit-page';
+import {
+  installPublishedProjectModule,
+  listInstalledProjectModules,
+  listProjectModuleHistory,
+  listPublishedProjectModuleReleases,
+  rollbackPublishedProjectModule,
+  updatePublishedProjectModule,
+} from '@/features/project-modules/client';
+import {
+  ProjectModulesView,
+  type ProjectModulesPageState,
+} from '@/features/project-modules/project-modules-page';
+import { projectModuleErrorCode } from '@/features/project-modules/query';
 
 const DEBUG_ACCOUNT_ID = '21000000-0000-4000-a000-000000000001';
 const DEBUG_TEAM_ACCOUNT_ID = '21000000-0000-4000-a000-000000000002';
 const DEBUG_PUBLISHER_RELEASE_ID = '22000000-0000-4000-a000-000000000003';
 const DEBUG_ADMIN_RELEASE_ID = '22000000-0000-4000-a000-000000000001';
+const DEBUG_PROJECT_ID = '24000000-0000-4000-a000-000000000001';
 
 type DebugMode =
-  'publisher-list' | 'publisher-submit' | 'publisher-detail' | 'admin-queue' | 'admin-detail';
+  | 'publisher-list'
+  | 'publisher-submit'
+  | 'publisher-detail'
+  | 'admin-queue'
+  | 'admin-detail'
+  | 'project-modules';
 
 function modeFromSearch(): DebugMode {
   if (typeof window === 'undefined') return 'publisher-list';
@@ -68,7 +90,8 @@ function modeFromSearch(): DebugMode {
   return value === 'publisher-submit' ||
     value === 'publisher-detail' ||
     value === 'admin-queue' ||
-    value === 'admin-detail'
+    value === 'admin-detail' ||
+    value === 'project-modules'
     ? value
     : 'publisher-list';
 }
@@ -147,6 +170,128 @@ function PublisherSubmitHarness({
       onTextChange={updateText}
       onValidate={validate}
       onConfirm={confirm}
+    />
+  );
+}
+
+function ProjectModulesDebugHarness({ canWrite }: { canWrite: boolean }) {
+  const [modules, setModules] = useState<ProjectModuleInstallation[]>([]);
+  const [releases, setReleases] = useState<
+    Awaited<ReturnType<typeof listPublishedProjectModuleReleases>>
+  >([]);
+  const [historyByInstallation, setHistoryByInstallation] = useState<
+    Readonly<Record<string, readonly ProjectModuleInstallationEvent[]>>
+  >({});
+  const [state, setState] = useState<ProjectModulesPageState>('loading');
+  const [pendingModuleId, setPendingModuleId] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+
+  const load = useCallback(async (showLoading = true) => {
+    if (showLoading) setState('loading');
+    setErrorCode(null);
+    try {
+      const [nextModules, nextReleases] = await Promise.all([
+        listInstalledProjectModules(DEBUG_PROJECT_ID),
+        listPublishedProjectModuleReleases(),
+      ]);
+      const histories = await Promise.all(
+        nextModules.map(async (installation) => [
+          installation.installation_id,
+          await listProjectModuleHistory(DEBUG_PROJECT_ID, installation.module_id),
+        ] as const),
+      );
+      setModules(nextModules);
+      setReleases(nextReleases);
+      setHistoryByInstallation(Object.fromEntries(histories));
+      setState(nextModules.length === 0 ? 'empty' : 'ready');
+    } catch (error) {
+      setErrorCode(projectModuleErrorCode(error));
+      setState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const recordTransition = (transition: ProjectModuleInstallationTransition) => {
+    setModules((current) => {
+      const next = current.filter(
+        (installation) => installation.module_id !== transition.installation.module_id,
+      );
+      return [...next, transition.installation].sort((left, right) =>
+        left.module_id.localeCompare(right.module_id),
+      );
+    });
+    setHistoryByInstallation((current) => ({
+      ...current,
+      [transition.installation.installation_id]: [
+        ...(current[transition.installation.installation_id] ?? []),
+        transition.event,
+      ],
+    }));
+    setState('ready');
+  };
+
+  const mutate = async (
+    moduleId: string,
+    operation: () => Promise<ProjectModuleInstallationTransition>,
+  ) => {
+    setPendingModuleId(moduleId);
+    setErrorCode(null);
+    try {
+      recordTransition(await operation());
+    } catch (error) {
+      const code = projectModuleErrorCode(error);
+      setErrorCode(code);
+      if (code === 'PROJECT_MODULE_INSTALL_CONFLICT') await load(false);
+      else setState('error');
+    } finally {
+      setPendingModuleId(null);
+    }
+  };
+
+  return (
+    <ProjectModulesView
+      state={state}
+      modules={modules}
+      releases={releases}
+      historyByInstallation={historyByInstallation}
+      canWrite={canWrite}
+      pendingModuleId={pendingModuleId}
+      errorCode={errorCode}
+      onInstall={(releaseId) =>
+        void mutate('install', () =>
+          installPublishedProjectModule(
+            DEBUG_PROJECT_ID,
+            releaseId,
+            `debug-install:${releaseId}`,
+          ),
+        )
+      }
+      onUpdate={(moduleId, releaseId, revision) =>
+        void mutate(moduleId, () =>
+          updatePublishedProjectModule(
+            DEBUG_PROJECT_ID,
+            moduleId,
+            releaseId,
+            revision,
+            `debug-update:${releaseId}:${revision}`,
+          ),
+        )
+      }
+      onRollback={(moduleId, releaseId, revision) =>
+        void mutate(moduleId, () =>
+          rollbackPublishedProjectModule(
+            DEBUG_PROJECT_ID,
+            moduleId,
+            releaseId,
+            revision,
+            `debug-rollback:${releaseId}:${revision}`,
+          ),
+        )
+      }
+      onReload={() => void load()}
     />
   );
 }
@@ -381,6 +526,14 @@ function DebugDeveloperCenterHarness() {
           >
             Admin detail
           </Button>
+          <Button
+            data-testid="debug-project-modules"
+            size="xs"
+            variant={mode === 'project-modules' ? 'secondary' : 'ghost'}
+            onClick={() => navigate('project-modules')}
+          >
+            Project modules
+          </Button>
           <span className="bg-border mx-1 h-5 w-px" />
           <Button
             data-testid="debug-account-a"
@@ -513,6 +666,7 @@ function DebugDeveloperCenterHarness() {
           onRevokeOpenChange={setRevokeOpen}
         />
       ) : null}
+      {mode === 'project-modules' ? <ProjectModulesDebugHarness canWrite={canWrite} /> : null}
     </main>
   );
 }

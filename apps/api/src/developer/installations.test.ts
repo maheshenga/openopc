@@ -195,6 +195,36 @@ describe('project module installation service', () => {
     expect(rolledBack.installation.install_revision).toBe(3);
   });
 
+  test('reads immutable installation history with project and account scoping', async () => {
+    const { service } = await setup();
+    await service.install({
+      ...projectInput,
+      releaseId: RELEASE_V1,
+      expectedInstallRevision: 0,
+    });
+    await service.update({
+      ...projectInput,
+      moduleId: MODULE_ID,
+      releaseId: RELEASE_V2,
+      expectedInstallRevision: 1,
+    });
+
+    const history = await service.history({
+      accountId: PROJECT_ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      moduleId: MODULE_ID,
+    });
+    expect(history.map((event) => event.action)).toEqual(['install', 'update']);
+    expect(history.map((event) => event.sequence)).toEqual([1, 2]);
+    await expect(
+      service.history({
+        accountId: PROJECT_ACCOUNT_ID,
+        projectId: OTHER_PROJECT_ID,
+        moduleId: MODULE_ID,
+      }),
+    ).rejects.toMatchObject({ code: 'PROJECT_MODULE_NOT_FOUND', status: 404 });
+  });
+
   test('replays the same idempotency key and rejects a changed target', async () => {
     const { service } = await setup();
     const command = {

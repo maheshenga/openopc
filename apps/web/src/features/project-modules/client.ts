@@ -1,9 +1,11 @@
 import {
   type ProjectModuleInstallation,
+  type ProjectModuleInstallationEvent,
   type ProjectModuleInstallationTransition,
   type ProjectModuleMutationOptions,
   installProjectModule,
   listMarketplaceCatalogItems,
+  listProjectModuleInstallationHistory,
   listProjectModules,
   rollbackProjectModule,
   updateProjectModule,
@@ -24,6 +26,13 @@ export async function listInstalledProjectModules(
   projectId: string,
 ): Promise<ProjectModuleInstallation[]> {
   return (await listProjectModules(projectId)).modules;
+}
+
+export async function listProjectModuleHistory(
+  projectId: string,
+  moduleId: string,
+): Promise<ProjectModuleInstallationEvent[]> {
+  return (await listProjectModuleInstallationHistory(projectId, moduleId)).history;
 }
 
 function asPublishedRelease(value: Record<string, unknown>): PublishedProjectModuleRelease | null {

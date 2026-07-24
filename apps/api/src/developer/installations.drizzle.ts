@@ -146,6 +146,15 @@ export function createDrizzleProjectModuleInstallationRepository(
       );
     },
 
+    async history(installationId) {
+      const rows = await db
+        .select()
+        .from(projectModuleInstallationEvents)
+        .where(eq(projectModuleInstallationEvents.installationId, installationId))
+        .orderBy(asc(projectModuleInstallationEvents.sequence));
+      return rows.map(serializeEvent);
+    },
+
     async get(accountId, projectId, moduleId) {
       const [row] = await db
         .select({

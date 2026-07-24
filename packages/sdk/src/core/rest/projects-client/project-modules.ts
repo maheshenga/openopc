@@ -43,6 +43,10 @@ export interface ProjectModuleListResponse {
   modules: ProjectModuleInstallation[];
 }
 
+export interface ProjectModuleHistoryResponse {
+  history: ProjectModuleInstallationEvent[];
+}
+
 export interface ProjectModuleInstallInput {
   release_id: string;
   expected_install_revision: 0;
@@ -88,6 +92,19 @@ export async function listProjectModules(projectId: string): Promise<ProjectModu
   return unwrap(
     await backendApi.get<ProjectModuleListResponse>(projectPath(projectId)),
     'Failed to list project modules',
+  );
+}
+
+/** List immutable installation history for one exact project module. */
+export async function listProjectModuleInstallationHistory(
+  projectId: string,
+  moduleId: string,
+): Promise<ProjectModuleHistoryResponse> {
+  return unwrap(
+    await backendApi.get<ProjectModuleHistoryResponse>(
+      `${projectPath(projectId)}/${encodeURIComponent(moduleId)}/history`,
+    ),
+    'Failed to list project module history',
   );
 }
 

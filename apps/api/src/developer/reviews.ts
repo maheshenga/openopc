@@ -66,7 +66,7 @@ export interface DeveloperModuleAdminReviewPage {
 
 export interface DeveloperModuleAdminReviewDetail {
   release: DeveloperModuleRelease;
-  history: DeveloperModuleReviewEvent[];
+  history: DeveloperModuleLifecycleEvent[];
 }
 
 export type DeveloperModuleReviewErrorCode =
@@ -478,10 +478,18 @@ export class DeveloperModuleReviewService {
   async adminGet(input: { releaseId: string }): Promise<DeveloperModuleAdminReviewDetail> {
     const release = await this.input.repository.getAdmin(input.releaseId);
     if (!release) fail('DEVELOPER_RELEASE_NOT_FOUND', 404);
+    const reviewHistory = await this.input.repository.history(release.account_id, release.release_id);
+    const distributionHistory = this.input.distributionRepository
+      ? await this.input.distributionRepository.history(release.account_id, release.release_id)
+      : [];
     return {
       release: cloneRelease(release),
-      history: (await this.input.repository.history(release.account_id, release.release_id)).map(
-        cloneEvent,
+      history: [
+        ...reviewHistory.map(cloneEvent),
+        ...distributionHistory.map((event) => structuredClone(event)),
+      ].sort(
+        (left, right) =>
+          left.sequence - right.sequence || left.created_at.localeCompare(right.created_at),
       ),
     };
   }

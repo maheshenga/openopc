@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { inflateSync } from 'node:zlib';
 
-import { chromium, type Page, type Route } from 'playwright';
+import { type Page, type Route, chromium } from 'playwright';
 
 const webRoot = path.resolve(import.meta.dirname, '../..');
 const debugPagePath = path.join(webRoot, 'src/app/(system)/debug/developer-center/page.tsx');
@@ -11,6 +11,10 @@ const baseUrl = process.env.WEB_BASE_URL || process.env.E2E_BASE_URL || 'http://
 const screenshotPath = path.resolve(
   process.env.DEVELOPER_CENTER_SCREENSHOT ||
     path.join(webRoot, 'test-results/developer-center-review-smoke.png'),
+);
+const mobileScreenshotPath = path.resolve(
+  process.env.DEVELOPER_CENTER_MOBILE_SCREENSHOT ||
+    path.join(webRoot, 'test-results/developer-center-review-smoke-mobile.png'),
 );
 
 const ACCOUNT_A = '21000000-0000-4000-a000-000000000001';
@@ -20,6 +24,10 @@ const RELEASE_A_PENDING = '22000000-0000-4000-a000-000000000001';
 const RELEASE_A_APPROVED = '22000000-0000-4000-a000-000000000004';
 const RELEASE_A_CHANGES = '22000000-0000-4000-a000-000000000005';
 const RELEASE_B_PENDING = '22000000-0000-4000-a000-000000000002';
+const PROJECT_ID = '24000000-0000-4000-a000-000000000001';
+const MODULE_ID = 'openopc.recruiting';
+const MODULE_RELEASE_V1 = '25000000-0000-4000-a000-000000000001';
+const MODULE_RELEASE_V2 = '25000000-0000-4000-a000-000000000002';
 
 const RELEASE_CREATED_AT = '2026-07-24T08:00:00.000Z';
 const RELEASE_UPDATED_AT = '2026-07-24T08:05:00.000Z';
@@ -112,6 +120,7 @@ function runSourcePreflight(): void {
     'DeveloperModuleSubmitView',
     'AdminDeveloperReviewQueueView',
     'AdminDeveloperReviewDetailView',
+    'ProjectModulesView',
   ]) {
     assert(
       source.includes(importName),
@@ -185,6 +194,35 @@ async function installRoutes(page: Page) {
         : [event(value, 1, 'submit', 'validated', 'review_pending')],
     ]),
   );
+  const moduleReleases = [
+    {
+      release_id: MODULE_RELEASE_V1,
+      module_id: MODULE_ID,
+      module_version: '1.0.0',
+      name: 'Recruiting module',
+      publisher_id: 'openopc-labs',
+      signature_key_id: 'openopc-2026',
+      signed_at: RELEASE_UPDATED_AT,
+      published_at: RELEASE_UPDATED_AT,
+      type: 'registry:module',
+      source: 'openopc-modules',
+    },
+    {
+      release_id: MODULE_RELEASE_V2,
+      module_id: MODULE_ID,
+      module_version: '2.0.0',
+      name: 'Recruiting module',
+      publisher_id: 'openopc-labs',
+      signature_key_id: 'openopc-2026',
+      signed_at: RELEASE_UPDATED_AT,
+      published_at: RELEASE_UPDATED_AT,
+      type: 'registry:module',
+      source: 'openopc-modules',
+    },
+  ];
+  const installations = new Map<string, Record<string, unknown>>();
+  const installationHistories = new Map<string, Record<string, unknown>[]>();
+  let forceModuleConflict = true;
   const requests = {
     validation: 0,
     submissions: 0,
@@ -194,6 +232,9 @@ async function installRoutes(page: Page) {
     queueCursors: [] as (string | null)[],
     queueStatuses: [] as string[],
     adminDetailReads: [] as string[],
+    projectModuleInstalls: [] as Record<string, unknown>[],
+    projectModuleMoves: [] as Record<string, unknown>[],
+    projectModuleHistories: [] as string[],
     unknown: [] as string[],
     forceConflict: true,
   };
@@ -201,6 +242,139 @@ async function installRoutes(page: Page) {
   await page.route('**/*', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    const projectModulesPrefix = `/projects/${PROJECT_ID}/modules`;
+    if (url.pathname.includes(projectModulesPrefix)) {
+      assert(
+        request.headers().authorization === 'Bearer debug-developer-center-token',
+        `project module request missing debug token: ${url.pathname}`,
+      );
+      const body = request.method() === 'POST' ? jsonBody(route) : {};
+      if (url.pathname.endsWith(projectModulesPrefix) && request.method() === 'GET') {
+        await fulfill(route, 200, { modules: clone([...installations.values()]) });
+        return;
+      }
+      if (url.pathname.endsWith('/history') && request.method() === 'GET') {
+        const moduleId = decodeURIComponent(
+          url.pathname.slice(0, -'/history'.length).split('/').at(-1) ?? '',
+        );
+        requests.projectModuleHistories.push(moduleId);
+        const installation = installations.get(moduleId);
+        await fulfill(route, 200, {
+          history: clone(
+            installation
+              ? (installationHistories.get(String(installation.installation_id)) ?? [])
+              : [],
+          ),
+        });
+        return;
+      }
+      if (url.pathname.endsWith('/install') && request.method() === 'POST') {
+        requests.projectModuleInstalls.push(clone(body));
+        const releaseId = String(body.release_id ?? '');
+        const release = moduleReleases.find((candidate) => candidate.release_id === releaseId);
+        if (!release || installations.has(release.module_id)) {
+          await fulfill(route, 409, { error: 'PROJECT_MODULE_INSTALL_CONFLICT' });
+          return;
+        }
+        const installationId = '26000000-0000-4000-a000-000000000001';
+        const event = {
+          installation_event_id: '27000000-0000-4000-a000-000000000001',
+          installation_id: installationId,
+          project_id: PROJECT_ID,
+          account_id: ACCOUNT_A,
+          sequence: 1,
+          action: 'install',
+          from_release_id: null,
+          to_release_id: releaseId,
+          expected_revision: 0,
+          resulting_revision: 1,
+          idempotency_key: String(request.headers()['idempotency-key'] ?? ''),
+          actor_user_id: '31000000-0000-4000-a000-000000000001',
+          created_at: RELEASE_UPDATED_AT,
+        };
+        const installation = {
+          installation_id: installationId,
+          project_id: PROJECT_ID,
+          account_id: ACCOUNT_A,
+          module_id: release.module_id,
+          active_release_id: releaseId,
+          active_version: release.module_version,
+          install_revision: 1,
+          status: 'active',
+          installed_by: '31000000-0000-4000-a000-000000000001',
+          created_at: RELEASE_UPDATED_AT,
+          updated_at: RELEASE_UPDATED_AT,
+        };
+        installations.set(release.module_id, installation);
+        installationHistories.set(installationId, [event]);
+        await fulfill(route, 201, { installation, event });
+        return;
+      }
+      const moveMatch = url.pathname.match(
+        new RegExp(`${projectModulesPrefix}/([^/]+)/(update|rollback)$`),
+      );
+      if (moveMatch && request.method() === 'POST') {
+        const moduleId = decodeURIComponent(moveMatch[1]);
+        const action = moveMatch[2];
+        requests.projectModuleMoves.push({ action, ...clone(body) });
+        const installation = installations.get(moduleId);
+        const expectedRevision = Number(body.expected_install_revision);
+        if (!installation || expectedRevision !== Number(installation.install_revision)) {
+          await fulfill(route, 409, { error: 'PROJECT_MODULE_INSTALL_CONFLICT' });
+          return;
+        }
+        if (action === 'rollback' && forceModuleConflict) {
+          forceModuleConflict = false;
+          await fulfill(route, 409, { error: 'PROJECT_MODULE_INSTALL_CONFLICT' });
+          return;
+        }
+        const releaseId = String(body.release_id ?? '');
+        const release = moduleReleases.find((candidate) => candidate.release_id === releaseId);
+        const history = installationHistories.get(String(installation.installation_id)) ?? [];
+        if (
+          !release ||
+          (action === 'rollback' && !history.some((event) => event.to_release_id === releaseId))
+        ) {
+          await fulfill(route, 409, { error: 'PROJECT_MODULE_ROLLBACK_TARGET_INVALID' });
+          return;
+        }
+        const nextRevision = expectedRevision + 1;
+        const event = {
+          installation_event_id: `27000000-0000-4000-a000-${String(nextRevision).padStart(12, '0')}`,
+          installation_id: installation.installation_id,
+          project_id: PROJECT_ID,
+          account_id: ACCOUNT_A,
+          sequence: nextRevision,
+          action,
+          from_release_id: installation.active_release_id,
+          to_release_id: releaseId,
+          expected_revision: expectedRevision,
+          resulting_revision: nextRevision,
+          idempotency_key: String(request.headers()['idempotency-key'] ?? ''),
+          actor_user_id: '31000000-0000-4000-a000-000000000001',
+          created_at: RELEASE_UPDATED_AT,
+        };
+        const nextInstallation = {
+          ...installation,
+          active_release_id: releaseId,
+          active_version: release.module_version,
+          install_revision: nextRevision,
+          updated_at: RELEASE_UPDATED_AT,
+        };
+        installations.set(moduleId, nextInstallation);
+        history.push(event);
+        installationHistories.set(String(installation.installation_id), history);
+        await fulfill(route, 200, { installation: nextInstallation, event });
+        return;
+      }
+      requests.unknown.push(`${request.method()} ${url.pathname}`);
+      await fulfill(route, 500, { error: 'UNEXPECTED_PROJECT_MODULE_REQUEST' });
+      return;
+    }
+    if (url.pathname.endsWith('/marketplace/items') && request.method() === 'GET') {
+      await fulfill(route, 200, { items: clone(moduleReleases) });
+      return;
+    }
     if (!url.pathname.includes('/developer/modules/')) return route.continue();
     assert(
       request.headers().authorization === 'Bearer debug-developer-center-token',
@@ -475,7 +649,8 @@ async function main() {
   page.on('response', (response) => {
     const pathname = new URL(response.url()).pathname;
     if (
-      pathname.includes('/developer/modules/') &&
+      (pathname.includes('/developer/modules/') ||
+        pathname.includes(`/projects/${PROJECT_ID}/modules`)) &&
       (response.status() === 400 || response.status() === 409)
     ) {
       expectedDeveloperHttpStatuses.push(response.status());
@@ -527,6 +702,61 @@ async function main() {
     await page.getByRole('button', { name: /^submit release$/i }).click();
     await visibleText(page, 'Submitted module');
     assert(requests.submissions === 1, 'confirmed submission should post exactly once');
+
+    await page.getByTestId('debug-project-modules').click();
+    await visibleText(page, 'No modules installed');
+    await visibleText(page, 'Available modules');
+    const installModule = page.getByTestId('install-module');
+    assert(
+      (await installModule.count()) === 2,
+      'both published exact module releases must be visible',
+    );
+    await installModule.filter({ hasText: 'Install' }).first().click();
+    await visibleText(page, 'Install exact release?');
+    await page.getByRole('button', { name: /^install release$/i }).click();
+    await visibleText(page, '1 active');
+    await visibleText(page, '1.0.0');
+    assert(
+      requests.projectModuleInstalls.length === 1 &&
+        requests.projectModuleInstalls[0].release_id === MODULE_RELEASE_V1,
+      'project install must use the exact v1 release id',
+    );
+
+    await page.getByTestId('update-module').click();
+    await visibleText(page, 'Update exact release?');
+    await page.getByRole('button', { name: /^update release$/i }).click();
+    await page.getByText('2.0.0', { exact: true }).first().waitFor({ state: 'visible' });
+    assert(
+      requests.projectModuleMoves.some(
+        (move) => move.action === 'update' && move.release_id === MODULE_RELEASE_V2,
+      ),
+      'project update must target the exact v2 release id',
+    );
+
+    await page.getByTestId('rollback-module').click();
+    await visibleText(page, 'Rollback exact release?');
+    await page.getByRole('button', { name: /^rollback release$/i }).click();
+    await page.getByText('2.0.0', { exact: true }).first().waitFor({ state: 'visible' });
+    assert(
+      requests.projectModuleMoves.filter((move) => move.action === 'rollback').length === 1,
+      'stale rollback must not be replayed automatically',
+    );
+    await page.getByTestId('rollback-module').click();
+    await visibleText(page, 'Rollback exact release?');
+    await page.getByRole('button', { name: /^rollback release$/i }).click();
+    await page.getByText('1.0.0', { exact: true }).first().waitFor({ state: 'visible' });
+    assert(
+      requests.projectModuleMoves.filter((move) => move.action === 'rollback').length === 2,
+      'rollback retry must be an explicit second request after refetch',
+    );
+    assert(
+      requests.projectModuleHistories.length >= 1,
+      'history must be read when a project module state is reloaded',
+    );
+    await page.getByTestId('history-module').click();
+    await visibleText(page, 'Installation history');
+    await visibleText(page, 'Revision 2');
+    await page.keyboard.press('Escape');
 
     await page.getByTestId('debug-publisher-detail').click();
     await visibleText(page, 'Recruiting module');
@@ -714,6 +944,18 @@ async function main() {
     await page.screenshot({ path: screenshotPath, fullPage: false });
     assert(fs.statSync(screenshotPath).size > 0, 'Developer Center screenshot is empty');
     await assertScreenshotHasVisualContent(screenshotPath);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${baseUrl}/debug/developer-center?mode=project-modules`, {
+      waitUntil: 'domcontentloaded',
+    });
+    await visibleText(page, 'Installed modules');
+    const mobileOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    );
+    assert(mobileOverflow, 'mobile Project Modules view has horizontal overflow');
+    await page.screenshot({ path: mobileScreenshotPath, fullPage: false });
+    assert(fs.statSync(mobileScreenshotPath).size > 0, 'mobile screenshot is empty');
+    await assertScreenshotHasVisualContent(mobileScreenshotPath);
     assert(consoleErrors.length === 0, `unexpected browser errors: ${consoleErrors.join(' | ')}`);
     assert(
       requests.unknown.length === 0,
@@ -721,7 +963,7 @@ async function main() {
     );
 
     console.log(
-      `[developer-center-review] ok: mocked publisher/admin review flows; screenshot=${screenshotPath}`,
+      `[developer-center-review] ok: mocked publisher/admin/project-module flows; screenshots=${screenshotPath},${mobileScreenshotPath}`,
     );
   } finally {
     await browser.close();

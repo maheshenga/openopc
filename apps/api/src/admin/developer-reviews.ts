@@ -92,7 +92,7 @@ const TransitionSchema = z.object({
 });
 const DetailSchema = z.object({
   release: DeveloperModuleReleaseSchema,
-  history: z.array(ReviewEventSchema),
+  history: z.array(z.union([ReviewEventSchema, DistributionEventSchema])),
 });
 const QueueSchema = z.object({
   releases: z.array(DeveloperModuleReleaseSchema),

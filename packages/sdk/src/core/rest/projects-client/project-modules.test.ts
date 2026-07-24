@@ -4,6 +4,7 @@ import { configureKortix } from '../../http/config';
 import {
   type ProjectModuleErrorResponse,
   installProjectModule,
+  listProjectModuleInstallationHistory,
   listProjectModules,
   rollbackProjectModule,
   updateProjectModule,
@@ -44,6 +45,7 @@ test('project module wire types expose transition and stable error-code shapes',
 
 test('project module transport encodes project and module path segments', async () => {
   await listProjectModules('project/with space');
+  await listProjectModuleInstallationHistory('project/with space', 'module/with space');
   await updateProjectModule('project/with space', 'module/with space', {
     release_id: 'release-v2',
     expected_install_revision: 1,
@@ -52,6 +54,11 @@ test('project module transport encodes project and module path segments', async 
   expect(calls.map(({ url, method, body }) => ({ url, method, body }))).toEqual([
     {
       url: 'http://test.local/projects/project%2Fwith%20space/modules',
+      method: 'GET',
+      body: undefined,
+    },
+    {
+      url: 'http://test.local/projects/project%2Fwith%20space/modules/module%2Fwith%20space/history',
       method: 'GET',
       body: undefined,
     },

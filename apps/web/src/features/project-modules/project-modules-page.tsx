@@ -57,6 +57,7 @@ import type { PublishedProjectModuleRelease } from './client';
 import {
   projectModuleErrorCode,
   useInstallProjectModule,
+  useProjectModuleHistories,
   useProjectModuleMutation,
   useProjectModuleReleases,
   useProjectModules,
@@ -527,11 +528,30 @@ export function ProjectModulesPage({ projectId }: { projectId: string }) {
   const installMutation = useInstallProjectModule();
   const updateMutation = useProjectModuleMutation('update');
   const rollbackMutation = useProjectModuleMutation('rollback');
-  const [historyByInstallation, setHistoryByInstallation] = useState<
+  const [mutationHistoryByInstallation, setMutationHistoryByInstallation] = useState<
     Readonly<Record<string, readonly ProjectModuleInstallationEvent[]>>
   >({});
   const modules = modulesQuery.data ?? [];
   const releases = releasesQuery.data ?? [];
+  const historyQueries = useProjectModuleHistories(
+    projectId,
+    modules,
+    canRead.allowed || canRead.isLoading,
+  );
+  const historyByInstallation = useMemo(() => {
+    const next: Record<string, readonly ProjectModuleInstallationEvent[]> = {};
+    modules.forEach((installation, index) => {
+      const fetched = historyQueries[index]?.data ?? [];
+      const local = mutationHistoryByInstallation[installation.installation_id] ?? [];
+      const seen = new Set<string>();
+      next[installation.installation_id] = [...fetched, ...local].filter((event) => {
+        if (seen.has(event.installation_event_id)) return false;
+        seen.add(event.installation_event_id);
+        return true;
+      });
+    });
+    return next;
+  }, [historyQueries, modules, mutationHistoryByInstallation]);
   const queryError = modulesQuery.error ?? releasesQuery.error;
   const mutationError = installMutation.error ?? updateMutation.error ?? rollbackMutation.error;
   const errorCode =
@@ -547,7 +567,7 @@ export function ProjectModulesPage({ projectId }: { projectId: string }) {
   const pendingModuleId =
     updateMutation.variables?.moduleId ?? rollbackMutation.variables?.moduleId ?? null;
   const recordTransition = (transition: ProjectModuleInstallationTransition) =>
-    setHistoryByInstallation((current) => ({
+    setMutationHistoryByInstallation((current) => ({
       ...current,
       [transition.installation.installation_id]: [
         ...(current[transition.installation.installation_id] ?? []),

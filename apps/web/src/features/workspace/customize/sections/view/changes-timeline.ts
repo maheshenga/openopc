@@ -33,7 +33,7 @@ export function dayLabel(ts: number, referenceDate = new Date()): string {
   if (day >= today) return 'Today';
   if (day >= yesterday) return 'Yesterday';
   if (day >= weekStart) return 'This week';
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
 }
 
 export type TimelineItem =
@@ -63,11 +63,13 @@ export function groupTimeline(items: TimelineItem[], referenceDate = new Date())
   const groups = new Map<string, TimelineItem[]>();
   for (const item of sorted) {
     const label = dayLabel(item.at, referenceDate);
-    if (!groups.has(label)) {
-      groups.set(label, []);
+    let group = groups.get(label);
+    if (!group) {
+      group = [];
+      groups.set(label, group);
       order.push(label);
     }
-    groups.get(label)!.push(item);
+    group.push(item);
   }
-  return order.map((label) => ({ label, items: groups.get(label)! }));
+  return order.map((label) => ({ label, items: groups.get(label) ?? [] }));
 }

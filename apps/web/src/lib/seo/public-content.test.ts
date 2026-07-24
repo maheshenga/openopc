@@ -25,7 +25,9 @@ const UNRESOLVED_MDX_COMPONENT =
 const LINE_START_UNRESOLVED_JSX = /^\s*(?:>\s*)?(?:[-*]\s*)?<\/?[A-Z][A-Za-z0-9_.]*(?:\s|>|\/)/m;
 
 function withoutFencedCode(markdown: string): string {
-  return markdown.replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2)(?=\n|$)/g, '\n');
+  return markdown
+    .replace(/\r\n?/g, '\n')
+    .replace(/(^|\n)(```|~~~)[\s\S]*?(\n\2)(?=\n|$)/g, '\n');
 }
 
 function expectCleanAgentMarkdown(markdown: string, label: string): void {

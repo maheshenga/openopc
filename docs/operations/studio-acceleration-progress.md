@@ -17,7 +17,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Intelligence workflows    | implemented, disabled                                   | workflow, approval, routing, evaluation, Temporal commits                                                                                   | separately reviewed production rollout                            |
 | OpenOPC Milestone A       | implemented, disabled by default                        | catalog, project SSE projection, SDK subscription, and focused contract/API/SDK/CLI gates verified locally                                  | production rollout and later milestones                           |
 | Automation Task 8A-8B     | authenticated heartbeat plus bounded Browser Worker dispatch transport implemented; desktop observe coordinator implemented; production hardening partial; default-off | heartbeat commits through `5c6ec31d0`; dispatch commits `44ff08329`, `bf3b2a4a2`, `9f7399997`, and `cce38b4ff`; shared schemas, signed receipts, mTLS client options, replay fencing, and package gates verified | main-runtime composition, real mTLS deployment, sink concurrency validation, durable step/approval handling, and unknown-result recovery |
-| Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; Windows launcher adapter and focused browser diagnostics                             | repeat landing-page console verification after host memory relief |
+| Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; full Web Bun suite `1078/1078`; Windows launcher adapter and focused browser diagnostics | repeat landing-page console verification after host memory relief |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
 | Developer Center          | planned                                                 | acceleration design Milestone 4                                                                                                             | separate plan                                                     |
@@ -310,12 +310,13 @@ smoke also passed after the browser-safe default UUID fix in
 
 The shared package gates passed: API contract (`56/56`), Studio runtime
 (`30/30`), Studio adapters (`127/127`), SDK (`1136/1136`), SDK typecheck, and
-SDK bundle build. The Web full test ran `1057` passing and `6` failing; the
-failures are outside this diff (public Markdown MDX syntax, three
-ProjectManifest alert tests only when run in the full suite, and two
-system-locale-sensitive timeline expectations). The same three files were
-re-run independently: the alert file passed; the Markdown and timeline
-failures remain reproducible baseline failures.
+SDK bundle build. The complete Web Bun suite now passes `1078/1078` tests with
+`3316` assertions, and Web no-emit TypeScript checking exits `0`. The baseline
+repair normalizes CRLF before removing fenced examples from the public Markdown
+audit, restores global browser-storage test doubles after every case, and uses
+a deterministic English month label for the otherwise English-only changes
+timeline. The previously full-suite-only ProjectManifest alert failures and the
+two system-locale-sensitive timeline failures are therefore closed.
 
 `i18n:audit` remains a baseline failure: English has `0` missing keys, the
 other seven locales each have `70` missing `hardcodedUi.appHomePage` keys, and

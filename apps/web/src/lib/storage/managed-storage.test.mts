@@ -1,5 +1,5 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import test, { afterEach } from 'node:test';
 
 /**
  * A faithful-enough localStorage mock: enforces a byte budget and throws a
@@ -28,7 +28,7 @@ class MockStorage {
     return [...this.map.keys()][i] ?? null;
   }
   getItem(k: string): string | null {
-    return this.map.has(k) ? this.map.get(k)! : null;
+    return this.map.get(k) ?? null;
   }
   setItem(k: string, v: string): void {
     if (this.usedBytes(k) + k.length + v.length > this.budget) {
@@ -46,14 +46,35 @@ class MockStorage {
   }
 }
 
+const STORAGE_GLOBAL_NAMES = ['window', 'localStorage', 'sessionStorage'] as const;
+const originalStorageGlobals = new Map(
+  STORAGE_GLOBAL_NAMES.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
+);
+
+function setStorageGlobal(name: (typeof STORAGE_GLOBAL_NAMES)[number], value: unknown): void {
+  Object.defineProperty(globalThis, name, {
+    configurable: true,
+    writable: true,
+    value,
+  });
+}
+
+function restoreStorageGlobals(): void {
+  for (const name of STORAGE_GLOBAL_NAMES) {
+    const descriptor = originalStorageGlobals.get(name);
+    if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+    else Reflect.deleteProperty(globalThis, name);
+  }
+}
+
 function install(budget: number): MockStorage {
   const store = new MockStorage(budget);
   // Mirror real browser semantics: `window.localStorage` IS the storage
   // accessor the module reads. Also keep the bare global for any direct
   // `localStorage` references in assertions.
-  (globalThis as any).window = { localStorage: store, sessionStorage: store };
-  (globalThis as any).localStorage = store;
-  (globalThis as any).sessionStorage = store;
+  setStorageGlobal('window', { localStorage: store, sessionStorage: store });
+  setStorageGlobal('localStorage', store);
+  setStorageGlobal('sessionStorage', store);
   return store;
 }
 
@@ -61,6 +82,10 @@ function install(budget: number): MockStorage {
 // state (registered families, timestamps) is fine to share across cases. We
 // import once and re-install a fresh storage per test.
 const mod = await import('./managed-storage.ts');
+
+afterEach(() => {
+  restoreStorageGlobals();
+});
 
 test('safeSetItem never throws and persists when there is room', () => {
   install(10_000);
@@ -137,7 +162,7 @@ test('exact-key disposables are evicted only after scoped families', () => {
 // lock that a null-storage environment degrades to no-ops, never throws.
 
 function installNullStorage(): void {
-  (globalThis as any).window = { localStorage: null, sessionStorage: null };
+  setStorageGlobal('window', { localStorage: null, sessionStorage: null });
 }
 
 test('null localStorage: safe* accessors never throw and report empty', () => {

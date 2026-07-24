@@ -123,6 +123,10 @@ test failure. The complete set covers the 30-day unknown-hold transfer,
 idempotent billing-incident creation, verified-cost settlement, cancellation
 fences, RLS/PostgREST exposure, migration upgrades, and atomic finalizers.
 
+The database package typecheck passed. Migration lint passed all `70` files;
+it reported the existing `7` destructive-operation warnings for migrations
+that require expand/contract review, with no lint errors.
+
 ## Canonical Client Contract
 
 `kortix.project(projectId).intelligence` is the only product-facing SDK facade for capability discovery, Agent Cards, task creation/events, and governed workflows. Milestone 0-1 adds image estimates, Studio jobs, uploads, and assets as typed projections under that existing facade. The unimplemented `kortix.project(projectId).studio` proposal is superseded and must not be introduced.

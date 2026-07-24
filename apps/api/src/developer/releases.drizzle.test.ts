@@ -50,6 +50,7 @@ const releaseRow = {
   manifestDigest: submission.manifestDigest,
   reviewRequirements: submission.reviewRequirements,
   status: 'validated' as const,
+  reviewRevision: 0,
   createdBy: USER_ID,
   createdAt: CREATED_AT,
   updatedAt: CREATED_AT,
@@ -141,6 +142,7 @@ describe('developer module release Drizzle repository', () => {
         account_id: ACCOUNT_ID,
         manifest_digest: submission.manifestDigest,
         status: 'validated',
+        review_revision: 0,
       }),
     );
   });

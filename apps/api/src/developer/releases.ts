@@ -41,6 +41,7 @@ export interface DeveloperModuleRelease {
   manifest_digest: `sha256:${string}`;
   review_requirements: DeveloperModuleReviewRequirement[];
   status: DeveloperModuleReleaseStatus;
+  review_revision: number;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -216,6 +217,7 @@ export function createMemoryDeveloperModuleReleaseRepository(input?: {
         manifest_digest: submission.manifestDigest,
         review_requirements: [...submission.reviewRequirements],
         status: 'validated',
+        review_revision: 0,
         created_by: submission.actorUserId,
         created_at: createdAt,
         updated_at: createdAt,

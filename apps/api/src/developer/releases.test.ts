@@ -53,6 +53,7 @@ describe('developer module release service', () => {
         module_version: '1.0.0',
         publisher_id: 'acme',
         status: 'validated',
+        review_revision: 0,
         created_by: USER_ID,
         created_at: NOW.toISOString(),
       }),

@@ -12,15 +12,22 @@
  * the legacy env/exec/schema endpoints are intentionally NOT restored.
  */
 import { createRoute, z } from '@hono/zod-openapi';
+import { developerModuleReviewService } from '../developer';
 import type { AppEnv } from '../types';
 import { supabaseAuth } from '../middleware/auth';
 import { requireAdmin } from '../middleware/require-admin';
 import { makeOpenApiApp, json, errors, auth } from '../openapi';
+import { recordAuditEvent } from '../shared/audit';
+import { registerAdminDeveloperReviewRoutes } from './developer-reviews';
 
 export const adminApp = makeOpenApiApp<AppEnv>();
 
 // Every admin route requires a logged-in platform admin.
 adminApp.use('*', supabaseAuth, requireAdmin);
+registerAdminDeveloperReviewRoutes(adminApp, {
+  reviewService: developerModuleReviewService,
+  recordAuditEvent,
+});
 
 // ── List accounts ────────────────────────────────────────────────────────────
 adminApp.openapi(

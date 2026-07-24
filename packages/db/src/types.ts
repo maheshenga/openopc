@@ -15,6 +15,7 @@ import type {
   chatInstalls,
   chatThreads,
   creditAccounts,
+  developerModuleReleaseReviewEvents,
   developerModuleReleases,
   developerPublishers,
   gatewayApiKeys,
@@ -126,6 +127,10 @@ export type DeveloperPublisher = typeof developerPublishers.$inferSelect;
 export type NewDeveloperPublisher = typeof developerPublishers.$inferInsert;
 export type DeveloperModuleRelease = typeof developerModuleReleases.$inferSelect;
 export type NewDeveloperModuleRelease = typeof developerModuleReleases.$inferInsert;
+export type DeveloperModuleReleaseReviewEvent =
+  typeof developerModuleReleaseReviewEvents.$inferSelect;
+export type NewDeveloperModuleReleaseReviewEvent =
+  typeof developerModuleReleaseReviewEvents.$inferInsert;
 
 // Aliases
 export type SandboxSelect = Sandbox;

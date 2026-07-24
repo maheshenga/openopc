@@ -299,6 +299,10 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
           P.listDeveloperModuleReleases(...args),
         get: (...args: Parameters<typeof P.getDeveloperModuleRelease>) =>
           P.getDeveloperModuleRelease(...args),
+        requestReview: (...args: Parameters<typeof P.requestDeveloperModuleReview>) =>
+          P.requestDeveloperModuleReview(...args),
+        reviewHistory: (...args: Parameters<typeof P.getDeveloperModuleReviewHistory>) =>
+          P.getDeveloperModuleReviewHistory(...args),
       },
     },
   };

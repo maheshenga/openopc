@@ -4,7 +4,9 @@ import { createKortix } from '../../client/kortix';
 import { configureKortix } from '../../http/config';
 import {
   getDeveloperModuleRelease,
+  getDeveloperModuleReviewHistory,
   listDeveloperModuleReleases,
+  requestDeveloperModuleReview,
   submitDeveloperModuleRelease,
   validateDeveloperModule,
 } from './developer-modules';
@@ -90,5 +92,52 @@ test('createKortix exposes the developer module release facade', async () => {
     'http://test.local/developer/modules/releases',
     'http://test.local/developer/modules/releases?account_id=acc-1&limit=10',
     'http://test.local/developer/modules/releases/release-1?account_id=acc-1',
+  ]);
+});
+
+test('developer module review SDK sends encoded account-scoped request and history calls', async () => {
+  await requestDeveloperModuleReview('release/with slash', {
+    accountId: 'acc-1',
+    expectedStatus: 'validated',
+    expectedRevision: 0,
+    reason: 'Ready for review',
+  });
+  await getDeveloperModuleReviewHistory('release/with slash', { accountId: 'acc-1' });
+
+  expect(calls).toEqual([
+    {
+      url: 'http://test.local/developer/modules/releases/release%2Fwith%20slash/review-requests',
+      method: 'POST',
+      body: {
+        account_id: 'acc-1',
+        expected_status: 'validated',
+        expected_revision: 0,
+        reason: 'Ready for review',
+      },
+    },
+    {
+      url: 'http://test.local/developer/modules/releases/release%2Fwith%20slash/review-history?account_id=acc-1',
+      method: 'GET',
+      body: undefined,
+    },
+  ]);
+});
+
+test('createKortix exposes requestReview and reviewHistory without removing release methods', async () => {
+  const kortix = createKortix({ backendUrl: 'http://test.local', getToken: async () => 'tok' });
+
+  await kortix.developer.modules.releases.requestReview('release-1', {
+    expectedStatus: 'changes_requested',
+    expectedRevision: 2,
+    reason: 'Addressed the requested changes.',
+  });
+  await kortix.developer.modules.releases.reviewHistory('release-1', { accountId: 'acc-1' });
+
+  expect(typeof kortix.developer.modules.releases.submit).toBe('function');
+  expect(typeof kortix.developer.modules.releases.list).toBe('function');
+  expect(typeof kortix.developer.modules.releases.get).toBe('function');
+  expect(calls.map((call) => call.url)).toEqual([
+    'http://test.local/developer/modules/releases/release-1/review-requests',
+    'http://test.local/developer/modules/releases/release-1/review-history?account_id=acc-1',
   ]);
 });

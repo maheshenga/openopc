@@ -87,6 +87,7 @@ describe('developer module release durable schema', () => {
         'manifest_digest',
         'review_requirements',
         'status',
+        'review_revision',
         'created_by',
         'created_at',
         'updated_at',
@@ -100,6 +101,9 @@ describe('developer module release durable schema', () => {
     );
     expect(uniqueConstraintNames(developerModuleReleases)).toContain(
       'developer_module_releases_module_version_unique',
+    );
+    expect(uniqueConstraintNames(developerModuleReleases)).toContain(
+      'developer_module_releases_release_account_unique',
     );
     expect(foreignKeys(developerModuleReleases)).toContainEqual({
       name: 'developer_module_releases_publisher_account_fk',
@@ -116,6 +120,7 @@ describe('developer module release durable schema', () => {
       expect.arrayContaining([
         'idx_developer_module_releases_account_created',
         'idx_developer_module_releases_account_status_created',
+        'idx_developer_module_releases_review_queue',
       ]),
     );
     expect(

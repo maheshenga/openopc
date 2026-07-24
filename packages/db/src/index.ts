@@ -240,10 +240,14 @@ export {
   automationKillSwitchesRelations,
   // OpenOPC Developer Center
   developerModuleReleaseStatusEnum,
+  developerModuleReviewActionEnum,
+  developerModuleReviewActorKindEnum,
   developerPublishers,
   developerModuleReleases,
+  developerModuleReleaseReviewEvents,
   developerPublishersRelations,
   developerModuleReleasesRelations,
+  developerModuleReleaseReviewEventsRelations,
 } from './schema/kortix';
 export type { AgentGrant } from './schema/kortix';
 

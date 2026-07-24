@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 
+import { assertAuthorized } from '../iam/dispatcher';
 import { supabaseAuth } from '../middleware/auth';
 import { db } from '../shared/db';
 import { resolveScopedAccountId } from '../shared/resolve-account';
@@ -8,10 +9,14 @@ import type { AppEnv } from '../types';
 import { createDeveloperApp } from './app';
 import { type DeveloperModuleReleaseRepository, DeveloperModuleReleaseService } from './releases';
 import { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzle';
+import { type DeveloperModuleReviewRepository, DeveloperModuleReviewService } from './reviews';
+import { createDrizzleDeveloperModuleReviewRepository } from './reviews.drizzle';
 
 export { createDeveloperApp, type DeveloperAppDependencies } from './app';
 export * from './releases';
 export { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzle';
+export * from './reviews';
+export { createDrizzleDeveloperModuleReviewRepository } from './reviews.drizzle';
 
 async function requestedAccountId(context: Context<AppEnv>, source: 'body' | 'query') {
   if (source === 'query') return context.req.query('account_id');
@@ -41,9 +46,23 @@ async function resolveDeveloperAccountId(
 const releaseRepository: DeveloperModuleReleaseRepository =
   createDrizzleDeveloperModuleReleaseRepository(db);
 const releaseService = new DeveloperModuleReleaseService({ repository: releaseRepository });
+const reviewRepository: DeveloperModuleReviewRepository =
+  createDrizzleDeveloperModuleReviewRepository(db);
+export const developerModuleReviewService = new DeveloperModuleReviewService({
+  repository: reviewRepository,
+});
 
 export const developerApp = createDeveloperApp({
   authenticate: supabaseAuth,
   resolveAccountId: resolveDeveloperAccountId,
+  authorizeAccount: (context, accountId, action) =>
+    assertAuthorized(
+      context.get('userId'),
+      accountId,
+      action,
+      { type: 'account' },
+      context.get('iamTokenId'),
+    ),
   releaseService,
+  reviewService: developerModuleReviewService,
 });

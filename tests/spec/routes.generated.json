@@ -1,6 +1,6 @@
 {
   "generatedAt": "static",
-  "count": 520,
+  "count": 525,
   "routes": [
     {
       "method": "GET",
@@ -535,6 +535,18 @@
       "path": "/v1/admin/api/sandboxes/:sessionId/migrate"
     },
     {
+      "method": "GET",
+      "path": "/v1/admin/developer/modules/releases/:releaseId/review"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/developer/modules/releases/:releaseId/review-decisions"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/developer/modules/reviews"
+    },
+    {
       "method": "POST",
       "path": "/v1/auth/logout"
     },
@@ -773,6 +785,14 @@
     {
       "method": "GET",
       "path": "/v1/developer/modules/releases/:releaseId"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/developer/modules/releases/:releaseId/review-history"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/developer/modules/releases/:releaseId/review-requests"
     },
     {
       "method": "POST",

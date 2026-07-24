@@ -6102,6 +6102,19 @@ export const developerModuleReleaseStatusEnum = kortixSchema.enum(
   ],
 );
 
+export const developerModuleReviewActionEnum = kortixSchema.enum('developer_module_review_action', [
+  'submit',
+  'resubmit',
+  'request_changes',
+  'approve',
+  'revoke',
+]);
+
+export const developerModuleReviewActorKindEnum = kortixSchema.enum(
+  'developer_module_review_actor_kind',
+  ['publisher', 'platform_admin'],
+);
+
 export const developerPublishers = kortixSchema.table(
   'developer_publishers',
   {
@@ -6144,6 +6157,7 @@ export const developerModuleReleases = kortixSchema.table(
     manifestDigest: varchar('manifest_digest', { length: 71 }).notNull(),
     reviewRequirements: jsonb('review_requirements').notNull().$type<string[]>(),
     status: developerModuleReleaseStatusEnum('status').default('validated').notNull(),
+    reviewRevision: integer('review_revision').default(0).notNull(),
     createdBy: uuid('created_by').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
@@ -6162,11 +6176,17 @@ export const developerModuleReleases = kortixSchema.table(
       table.moduleId,
       table.moduleVersion,
     ),
+    unique('developer_module_releases_release_account_unique').on(table.releaseId, table.accountId),
     index('idx_developer_module_releases_account_created').on(table.accountId, table.createdAt),
     index('idx_developer_module_releases_account_status_created').on(
       table.accountId,
       table.status,
       table.createdAt,
+    ),
+    index('idx_developer_module_releases_review_queue').on(
+      table.status,
+      table.updatedAt,
+      table.releaseId,
     ),
     check(
       'developer_module_releases_item_name_check',
@@ -6196,6 +6216,97 @@ export const developerModuleReleases = kortixSchema.table(
         AND jsonb_array_length(${table.reviewRequirements}) BETWEEN 2 AND 16
         AND pg_column_size(${table.reviewRequirements}) <= 4096`,
     ),
+    check('developer_module_releases_review_revision_check', sql`${table.reviewRevision} >= 0`),
+  ],
+);
+
+export const developerModuleReleaseReviewEvents = kortixSchema.table(
+  'developer_module_release_review_events',
+  {
+    reviewEventId: uuid('review_event_id').defaultRandom().primaryKey(),
+    releaseId: uuid('release_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    sequence: integer('sequence').notNull(),
+    action: developerModuleReviewActionEnum('action').notNull(),
+    fromStatus: developerModuleReleaseStatusEnum('from_status').notNull(),
+    toStatus: developerModuleReleaseStatusEnum('to_status').notNull(),
+    actorUserId: uuid('actor_user_id').notNull(),
+    actorKind: developerModuleReviewActorKindEnum('actor_kind').notNull(),
+    reason: text('reason'),
+    evidence: jsonb('evidence').default([]).notNull().$type<Record<string, unknown>[]>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'developer_module_release_review_events_release_account_fk',
+    }).onDelete('cascade'),
+    unique('developer_module_release_review_events_release_sequence_unique').on(
+      table.releaseId,
+      table.sequence,
+    ),
+    index('idx_developer_module_release_review_events_account_release_sequence').on(
+      table.accountId,
+      table.releaseId,
+      table.sequence,
+    ),
+    check('developer_module_release_review_events_sequence_check', sql`${table.sequence} > 0`),
+    check(
+      'developer_module_release_review_events_reason_check',
+      sql`(
+        ${table.reason} IS NULL
+        OR (
+          length(BTRIM(${table.reason})) BETWEEN 1 AND 4000
+          AND octet_length(${table.reason}) <= 8192
+        )
+      )
+      AND (
+        ${table.action} NOT IN ('resubmit', 'request_changes', 'revoke')
+        OR ${table.reason} IS NOT NULL
+      )`,
+    ),
+    check(
+      'developer_module_release_review_events_evidence_check',
+      sql`jsonb_typeof(${table.evidence}) = 'array'
+        AND jsonb_array_length(${table.evidence}) <= 16
+        AND pg_column_size(${table.evidence}) <= 32768
+        AND (
+          (${table.action} = 'approve' AND jsonb_array_length(${table.evidence}) BETWEEN 2 AND 16)
+          OR (${table.action} <> 'approve' AND jsonb_array_length(${table.evidence}) = 0)
+        )`,
+    ),
+    check(
+      'developer_module_release_review_events_transition_check',
+      sql`(
+        ${table.action} = 'submit'
+        AND ${table.actorKind} = 'publisher'
+        AND ${table.fromStatus} = 'validated'
+        AND ${table.toStatus} = 'review_pending'
+      ) OR (
+        ${table.action} = 'resubmit'
+        AND ${table.actorKind} = 'publisher'
+        AND ${table.fromStatus} = 'changes_requested'
+        AND ${table.toStatus} = 'review_pending'
+      ) OR (
+        ${table.action} = 'request_changes'
+        AND ${table.actorKind} = 'platform_admin'
+        AND ${table.fromStatus} = 'review_pending'
+        AND ${table.toStatus} = 'changes_requested'
+      ) OR (
+        ${table.action} = 'approve'
+        AND ${table.actorKind} = 'platform_admin'
+        AND ${table.fromStatus} = 'review_pending'
+        AND ${table.toStatus} = 'approved'
+      ) OR (
+        ${table.action} = 'revoke'
+        AND ${table.actorKind} = 'platform_admin'
+        AND ${table.fromStatus} = 'approved'
+        AND ${table.toStatus} = 'revoked'
+      )`,
+    ),
   ],
 );
 
@@ -6207,13 +6318,34 @@ export const developerPublishersRelations = relations(developerPublishers, ({ on
   releases: many(developerModuleReleases),
 }));
 
-export const developerModuleReleasesRelations = relations(developerModuleReleases, ({ one }) => ({
-  account: one(accounts, {
-    fields: [developerModuleReleases.accountId],
-    references: [accounts.accountId],
+export const developerModuleReleasesRelations = relations(
+  developerModuleReleases,
+  ({ one, many }) => ({
+    account: one(accounts, {
+      fields: [developerModuleReleases.accountId],
+      references: [accounts.accountId],
+    }),
+    publisher: one(developerPublishers, {
+      fields: [developerModuleReleases.publisherId, developerModuleReleases.accountId],
+      references: [developerPublishers.publisherId, developerPublishers.accountId],
+    }),
+    reviewEvents: many(developerModuleReleaseReviewEvents),
   }),
-  publisher: one(developerPublishers, {
-    fields: [developerModuleReleases.publisherId, developerModuleReleases.accountId],
-    references: [developerPublishers.publisherId, developerPublishers.accountId],
+);
+
+export const developerModuleReleaseReviewEventsRelations = relations(
+  developerModuleReleaseReviewEvents,
+  ({ one }) => ({
+    release: one(developerModuleReleases, {
+      fields: [
+        developerModuleReleaseReviewEvents.releaseId,
+        developerModuleReleaseReviewEvents.accountId,
+      ],
+      references: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+    }),
+    account: one(accounts, {
+      fields: [developerModuleReleaseReviewEvents.accountId],
+      references: [accounts.accountId],
+    }),
   }),
-}));
+);

@@ -432,13 +432,16 @@ flow(
       'POST /v1/developer/modules/releases',
       'GET /v1/developer/modules/releases',
       'GET /v1/developer/modules/releases/:releaseId',
+      'POST /v1/developer/modules/releases/:releaseId/review-requests',
+      'GET /v1/developer/modules/releases/:releaseId/review-history',
+      'GET /v1/admin/developer/modules/reviews',
+      'GET /v1/admin/developer/modules/releases/:releaseId/review',
+      'POST /v1/admin/developer/modules/releases/:releaseId/review-decisions',
     ],
   },
   async (ctx) => {
     await ctx.step('developer module validation requires authentication', async () => {
-      const response = await ctx.client
-        .as(ctx.P.ANON)
-        .post('/v1/developer/modules/validate', {});
+      const response = await ctx.client.as(ctx.P.ANON).post('/v1/developer/modules/validate', {});
       response.status(401);
     });
     await ctx.step('developer module release APIs require authentication', async () => {
@@ -449,6 +452,26 @@ flow(
         ctx.client
           .as(ctx.P.ANON)
           .get('/v1/developer/modules/releases/:releaseId', { params: { releaseId } }),
+      ]);
+      for (const response of responses) response.status(401);
+    });
+    await ctx.step('developer module review APIs require authentication', async () => {
+      const releaseId = '30000000-0000-4000-a000-000000000003';
+      const params = { releaseId };
+      const responses = await Promise.all([
+        ctx.client
+          .as(ctx.P.ANON)
+          .post('/v1/developer/modules/releases/:releaseId/review-requests', {}, { params }),
+        ctx.client
+          .as(ctx.P.ANON)
+          .get('/v1/developer/modules/releases/:releaseId/review-history', { params }),
+        ctx.client.as(ctx.P.ANON).get('/v1/admin/developer/modules/reviews'),
+        ctx.client
+          .as(ctx.P.ANON)
+          .get('/v1/admin/developer/modules/releases/:releaseId/review', { params }),
+        ctx.client
+          .as(ctx.P.ANON)
+          .post('/v1/admin/developer/modules/releases/:releaseId/review-decisions', {}, { params }),
       ]);
       for (const response of responses) response.status(401);
     });

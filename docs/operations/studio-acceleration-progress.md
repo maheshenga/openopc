@@ -20,7 +20,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; full Web Bun suite `1078/1078`; Windows launcher adapter and focused browser diagnostics | repeat landing-page console verification after host memory relief |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
-| Developer Center          | active (durable validated-release foundation)            | strict `registry:module` v1 validation, account-scoped immutable release metadata, publisher ownership, typed API/SDK, schema and route-parity gates | review transitions/sign/scan/sandbox/publish/install/rollback/metering/settlement |
+| Developer Center          | active (governed manual review lifecycle)                  | immutable release metadata, account IAM, publisher requests, platform-admin decisions, manual attestations, revision fencing, history, API/SDK and route-parity gates | automated scan/sandbox, signing, publishing, Web UI, install/rollback, metering/settlement |
 
 ## Developer Center Foundation
 
@@ -66,8 +66,9 @@ submission of the same module version and digest is idempotent; a different
 digest for that version or a publisher owned by another account returns a safe
 conflict. Request errors return codes only and never echo submitted values.
 
-This slice stops at `validated`. Review transitions, source scanning, sandbox
-tests, signing, publication, revocation operations, installation, rollback,
+This foundation slice stopped at `validated`; the review lifecycle below now
+supersedes that specific limitation. Automated source scanning, sandbox tests,
+signing, publication, installation, rollback,
 usage metering, revenue settlement, browser acceptance, live database
 acceptance and production deployment remain open and are not claimed.
 
@@ -80,6 +81,53 @@ passing. The monolithic API unit command is not green (`1546` pass, `8` skip,
 cross-file mock/module contamination, and the Slack identity test independently
 fails on a pre-existing missing `PROJECT_ACTIONS` export. This is not presented
 as full API or production acceptance.
+
+## Developer Module Review Lifecycle
+
+**Updated:** 2026-07-24
+
+The governed review slice adds publisher review requests and resubmissions,
+platform-admin request-changes, approval, and emergency revocation decisions,
+plus chronological immutable history. Existing release reads now require
+`account.read`; release submission and review requests require `account.write`.
+Publisher operations remain account-scoped, while global review queue/detail
+and decisions exist only behind the existing platform-admin middleware.
+
+Every transition uses expected status plus `review_revision` compare-and-swap.
+The PostgreSQL repository updates the release and appends the resulting event
+sequence in one transaction. Approval rejects the release creator and every
+current publisher-account member. It requires exactly one bounded `manual`
+`passed` attestation for every declared requirement; this does not claim an
+automated scan or sandbox run. Reasons and summaries reject supported secret
+patterns/control characters, and API errors expose stable codes only.
+
+Publisher SDK additions are
+`kortix.developer.modules.releases.requestReview(...)` and
+`.reviewHistory(...)`; the existing validate/submit/list/get methods remain
+unchanged. The two publisher routes and three internal Admin routes are present
+in the authoritative route manifest and anonymous-perimeter coverage.
+
+Fresh focused evidence: review/release domain, Drizzle, publisher API, and Admin
+API `48/48`; database schema contracts `9/9`; API, DB, and SDK typechecks;
+migration lint `72/72` with seven pre-existing destructive-operation warnings;
+SDK transport plus public runtime/type surfaces `8/8`; DB package `125` pass,
+`83` skip, `0` fail; SDK package `1156/1156`; route coverage `446/525`, with
+`9` allowlisted and `70` pre-existing uncovered routes. The Docker-backed
+PostgreSQL 16 review migration test currently reports `8` skips because Docker
+Desktop's Linux engine is unavailable, so live migration, cascade, grant,
+replay, and concurrent-CAS proof is not claimed yet.
+
+The restored root `pnpm test` command is not green and did not complete every
+workspace package. Its first failing unchanged package was
+`@kortix/sandbox-agent-server`: `154` pass, `40` fail, and `1` error on Windows,
+beginning with POSIX `0600` mode semantics and continuing through Unix path,
+process-group, and local-service fixtures. No Developer Center file is in that
+package, and the focused changed-area gates above remain green; this is not
+presented as a full repository pass.
+
+Automated source scan/sandbox execution, signing, publication, Web review UI,
+installation/rollback, usage metering, revenue settlement, browser acceptance,
+deployment, and production acceptance remain open.
 
 ## Authenticated Local Gate Continuation
 

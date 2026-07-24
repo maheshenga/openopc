@@ -11,7 +11,9 @@ import {
 
 type DeveloperModuleReleaseRow = typeof developerModuleReleases.$inferSelect;
 
-function serializeRelease(row: DeveloperModuleReleaseRow): DeveloperModuleRelease {
+export function serializeDeveloperModuleReleaseRow(
+  row: DeveloperModuleReleaseRow,
+): DeveloperModuleRelease {
   return {
     release_id: row.releaseId,
     account_id: row.accountId,
@@ -23,6 +25,7 @@ function serializeRelease(row: DeveloperModuleReleaseRow): DeveloperModuleReleas
     manifest_digest: row.manifestDigest as `sha256:${string}`,
     review_requirements: [...row.reviewRequirements] as DeveloperModuleReviewRequirement[],
     status: row.status,
+    review_revision: row.reviewRevision,
     created_by: row.createdBy,
     created_at: row.createdAt,
     updated_at: row.updatedAt,
@@ -77,7 +80,9 @@ export function createDrizzleDeveloperModuleReleaseRepository(
           })
           .returning();
 
-        if (inserted) return { release: serializeRelease(inserted), created: true };
+        if (inserted) {
+          return { release: serializeDeveloperModuleReleaseRow(inserted), created: true };
+        }
 
         const [existingRelease] = await tx
           .select()
@@ -96,7 +101,7 @@ export function createDrizzleDeveloperModuleReleaseRepository(
         ) {
           throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
         }
-        return { release: serializeRelease(existingRelease), created: false };
+        return { release: serializeDeveloperModuleReleaseRow(existingRelease), created: false };
       });
     },
 
@@ -107,7 +112,7 @@ export function createDrizzleDeveloperModuleReleaseRepository(
         .where(eq(developerModuleReleases.accountId, accountId))
         .orderBy(desc(developerModuleReleases.createdAt), desc(developerModuleReleases.releaseId))
         .limit(limit);
-      return rows.map(serializeRelease);
+      return rows.map(serializeDeveloperModuleReleaseRow);
     },
 
     async get(accountId, releaseId) {
@@ -121,7 +126,7 @@ export function createDrizzleDeveloperModuleReleaseRepository(
           ),
         )
         .limit(1);
-      return row ? serializeRelease(row) : null;
+      return row ? serializeDeveloperModuleReleaseRow(row) : null;
     },
   };
 }

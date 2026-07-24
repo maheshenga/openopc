@@ -111,7 +111,7 @@ export interface RegistryItemFile {
   content?: string;
 }
 
-export const REGISTRY_MODULE_SCHEMA_VERSION = 1 as const;
+export const REGISTRY_MODULE_SCHEMA_VERSION = 2 as const;
 
 export const REGISTRY_MODULE_CATEGORIES = [
   'industry',
@@ -129,11 +129,21 @@ export const REGISTRY_MODULE_EXECUTION_MODES = [
   'desktop-native',
 ] as const;
 
+export const REGISTRY_MODULE_VERIFICATION_PROFILES = [
+  'declarative',
+  'agent-project',
+  'sandboxed-web',
+  'server-conformance',
+  'desktop-package',
+] as const;
+
 export const REGISTRY_MODULE_CAPABILITY_KINDS = ['task', 'tool', 'workflow', 'ui'] as const;
 export const REGISTRY_MODULE_UI_SURFACES = ['page', 'panel', 'form', 'result'] as const;
 
 export type RegistryModuleCategory = (typeof REGISTRY_MODULE_CATEGORIES)[number];
 export type RegistryModuleExecutionMode = (typeof REGISTRY_MODULE_EXECUTION_MODES)[number];
+export type RegistryModuleVerificationProfile =
+  (typeof REGISTRY_MODULE_VERIFICATION_PROFILES)[number];
 export type RegistryModuleCapabilityKind = (typeof REGISTRY_MODULE_CAPABILITY_KINDS)[number];
 export type RegistryModuleUiSurfaceKind = (typeof REGISTRY_MODULE_UI_SURFACES)[number];
 
@@ -150,6 +160,10 @@ export interface RegistryModuleCompatibility {
 export interface RegistryModuleExecution {
   mode: RegistryModuleExecutionMode;
   entry?: string;
+}
+
+export interface RegistryModuleVerification {
+  profile: RegistryModuleVerificationProfile;
 }
 
 export interface RegistryModuleCapability {
@@ -185,6 +199,7 @@ export interface RegistryModuleManifest {
   locales: string[];
   compatibility: RegistryModuleCompatibility;
   execution: RegistryModuleExecution;
+  verification?: RegistryModuleVerification;
   capabilities?: RegistryModuleCapability[];
   permissions?: RegistryModulePermissions;
   ui?: RegistryModuleUiSurface[];

@@ -4,6 +4,7 @@ import {
   REGISTRY_MODULE_EXECUTION_MODES,
   REGISTRY_MODULE_SCHEMA_VERSION,
   REGISTRY_MODULE_UI_SURFACES,
+  REGISTRY_MODULE_VERIFICATION_PROFILES,
   type RegistryItem,
   type RegistryModuleManifest,
 } from './schema';
@@ -36,6 +37,7 @@ const TOP_LEVEL_KEYS = new Set([
   'locales',
   'compatibility',
   'execution',
+  'verification',
   'capabilities',
   'permissions',
   'ui',
@@ -43,6 +45,7 @@ const TOP_LEVEL_KEYS = new Set([
 const PUBLISHER_KEYS = new Set(['id', 'displayName']);
 const COMPATIBILITY_KEYS = new Set(['platform', 'registry']);
 const EXECUTION_KEYS = new Set(['mode', 'entry']);
+const VERIFICATION_KEYS = new Set(['profile']);
 const CAPABILITY_KEYS = new Set(['id', 'kind', 'inputSchema', 'outputSchema', 'assetKinds']);
 const PERMISSION_KEYS = new Set([
   'actions',
@@ -198,6 +201,40 @@ export function validateRegistryModuleManifest(
       error(`${basePath}.execution.entry`, `execution.entry is required for ${executionMode}`);
     } else if (entry !== undefined && (typeof entry !== 'string' || !isSafeRelativeEntry(entry))) {
       error(`${basePath}.execution.entry`, 'execution.entry must be a safe relative package path');
+    }
+  }
+
+  const requiredVerificationProfile = {
+    declarative: 'declarative',
+    agent: 'agent-project',
+    'sandboxed-web': 'sandboxed-web',
+    'server-adapter': 'server-conformance',
+    'desktop-native': 'desktop-package',
+  }[executionMode];
+  if (value.verification === undefined && executionMode !== 'declarative') {
+    error(
+      `${basePath}.verification`,
+      `verification is required for ${executionMode || 'an executable module'}`,
+    );
+  } else if (value.verification !== undefined) {
+    if (!isRecord(value.verification)) {
+      error(`${basePath}.verification`, 'verification must be an object');
+    } else {
+      rejectUnknownKeys(value.verification, VERIFICATION_KEYS, `${basePath}.verification`);
+      if (!isOneOf(REGISTRY_MODULE_VERIFICATION_PROFILES, value.verification.profile)) {
+        error(
+          `${basePath}.verification.profile`,
+          `verification.profile must be one of: ${REGISTRY_MODULE_VERIFICATION_PROFILES.join(', ')}`,
+        );
+      } else if (
+        requiredVerificationProfile &&
+        value.verification.profile !== requiredVerificationProfile
+      ) {
+        error(
+          `${basePath}.verification.profile`,
+          `verification.profile must be ${requiredVerificationProfile} for ${executionMode}`,
+        );
+      }
     }
   }
 

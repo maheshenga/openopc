@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { readRegistryModuleManifest } from './module-manifest';
+import { readRegistryModuleManifest, validateRegistryModuleManifest } from './module-manifest';
 import { validateRegistry } from './validate';
 
 const validModuleItem = () => ({
@@ -8,7 +8,7 @@ const validModuleItem = () => ({
   type: 'registry:module',
   title: 'Recruiting Workbench',
   module: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: 'acme.recruiting',
     version: '1.2.0',
     publisher: { id: 'acme', displayName: 'Acme' },
@@ -38,6 +38,62 @@ const validModuleItem = () => ({
 });
 
 describe('registry module manifest', () => {
+  test('accepts schema version 2 and rejects schema version 1 without fallback', () => {
+    const current = validModuleItem().module;
+    const legacy = { ...current, schemaVersion: 1 };
+
+    expect(validateRegistryModuleManifest(current)).toEqual({ valid: true, issues: [] });
+    expect(validateRegistryModuleManifest(legacy)).toEqual({
+      valid: false,
+      issues: [
+        {
+          severity: 'error',
+          path: 'module.schemaVersion',
+          message: 'schemaVersion must be 2',
+        },
+      ],
+    });
+  });
+
+  test.each([
+    ['agent', 'agent-project', undefined],
+    ['sandboxed-web', 'sandboxed-web', 'dist/index.html'],
+    ['server-adapter', 'server-conformance', 'dist/server.js'],
+    ['desktop-native', 'desktop-package', 'dist/desktop.zip'],
+  ] as const)(
+    'requires execution mode %s to use verification profile %s',
+    (mode, profile, entry) => {
+      const module = validModuleItem().module as Record<string, unknown>;
+      module.execution = { mode, ...(entry ? { entry } : {}) };
+      module.verification = { profile };
+
+      expect(validateRegistryModuleManifest(module).valid).toBe(true);
+
+      module.verification = { profile: 'declarative' };
+      const mismatched = validateRegistryModuleManifest(module);
+      expect(mismatched.valid).toBe(false);
+      expect(mismatched.issues).toContainEqual({
+        severity: 'error',
+        path: 'module.verification.profile',
+        message: `verification.profile must be ${profile} for ${mode}`,
+      });
+    },
+  );
+
+  test('allows declarative verification to be omitted and rejects a foreign profile', () => {
+    const module = validModuleItem().module as Record<string, unknown>;
+    expect(validateRegistryModuleManifest(module).valid).toBe(true);
+
+    module.verification = { profile: 'server-conformance' };
+    const result = validateRegistryModuleManifest(module);
+    expect(result.valid).toBe(false);
+    expect(result.issues).toContainEqual({
+      severity: 'error',
+      path: 'module.verification.profile',
+      message: 'verification.profile must be declarative for declarative',
+    });
+  });
+
   test('accepts a versioned declarative module with scoped capabilities', () => {
     const item = validModuleItem();
     const result = validateRegistry({ name: 'acme', items: [item] });

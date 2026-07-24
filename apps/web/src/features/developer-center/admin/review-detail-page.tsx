@@ -2,7 +2,6 @@
 
 import type {
   DeveloperModuleRelease,
-  DeveloperModuleReviewEvent,
   DeveloperModuleReviewEvidence,
 } from '@kortix/sdk';
 import { ArrowLeft, ClipboardCheck, ShieldAlert } from 'lucide-react';
@@ -29,9 +28,17 @@ import { DeveloperModuleManifestView } from '../shared/module-manifest-view';
 import { DeveloperModuleRequirements } from '../shared/module-requirements';
 import { DeveloperModuleStatusBadge } from '../shared/module-status-badge';
 import { DeveloperModuleReviewTimeline } from '../shared/review-timeline';
-import { type AdminDeveloperReviewDecision, adminDeveloperReviewErrorCode } from './client';
+import {
+  type AdminDeveloperLifecycleEvent,
+  type AdminDeveloperReviewDecision,
+  adminDeveloperReviewErrorCode,
+} from './client';
 import { createEvidenceDrafts, isApprovalEvidenceComplete, isReviewReasonValid } from './evidence';
-import { useAdminDeveloperReviewDecision, useAdminDeveloperReviewDetail } from './query';
+import {
+  useAdminDeveloperDistribution,
+  useAdminDeveloperReviewDecision,
+  useAdminDeveloperReviewDetail,
+} from './query';
 
 export type AdminReviewDetailState = 'loading' | 'error' | 'ready';
 
@@ -55,12 +62,13 @@ function detailErrorMessage(errorCode: string | null): string {
 export interface AdminDeveloperReviewDetailViewProps {
   state: AdminReviewDetailState;
   release: DeveloperModuleRelease | null;
-  history: readonly DeveloperModuleReviewEvent[];
+  history: readonly AdminDeveloperLifecycleEvent[];
   evidence: readonly DeveloperModuleReviewEvidence[];
   reason: string;
   pending: boolean;
   reloadPending?: boolean;
   conflict: boolean;
+  distributionPending?: boolean;
   revokeOpen: boolean;
   errorCode: string | null;
   onReasonChange: (value: string) => void;
@@ -69,6 +77,7 @@ export interface AdminDeveloperReviewDetailViewProps {
     decision: AdminDeveloperReviewDecision,
     input: { reason?: string; evidence?: readonly DeveloperModuleReviewEvidence[] },
   ) => void;
+  onDistributionAction?: (action: 'sign' | 'publish') => void;
   onReload: () => void | Promise<void>;
   onRevokeOpenChange: (open: boolean) => void;
 }
@@ -82,11 +91,13 @@ export function AdminDeveloperReviewDetailView({
   pending,
   reloadPending = false,
   conflict,
+  distributionPending = false,
   revokeOpen,
   errorCode,
   onReasonChange,
   onEvidenceChange,
   onDecision,
+  onDistributionAction = () => undefined,
   onReload,
   onRevokeOpenChange,
 }: AdminDeveloperReviewDetailViewProps) {
@@ -107,6 +118,8 @@ export function AdminDeveloperReviewDetailView({
   const controlsPending = pending || reloadPending;
   const reviewPending = release.status === 'review_pending';
   const approved = release.status === 'approved';
+  const distributionAction =
+    release.status === 'approved' ? 'sign' : release.status === 'signed' ? 'publish' : null;
 
   return (
     <main className="mx-auto w-full max-w-6xl space-y-8 px-4 py-6 md:px-8">
@@ -162,6 +175,18 @@ export function AdminDeveloperReviewDetailView({
         <DeveloperModuleManifestView manifest={release.manifest} />
         <div className="space-y-6">
           <DeveloperModuleRequirements requirements={release.review_requirements} />
+          {release.signature_algorithm && release.signature_key_id && release.signed_at ? (
+            <section className="space-y-2 border-t pt-5" aria-label="Public signature">
+              <h2 className="text-sm font-semibold">Signature verified</h2>
+              <p className="text-muted-foreground text-xs">
+                {release.signature_algorithm} / {release.signature_key_id}
+              </p>
+              <p className="text-muted-foreground text-xs">Signed {release.signed_at}</p>
+              {release.published_at ? (
+                <p className="text-muted-foreground text-xs">Published {release.published_at}</p>
+              ) : null}
+            </section>
+          ) : null}
           <section className="space-y-3 border-t pt-5" aria-label="Review decisions">
             <h2 className="text-sm font-semibold">Review decisions</h2>
             <Textarea
@@ -237,6 +262,21 @@ export function AdminDeveloperReviewDetailView({
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
+              {distributionAction ? (
+                <Button
+                  type="button"
+                  data-testid={`${distributionAction}-release`}
+                  disabled={controlsPending || conflict || distributionPending}
+                  onClick={() => onDistributionAction(distributionAction)}
+                >
+                  {distributionPending ? <Loading /> : null}
+                  {distributionAction === 'sign' ? 'Sign release' : 'Publish release'}
+                </Button>
+              ) : release.status === 'revoked' ? (
+                <p data-testid="distribution-disabled" className="text-muted-foreground text-xs">
+                  No distribution actions available for a revoked release.
+                </p>
+              ) : null}
               <span className="sr-only">
                 Confirm emergency revoke {release.module_id} version {release.module_version}
               </span>
@@ -346,6 +386,7 @@ export function AdminDeveloperReviewDetailView({
 export function AdminDeveloperReviewDetailPage({ releaseId }: { releaseId: string }) {
   const detailQuery = useAdminDeveloperReviewDetail(releaseId);
   const mutation = useAdminDeveloperReviewDecision();
+  const distributionMutation = useAdminDeveloperDistribution();
   const [reason, setReason] = useState('');
   const [evidence, setEvidence] = useState<DeveloperModuleReviewEvidence[]>([]);
   const [revokeOpen, setRevokeOpen] = useState(false);
@@ -361,7 +402,12 @@ export function AdminDeveloperReviewDetailPage({ releaseId }: { releaseId: strin
 
   const release = detailQuery.data?.release ?? null;
   const mutationErrorCode = mutation.error ? adminDeveloperReviewErrorCode(mutation.error) : null;
-  const conflict = mutationErrorCode === 'DEVELOPER_REVIEW_CONFLICT';
+  const distributionErrorCode = distributionMutation.error
+    ? adminDeveloperReviewErrorCode(distributionMutation.error)
+    : null;
+  const conflict =
+    mutationErrorCode === 'DEVELOPER_REVIEW_CONFLICT' ||
+    distributionErrorCode === 'DEVELOPER_DISTRIBUTION_CONFLICT';
   const state: AdminReviewDetailState = detailQuery.isLoading
     ? 'loading'
     : detailQuery.isError || !release
@@ -380,6 +426,7 @@ export function AdminDeveloperReviewDetailPage({ releaseId }: { releaseId: strin
       conflict={conflict}
       revokeOpen={revokeOpen}
       errorCode={
+        distributionErrorCode ??
         mutationErrorCode ??
         (detailQuery.error ? adminDeveloperReviewErrorCode(detailQuery.error) : null)
       }
@@ -400,6 +447,12 @@ export function AdminDeveloperReviewDetailPage({ releaseId }: { releaseId: strin
           evidence: input.evidence,
         });
         if (decision === 'revoke') setRevokeOpen(false);
+      }}
+      distributionPending={distributionMutation.isPending}
+      onDistributionAction={(action) => {
+        const currentRelease = detailQuery.data?.release;
+        if (!currentRelease) return;
+        distributionMutation.mutate({ release: currentRelease, action });
       }}
       onReload={async () => {
         setReloadPending(true);

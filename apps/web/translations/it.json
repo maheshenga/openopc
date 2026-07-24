@@ -28,6 +28,25 @@
       "DEVELOPER_REVIEW_CONFLICT": "Another administrator updated this release. Review the latest state and submit again."
     }
   },
+  "projectModules": {
+    "label": "Installed modules",
+    "linkLabel": "Open installed modules",
+    "title": "Installed modules",
+    "description": "Exact releases, signatures, and reversible activation history.",
+    "active": "active",
+    "blocked": "Blocked",
+    "readOnly": "Read-only",
+    "history": "Installation history",
+    "install": "Install",
+    "update": "Update",
+    "rollback": "Rollback",
+    "noModules": "No modules installed",
+    "loading": "Loading installed modules...",
+    "reload": "Reload",
+    "signatureVerified": "Signature verified",
+    "revokedDescription": "The active release was revoked.",
+    "conflict": "This module changed in another session. Reload the installed modules before trying again."
+  },
   "common": {
     "cancel": "Annulla",
     "save": "Salva",

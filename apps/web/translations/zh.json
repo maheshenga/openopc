@@ -28,6 +28,25 @@
       "DEVELOPER_REVIEW_CONFLICT": "另一位管理员已更新此版本，请查看最新状态后重新提交。"
     }
   },
+  "projectModules": {
+    "label": "已安装模块",
+    "linkLabel": "打开已安装模块",
+    "title": "已安装模块",
+    "description": "查看精确版本、签名和可逆的激活历史。",
+    "active": "已启用",
+    "blocked": "已阻止",
+    "readOnly": "只读",
+    "history": "安装历史",
+    "install": "安装",
+    "update": "更新",
+    "rollback": "回滚",
+    "noModules": "暂无已安装模块",
+    "loading": "正在加载已安装模块...",
+    "reload": "重新加载",
+    "signatureVerified": "签名已验证",
+    "revokedDescription": "当前版本已被撤销。",
+    "conflict": "此模块已在其他会话中发生变化。请重新加载后再试。"
+  },
   "common": {
     "cancel": "取消",
     "save": "保存",

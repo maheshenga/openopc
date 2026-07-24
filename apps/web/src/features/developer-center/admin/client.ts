@@ -1,6 +1,7 @@
 import type {
   DeveloperModuleRelease,
   DeveloperModuleReleaseStatus,
+  DeveloperModuleReviewEvent,
   DeveloperModuleReviewEvidence,
   DeveloperModuleReviewTransition,
 } from '@kortix/sdk';
@@ -12,9 +13,27 @@ export interface AdminDeveloperReviewPage {
   next_cursor: string | null;
 }
 
+export interface AdminDeveloperDistributionEvent {
+  distribution_event_id: string;
+  release_id: string;
+  account_id: string;
+  sequence: number;
+  action: 'sign' | 'publish' | 'revoke';
+  from_status: DeveloperModuleReleaseStatus;
+  to_status: DeveloperModuleReleaseStatus;
+  actor_user_id: string;
+  actor_kind: 'platform_admin';
+  reason: string | null;
+  created_at: string;
+}
+
+export type AdminDeveloperLifecycleEvent =
+  | DeveloperModuleReviewEvent
+  | AdminDeveloperDistributionEvent;
+
 export interface AdminDeveloperReviewDetail {
   release: DeveloperModuleRelease;
-  history: DeveloperModuleReviewTransition['event'][];
+  history: AdminDeveloperLifecycleEvent[];
 }
 
 export type AdminDeveloperReviewDecision = 'request_changes' | 'approve' | 'revoke';
@@ -36,6 +55,11 @@ export type AdminDeveloperReviewErrorCode =
   | 'DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE'
   | 'DEVELOPER_REVIEW_SELF_APPROVAL_DENIED'
   | 'DEVELOPER_REVIEW_INPUT_INVALID'
+  | 'DEVELOPER_MODULE_SIGNER_UNAVAILABLE'
+  | 'DEVELOPER_MODULE_SIGNATURE_INVALID'
+  | 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE'
+  | 'DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED'
+  | 'DEVELOPER_DISTRIBUTION_CONFLICT'
   | 'DEVELOPER_REQUEST_FAILED';
 
 const STABLE_ERROR_CODES = new Set<AdminDeveloperReviewErrorCode>([
@@ -47,6 +71,11 @@ const STABLE_ERROR_CODES = new Set<AdminDeveloperReviewErrorCode>([
   'DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE',
   'DEVELOPER_REVIEW_SELF_APPROVAL_DENIED',
   'DEVELOPER_REVIEW_INPUT_INVALID',
+  'DEVELOPER_MODULE_SIGNER_UNAVAILABLE',
+  'DEVELOPER_MODULE_SIGNATURE_INVALID',
+  'DEVELOPER_MODULE_NOT_DISTRIBUTABLE',
+  'DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED',
+  'DEVELOPER_DISTRIBUTION_CONFLICT',
 ]);
 
 export class AdminDeveloperReviewError extends Error {
@@ -130,6 +159,40 @@ export async function decideAdminDeveloperReview(
   return unwrapAdmin(
     await backendApi.post<DeveloperModuleReviewTransition>(
       `/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/review-decisions`,
+      body,
+    ),
+  );
+}
+
+export type AdminDeveloperDistributionAction = 'sign' | 'publish';
+
+export type AdminDeveloperDistributionBody =
+  | { expected_status: 'approved'; expected_revision: number }
+  | { expected_status: 'signed'; expected_revision: number };
+
+export async function signAdminDeveloperModuleRelease(
+  releaseId: string,
+  body: Extract<AdminDeveloperDistributionBody, { expected_status: 'approved' }>,
+): Promise<DeveloperModuleReviewTransition & { event: AdminDeveloperDistributionEvent }> {
+  return unwrapAdmin(
+    await backendApi.post<
+      DeveloperModuleReviewTransition & { event: AdminDeveloperDistributionEvent }
+    >(
+      `/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/sign`,
+      body,
+    ),
+  );
+}
+
+export async function publishAdminDeveloperModuleRelease(
+  releaseId: string,
+  body: Extract<AdminDeveloperDistributionBody, { expected_status: 'signed' }>,
+): Promise<DeveloperModuleReviewTransition & { event: AdminDeveloperDistributionEvent }> {
+  return unwrapAdmin(
+    await backendApi.post<
+      DeveloperModuleReviewTransition & { event: AdminDeveloperDistributionEvent }
+    >(
+      `/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/publish`,
       body,
     ),
   );

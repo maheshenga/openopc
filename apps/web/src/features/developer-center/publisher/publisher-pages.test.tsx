@@ -190,4 +190,34 @@ describe('Publisher Developer Center pages', () => {
     expect(approvedReadOnly).toContain('Read-only');
     expect(approvedReadOnly).not.toContain('Request review');
   });
+
+  test('shows public signature verification details for a published release', () => {
+    const html = renderToStaticMarkup(
+      <PublisherReleaseDetailView
+        state="ready"
+        release={{
+          ...RELEASE,
+          status: 'published',
+          signature_algorithm: 'ed25519',
+          signature_key_id: 'openopc-2026',
+          signature: `base64url:${'a'.repeat(86)}`,
+          signature_payload_digest: `sha256:${'b'.repeat(64)}`,
+          signed_at: '2026-07-24T07:00:00.000Z',
+          published_at: '2026-07-24T07:05:00.000Z',
+        }}
+        history={[]}
+        canWrite
+        pending={false}
+        errorCode={null}
+        reason=""
+        onReasonChange={noop}
+        onRequestReview={noop}
+      />,
+    );
+
+    expect(html).toContain('Signature verified');
+    expect(html).toContain('openopc-2026');
+    expect(html).toContain('2026-07-24T07:05:00.000Z');
+    expect(html).not.toContain('Request review');
+  });
 });

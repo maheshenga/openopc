@@ -107,6 +107,18 @@ export function PublisherReleaseDetailView({
         <DeveloperModuleManifestView manifest={release.manifest} />
         <div className="space-y-6">
           <DeveloperModuleRequirements requirements={release.review_requirements} />
+          {release.signature_algorithm && release.signature_key_id && release.signed_at ? (
+            <section className="space-y-2 border-t pt-5" aria-label="Public signature">
+              <h2 className="text-sm font-semibold">Signature verified</h2>
+              <p className="text-muted-foreground text-xs">
+                {release.signature_algorithm} / {release.signature_key_id}
+              </p>
+              <p className="text-muted-foreground text-xs">Signed {release.signed_at}</p>
+              {release.published_at ? (
+                <p className="text-muted-foreground text-xs">Published {release.published_at}</p>
+              ) : null}
+            </section>
+          ) : null}
           <section className="space-y-3 border-t pt-5" aria-label="Publisher action">
             <h2 className="text-sm font-semibold">Publisher action</h2>
             {!action ? (

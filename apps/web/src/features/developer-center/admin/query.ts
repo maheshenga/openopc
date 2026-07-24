@@ -8,6 +8,10 @@ import {
   decideAdminDeveloperReview,
   getAdminDeveloperReview,
   listAdminDeveloperReviews,
+  publishAdminDeveloperModuleRelease,
+  signAdminDeveloperModuleRelease,
+  type AdminDeveloperDistributionAction,
+  type AdminDeveloperLifecycleEvent,
   type AdminDeveloperReviewDecision,
   type AdminDeveloperReviewDetail,
   type AdminDeveloperReviewPage,
@@ -105,6 +109,63 @@ export function useAdminDeveloperReviewDecision() {
     },
     onError: async (error, input) => {
       if (adminDeveloperReviewErrorCode(error) !== 'DEVELOPER_REVIEW_CONFLICT') return;
+      queryClient.removeQueries({
+        queryKey: adminDeveloperReviewKeys.detail(input.release.release_id),
+      });
+      await queryClient.refetchQueries({
+        queryKey: adminDeveloperReviewKeys.detail(input.release.release_id),
+      });
+    },
+  });
+}
+
+export interface AdminDeveloperDistributionMutationInput {
+  release: Pick<DeveloperModuleRelease, 'release_id' | 'status' | 'review_revision'>;
+  action: AdminDeveloperDistributionAction;
+}
+
+export function submitAdminDeveloperDistribution(input: AdminDeveloperDistributionMutationInput) {
+  if (input.action === 'sign') {
+    return signAdminDeveloperModuleRelease(input.release.release_id, {
+      expected_status: 'approved',
+      expected_revision: input.release.review_revision,
+    });
+  }
+  return publishAdminDeveloperModuleRelease(input.release.release_id, {
+    expected_status: 'signed',
+    expected_revision: input.release.review_revision,
+  });
+}
+
+export function useAdminDeveloperDistribution() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: submitAdminDeveloperDistribution,
+    retry: false,
+    onSuccess: async (transition, input) => {
+      queryClient.setQueryData<AdminDeveloperReviewDetail>(
+        adminDeveloperReviewKeys.detail(input.release.release_id),
+        (current) =>
+          current
+            ? {
+                release: transition.release,
+                history: [
+                  ...current.history,
+                  transition.event as AdminDeveloperLifecycleEvent,
+                ],
+              }
+            : current,
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: adminDeveloperReviewKeys.all }),
+        queryClient.invalidateQueries({
+          queryKey: adminDeveloperReviewKeys.detail(input.release.release_id),
+        }),
+      ]);
+    },
+    onError: async (error, input) => {
+      if (adminDeveloperReviewErrorCode(error) !== 'DEVELOPER_DISTRIBUTION_CONFLICT') return;
       queryClient.removeQueries({
         queryKey: adminDeveloperReviewKeys.detail(input.release.release_id),
       });

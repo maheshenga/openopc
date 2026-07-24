@@ -282,4 +282,107 @@ describe('Admin Developer Center pages', () => {
     expect(publisherSource).not.toContain('/admin/developer');
     expect(publisherSource).not.toContain('../admin');
   });
+
+  test('shows only the legal distribution action for each release state', () => {
+    const approved = renderToStaticMarkup(
+      <AdminDeveloperReviewDetailView
+        state="ready"
+        release={{ ...RELEASE, status: 'approved' }}
+        history={[]}
+        evidence={COMPLETE_EVIDENCE}
+        reason=""
+        pending={false}
+        conflict={false}
+        revokeOpen={false}
+        errorCode={null}
+        onReasonChange={noop}
+        onEvidenceChange={noop}
+        onDecision={noop}
+        onDistributionAction={noop}
+        onReload={noop}
+        onRevokeOpenChange={noop}
+      />,
+    );
+    const signed = renderToStaticMarkup(
+      <AdminDeveloperReviewDetailView
+        state="ready"
+        release={{
+          ...RELEASE,
+          status: 'signed',
+          signature_algorithm: 'ed25519',
+          signature_key_id: 'openopc-2026',
+          signature: `base64url:${'a'.repeat(86)}`,
+          signature_payload_digest: `sha256:${'b'.repeat(64)}`,
+          signed_at: '2026-07-24T07:00:00.000Z',
+        }}
+        history={[]}
+        evidence={COMPLETE_EVIDENCE}
+        reason=""
+        pending={false}
+        conflict={false}
+        revokeOpen={false}
+        errorCode={null}
+        onReasonChange={noop}
+        onEvidenceChange={noop}
+        onDecision={noop}
+        onDistributionAction={noop}
+        onReload={noop}
+        onRevokeOpenChange={noop}
+      />,
+    );
+
+    expect(approved).toContain('data-testid="sign-release"');
+    expect(approved).not.toContain('data-testid="publish-release"');
+    expect(signed).toContain('data-testid="publish-release"');
+    expect(signed).not.toContain('data-testid="sign-release"');
+  });
+
+  test('renders public signature metadata and no mutation for published or revoked releases', () => {
+    const publishedRelease: DeveloperModuleRelease = {
+      ...RELEASE,
+      status: 'published',
+      signature_algorithm: 'ed25519',
+      signature_key_id: 'openopc-2026',
+      signature: `base64url:${'a'.repeat(86)}`,
+      signature_payload_digest: `sha256:${'b'.repeat(64)}`,
+      signed_at: '2026-07-24T07:00:00.000Z',
+      published_at: '2026-07-24T07:05:00.000Z',
+    };
+    const render = (release: DeveloperModuleRelease) =>
+      renderToStaticMarkup(
+        <AdminDeveloperReviewDetailView
+          state="ready"
+          release={release}
+          history={[]}
+          evidence={COMPLETE_EVIDENCE}
+          reason=""
+          pending={false}
+          conflict={false}
+          revokeOpen={false}
+          errorCode={null}
+          onReasonChange={noop}
+          onEvidenceChange={noop}
+          onDecision={noop}
+          onDistributionAction={noop}
+          onReload={noop}
+          onRevokeOpenChange={noop}
+        />,
+      );
+
+    const published = render(publishedRelease);
+    const revoked = render({
+      ...publishedRelease,
+      status: 'revoked',
+      revoked_at: '2026-07-24T08:00:00.000Z',
+    });
+
+    expect(published).toContain('Signature verified');
+    expect(published).toContain('openopc-2026');
+    expect(published).toContain('2026-07-24T07:05:00.000Z');
+    expect(published).not.toContain('data-testid="sign-release"');
+    expect(published).not.toContain('data-testid="publish-release"');
+    expect(revoked).toContain('No distribution actions available');
+    expect(revoked).not.toContain('data-testid="sign-release"');
+    expect(revoked).not.toContain('data-testid="publish-release"');
+  });
 });

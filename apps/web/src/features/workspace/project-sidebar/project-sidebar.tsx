@@ -38,6 +38,7 @@ import {
   useCustomizeKeyboardShortcut,
 } from '@/features/workspace/project-sidebar/footer/project-customize-nav';
 import { ProjectManifestUpgradeAlert } from '@/features/workspace/project-sidebar/footer/project-manifest-upgrade-alert';
+import { ProjectModulesNavItem } from '@/features/workspace/project-sidebar/footer/project-modules-nav';
 import { ProjectSandboxAlert } from '@/features/workspace/project-sidebar/footer/project-sandbox-alert';
 import { ProjectStudioNavItem } from '@/features/workspace/project-sidebar/footer/project-studio-nav';
 import { ProjectSessionList } from '@/features/workspace/project-sidebar/project-session-list';
@@ -290,6 +291,7 @@ export function ProjectSidebar({ projectId }: { projectId: string }) {
                   Customize — files aren't gated behind customize access. */}
               <ProjectStudioNavItem projectId={projectId} />
               <ProjectFilesNavItem />
+              <ProjectModulesNavItem projectId={projectId} />
               <ProjectCustomizeNavItem />
               <ProjectChatGptConnectNavItem projectId={projectId} />
               <SidebarUpgradeButton accountId={accountId} />

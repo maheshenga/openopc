@@ -4,13 +4,13 @@ export interface ElectronSmokeLaunchInput {
   appMode?: 'unpacked' | 'packaged';
   appDataDir: string;
   baseUrl: string;
-  baseEnv: NodeJS.ProcessEnv;
+  baseEnv: Readonly<Record<string, string | undefined>>;
 }
 
 export interface ElectronSmokeLaunchOptions {
   executablePath: string;
   args: string[];
-  env: NodeJS.ProcessEnv;
+  env: Record<string, string | undefined>;
   headless: false;
   timeout: number;
 }

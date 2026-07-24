@@ -89,18 +89,22 @@ Fresh focused evidence:
 - scoped Biome for `package.json` and the three launcher/runtime-safety scripts
   passed;
 - `git diff --check` passed;
-- direct Web TypeScript checking reached the compiler and reported only three
-  pre-existing unrelated script errors in `electron-smoke-launch.test.ts` and
-  `image-studio-smoke.ts`.
+- the Electron launch-options tests passed `2/2`;
+- full Web TypeScript checking now exits `0`. The follow-up replaces the
+  over-constrained `NodeJS.ProcessEnv` helper boundary with Playwright's plain
+  string environment map and explicitly allows `.ts` extension imports in the
+  no-emit Web project, preserving direct Node execution of the smoke script.
 
 The final landing-page browser recheck is still open. After the earlier dev
 process timed out, orphaned Next child processes consumed approximately 8.4 GB
 and the Windows host began returning `The paging file is too small`; the stale
-task-owned children were cleaned up, but a final formal `pnpm --filter ... dev`
-attempt still did not expose port `3311` within 20 seconds. The static
+task-owned children were cleaned up. A later formal `pnpm --filter ... dev`
+attempt still did not expose port `3311` within 30 seconds: the Next child held
+approximately 660 MB, stopped accumulating CPU time, and Windows process
+inspection continued to return the same paging-file error. The type and static
 regressions are green, but this ledger does not claim a clean post-fix browser
-console, a full Web typecheck, a Web build, production readiness, or any full
-repository suite from this continuation.
+console, a Web build, production readiness, or any full repository suite from
+this continuation.
 
 ## Task 15 Focused Acceptance Snapshot
 

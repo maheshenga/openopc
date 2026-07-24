@@ -427,7 +427,12 @@ flow(
   {
     domain: 'coverage',
     publicOnly: true,
-    routes: ['POST /v1/developer/modules/validate'],
+    routes: [
+      'POST /v1/developer/modules/validate',
+      'POST /v1/developer/modules/releases',
+      'GET /v1/developer/modules/releases',
+      'GET /v1/developer/modules/releases/:releaseId',
+    ],
   },
   async (ctx) => {
     await ctx.step('developer module validation requires authentication', async () => {
@@ -435,6 +440,17 @@ flow(
         .as(ctx.P.ANON)
         .post('/v1/developer/modules/validate', {});
       response.status(401);
+    });
+    await ctx.step('developer module release APIs require authentication', async () => {
+      const releaseId = '30000000-0000-4000-a000-000000000003';
+      const responses = await Promise.all([
+        ctx.client.as(ctx.P.ANON).post('/v1/developer/modules/releases', {}),
+        ctx.client.as(ctx.P.ANON).get('/v1/developer/modules/releases'),
+        ctx.client
+          .as(ctx.P.ANON)
+          .get('/v1/developer/modules/releases/:releaseId', { params: { releaseId } }),
+      ]);
+      for (const response of responses) response.status(401);
     });
   },
 );

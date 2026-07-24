@@ -2,7 +2,12 @@ import { beforeEach, expect, mock, test } from 'bun:test';
 
 import { createKortix } from '../../client/kortix';
 import { configureKortix } from '../../http/config';
-import { validateDeveloperModule } from './developer-modules';
+import {
+  getDeveloperModuleRelease,
+  listDeveloperModuleReleases,
+  submitDeveloperModuleRelease,
+  validateDeveloperModule,
+} from './developer-modules';
 
 let calls: Array<{ url: string; method: string; body: unknown }> = [];
 
@@ -45,4 +50,45 @@ test('createKortix exposes developer module validation', async () => {
   await expect(
     kortix.developer.modules.validate({ name: 'example', type: 'registry:module' }),
   ).resolves.toEqual({ valid: true, issues: [] });
+});
+
+test('developer module release SDK sends account-scoped submit, list and get requests', async () => {
+  const item = { name: 'example', type: 'registry:module' };
+
+  await submitDeveloperModuleRelease(item, { accountId: 'acc-1' });
+  await listDeveloperModuleReleases({ accountId: 'acc-1', limit: 20 });
+  await getDeveloperModuleRelease('release-1', { accountId: 'acc-1' });
+
+  expect(calls).toEqual([
+    {
+      url: 'http://test.local/developer/modules/releases',
+      method: 'POST',
+      body: { account_id: 'acc-1', item },
+    },
+    {
+      url: 'http://test.local/developer/modules/releases?account_id=acc-1&limit=20',
+      method: 'GET',
+      body: undefined,
+    },
+    {
+      url: 'http://test.local/developer/modules/releases/release-1?account_id=acc-1',
+      method: 'GET',
+      body: undefined,
+    },
+  ]);
+});
+
+test('createKortix exposes the developer module release facade', async () => {
+  const kortix = createKortix({ backendUrl: 'http://test.local', getToken: async () => 'tok' });
+  const item = { name: 'example', type: 'registry:module' };
+
+  await kortix.developer.modules.releases.submit(item, { accountId: 'acc-1' });
+  await kortix.developer.modules.releases.list({ accountId: 'acc-1', limit: 10 });
+  await kortix.developer.modules.releases.get('release-1', { accountId: 'acc-1' });
+
+  expect(calls.map((call) => call.url)).toEqual([
+    'http://test.local/developer/modules/releases',
+    'http://test.local/developer/modules/releases?account_id=acc-1&limit=10',
+    'http://test.local/developer/modules/releases/release-1?account_id=acc-1',
+  ]);
 });

@@ -238,6 +238,12 @@ export {
   automationPoliciesRelations,
   automationBrowserProfilesRelations,
   automationKillSwitchesRelations,
+  // OpenOPC Developer Center
+  developerModuleReleaseStatusEnum,
+  developerPublishers,
+  developerModuleReleases,
+  developerPublishersRelations,
+  developerModuleReleasesRelations,
 } from './schema/kortix';
 export type { AgentGrant } from './schema/kortix';
 
@@ -311,4 +317,8 @@ export type {
   NewAutomationBrowserProfile,
   AutomationKillSwitch,
   NewAutomationKillSwitch,
+  DeveloperPublisher,
+  NewDeveloperPublisher,
+  DeveloperModuleRelease,
+  NewDeveloperModuleRelease,
 } from './types';

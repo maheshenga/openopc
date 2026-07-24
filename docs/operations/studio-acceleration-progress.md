@@ -20,7 +20,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; full Web Bun suite `1078/1078`; Windows launcher adapter and focused browser diagnostics | repeat landing-page console verification after host memory relief |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
-| Developer Center          | active (manifest and validation foundation)             | additive `registry:module` v1 contract, authenticated pure-validation API, typed SDK facade, Registry/SDK full suites and API contract tests | publish/review/sign/sandbox/install/rollback/metering/settlement  |
+| Developer Center          | active (durable validated-release foundation)            | strict `registry:module` v1 validation, account-scoped immutable release metadata, publisher ownership, typed API/SDK, schema and route-parity gates | review transitions/sign/scan/sandbox/publish/install/rollback/metering/settlement |
 
 ## Developer Center Foundation
 
@@ -44,6 +44,42 @@ route parity gate at `438/517` covered, `9` allowlisted, and `70` existing
 baseline-uncovered routes. Browser, database-backed publication, package
 signing, sandbox execution, install and rollback, usage metering, revenue
 sharing, and production deployment remain open and are not claimed.
+
+## Developer Module Release Foundation
+
+**Updated:** 2026-07-24
+
+The second Developer Center slice persists derived operational metadata without
+creating a second catalog. `developer_publishers` binds a globally unique
+publisher slug to one account; `developer_module_releases` stores an immutable
+validated manifest snapshot, deterministic `sha256:` digest, review
+requirements, lifecycle status, creator and timestamps. A composite publisher
+and account foreign key plus account predicates on every read fail closed across
+tenants. Git-native Registry packages remain canonical and can rebuild catalog
+metadata independently of these operational rows.
+
+Authenticated routes now include `POST /v1/developer/modules/releases`,
+`GET /v1/developer/modules/releases`, and
+`GET /v1/developer/modules/releases/:releaseId`. The SDK exposes them as
+`kortix.developer.modules.releases.submit`, `.list`, and `.get`. Repeated
+submission of the same module version and digest is idempotent; a different
+digest for that version or a publisher owned by another account returns a safe
+conflict. Request errors return codes only and never echo submitted values.
+
+This slice stops at `validated`. Review transitions, source scanning, sandbox
+tests, signing, publication, revocation operations, installation, rollback,
+usage metering, revenue settlement, browser acceptance, live database
+acceptance and production deployment remain open and are not claimed.
+
+Fresh verification for this slice: release domain/API/Drizzle `20/20`, DB
+schema `5/5`, DB source `102/102`, DB script unit `18/18`, sequential local
+PostgreSQL migration integration `58/58`, Registry `45/45`, SDK release `4/4`
+and SDK full suite `1154/1154`; route coverage is `441/520` with the gate
+passing. The monolithic API unit command is not green (`1546` pass, `8` skip,
+`457` fail, `91` errors): representative isolated tests confirm existing
+cross-file mock/module contamination, and the Slack identity test independently
+fails on a pre-existing missing `PROJECT_ACTIONS` export. This is not presented
+as full API or production acceptance.
 
 ## Authenticated Local Gate Continuation
 

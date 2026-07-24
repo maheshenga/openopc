@@ -6083,3 +6083,137 @@ export const automationKillSwitchesRelations = relations(automationKillSwitches,
     references: [projects.projectId],
   }),
 }));
+
+// ─── OpenOPC Developer Center releases ───
+// Git-native registry packages remain canonical. These tables retain only
+// operational publisher ownership and immutable release-review metadata.
+
+export const developerModuleReleaseStatusEnum = kortixSchema.enum(
+  'developer_module_release_status',
+  [
+    'validated',
+    'review_pending',
+    'changes_requested',
+    'approved',
+    'signed',
+    'published',
+    'revoked',
+    'deprecated',
+  ],
+);
+
+export const developerPublishers = kortixSchema.table(
+  'developer_publishers',
+  {
+    publisherId: varchar('publisher_id', { length: 63 }).primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    displayName: varchar('display_name', { length: 255 }).notNull(),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('developer_publishers_publisher_account_unique').on(table.publisherId, table.accountId),
+    index('idx_developer_publishers_account_created').on(table.accountId, table.createdAt),
+    check('developer_publishers_id_check', sql`${table.publisherId} ~ '^[a-z0-9][a-z0-9-]{0,62}$'`),
+    check(
+      'developer_publishers_display_name_check',
+      sql`length(BTRIM(${table.displayName})) BETWEEN 1 AND 255`,
+    ),
+  ],
+);
+
+export const developerModuleReleases = kortixSchema.table(
+  'developer_module_releases',
+  {
+    releaseId: uuid('release_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    publisherId: varchar('publisher_id', { length: 63 }).notNull(),
+    itemName: varchar('item_name', { length: 128 }).notNull(),
+    moduleId: varchar('module_id', { length: 128 }).notNull(),
+    moduleVersion: varchar('module_version', { length: 128 }).notNull(),
+    manifest: jsonb('manifest').notNull().$type<Record<string, unknown>>(),
+    manifestDigest: varchar('manifest_digest', { length: 71 }).notNull(),
+    reviewRequirements: jsonb('review_requirements').notNull().$type<string[]>(),
+    status: developerModuleReleaseStatusEnum('status').default('validated').notNull(),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.publisherId, table.accountId],
+      foreignColumns: [developerPublishers.publisherId, developerPublishers.accountId],
+      name: 'developer_module_releases_publisher_account_fk',
+    }).onDelete('restrict'),
+    unique('developer_module_releases_module_version_unique').on(
+      table.moduleId,
+      table.moduleVersion,
+    ),
+    index('idx_developer_module_releases_account_created').on(table.accountId, table.createdAt),
+    index('idx_developer_module_releases_account_status_created').on(
+      table.accountId,
+      table.status,
+      table.createdAt,
+    ),
+    check(
+      'developer_module_releases_item_name_check',
+      sql`${table.itemName} ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'`,
+    ),
+    check(
+      'developer_module_releases_namespace_check',
+      sql`${table.moduleId} ~ '^[a-z0-9]+(?:[.-][a-z0-9]+)+$'
+        AND ${table.moduleId} LIKE (${table.publisherId} || '.%')`,
+    ),
+    check(
+      'developer_module_releases_version_check',
+      sql`${table.moduleVersion} ~ '^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$'`,
+    ),
+    check(
+      'developer_module_releases_manifest_check',
+      sql`jsonb_typeof(${table.manifest}) = 'object'
+        AND pg_column_size(${table.manifest}) <= 262144`,
+    ),
+    check(
+      'developer_module_releases_digest_check',
+      sql`${table.manifestDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'developer_module_releases_review_requirements_check',
+      sql`jsonb_typeof(${table.reviewRequirements}) = 'array'
+        AND jsonb_array_length(${table.reviewRequirements}) BETWEEN 2 AND 16
+        AND pg_column_size(${table.reviewRequirements}) <= 4096`,
+    ),
+  ],
+);
+
+export const developerPublishersRelations = relations(developerPublishers, ({ one, many }) => ({
+  account: one(accounts, {
+    fields: [developerPublishers.accountId],
+    references: [accounts.accountId],
+  }),
+  releases: many(developerModuleReleases),
+}));
+
+export const developerModuleReleasesRelations = relations(developerModuleReleases, ({ one }) => ({
+  account: one(accounts, {
+    fields: [developerModuleReleases.accountId],
+    references: [accounts.accountId],
+  }),
+  publisher: one(developerPublishers, {
+    fields: [developerModuleReleases.publisherId, developerModuleReleases.accountId],
+    references: [developerPublishers.publisherId, developerPublishers.accountId],
+  }),
+}));

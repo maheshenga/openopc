@@ -1,6 +1,6 @@
 {
   "generatedAt": "static",
-  "count": 517,
+  "count": 520,
   "routes": [
     {
       "method": "GET",
@@ -761,6 +761,18 @@
     {
       "method": "GET",
       "path": "/v1/channels/teams/identity/login/:token"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/developer/modules/releases"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/developer/modules/releases"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/developer/modules/releases/:releaseId"
     },
     {
       "method": "POST",

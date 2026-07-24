@@ -15,6 +15,8 @@ import type {
   chatInstalls,
   chatThreads,
   creditAccounts,
+  developerModuleReleases,
+  developerPublishers,
   gatewayApiKeys,
   gatewayBudgets,
   gatewayRequestLogs,
@@ -118,6 +120,12 @@ export type AutomationBrowserProfile = typeof automationBrowserProfiles.$inferSe
 export type NewAutomationBrowserProfile = typeof automationBrowserProfiles.$inferInsert;
 export type AutomationKillSwitch = typeof automationKillSwitches.$inferSelect;
 export type NewAutomationKillSwitch = typeof automationKillSwitches.$inferInsert;
+
+// OpenOPC Developer Center
+export type DeveloperPublisher = typeof developerPublishers.$inferSelect;
+export type NewDeveloperPublisher = typeof developerPublishers.$inferInsert;
+export type DeveloperModuleRelease = typeof developerModuleReleases.$inferSelect;
+export type NewDeveloperModuleRelease = typeof developerModuleReleases.$inferInsert;
 
 // Aliases
 export type SandboxSelect = Sandbox;

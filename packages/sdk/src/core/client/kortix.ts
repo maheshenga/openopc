@@ -292,6 +292,14 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
     modules: {
       validate: (item: Parameters<typeof P.validateDeveloperModule>[0]) =>
         P.validateDeveloperModule(item),
+      releases: {
+        submit: (...args: Parameters<typeof P.submitDeveloperModuleRelease>) =>
+          P.submitDeveloperModuleRelease(...args),
+        list: (...args: Parameters<typeof P.listDeveloperModuleReleases>) =>
+          P.listDeveloperModuleReleases(...args),
+        get: (...args: Parameters<typeof P.getDeveloperModuleRelease>) =>
+          P.getDeveloperModuleRelease(...args),
+      },
     },
   };
 

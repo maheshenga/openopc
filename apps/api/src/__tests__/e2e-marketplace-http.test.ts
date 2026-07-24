@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { Hono } from 'hono';
+import type { DeveloperModuleRelease } from '../developer/releases';
 
 let authCalls = 0;
 
@@ -14,13 +15,68 @@ mock.module('../middleware/auth', () => ({
   },
 }));
 
+mock.module('../marketplace/sources-store', () => ({
+  listSources: async () => [],
+  addSource: async () => ({
+    id: 'source-test',
+    address: 'example/test',
+    addedAt: '2026-07-24T00:00:00.000Z',
+  }),
+  removeSource: async () => true,
+}));
+
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl: string;
 
 describe('marketplace HTTP contract', () => {
   beforeAll(async () => {
+    process.env.SUPABASE_URL = 'http://127.0.0.1:54321';
+    process.env.INTERNAL_KORTIX_ENV = 'dev';
+    process.env.RECALL_BASE_URL = 'http://127.0.0.1:54322';
+    process.env.FRONTEND_URL = 'http://127.0.0.1:3000';
+    process.env.ALLOWED_SANDBOX_PROVIDERS = '';
     process.env.KORTIX_DEFAULT_MARKETPLACES = '';
     process.env.KORTIX_MARKETPLACE_REGISTRIES = '';
+    const { registerDeveloperModuleMarketplaceSource } = await import('../marketplace/developer-modules');
+    const releaseId = '40000000-0000-4000-a000-000000000004';
+    const moduleRelease: DeveloperModuleRelease = {
+      release_id: releaseId,
+      account_id: '20000000-0000-4000-a000-000000000002',
+      item_name: 'recruiting-workbench',
+      publisher_id: 'acme',
+      module_id: 'acme.recruiting',
+      module_version: '1.0.0',
+      manifest: {
+        schemaVersion: 1,
+        id: 'acme.recruiting',
+        version: '1.0.0',
+        publisher: { id: 'acme', displayName: 'Acme' },
+        category: 'industry',
+        locales: ['en'],
+        compatibility: { platform: '^1.0.0' },
+        execution: { mode: 'declarative' },
+        capabilities: [{ id: 'acme.recruiting.score', kind: 'task' }],
+        permissions: { connectors: ['crm'] },
+      },
+      manifest_digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      review_requirements: ['manifest_review'],
+      status: 'published',
+      review_revision: 4,
+      signature_algorithm: 'ed25519',
+      signature_key_id: 'platform-2026',
+      signature: `base64url:${'a'.repeat(86)}` as `base64url:${string}`,
+      signature_payload_digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      signed_at: '2026-07-24T00:00:00.000Z',
+      published_at: '2026-07-24T00:00:00.000Z',
+      revoked_at: null,
+      created_by: '30000000-0000-4000-a000-000000000003',
+      created_at: '2026-07-24T00:00:00.000Z',
+      updated_at: '2026-07-24T00:00:00.000Z',
+    };
+    registerDeveloperModuleMarketplaceSource({
+      listPublished: async () => ({ releases: [moduleRelease], total: 1 }),
+      getPublished: async () => moduleRelease,
+    });
     const { marketplaceApp } = await import('../marketplace');
     const app = new Hono();
     app.route('/v1/marketplace', marketplaceApp);
@@ -132,5 +188,36 @@ describe('marketplace HTTP contract', () => {
     // set came back — i.e. the request wasn't clamped down below its total.
     expect(body.items.length).toBe(body.total);
     expect(body.items.length).toBeGreaterThan(0);
+  });
+
+  test('GET /marketplace/items exposes published declarative modules and keeps file preview closed', async () => {
+    const list = await fetch(`${baseUrl}/marketplace/items?source=openopc-modules`, {
+      headers: { Authorization: 'Bearer test-token' },
+    });
+    expect(list.status).toBe(200);
+    const body = await list.json() as { items: Array<{ id: string; type: string; fileCount: number }> };
+    expect(body.items).toEqual([
+      expect.objectContaining({
+        id: 'openopc-module:40000000-0000-4000-a000-000000000004',
+        type: 'registry:module',
+        fileCount: 0,
+      }),
+    ]);
+
+    const detail = await fetch(`${baseUrl}/marketplace/items/${encodeURIComponent(body.items[0].id)}`);
+    expect(detail.status).toBe(200);
+    const detailBody = await detail.json() as {
+      release_id: string;
+      files: unknown[];
+      permissions: { connectors: string[] };
+      signature: { key_id: string };
+    };
+    expect(detailBody.release_id).toBe('40000000-0000-4000-a000-000000000004');
+    expect(detailBody.files).toEqual([]);
+    expect(detailBody.permissions.connectors).toEqual(['crm']);
+    expect(detailBody.signature.key_id).toBe('platform-2026');
+
+    const file = await fetch(`${baseUrl}/marketplace/items/${encodeURIComponent(body.items[0].id)}/file?path=README.md`);
+    expect(file.status).toBe(404);
   });
 });

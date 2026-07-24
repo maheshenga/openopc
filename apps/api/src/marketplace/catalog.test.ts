@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   clampMarketplaceItemsLimit,
+  mergeCatalogItemsWithDeveloperModules,
   pageCatalogItems,
   selectTemplateItems,
   type CatalogItem,
@@ -156,6 +157,60 @@ describe('pageCatalogItems', () => {
     expect(result.items).toEqual([]);
     expect(result.total).toBe(5);
     expect(50 + result.items.length < result.total).toBe(false);
+  });
+
+  test('merges developer modules by stable id before filters and pagination', () => {
+    const base = [
+      item({ id: 'z-source:zeta', name: 'zeta' }),
+      item({ id: 'a-source:alpha', name: 'alpha' }),
+    ];
+    const modules = [
+      item({
+        id: 'openopc-module:40000000-0000-4000-a000-000000000005',
+        name: 'onboarding',
+        title: 'HR Onboarding',
+        type: 'registry:module',
+        registry: 'openopc-modules',
+        marketplaceId: 'openopc-modules',
+        marketplaceLabel: 'OpenOPC Modules',
+        fileCount: 0,
+        external: false,
+      }),
+      item({
+        id: 'openopc-module:40000000-0000-4000-a000-000000000004',
+        name: 'recruiting',
+        title: 'Recruiting Workbench',
+        type: 'registry:module',
+        registry: 'openopc-modules',
+        marketplaceId: 'openopc-modules',
+        marketplaceLabel: 'OpenOPC Modules',
+        fileCount: 0,
+        external: false,
+      }),
+    ];
+
+    const combined = mergeCatalogItemsWithDeveloperModules(base, modules);
+    const page = pageCatalogItems(combined, {
+      query: 'ing',
+      type: 'module',
+      source: 'openopc-modules',
+      limit: 1,
+      offset: 1,
+    });
+
+    expect(combined.map((entry) => entry.id)).toEqual([
+      'a-source:alpha',
+      'openopc-module:40000000-0000-4000-a000-000000000004',
+      'openopc-module:40000000-0000-4000-a000-000000000005',
+      'z-source:zeta',
+    ]);
+    expect(page.total).toBe(2);
+    expect(page.items.map((entry) => entry.name)).toEqual(['onboarding']);
+  });
+
+  test('preserves the existing catalog order when the module source is empty', () => {
+    const base = synthetic(3);
+    expect(mergeCatalogItemsWithDeveloperModules(base, [])).toEqual(base);
   });
 });
 

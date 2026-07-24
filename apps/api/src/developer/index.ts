@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 
 import { config } from '../config';
 import { assertAuthorized } from '../iam/dispatcher';
+import { registerDeveloperModuleMarketplaceSource } from '../marketplace/developer-modules';
 import { supabaseAuth } from '../middleware/auth';
 import { db } from '../shared/db';
 import { resolveScopedAccountId } from '../shared/resolve-account';
@@ -87,6 +88,9 @@ export const projectModuleInstallationService = new ProjectModuleInstallationSer
   platformVersion: process.env.OPENOPC_PLATFORM_VERSION ?? '1.0.0',
   registryVersion: '1.0.0',
 });
+registerDeveloperModuleMarketplaceSource(
+  developerModuleDistributionEnabled ? developerModuleDistributionService : null,
+);
 const reviewRepository: DeveloperModuleReviewRepository =
   createDrizzleDeveloperModuleReviewRepository(db);
 export const developerModuleReviewService = new DeveloperModuleReviewService({

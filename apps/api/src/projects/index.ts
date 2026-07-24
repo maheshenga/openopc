@@ -30,6 +30,7 @@ import './routes/public-shares';
 import './routes/r8';
 import './routes/r9';
 import './routes/r10';
+import './routes/developer-modules.registration';
 import './routes/r11';
 import './routes/model-defaults';
 import './routes/agent-scope';

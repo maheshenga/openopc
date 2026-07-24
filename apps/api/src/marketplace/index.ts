@@ -16,6 +16,8 @@ import {
   FEATURED_MARKETPLACES,
   getCatalogItemDetail,
   getCatalogItemFile,
+  mergeCatalogItemsWithDeveloperModules,
+  pageCatalogItems,
   listCatalogItemsLive,
   listCatalogItemsPage,
   listFeaturedMarketplaces,
@@ -23,6 +25,10 @@ import {
   registerMarketplaceSourceProvider,
   warmMarketplaceCatalog,
 } from './catalog';
+import {
+  getDeveloperModuleMarketplaceAdapter,
+  OPENOPC_MODULE_ITEM_PREFIX,
+} from './developer-modules';
 import { addSource, listSources, removeSource } from './sources-store';
 
 // Wire DB-persisted sources into the catalog. Done here (not in catalog.ts) so
@@ -68,6 +74,30 @@ marketplaceApp.openapi(
     const hasLimit = Number.isFinite(parsedLimit);
     const parsedOffset = q.offset !== undefined ? Number.parseInt(q.offset, 10) : NaN;
     const offset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? parsedOffset : 0;
+    const developerModules = await getDeveloperModuleMarketplaceAdapter().list({
+      query: q.query,
+      limit: 200,
+      offset: 0,
+    });
+    if (developerModules.items.length > 0) {
+      const catalogItems = await listCatalogItemsLive();
+      const combined = mergeCatalogItemsWithDeveloperModules(
+        catalogItems,
+        developerModules.items,
+      );
+      const { items, total } = pageCatalogItems(combined, {
+        query: q.query,
+        type: q.type,
+        source: q.source,
+        ...(hasLimit ? { limit: clampMarketplaceItemsLimit(parsedLimit), offset } : {}),
+      });
+      return c.json({
+        items,
+        total,
+        hasMore: hasLimit ? offset + items.length < total : false,
+        ...catalogStatus(),
+      });
+    }
     if (hasLimit) {
       const limit = clampMarketplaceItemsLimit(parsedLimit);
       const { items, total } = await listCatalogItemsPage({
@@ -133,7 +163,10 @@ marketplaceApp.openapi(
     },
   }),
   async (c: any) => {
-    const detail = await getCatalogItemDetail(c.req.param('id'));
+    const id = c.req.param('id');
+    const detail =
+      (await getDeveloperModuleMarketplaceAdapter().get(id)) ??
+      (await getCatalogItemDetail(id));
     if (!detail) return c.json({ error: 'Not found' }, 404);
     return c.json(detail);
   },
@@ -155,7 +188,11 @@ marketplaceApp.openapi(
     },
   }),
   async (c: any) => {
-    const file = await getCatalogItemFile(c.req.param('id'), c.req.query('path'));
+    const id = c.req.param('id');
+    if (id.startsWith(OPENOPC_MODULE_ITEM_PREFIX)) {
+      return c.json({ error: 'Not found' }, 404);
+    }
+    const file = await getCatalogItemFile(id, c.req.query('path'));
     if (!file) return c.json({ error: 'Not found' }, 404);
     return c.json(file);
   },

@@ -1665,7 +1665,11 @@ type ItemQuery = { query?: string; type?: string; source?: string };
 // Agents/commands/bundles are still installable (the install engine handles
 // any type generically) but are hidden from browse for now — just Projects
 // (clone) and Skills (add) keeps the marketplace's taxonomy simple.
-const MARKETPLACE_VISIBLE_TYPES = new Set<string>(["registry:skill", "registry:project"]);
+const MARKETPLACE_VISIBLE_TYPES = new Set<string>([
+  "registry:skill",
+  "registry:project",
+  "registry:module",
+]);
 
 function isBrowseableCatalogItem(it: CatalogItem): boolean {
   // Kortix-managed system skills (kortix-system/executor/memory/slack/computer/
@@ -1740,6 +1744,22 @@ export function pageCatalogItems(
       ? opts.offset
       : 0;
   return { items: filtered.slice(offset, offset + (opts.limit as number)), total };
+}
+
+/** Add platform-published declarative modules at the public catalog boundary.
+ * Existing catalog ordering stays byte-compatible while the source is empty;
+ * once modules exist, the combined result is stable across database and Git
+ * source ordering before filters and offsets are applied. */
+export function mergeCatalogItemsWithDeveloperModules(
+  catalogItems: readonly CatalogItem[],
+  moduleItems: readonly CatalogItem[],
+): CatalogItem[] {
+  if (moduleItems.length === 0) return [...catalogItems];
+  const byId = new Map<string, CatalogItem>();
+  for (const item of [...catalogItems, ...moduleItems]) {
+    if (!byId.has(item.id)) byId.set(item.id, item);
+  }
+  return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
 /** Complete catalog (waits for every source). Use where the full set must be

@@ -1,4 +1,33 @@
 {
+  "developerCenter": {
+    "publisher": {
+      "title": "Developer Center",
+      "recentReleases": "Recent releases",
+      "submitNewVersion": "Submit new version",
+      "requestReview": "Request review",
+      "resubmit": "Resubmit for review"
+    },
+    "admin": {
+      "moduleReviews": "Module reviews",
+      "reviewQueue": "Review queue",
+      "requestChanges": "Request changes",
+      "approve": "Approve",
+      "revoke": "Emergency revoke"
+    },
+    "errors": {
+      "DEVELOPER_REQUEST_FAILED": "The request failed. Try again.",
+      "DEVELOPER_MODULE_INVALID": "The module manifest is invalid.",
+      "DEVELOPER_PUBLISHER_MISMATCH": "The module ID does not match the publisher namespace.",
+      "DEVELOPER_PUBLISHER_CONFLICT": "This publisher belongs to another account.",
+      "DEVELOPER_MODULE_VERSION_CONFLICT": "This version already exists with different content.",
+      "DEVELOPER_RELEASE_NOT_FOUND": "The release was not found.",
+      "DEVELOPER_REVIEW_REASON_REQUIRED": "Enter a reason.",
+      "DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE": "Complete evidence for every review requirement.",
+      "DEVELOPER_REVIEW_SELF_APPROVAL_DENIED": "An independent administrator must approve this release.",
+      "DEVELOPER_REVIEW_TRANSITION_INVALID": "The release is no longer in a valid state for this action.",
+      "DEVELOPER_REVIEW_CONFLICT": "Another administrator updated this release. Review the latest state and submit again."
+    }
+  },
   "common": {
     "cancel": "Cancel",
     "save": "Save",

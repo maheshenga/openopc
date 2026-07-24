@@ -43,7 +43,7 @@ import { useCurrentAccountStore } from '@/stores/current-account-store';
 import { useReferralDialog } from '@/stores/referral-dialog';
 import { BookOpen, CogOne, CreditCard, HomeSolid } from '@mynaui/icons-react';
 import { useQuery } from '@tanstack/react-query';
-import { Download, LifeBuoy, LogOut, Store } from 'lucide-react';
+import { Download, LifeBuoy, LogOut, PackageOpen, Store } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
@@ -67,6 +67,7 @@ export function UserMenu({
 }) {
   const tI18nHardcoded = useTranslations('hardcodedUi');
   const tHardcodedUi = useTranslations('hardcodedUi');
+  const tDeveloperCenter = useTranslations('developerCenter');
   const router = useRouter();
   const sidebar = React.useContext(SidebarContext);
   const { selectedAccountId, setSelectedAccountId } = useCurrentAccountStore();
@@ -212,6 +213,11 @@ export function UserMenu({
         <DropdownMenuItem onClick={() => deferAfterClose(() => router.push('/marketplace'))}>
           <Store />
           Marketplace
+        </DropdownMenuItem>
+
+        <DropdownMenuItem onClick={() => deferAfterClose(() => router.push('/developer/modules'))}>
+          <PackageOpen />
+          {tDeveloperCenter('publisher.title')}
         </DropdownMenuItem>
 
         <DropdownMenuItem

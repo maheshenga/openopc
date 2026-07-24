@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   Activity,
   Boxes,
+  PackageCheck,
   ShieldCheck,
   Users,
   Wrench,
@@ -34,6 +35,7 @@ interface NavItem {
 
 export function AdminSidebar() {
   const tHardcodedUi = useTranslations('hardcodedUi');
+  const tDeveloperCenter = useTranslations('developerCenter');
   const pathname = usePathname();
   const router = useRouter();
 
@@ -58,6 +60,11 @@ export function AdminSidebar() {
       href: '/admin/accounts',
       label: 'Accounts',
       icon: Users,
+    },
+    {
+      href: '/admin/developer-reviews',
+      label: tDeveloperCenter('admin.moduleReviews'),
+      icon: PackageCheck,
     },
   ];
 

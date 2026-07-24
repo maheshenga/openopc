@@ -1,4 +1,33 @@
 {
+  "developerCenter": {
+    "publisher": {
+      "title": "开发者中心",
+      "recentReleases": "最近版本",
+      "submitNewVersion": "提交新版本",
+      "requestReview": "申请审核",
+      "resubmit": "重新提交审核"
+    },
+    "admin": {
+      "moduleReviews": "模块审核",
+      "reviewQueue": "审核队列",
+      "requestChanges": "要求修改",
+      "approve": "批准",
+      "revoke": "紧急撤销"
+    },
+    "errors": {
+      "DEVELOPER_REQUEST_FAILED": "请求失败，请重试。",
+      "DEVELOPER_MODULE_INVALID": "模块清单无效。",
+      "DEVELOPER_PUBLISHER_MISMATCH": "模块 ID 与发布者命名空间不匹配。",
+      "DEVELOPER_PUBLISHER_CONFLICT": "该发布者属于其他账户。",
+      "DEVELOPER_MODULE_VERSION_CONFLICT": "此版本已存在但内容不同。",
+      "DEVELOPER_RELEASE_NOT_FOUND": "未找到该版本。",
+      "DEVELOPER_REVIEW_REASON_REQUIRED": "请输入原因。",
+      "DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE": "请为每项审核要求补充完整证据。",
+      "DEVELOPER_REVIEW_SELF_APPROVAL_DENIED": "必须由独立管理员批准此版本。",
+      "DEVELOPER_REVIEW_TRANSITION_INVALID": "该版本已不处于允许此操作的状态。",
+      "DEVELOPER_REVIEW_CONFLICT": "另一位管理员已更新此版本，请查看最新状态后重新提交。"
+    }
+  },
   "common": {
     "cancel": "取消",
     "save": "保存",

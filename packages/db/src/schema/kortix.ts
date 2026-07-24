@@ -1,4 +1,4 @@
-import { relations, sql, type SQLWrapper } from 'drizzle-orm';
+import { type SQLWrapper, relations, sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
@@ -6115,6 +6115,21 @@ export const developerModuleReviewActorKindEnum = kortixSchema.enum(
   ['publisher', 'platform_admin'],
 );
 
+export const developerModuleDistributionActionEnum = kortixSchema.enum(
+  'developer_module_distribution_action',
+  ['sign', 'publish', 'revoke'],
+);
+
+export const projectModuleInstallationStatusEnum = kortixSchema.enum(
+  'project_module_installation_status',
+  ['active', 'blocked'],
+);
+
+export const projectModuleInstallationActionEnum = kortixSchema.enum(
+  'project_module_installation_action',
+  ['install', 'update', 'rollback'],
+);
+
 export const developerPublishers = kortixSchema.table(
   'developer_publishers',
   {
@@ -6158,6 +6173,13 @@ export const developerModuleReleases = kortixSchema.table(
     reviewRequirements: jsonb('review_requirements').notNull().$type<string[]>(),
     status: developerModuleReleaseStatusEnum('status').default('validated').notNull(),
     reviewRevision: integer('review_revision').default(0).notNull(),
+    signatureAlgorithm: varchar('signature_algorithm', { length: 16 }),
+    signatureKeyId: varchar('signature_key_id', { length: 128 }),
+    signature: varchar('signature', { length: 96 }),
+    signaturePayloadDigest: varchar('signature_payload_digest', { length: 71 }),
+    signedAt: timestamp('signed_at', { withTimezone: true, mode: 'string' }),
+    publishedAt: timestamp('published_at', { withTimezone: true, mode: 'string' }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
     createdBy: uuid('created_by').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
@@ -6177,6 +6199,12 @@ export const developerModuleReleases = kortixSchema.table(
       table.moduleVersion,
     ),
     unique('developer_module_releases_release_account_unique').on(table.releaseId, table.accountId),
+    unique('developer_module_releases_installation_identity_unique').on(
+      table.releaseId,
+      table.accountId,
+      table.moduleId,
+      table.moduleVersion,
+    ),
     index('idx_developer_module_releases_account_created').on(table.accountId, table.createdAt),
     index('idx_developer_module_releases_account_status_created').on(
       table.accountId,
@@ -6217,6 +6245,43 @@ export const developerModuleReleases = kortixSchema.table(
         AND pg_column_size(${table.reviewRequirements}) <= 4096`,
     ),
     check('developer_module_releases_review_revision_check', sql`${table.reviewRevision} >= 0`),
+    check(
+      'developer_module_releases_signature_consistency_check',
+      sql`(
+        (
+          ${table.signatureAlgorithm} IS NULL
+          AND ${table.signatureKeyId} IS NULL
+          AND ${table.signature} IS NULL
+          AND ${table.signaturePayloadDigest} IS NULL
+          AND ${table.signedAt} IS NULL
+        )
+        OR (
+          ${table.signatureAlgorithm} = 'ed25519'
+          AND ${table.signatureKeyId} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          AND ${table.signature} ~ '^base64url:[A-Za-z0-9_-]{86}$'
+          AND ${table.signaturePayloadDigest} ~ '^sha256:[0-9a-f]{64}$'
+          AND ${table.signedAt} IS NOT NULL
+        )
+      )
+      AND (
+        ${table.status} NOT IN ('signed', 'published')
+        OR ${table.signatureAlgorithm} IS NOT NULL
+      )`,
+    ),
+    check(
+      'developer_module_releases_lifecycle_timestamps_check',
+      sql`(
+        (${table.status} IN ('published', 'deprecated') AND ${table.publishedAt} IS NOT NULL)
+        OR (${table.status} NOT IN ('published', 'deprecated', 'revoked') AND ${table.publishedAt} IS NULL)
+        OR ${table.status} = 'revoked'
+      )
+      AND (${table.status} = 'revoked' OR ${table.revokedAt} IS NULL)
+      AND (
+        ${table.status} <> 'revoked'
+        OR ${table.signatureAlgorithm} IS NULL
+        OR ${table.revokedAt} IS NOT NULL
+      )`,
+    ),
   ],
 );
 
@@ -6310,6 +6375,214 @@ export const developerModuleReleaseReviewEvents = kortixSchema.table(
   ],
 );
 
+export const developerModuleReleaseDistributionEvents = kortixSchema.table(
+  'developer_module_release_distribution_events',
+  {
+    distributionEventId: uuid('distribution_event_id').defaultRandom().primaryKey(),
+    releaseId: uuid('release_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    sequence: integer('sequence').notNull(),
+    action: developerModuleDistributionActionEnum('action').notNull(),
+    fromStatus: developerModuleReleaseStatusEnum('from_status').notNull(),
+    toStatus: developerModuleReleaseStatusEnum('to_status').notNull(),
+    actorUserId: uuid('actor_user_id').notNull(),
+    actorKind: developerModuleReviewActorKindEnum('actor_kind').notNull(),
+    reason: text('reason'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'developer_module_release_distribution_events_release_account_fk',
+    }).onDelete('cascade'),
+    unique('developer_module_release_distribution_events_release_sequence_unique').on(
+      table.releaseId,
+      table.sequence,
+    ),
+    index('idx_developer_module_release_distribution_events_account_release_sequence').on(
+      table.accountId,
+      table.releaseId,
+      table.sequence,
+    ),
+    check(
+      'developer_module_release_distribution_events_sequence_check',
+      sql`${table.sequence} > 0`,
+    ),
+    check(
+      'developer_module_release_distribution_events_reason_check',
+      sql`(
+        ${table.reason} IS NULL
+        OR (
+          length(BTRIM(${table.reason})) BETWEEN 1 AND 4000
+          AND octet_length(${table.reason}) <= 8192
+        )
+      )
+      AND (${table.action} <> 'revoke' OR ${table.reason} IS NOT NULL)`,
+    ),
+    check(
+      'developer_module_release_distribution_events_transition_check',
+      sql`(
+        ${table.actorKind} = 'platform_admin'
+        AND (
+          (
+            ${table.action} = 'sign'
+            AND ${table.fromStatus} = 'approved'
+            AND ${table.toStatus} = 'signed'
+          ) OR (
+            ${table.action} = 'publish'
+            AND ${table.fromStatus} = 'signed'
+            AND ${table.toStatus} = 'published'
+          ) OR (
+            ${table.action} = 'revoke'
+            AND ${table.fromStatus} IN ('signed', 'published')
+            AND ${table.toStatus} = 'revoked'
+          )
+        )
+      )`,
+    ),
+  ],
+);
+
+export const projectModuleInstallations = kortixSchema.table(
+  'project_module_installations',
+  {
+    installationId: uuid('installation_id').defaultRandom().primaryKey(),
+    projectId: uuid('project_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    moduleId: varchar('module_id', { length: 128 }).notNull(),
+    activeReleaseId: uuid('active_release_id').notNull(),
+    activeVersion: varchar('active_version', { length: 128 }).notNull(),
+    installRevision: integer('install_revision').default(0).notNull(),
+    status: projectModuleInstallationStatusEnum('status').default('active').notNull(),
+    installedBy: uuid('installed_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'project_module_installations_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.activeReleaseId, table.accountId, table.moduleId, table.activeVersion],
+      foreignColumns: [
+        developerModuleReleases.releaseId,
+        developerModuleReleases.accountId,
+        developerModuleReleases.moduleId,
+        developerModuleReleases.moduleVersion,
+      ],
+      name: 'project_module_installations_release_identity_fk',
+    }).onDelete('no action'),
+    unique('project_module_installations_project_module_unique').on(
+      table.projectId,
+      table.moduleId,
+    ),
+    unique('project_module_installations_identity_unique').on(
+      table.installationId,
+      table.projectId,
+      table.accountId,
+    ),
+    index('idx_project_module_installations_account_project').on(
+      table.accountId,
+      table.projectId,
+    ),
+    index('idx_project_module_installations_active_release').on(table.activeReleaseId),
+    check(
+      'project_module_installations_module_id_check',
+      sql`${table.moduleId} ~ '^[a-z0-9]+(?:[.-][a-z0-9]+)+$'`,
+    ),
+    check(
+      'project_module_installations_active_version_check',
+      sql`${table.activeVersion} ~ '^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$'`,
+    ),
+    check(
+      'project_module_installations_revision_check',
+      sql`${table.installRevision} >= 0`,
+    ),
+  ],
+);
+
+export const projectModuleInstallationEvents = kortixSchema.table(
+  'project_module_installation_events',
+  {
+    installationEventId: uuid('installation_event_id').defaultRandom().primaryKey(),
+    installationId: uuid('installation_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    sequence: integer('sequence').notNull(),
+    action: projectModuleInstallationActionEnum('action').notNull(),
+    fromReleaseId: uuid('from_release_id'),
+    toReleaseId: uuid('to_release_id').notNull(),
+    expectedRevision: integer('expected_revision').notNull(),
+    resultingRevision: integer('resulting_revision').notNull(),
+    actorUserId: uuid('actor_user_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'project_module_installation_events_installation_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.fromReleaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'project_module_installation_events_from_release_account_fk',
+    }).onDelete('no action'),
+    foreignKey({
+      columns: [table.toReleaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'project_module_installation_events_to_release_account_fk',
+    }).onDelete('no action'),
+    unique('project_module_installation_events_installation_sequence_unique').on(
+      table.installationId,
+      table.sequence,
+    ),
+    index('idx_project_module_installation_events_account_project_installation_sequence').on(
+      table.accountId,
+      table.projectId,
+      table.installationId,
+      table.sequence,
+    ),
+    index('idx_project_module_installation_events_from_release').on(table.fromReleaseId),
+    index('idx_project_module_installation_events_to_release').on(table.toReleaseId),
+    check(
+      'project_module_installation_events_revision_check',
+      sql`${table.sequence} > 0
+        AND ${table.expectedRevision} >= 0
+        AND ${table.resultingRevision} = ${table.expectedRevision} + 1
+        AND ${table.sequence} = ${table.resultingRevision}`,
+    ),
+    check(
+      'project_module_installation_events_transition_check',
+      sql`(
+        ${table.action} = 'install'
+        AND ${table.fromReleaseId} IS NULL
+        AND ${table.expectedRevision} = 0
+        AND ${table.resultingRevision} = 1
+      ) OR (
+        ${table.action} IN ('update', 'rollback')
+        AND ${table.fromReleaseId} IS NOT NULL
+        AND ${table.fromReleaseId} <> ${table.toReleaseId}
+      )`,
+    ),
+  ],
+);
+
 export const developerPublishersRelations = relations(developerPublishers, ({ one, many }) => ({
   account: one(accounts, {
     fields: [developerPublishers.accountId],
@@ -6330,6 +6603,16 @@ export const developerModuleReleasesRelations = relations(
       references: [developerPublishers.publisherId, developerPublishers.accountId],
     }),
     reviewEvents: many(developerModuleReleaseReviewEvents),
+    distributionEvents: many(developerModuleReleaseDistributionEvents),
+    activeInstallations: many(projectModuleInstallations, {
+      relationName: 'project_module_installation_active_release',
+    }),
+    installationFromEvents: many(projectModuleInstallationEvents, {
+      relationName: 'project_module_installation_event_from_release',
+    }),
+    installationToEvents: many(projectModuleInstallationEvents, {
+      relationName: 'project_module_installation_event_to_release',
+    }),
   }),
 );
 
@@ -6346,6 +6629,89 @@ export const developerModuleReleaseReviewEventsRelations = relations(
     account: one(accounts, {
       fields: [developerModuleReleaseReviewEvents.accountId],
       references: [accounts.accountId],
+    }),
+  }),
+);
+
+export const developerModuleReleaseDistributionEventsRelations = relations(
+  developerModuleReleaseDistributionEvents,
+  ({ one }) => ({
+    release: one(developerModuleReleases, {
+      fields: [
+        developerModuleReleaseDistributionEvents.releaseId,
+        developerModuleReleaseDistributionEvents.accountId,
+      ],
+      references: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+    }),
+    account: one(accounts, {
+      fields: [developerModuleReleaseDistributionEvents.accountId],
+      references: [accounts.accountId],
+    }),
+  }),
+);
+
+export const projectModuleInstallationsRelations = relations(
+  projectModuleInstallations,
+  ({ one, many }) => ({
+    project: one(projects, {
+      fields: [projectModuleInstallations.projectId],
+      references: [projects.projectId],
+    }),
+    account: one(accounts, {
+      fields: [projectModuleInstallations.accountId],
+      references: [accounts.accountId],
+    }),
+    activeRelease: one(developerModuleReleases, {
+      relationName: 'project_module_installation_active_release',
+      fields: [
+        projectModuleInstallations.activeReleaseId,
+        projectModuleInstallations.accountId,
+        projectModuleInstallations.moduleId,
+        projectModuleInstallations.activeVersion,
+      ],
+      references: [
+        developerModuleReleases.releaseId,
+        developerModuleReleases.accountId,
+        developerModuleReleases.moduleId,
+        developerModuleReleases.moduleVersion,
+      ],
+    }),
+    events: many(projectModuleInstallationEvents),
+  }),
+);
+
+export const projectModuleInstallationEventsRelations = relations(
+  projectModuleInstallationEvents,
+  ({ one }) => ({
+    installation: one(projectModuleInstallations, {
+      fields: [
+        projectModuleInstallationEvents.installationId,
+        projectModuleInstallationEvents.projectId,
+        projectModuleInstallationEvents.accountId,
+      ],
+      references: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+    }),
+    project: one(projects, {
+      fields: [projectModuleInstallationEvents.projectId],
+      references: [projects.projectId],
+    }),
+    account: one(accounts, {
+      fields: [projectModuleInstallationEvents.accountId],
+      references: [accounts.accountId],
+    }),
+    fromRelease: one(developerModuleReleases, {
+      relationName: 'project_module_installation_event_from_release',
+      fields: [projectModuleInstallationEvents.fromReleaseId, projectModuleInstallationEvents.accountId],
+      references: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+    }),
+    toRelease: one(developerModuleReleases, {
+      relationName: 'project_module_installation_event_to_release',
+      fields: [projectModuleInstallationEvents.toReleaseId, projectModuleInstallationEvents.accountId],
+      references: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
     }),
   }),
 );

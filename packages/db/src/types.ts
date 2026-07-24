@@ -15,6 +15,7 @@ import type {
   chatInstalls,
   chatThreads,
   creditAccounts,
+  developerModuleReleaseDistributionEvents,
   developerModuleReleaseReviewEvents,
   developerModuleReleases,
   developerPublishers,
@@ -26,6 +27,8 @@ import type {
   projectGitConnections,
   projectGitCredentials,
   projectMembers,
+  projectModuleInstallationEvents,
+  projectModuleInstallations,
   projectSecrets,
   projectSessions,
   projectSnapshotBuilds,
@@ -131,6 +134,14 @@ export type DeveloperModuleReleaseReviewEvent =
   typeof developerModuleReleaseReviewEvents.$inferSelect;
 export type NewDeveloperModuleReleaseReviewEvent =
   typeof developerModuleReleaseReviewEvents.$inferInsert;
+export type DeveloperModuleReleaseDistributionEvent =
+  typeof developerModuleReleaseDistributionEvents.$inferSelect;
+export type NewDeveloperModuleReleaseDistributionEvent =
+  typeof developerModuleReleaseDistributionEvents.$inferInsert;
+export type ProjectModuleInstallation = typeof projectModuleInstallations.$inferSelect;
+export type NewProjectModuleInstallation = typeof projectModuleInstallations.$inferInsert;
+export type ProjectModuleInstallationEvent = typeof projectModuleInstallationEvents.$inferSelect;
+export type NewProjectModuleInstallationEvent = typeof projectModuleInstallationEvents.$inferInsert;
 
 // Aliases
 export type SandboxSelect = Sandbox;

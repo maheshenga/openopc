@@ -242,12 +242,21 @@ export {
   developerModuleReleaseStatusEnum,
   developerModuleReviewActionEnum,
   developerModuleReviewActorKindEnum,
+  developerModuleDistributionActionEnum,
+  projectModuleInstallationStatusEnum,
+  projectModuleInstallationActionEnum,
   developerPublishers,
   developerModuleReleases,
   developerModuleReleaseReviewEvents,
+  developerModuleReleaseDistributionEvents,
+  projectModuleInstallations,
+  projectModuleInstallationEvents,
   developerPublishersRelations,
   developerModuleReleasesRelations,
   developerModuleReleaseReviewEventsRelations,
+  developerModuleReleaseDistributionEventsRelations,
+  projectModuleInstallationsRelations,
+  projectModuleInstallationEventsRelations,
 } from './schema/kortix';
 export type { AgentGrant } from './schema/kortix';
 
@@ -325,4 +334,10 @@ export type {
   NewDeveloperPublisher,
   DeveloperModuleRelease,
   NewDeveloperModuleRelease,
+  DeveloperModuleReleaseDistributionEvent,
+  NewDeveloperModuleReleaseDistributionEvent,
+  ProjectModuleInstallation,
+  NewProjectModuleInstallation,
+  ProjectModuleInstallationEvent,
+  NewProjectModuleInstallationEvent,
 } from './types';

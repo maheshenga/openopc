@@ -2,6 +2,10 @@ import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 
 import {
+  DeveloperModuleDistributionError,
+  type DeveloperModuleDistributionService,
+} from '../developer/distribution';
+import {
   DEVELOPER_MODULE_RELEASE_STATUSES,
   DEVELOPER_MODULE_REVIEW_REQUIREMENTS,
 } from '../developer/releases';
@@ -13,7 +17,7 @@ import { auth, errors, json } from '../openapi';
 import type { AuditEventInput } from '../shared/audit';
 import type { AppEnv } from '../types';
 
-const ReleaseSchema = z.object({
+export const DeveloperModuleReleaseSchema = z.object({
   release_id: z.string().uuid(),
   account_id: z.string().uuid(),
   item_name: z.string(),
@@ -53,7 +57,7 @@ const EvidenceSchema = z
   })
   .strict();
 
-const EventSchema = z.object({
+const ReviewEventSchema = z.object({
   review_event_id: z.string().uuid(),
   release_id: z.string().uuid(),
   account_id: z.string().uuid(),
@@ -68,10 +72,30 @@ const EventSchema = z.object({
   created_at: z.string(),
 });
 
-const TransitionSchema = z.object({ release: ReleaseSchema, event: EventSchema });
-const DetailSchema = z.object({ release: ReleaseSchema, history: z.array(EventSchema) });
+const DistributionEventSchema = z.object({
+  distribution_event_id: z.string().uuid(),
+  release_id: z.string().uuid(),
+  account_id: z.string().uuid(),
+  sequence: z.number().int().positive(),
+  action: z.enum(['sign', 'publish', 'revoke']),
+  from_status: z.enum(DEVELOPER_MODULE_RELEASE_STATUSES),
+  to_status: z.enum(DEVELOPER_MODULE_RELEASE_STATUSES),
+  actor_user_id: z.string().uuid(),
+  actor_kind: z.literal('platform_admin'),
+  reason: z.string().nullable(),
+  created_at: z.string(),
+});
+
+const TransitionSchema = z.object({
+  release: DeveloperModuleReleaseSchema,
+  event: z.union([ReviewEventSchema, DistributionEventSchema]),
+});
+const DetailSchema = z.object({
+  release: DeveloperModuleReleaseSchema,
+  history: z.array(ReviewEventSchema),
+});
 const QueueSchema = z.object({
-  releases: z.array(ReleaseSchema),
+  releases: z.array(DeveloperModuleReleaseSchema),
   next_cursor: z.string().nullable(),
 });
 
@@ -95,16 +119,24 @@ const DecisionBodySchema = z
 
 export type AdminDeveloperReviewRouteDependencies = Readonly<{
   reviewService: Pick<DeveloperModuleReviewService, 'adminList' | 'adminGet' | 'decide'>;
+  distributionService: Pick<DeveloperModuleDistributionService, 'revoke'>;
+  distributionEnabled: boolean;
   recordAuditEvent: (input: AuditEventInput) => Promise<unknown>;
 }>;
 
 function errorResponse(context: Context<AppEnv>, error: unknown) {
-  if (!(error instanceof DeveloperModuleReviewError)) throw error;
+  if (
+    !(error instanceof DeveloperModuleReviewError) &&
+    !(error instanceof DeveloperModuleDistributionError)
+  ) {
+    throw error;
+  }
   const body = { error: error.code };
   if (error.status === 400) return context.json(body, 400);
   if (error.status === 403) return context.json(body, 403);
   if (error.status === 404) return context.json(body, 404);
-  return context.json(body, 409);
+  if (error.status === 409) return context.json(body, 409);
+  return context.json(body, 503);
 }
 
 function clientIp(context: { req: { header(name: string): string | undefined } }): string | null {
@@ -115,9 +147,13 @@ function clientIp(context: { req: { header(name: string): string | undefined } }
   );
 }
 
-function auditAction(action: 'request_changes' | 'approve' | 'revoke'): string {
+function auditAction(
+  action: 'request_changes' | 'approve' | 'revoke',
+  distributionRevoke: boolean,
+): string {
   if (action === 'request_changes') return 'developer.module.review.changes_requested';
   if (action === 'approve') return 'developer.module.review.approved';
+  if (distributionRevoke) return 'developer.module.distribution.revoked';
   return 'developer.module.review.revoked';
 }
 
@@ -200,27 +236,41 @@ export function registerAdminDeveloperReviewRoutes(
       },
       responses: {
         200: json(TransitionSchema, 'Developer module review decision recorded'),
-        ...errors(400, 401, 403, 404, 409),
+        ...errors(400, 401, 403, 404, 409, 503),
       },
     }),
     async (context) => {
       const body = context.req.valid('json');
       try {
-        const transition = await dependencies.reviewService.decide({
-          releaseId: context.req.valid('param').releaseId,
-          actorUserId: context.get('userId'),
-          decision: body.decision,
-          expectedStatus: body.expected_status,
-          expectedRevision: body.expected_revision,
-          reason: body.reason,
-          evidence: body.evidence,
-        });
+        const distributionRevoke =
+          body.decision === 'revoke' &&
+          (body.expected_status === 'signed' || body.expected_status === 'published');
+        if (distributionRevoke && !dependencies.distributionEnabled) {
+          throw new DeveloperModuleDistributionError('DEVELOPER_MODULE_SIGNER_UNAVAILABLE', 503);
+        }
+        const transition = distributionRevoke
+          ? await dependencies.distributionService.revoke({
+              releaseId: context.req.valid('param').releaseId,
+              actorUserId: context.get('userId'),
+              expectedStatus: body.expected_status as 'signed' | 'published',
+              expectedRevision: body.expected_revision,
+              reason: body.reason ?? '',
+            })
+          : await dependencies.reviewService.decide({
+              releaseId: context.req.valid('param').releaseId,
+              actorUserId: context.get('userId'),
+              decision: body.decision,
+              expectedStatus: body.expected_status,
+              expectedRevision: body.expected_revision,
+              reason: body.reason,
+              evidence: body.evidence,
+            });
         context.set('accountId', transition.release.account_id);
         await dependencies
           .recordAuditEvent({
             accountId: transition.release.account_id,
             actorUserId: context.get('userId'),
-            action: auditAction(body.decision),
+            action: auditAction(body.decision, distributionRevoke),
             resourceType: 'developer_module_release',
             resourceId: transition.release.release_id,
             before: {

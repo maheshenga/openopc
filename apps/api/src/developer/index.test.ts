@@ -177,6 +177,18 @@ describe('developer module validation API', () => {
     expect(responses.map((response) => response.status)).toEqual([401, 401, 401, 401, 401]);
   });
 
+  test('does not mount platform-admin distribution actions on the developer app', async () => {
+    const app = authenticatedApp();
+    const releasePath = '/modules/releases/30000000-0000-4000-a000-000000000003';
+
+    const responses = await Promise.all([
+      app.request(`${releasePath}/sign`, { method: 'POST', body: '{}' }),
+      app.request(`${releasePath}/publish`, { method: 'POST', body: '{}' }),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([404, 404]);
+  });
+
   test('applies account write/read IAM after resolution while validation stays account independent', async () => {
     const actions: string[] = [];
     const app = authenticatedApp({

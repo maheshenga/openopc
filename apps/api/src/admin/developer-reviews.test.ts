@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { HTTPException } from 'hono/http-exception';
 
+import {
+  DeveloperModuleDistributionService,
+  createMemoryDeveloperModuleDistributionRepository,
+} from '../developer/distribution';
 import type { DeveloperModuleRelease } from '../developer/releases';
 import {
   type DeveloperModuleReviewEvidence,
@@ -93,6 +97,7 @@ async function pendingService(input?: { members?: string[] }) {
 
 function appHarness(input: {
   service: DeveloperModuleReviewService;
+  distributionService?: DeveloperModuleDistributionService;
   recordAuditEvent?: (event: AuditEventInput) => Promise<unknown>;
 }) {
   const app = makeOpenApiApp<AppEnv>();
@@ -112,6 +117,12 @@ function appHarness(input: {
   });
   registerAdminDeveloperReviewRoutes(app, {
     reviewService: input.service,
+    distributionService:
+      input.distributionService ??
+      new DeveloperModuleDistributionService({
+        repository: createMemoryDeveloperModuleDistributionRepository(),
+      }),
+    distributionEnabled: true,
     recordAuditEvent: input.recordAuditEvent ?? (async () => undefined),
   });
   return app;
@@ -321,5 +332,89 @@ describe('admin developer module review API', () => {
     expect((await service.adminGet({ releaseId: RELEASE_ID })).release).toEqual(
       expect.objectContaining({ status: 'changes_requested', review_revision: 2 }),
     );
+  });
+
+  test('reuses review-decisions to revoke signed releases through the distribution service', async () => {
+    const audits: AuditEventInput[] = [];
+    const distributionService = new DeveloperModuleDistributionService({
+      repository: createMemoryDeveloperModuleDistributionRepository({
+        releases: [release('signed', 3)],
+        now: () => NOW,
+        createId: () => '40000000-0000-4000-a000-000000000099',
+      }),
+    });
+    const app = appHarness({
+      service: await pendingService(),
+      distributionService,
+      recordAuditEvent: async (event) => {
+        audits.push(structuredClone(event));
+      },
+    });
+
+    const response = await app.request(
+      `/developer/modules/releases/${RELEASE_ID}/review-decisions`,
+      {
+        method: 'POST',
+        headers: { ...adminHeaders, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          decision: 'revoke',
+          expected_status: 'signed',
+          expected_revision: 3,
+          reason: 'Emergency withdrawal.',
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      release: expect.objectContaining({ status: 'revoked', review_revision: 4 }),
+      event: expect.objectContaining({ action: 'revoke', sequence: 4 }),
+    });
+    expect(audits).toEqual([
+      expect.objectContaining({
+        action: 'developer.module.distribution.revoked',
+        before: { status: 'signed', review_revision: 3 },
+        after: { status: 'revoked', review_revision: 4 },
+      }),
+    ]);
+  });
+
+  test('keeps approved revocation on the existing review service path', async () => {
+    const service = await pendingService();
+    const app = appHarness({
+      service,
+      distributionService: new DeveloperModuleDistributionService({
+        repository: createMemoryDeveloperModuleDistributionRepository(),
+      }),
+    });
+    const path = `/developer/modules/releases/${RELEASE_ID}/review-decisions`;
+
+    const approved = await app.request(path, {
+      method: 'POST',
+      headers: { ...adminHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        decision: 'approve',
+        expected_status: 'review_pending',
+        expected_revision: 1,
+        evidence: completeEvidence(),
+      }),
+    });
+    const revoked = await app.request(path, {
+      method: 'POST',
+      headers: { ...adminHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        decision: 'revoke',
+        expected_status: 'approved',
+        expected_revision: 2,
+        reason: 'Withdraw before signing.',
+      }),
+    });
+
+    expect(approved.status).toBe(200);
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toEqual({
+      release: expect.objectContaining({ status: 'revoked', review_revision: 3 }),
+      event: expect.objectContaining({ action: 'revoke', sequence: 3 }),
+    });
   });
 });

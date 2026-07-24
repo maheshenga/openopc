@@ -21,6 +21,18 @@ const EVIDENCE_KEYS = new Set([
   'evidence_digest',
 ]);
 
+const REASON_MAX_CHARS = 4_000;
+const REASON_MAX_BYTES = 8_192;
+
+export function isReviewReasonValid(reason: string | undefined): boolean {
+  if (!reason?.trim()) return false;
+  const normalized = reason.trim();
+  return (
+    normalized.length <= REASON_MAX_CHARS &&
+    new TextEncoder().encode(normalized).byteLength <= REASON_MAX_BYTES
+  );
+}
+
 export function createEvidenceDrafts(
   requirements: readonly DeveloperModuleReviewRequirement[],
   observedAt = new Date().toISOString(),
@@ -81,13 +93,22 @@ function isEvidenceEntry(value: unknown): value is DeveloperModuleReviewEvidence
 export function isApprovalEvidenceComplete(
   requirements: readonly DeveloperModuleReviewRequirement[],
   evidence: readonly DeveloperModuleReviewEvidence[] | unknown,
+  bounds: { releaseCreatedAt?: string; now?: Date } = {},
 ): evidence is DeveloperModuleReviewEvidence[] {
   if (!Array.isArray(evidence) || evidence.length !== requirements.length) return false;
   const declared = new Set(requirements);
   const seen = new Set<DeveloperModuleReviewRequirement>();
+  const releaseCreatedAt = bounds.releaseCreatedAt ? Date.parse(bounds.releaseCreatedAt) : null;
+  const now = bounds.now?.getTime() ?? Date.now();
+
+  if (releaseCreatedAt !== null && !Number.isFinite(releaseCreatedAt)) return false;
 
   for (const entry of evidence) {
     if (!isEvidenceEntry(entry)) return false;
+    const observedAt = Date.parse(entry.observed_at);
+    if ((releaseCreatedAt !== null && observedAt < releaseCreatedAt) || observedAt > now) {
+      return false;
+    }
     const requirement = entry.requirement as DeveloperModuleReviewRequirement;
     if (!declared.has(requirement) || seen.has(requirement)) return false;
     seen.add(requirement);
@@ -96,7 +117,8 @@ export function isApprovalEvidenceComplete(
 }
 
 export function buildAdminDecisionBody(
-  release: Pick<DeveloperModuleRelease, 'status' | 'review_revision' | 'review_requirements'>,
+  release: Pick<DeveloperModuleRelease, 'status' | 'review_revision' | 'review_requirements'> &
+    Partial<Pick<DeveloperModuleRelease, 'created_at'>>,
   decision: AdminDeveloperReviewDecision,
   input: {
     reason?: string;
@@ -110,16 +132,24 @@ export function buildAdminDecisionBody(
   };
 
   if (decision === 'approve') {
-    if (!isApprovalEvidenceComplete(release.review_requirements, input.evidence)) {
+    if (
+      !isApprovalEvidenceComplete(release.review_requirements, input.evidence, {
+        releaseCreatedAt: release.created_at,
+      })
+    ) {
       throw new Error('EVIDENCE_INCOMPLETE');
     }
-    if (input.reason?.trim()) body.reason = input.reason.trim();
+    if (input.reason?.trim()) {
+      if (!isReviewReasonValid(input.reason)) throw new Error('REASON_INVALID');
+      body.reason = input.reason.trim();
+    }
     body.evidence = [...input.evidence];
     return body;
   }
 
   const reason = input.reason?.trim();
   if (!reason) throw new Error('REASON_REQUIRED');
+  if (!isReviewReasonValid(reason)) throw new Error('REASON_INVALID');
   body.reason = reason;
   return body;
 }

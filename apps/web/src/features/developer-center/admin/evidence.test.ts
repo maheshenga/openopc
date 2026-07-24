@@ -4,6 +4,7 @@ import {
   buildAdminDecisionBody,
   createEvidenceDrafts,
   isApprovalEvidenceComplete,
+  isReviewReasonValid,
 } from './evidence';
 
 import type {
@@ -118,6 +119,35 @@ describe('Admin review evidence model', () => {
         { ...COMPLETE_EVIDENCE[0], tool: undefined, tool_version: '1.0.0' },
         COMPLETE_EVIDENCE[1],
       ]),
+    ).toBe(false);
+  });
+
+  test('rejects reason text that exceeds the server UTF-8 byte budget', () => {
+    const longUnicodeReason = '审'.repeat(3_000);
+    expect(isReviewReasonValid(longUnicodeReason)).toBe(false);
+    expect(() =>
+      buildAdminDecisionBody(RELEASE, 'request_changes', { reason: longUnicodeReason }),
+    ).toThrow('REASON_INVALID');
+    expect(() =>
+      buildAdminDecisionBody(RELEASE, 'approve', {
+        reason: longUnicodeReason,
+        evidence: COMPLETE_EVIDENCE,
+      }),
+    ).toThrow('REASON_INVALID');
+  });
+
+  test('rejects evidence observed before release creation or after the review clock', () => {
+    expect(
+      isApprovalEvidenceComplete(REQUIREMENTS, COMPLETE_EVIDENCE, {
+        releaseCreatedAt: '2026-07-24T07:00:00.000Z',
+        now: new Date('2026-07-24T08:00:00.000Z'),
+      }),
+    ).toBe(false);
+    expect(
+      isApprovalEvidenceComplete(REQUIREMENTS, COMPLETE_EVIDENCE, {
+        releaseCreatedAt: '2026-07-24T05:00:00.000Z',
+        now: new Date('2026-07-24T05:30:00.000Z'),
+      }),
     ).toBe(false);
   });
 

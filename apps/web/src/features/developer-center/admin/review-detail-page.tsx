@@ -1,9 +1,6 @@
 'use client';
 
-import type {
-  DeveloperModuleRelease,
-  DeveloperModuleReviewEvidence,
-} from '@kortix/sdk';
+import type { DeveloperModuleRelease, DeveloperModuleReviewEvidence } from '@kortix/sdk';
 import { ArrowLeft, ClipboardCheck, ShieldAlert } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
@@ -365,7 +362,8 @@ export function AdminDeveloperReviewDetailView({
                     onChange={(event) =>
                       onEvidenceChange(index, {
                         evidence_digest: (event.target.value || undefined) as
-                          DeveloperModuleReviewEvidence['evidence_digest'] | undefined,
+                          | DeveloperModuleReviewEvidence['evidence_digest']
+                          | undefined,
                       })
                     }
                   />
@@ -391,16 +389,16 @@ export function AdminDeveloperReviewDetailPage({ releaseId }: { releaseId: strin
   const [evidence, setEvidence] = useState<DeveloperModuleReviewEvidence[]>([]);
   const [revokeOpen, setRevokeOpen] = useState(false);
   const [reloadPending, setReloadPending] = useState(false);
+  const loadedRelease = detailQuery.data?.release;
 
   useEffect(() => {
-    const release = detailQuery.data?.release;
-    if (!release) return;
-    setEvidence(createEvidenceDrafts(release.review_requirements));
+    if (!loadedRelease) return;
+    setEvidence(createEvidenceDrafts(loadedRelease.review_requirements));
     setReason('');
     setRevokeOpen(false);
-  }, [detailQuery.data?.release.release_id, detailQuery.data?.release.review_revision]);
+  }, [loadedRelease]);
 
-  const release = detailQuery.data?.release ?? null;
+  const release = loadedRelease ?? null;
   const mutationErrorCode = mutation.error ? adminDeveloperReviewErrorCode(mutation.error) : null;
   const distributionErrorCode = distributionMutation.error
     ? adminDeveloperReviewErrorCode(distributionMutation.error)

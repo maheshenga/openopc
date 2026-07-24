@@ -1,6 +1,6 @@
 # Studio Acceleration Progress
 
-**Updated:** 2026-07-24
+**Updated:** 2026-07-25
 
 **Branch:** `studio-platform`
 
@@ -20,7 +20,7 @@ This ledger is the authoritative status source for the retained Studio accelerat
 | Milestone 0-1 (Web)       | active (Task 10 complete; Task 11 partial)              | canonical Intelligence SDK; Task 10 commit `8dea9258c`; full Web Bun suite `1078/1078`; Windows launcher adapter and focused browser diagnostics | repeat landing-page console verification after host memory relief |
 | Desktop/Electron          | active (Windows unsigned installer acceptance complete) | commits `285f7a2a6`, `10ed33403`, and `5255a05e4`; focused tests plus browser/source/packaged Electron smoke and NSIS artifact checks green | signed Windows installer and macOS/Linux acceptance               |
 | Mobile                    | deferred (implementation retained)                      | mobile commit `ae7202a65`; focused contract/wiring tests green                                                                              | resume Android/iOS acceptance only after product reprioritization |
-| Developer Center          | active (governed manual review lifecycle)                  | immutable release metadata, account IAM, publisher requests, platform-admin decisions, manual attestations, revision fencing, history, API/SDK and route-parity gates | automated scan/sandbox, signing, publishing, Web UI, install/rollback, metering/settlement |
+| Developer Center          | active (review and distribution workbench implemented)     | commits `42d8360ba` through `fa4745a1d`; review, signing, publication/revocation, Web UI, exact install/update/rollback, lifecycle history, API/SDK and route-parity gates | automated scan/sandbox execution, metering/settlement, production KMS, deployment and production acceptance |
 
 ## Developer Center Foundation
 
@@ -125,9 +125,66 @@ process-group, and local-service fixtures. No Developer Center file is in that
 package, and the focused changed-area gates above remain green; this is not
 presented as a full repository pass.
 
-Automated source scan/sandbox execution, signing, publication, Web review UI,
-installation/rollback, usage metering, revenue settlement, browser acceptance,
-deployment, and production acceptance remain open.
+The distribution slice below supersedes this checkpoint's open
+signing/publication, Web review UI, and installation/rollback items. Automated
+source scan/sandbox execution, usage metering, revenue settlement, production
+KMS, deployment, and production acceptance remain open.
+
+## Developer Module Distribution and Web Workbench
+
+**Updated:** 2026-07-25
+
+Commits `42d8360ba`, `809fcc161`, `80e3f6aed`, `c1125559c`,
+`d81f4fa7f`, `b72047724`, `979a38826`, and `fa4745a1d` extend the governed
+review foundation through distribution and project installation. Approved
+releases can now be signed, published, and revoked through platform-admin
+actions. Published releases are projected through the existing Marketplace
+adapter rather than a second catalog. Project-scoped APIs and the public SDK
+support exact install, update, rollback, and immutable lifecycle history with
+revision fencing, idempotency keys, signature verification, and tenant checks.
+
+The Web application now includes publisher submission/list/detail/history,
+platform-admin review/sign/publish/revoke, and project module distribution
+workbenches. Conflict recovery refreshes authoritative state on `409`; UI
+actions remain bounded by the existing account and platform-admin authority
+checks. This implements the manual governed path only. It does not authorize
+arbitrary uploaded package execution or claim automated safety analysis.
+
+Fresh local verification after the distribution implementation:
+
+- SDK snapshot tests `2/2` and the full SDK suite `1161/1161` passed.
+- Database integration `6/6` and the full DB suite `200/200` passed.
+- Web no-emit TypeScript checking and the full Web suite `1132/1132` passed.
+- API, DB, SDK, and Web typechecks passed. The scoped Task 10 Biome gate
+  checked `58` files with no remaining diagnostics.
+- Route coverage passed at `453/531` (`85.3%`): `9` allowlisted, `69`
+  pre-existing uncovered, and `10` newly covered routes.
+- Repository migration integration passed schema `9/9`, idempotency `3/3`,
+  and reset/rollback `3/3`. All `74` migrations applied, reran idempotently,
+  and reset successfully.
+
+The monolithic API package is still a known baseline failure: `1656` pass,
+`8` skip, `461` fail, and `91` errors across `2125` tests in `347` files. Its
+first failure is `sandbox-reaper.test.ts`, where imported helpers become
+`undefined` only in the monolithic run. Developer Center review,
+distribution, Marketplace projection, project history, and
+install/update/rollback tests passed within that same run. The root wrapper
+still provides no readable aggregate result on Windows; its first directly
+verified failing package is the unchanged `@kortix/sandbox-agent-server`
+baseline (`154` pass, `40` fail, `1` error) across POSIX path, permission,
+process-group, static-file, and timeout fixtures. Neither result is presented
+as a clean full API or repository gate.
+
+A previous deterministic browser checkpoint on `fa4745a1d` covered
+install/update/rollback/history, `409` recovery, desktop/mobile screenshots,
+and overflow checks. A fresh rerun on 2026-07-25 was not possible: the local
+encrypted `.env` lacks its dotenv private key, and the otherwise valid public
+Supabase runtime override was rejected by local command policy. No secret or
+bypass was requested, and no fresh browser evidence is claimed from this run.
+
+Still open: automated source scanning and sandbox execution, arbitrary package
+execution, usage metering, revenue settlement, production KMS-backed signing,
+deployment, and protected production acceptance.
 
 ## Authenticated Local Gate Continuation
 

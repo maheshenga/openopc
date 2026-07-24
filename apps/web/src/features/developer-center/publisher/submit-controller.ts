@@ -30,7 +30,9 @@ export interface DeveloperModuleSubmitControllerDependencies {
   ) => Promise<DeveloperModuleReleaseSubmission>;
 }
 
-function cleanIssues(issues: readonly DeveloperModuleValidationIssue[]): DeveloperModuleValidationIssue[] {
+function cleanIssues(
+  issues: readonly DeveloperModuleValidationIssue[],
+): DeveloperModuleValidationIssue[] {
   return issues
     .filter(
       (issue) =>
@@ -79,7 +81,13 @@ export function createDeveloperModuleSubmitController(
     const textSnapshot = state.text;
     const parsed = parseDeveloperModuleInput(textSnapshot);
     if (!parsed.ok) {
-      state = { ...state, stage: 'input', parsedItem: null, issues: [], inputErrorCode: parsed.code };
+      state = {
+        ...state,
+        stage: 'input',
+        parsedItem: null,
+        issues: [],
+        inputErrorCode: parsed.code,
+      };
       return getState();
     }
 

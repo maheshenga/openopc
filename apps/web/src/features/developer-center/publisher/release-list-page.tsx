@@ -19,11 +19,7 @@ import {
 import { usePermission } from '@/lib/use-permission';
 import { useCurrentAccountStore } from '@/stores/current-account-store';
 
-import {
-  developerCenterErrorCode,
-  filterRecentReleases,
-  type ReleaseStatusFilter,
-} from '../model';
+import { type ReleaseStatusFilter, developerCenterErrorCode, filterRecentReleases } from '../model';
 import { DeveloperModuleStatusBadge } from '../shared/module-status-badge';
 import { usePublisherModuleReleases } from './query';
 

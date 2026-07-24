@@ -60,7 +60,7 @@ export function PublisherReleaseDetailView({
           ? 'Select an account to view this release.'
           : state === 'permission_denied'
             ? 'You do not have permission to view this release.'
-            : errorCode ?? 'DEVELOPER_REQUEST_FAILED';
+            : (errorCode ?? 'DEVELOPER_REQUEST_FAILED');
     return (
       <main className="mx-auto flex min-h-80 w-full max-w-6xl items-center justify-center gap-2 px-4 py-8 text-sm text-muted-foreground">
         {state === 'loading' ? <Loading /> : null}

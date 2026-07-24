@@ -177,10 +177,7 @@ export async function signAdminDeveloperModuleRelease(
   return unwrapAdmin(
     await backendApi.post<
       DeveloperModuleReviewTransition & { event: AdminDeveloperDistributionEvent }
-    >(
-      `/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/sign`,
-      body,
-    ),
+    >(`/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/sign`, body),
   );
 }
 
@@ -191,9 +188,6 @@ export async function publishAdminDeveloperModuleRelease(
   return unwrapAdmin(
     await backendApi.post<
       DeveloperModuleReviewTransition & { event: AdminDeveloperDistributionEvent }
-    >(
-      `/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/publish`,
-      body,
-    ),
+    >(`/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/publish`, body),
   );
 }

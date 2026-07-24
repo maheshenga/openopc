@@ -7,7 +7,12 @@ const getDeveloperModuleRelease = mock(async () => ({
 }));
 const getDeveloperModuleReviewHistory = mock(async () => ({ history: [] }));
 const requestDeveloperModuleReview = mock(async () => ({
-  release: { release_id: 'release', account_id: 'account', status: 'review_pending', review_revision: 2 },
+  release: {
+    release_id: 'release',
+    account_id: 'account',
+    status: 'review_pending',
+    review_revision: 2,
+  },
   event: { review_event_id: 'event' },
 }));
 
@@ -28,7 +33,9 @@ const {
 
 describe('publisher Developer Center queries', () => {
   test('isolates every publisher key by account', () => {
-    expect(developerModuleKeys.list('account-a')).not.toEqual(developerModuleKeys.list('account-b'));
+    expect(developerModuleKeys.list('account-a')).not.toEqual(
+      developerModuleKeys.list('account-b'),
+    );
     expect(developerModuleKeys.detail('account-a', 'release')).not.toEqual(
       developerModuleKeys.detail('account-b', 'release'),
     );
@@ -39,13 +46,18 @@ describe('publisher Developer Center queries', () => {
 
   test('uses the public SDK with the bounded recent-release contract', async () => {
     await publisherModuleReleasesQuery('account-a').queryFn();
-    expect(listDeveloperModuleReleases).toHaveBeenCalledWith({ accountId: 'account-a', limit: 100 });
+    expect(listDeveloperModuleReleases).toHaveBeenCalledWith({
+      accountId: 'account-a',
+      limit: 100,
+    });
 
     await publisherModuleDetailQuery('account-a', 'release').queryFn();
     expect(getDeveloperModuleRelease).toHaveBeenCalledWith('release', { accountId: 'account-a' });
 
     await publisherModuleHistoryQuery('account-a', 'release').queryFn();
-    expect(getDeveloperModuleReviewHistory).toHaveBeenCalledWith('release', { accountId: 'account-a' });
+    expect(getDeveloperModuleReviewHistory).toHaveBeenCalledWith('release', {
+      accountId: 'account-a',
+    });
   });
 
   test('sends the current status and revision without optimistic state', async () => {

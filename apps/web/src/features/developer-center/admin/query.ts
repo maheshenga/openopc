@@ -4,17 +4,17 @@ import type { DeveloperModuleRelease, DeveloperModuleReviewEvidence } from '@kor
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
+  type AdminDeveloperDistributionAction,
+  type AdminDeveloperLifecycleEvent,
+  type AdminDeveloperReviewDecision,
+  type AdminDeveloperReviewDetail,
+  type AdminDeveloperReviewPage,
   adminDeveloperReviewErrorCode,
   decideAdminDeveloperReview,
   getAdminDeveloperReview,
   listAdminDeveloperReviews,
   publishAdminDeveloperModuleRelease,
   signAdminDeveloperModuleRelease,
-  type AdminDeveloperDistributionAction,
-  type AdminDeveloperLifecycleEvent,
-  type AdminDeveloperReviewDecision,
-  type AdminDeveloperReviewDetail,
-  type AdminDeveloperReviewPage,
 } from './client';
 import { buildAdminDecisionBody } from './evidence';
 
@@ -150,10 +150,7 @@ export function useAdminDeveloperDistribution() {
           current
             ? {
                 release: transition.release,
-                history: [
-                  ...current.history,
-                  transition.event as AdminDeveloperLifecycleEvent,
-                ],
+                history: [...current.history, transition.event as AdminDeveloperLifecycleEvent],
               }
             : current,
       );

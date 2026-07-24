@@ -2,14 +2,18 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 
 type MockApiResponse = { success: boolean; data?: unknown; error?: unknown };
 
-const get = mock(async (_path: string): Promise<MockApiResponse> => ({
-  success: true,
-  data: {},
-}));
-const post = mock(async (_path: string, _body: unknown): Promise<MockApiResponse> => ({
-  success: true,
-  data: {},
-}));
+const get = mock(
+  async (_path: string): Promise<MockApiResponse> => ({
+    success: true,
+    data: {},
+  }),
+);
+const post = mock(
+  async (_path: string, _body: unknown): Promise<MockApiResponse> => ({
+    success: true,
+    data: {},
+  }),
+);
 
 mock.module('@/lib/api-client', () => ({
   backendApi: { get, post },

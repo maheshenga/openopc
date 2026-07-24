@@ -478,7 +478,10 @@ export function createMemoryProjectModuleInstallationRepository(input?: {
     },
 
     async history(installationId) {
-      return (events.get(installationId) ?? []).slice().sort((left, right) => left.sequence - right.sequence).map(cloneEvent);
+      return (events.get(installationId) ?? [])
+        .slice()
+        .sort((left, right) => left.sequence - right.sequence)
+        .map(cloneEvent);
     },
 
     async get(accountId, projectId, moduleId) {

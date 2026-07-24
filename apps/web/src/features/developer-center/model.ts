@@ -44,9 +44,7 @@ export function publisherActionFor(
   return null;
 }
 
-export function parseDeveloperModuleInput(
-  text: string,
-):
+export function parseDeveloperModuleInput(text: string):
   | { ok: true; item: Record<string, unknown> }
   | {
       ok: false;
@@ -79,9 +77,12 @@ export function filterRecentReleases(
     if (status !== 'all' && release.status !== status) return false;
     if (!needle) return true;
 
-    return [release.item_name, release.module_id, release.publisher_id, release.module_version].some(
-      (value) => value.toLowerCase().includes(needle),
-    );
+    return [
+      release.item_name,
+      release.module_id,
+      release.publisher_id,
+      release.module_version,
+    ].some((value) => value.toLowerCase().includes(needle));
   });
 }
 

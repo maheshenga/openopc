@@ -1,14 +1,14 @@
 'use client';
 
 import {
+  type DeveloperModuleReviewTransition,
+  type RequestDeveloperModuleReviewInput,
   getDeveloperModuleRelease,
   getDeveloperModuleReviewHistory,
   listDeveloperModuleReleases,
   requestDeveloperModuleReview,
-  type DeveloperModuleReviewTransition,
-  type RequestDeveloperModuleReviewInput,
 } from '@kortix/sdk';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { skipToken, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { developerCenterErrorCode } from '../model';
 
@@ -48,8 +48,10 @@ export function publisherModuleHistoryQuery(accountId: string, releaseId: string
 
 export function usePublisherModuleReleases(accountId: string | null, enabled = true) {
   return useQuery({
-    queryKey: accountId ? developerModuleKeys.list(accountId) : [...developerModuleKeys.all, 'idle', 'list'],
-    queryFn: () => listDeveloperModuleReleases({ accountId: accountId!, limit: 100 }),
+    queryKey: accountId
+      ? developerModuleKeys.list(accountId)
+      : [...developerModuleKeys.all, 'idle', 'list'],
+    queryFn: accountId ? () => listDeveloperModuleReleases({ accountId, limit: 100 }) : skipToken,
     enabled: Boolean(accountId) && enabled,
     staleTime: 15_000,
   });
@@ -64,7 +66,7 @@ export function usePublisherModuleDetail(
     queryKey: accountId
       ? developerModuleKeys.detail(accountId, releaseId)
       : [...developerModuleKeys.all, 'idle', 'detail', releaseId],
-    queryFn: () => getDeveloperModuleRelease(releaseId, { accountId: accountId! }),
+    queryFn: accountId ? () => getDeveloperModuleRelease(releaseId, { accountId }) : skipToken,
     enabled: Boolean(accountId) && Boolean(releaseId) && enabled,
     staleTime: 15_000,
   });
@@ -79,7 +81,9 @@ export function usePublisherModuleHistory(
     queryKey: accountId
       ? developerModuleKeys.history(accountId, releaseId)
       : [...developerModuleKeys.all, 'idle', 'history', releaseId],
-    queryFn: () => getDeveloperModuleReviewHistory(releaseId, { accountId: accountId! }),
+    queryFn: accountId
+      ? () => getDeveloperModuleReviewHistory(releaseId, { accountId })
+      : skipToken,
     enabled: Boolean(accountId) && Boolean(releaseId) && enabled,
     staleTime: 15_000,
   });

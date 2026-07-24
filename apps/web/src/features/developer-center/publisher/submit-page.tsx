@@ -1,9 +1,9 @@
 'use client';
 
 import {
+  type DeveloperModuleValidationIssue,
   submitDeveloperModuleRelease,
   validateDeveloperModule,
-  type DeveloperModuleValidationIssue,
 } from '@kortix/sdk';
 import { ArrowLeft, FileJson, ShieldCheck, Upload } from 'lucide-react';
 import Link from 'next/link';
@@ -19,10 +19,10 @@ import { useCurrentAccountStore } from '@/stores/current-account-store';
 
 import { DEVELOPER_MODULE_INPUT_MAX_BYTES, developerCenterErrorCode } from '../model';
 import {
-  createDeveloperModuleSubmitController,
   type DeveloperModuleSubmitControllerState,
   type SubmitControllerStage,
   type SubmitInputErrorCode,
+  createDeveloperModuleSubmitController,
 } from './submit-controller';
 
 export interface DeveloperModuleSubmitViewProps {
@@ -98,11 +98,15 @@ export function DeveloperModuleSubmitView({
       {!confirmation ? (
         <section className="space-y-5" aria-label="Module manifest input">
           <div className="grid gap-3 md:grid-cols-[16rem_minmax(0,1fr)]">
-            <label className="flex min-h-32 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed p-5 text-center">
+            <label
+              htmlFor="developer-module-file"
+              className="flex min-h-32 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed p-5 text-center"
+            >
               <Upload className="size-5" />
               <span className="mt-2 text-sm font-medium">Upload JSON</span>
               <span className="mt-1 text-xs text-muted-foreground">Maximum 1 MiB</span>
               <Input
+                id="developer-module-file"
                 type="file"
                 accept=".json,application/json"
                 className="sr-only"
@@ -198,9 +202,7 @@ export function DeveloperModuleSubmitView({
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">Review requirements</dt>
-              <dd className="mt-1 break-words text-sm">
-                {listValue(item.review_requirements)}
-              </dd>
+              <dd className="mt-1 break-words text-sm">{listValue(item.review_requirements)}</dd>
             </div>
           </dl>
 
@@ -219,7 +221,12 @@ export function DeveloperModuleSubmitView({
               {pending ? 'Submitting...' : 'Submit release'}
             </Button>
           )}
-          <Button type="button" variant="outline" disabled={pending} onClick={() => onTextChange(text)}>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onTextChange(text)}
+          >
             Edit manifest
           </Button>
         </section>
@@ -240,8 +247,8 @@ export function PublisherModuleSubmitPage() {
       }),
     [],
   );
-  const [controllerState, setControllerState] = useState<DeveloperModuleSubmitControllerState>(
-    () => controller.getState(),
+  const [controllerState, setControllerState] = useState<DeveloperModuleSubmitControllerState>(() =>
+    controller.getState(),
   );
   const [validating, setValidating] = useState(false);
   const [fileError, setFileError] = useState<SubmitInputErrorCode | null>(null);

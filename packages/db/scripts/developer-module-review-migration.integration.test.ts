@@ -94,11 +94,7 @@ describe.skipIf(!dockerAvailable)('developer module review migration - real Post
 
     const readinessDeadline = Date.now() + 90_000;
     while (Date.now() < readinessDeadline) {
-      const ready = Bun.spawnSync(
-        ['docker', 'exec', container, 'pg_isready', '-U', 'postgres', '-d', 'testdb'],
-        { stdout: 'ignore', stderr: 'ignore' },
-      );
-      if (ready.exitCode === 0) {
+      if (dockerPsql('SELECT 1;', true).exitCode === 0) {
         const releaseMigration = await Bun.file(releaseMigrationPath).text();
         const reviewMigration = await Bun.file(reviewMigrationPath).text();
         dockerPsql(`

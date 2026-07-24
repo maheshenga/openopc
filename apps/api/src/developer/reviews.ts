@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  DeveloperModuleDistributionEvent,
+  DeveloperModuleDistributionRepository,
+} from './distribution';
+import type {
   DeveloperModuleRelease,
   DeveloperModuleReleaseStatus,
   DeveloperModuleReviewRequirement,
@@ -45,6 +49,10 @@ export interface DeveloperModuleReviewEvent {
   evidence: DeveloperModuleReviewEvidence[];
   created_at: string;
 }
+
+export type DeveloperModuleLifecycleEvent =
+  | DeveloperModuleReviewEvent
+  | DeveloperModuleDistributionEvent;
 
 export interface DeveloperModuleReviewTransition {
   release: DeveloperModuleRelease;
@@ -325,6 +333,7 @@ export class DeveloperModuleReviewService {
   constructor(
     private readonly input: {
       repository: DeveloperModuleReviewRepository;
+      distributionRepository?: Pick<DeveloperModuleDistributionRepository, 'history'>;
       now?: () => Date;
     },
   ) {
@@ -429,6 +438,25 @@ export class DeveloperModuleReviewService {
     const release = await this.input.repository.getPublisher(input.accountId, input.releaseId);
     if (!release) fail('DEVELOPER_RELEASE_NOT_FOUND', 404);
     return (await this.input.repository.history(input.accountId, input.releaseId)).map(cloneEvent);
+  }
+
+  async combinedHistory(input: {
+    accountId: string;
+    releaseId: string;
+  }): Promise<readonly DeveloperModuleLifecycleEvent[]> {
+    const release = await this.input.repository.getPublisher(input.accountId, input.releaseId);
+    if (!release) fail('DEVELOPER_RELEASE_NOT_FOUND', 404);
+    const reviewHistory = await this.input.repository.history(input.accountId, input.releaseId);
+    const distributionHistory = this.input.distributionRepository
+      ? await this.input.distributionRepository.history(input.accountId, input.releaseId)
+      : [];
+    return [
+      ...reviewHistory.map(cloneEvent),
+      ...distributionHistory.map((event) => structuredClone(event)),
+    ].sort(
+      (left, right) =>
+        left.sequence - right.sequence || left.created_at.localeCompare(right.created_at),
+    );
   }
 
   async adminList(

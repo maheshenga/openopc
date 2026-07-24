@@ -42,6 +42,13 @@ export interface DeveloperModuleRelease {
   review_requirements: DeveloperModuleReviewRequirement[];
   status: DeveloperModuleReleaseStatus;
   review_revision: number;
+  signature_algorithm: 'ed25519' | null;
+  signature_key_id: string | null;
+  signature: `base64url:${string}` | null;
+  signature_payload_digest: `sha256:${string}` | null;
+  signed_at: string | null;
+  published_at: string | null;
+  revoked_at: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -218,6 +225,13 @@ export function createMemoryDeveloperModuleReleaseRepository(input?: {
         review_requirements: [...submission.reviewRequirements],
         status: 'validated',
         review_revision: 0,
+        signature_algorithm: null,
+        signature_key_id: null,
+        signature: null,
+        signature_payload_digest: null,
+        signed_at: null,
+        published_at: null,
+        revoked_at: null,
         created_by: submission.actorUserId,
         created_at: createdAt,
         updated_at: createdAt,

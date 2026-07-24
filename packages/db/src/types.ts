@@ -15,9 +15,15 @@ import type {
   chatInstalls,
   chatThreads,
   creditAccounts,
+  developerModuleArtifactUploads,
+  developerModuleArtifacts,
   developerModuleReleaseDistributionEvents,
   developerModuleReleaseReviewEvents,
   developerModuleReleases,
+  developerModuleTrustAttestations,
+  developerModuleVerificationCapabilities,
+  developerModuleVerificationFindings,
+  developerModuleVerificationRuns,
   developerPublishers,
   gatewayApiKeys,
   gatewayBudgets,
@@ -128,8 +134,25 @@ export type NewAutomationKillSwitch = typeof automationKillSwitches.$inferInsert
 // OpenOPC Developer Center
 export type DeveloperPublisher = typeof developerPublishers.$inferSelect;
 export type NewDeveloperPublisher = typeof developerPublishers.$inferInsert;
+export type DeveloperModuleArtifactUpload = typeof developerModuleArtifactUploads.$inferSelect;
+export type NewDeveloperModuleArtifactUpload = typeof developerModuleArtifactUploads.$inferInsert;
+export type DeveloperModuleArtifact = typeof developerModuleArtifacts.$inferSelect;
+export type NewDeveloperModuleArtifact = typeof developerModuleArtifacts.$inferInsert;
 export type DeveloperModuleRelease = typeof developerModuleReleases.$inferSelect;
 export type NewDeveloperModuleRelease = typeof developerModuleReleases.$inferInsert;
+export type DeveloperModuleVerificationRun = typeof developerModuleVerificationRuns.$inferSelect;
+export type NewDeveloperModuleVerificationRun = typeof developerModuleVerificationRuns.$inferInsert;
+export type DeveloperModuleVerificationFinding =
+  typeof developerModuleVerificationFindings.$inferSelect;
+export type NewDeveloperModuleVerificationFinding =
+  typeof developerModuleVerificationFindings.$inferInsert;
+export type DeveloperModuleTrustAttestation = typeof developerModuleTrustAttestations.$inferSelect;
+export type NewDeveloperModuleTrustAttestation =
+  typeof developerModuleTrustAttestations.$inferInsert;
+export type DeveloperModuleVerificationCapability =
+  typeof developerModuleVerificationCapabilities.$inferSelect;
+export type NewDeveloperModuleVerificationCapability =
+  typeof developerModuleVerificationCapabilities.$inferInsert;
 export type DeveloperModuleReleaseReviewEvent =
   typeof developerModuleReleaseReviewEvents.$inferSelect;
 export type NewDeveloperModuleReleaseReviewEvent =

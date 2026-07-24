@@ -6120,6 +6120,28 @@ export const developerModuleDistributionActionEnum = kortixSchema.enum(
   ['sign', 'publish', 'revoke'],
 );
 
+export const developerArtifactUploadStateEnum = kortixSchema.enum(
+  'developer_artifact_upload_state',
+  ['created', 'uploaded', 'finalized', 'cancelled', 'expired'],
+);
+
+export const developerVerificationStateEnum = kortixSchema.enum('developer_verification_state', [
+  'queued',
+  'running',
+  'passed',
+  'failed',
+  'inconclusive',
+  'cancelled',
+]);
+
+export const developerFindingSeverityEnum = kortixSchema.enum('developer_finding_severity', [
+  'info',
+  'low',
+  'medium',
+  'high',
+  'critical',
+]);
+
 export const projectModuleInstallationStatusEnum = kortixSchema.enum(
   'project_module_installation_status',
   ['active', 'blocked'],
@@ -6157,6 +6179,133 @@ export const developerPublishers = kortixSchema.table(
   ],
 );
 
+export const developerModuleArtifactUploads = kortixSchema.table(
+  'developer_module_artifact_uploads',
+  {
+    uploadId: uuid('upload_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    publisherId: varchar('publisher_id', { length: 63 }).notNull(),
+    state: developerArtifactUploadStateEnum('state').default('created').notNull(),
+    expectedDigest: varchar('expected_digest', { length: 71 }).notNull(),
+    expectedSize: bigint('expected_size', { mode: 'number' }).notNull(),
+    stagingStorageKey: text('staging_storage_key').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.publisherId, table.accountId],
+      foreignColumns: [developerPublishers.publisherId, developerPublishers.accountId],
+      name: 'developer_module_artifact_uploads_publisher_account_fk',
+    }).onDelete('restrict'),
+    unique('developer_module_artifact_uploads_upload_account_unique').on(
+      table.uploadId,
+      table.accountId,
+    ),
+    index('idx_developer_module_artifact_uploads_account_state_expiry').on(
+      table.accountId,
+      table.state,
+      table.expiresAt,
+    ),
+    check(
+      'developer_module_artifact_uploads_digest_check',
+      sql`${table.expectedDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'developer_module_artifact_uploads_size_check',
+      sql`${table.expectedSize} BETWEEN 1 AND 536870912`,
+    ),
+    check(
+      'developer_module_artifact_uploads_storage_key_check',
+      sql`octet_length(${table.stagingStorageKey}) BETWEEN 1 AND 2048`,
+    ),
+    check(
+      'developer_module_artifact_uploads_expiry_check',
+      sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const developerModuleArtifacts = kortixSchema.table(
+  'developer_module_artifacts',
+  {
+    artifactId: uuid('artifact_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    publisherId: varchar('publisher_id', { length: 63 }).notNull(),
+    artifactDigest: varchar('artifact_digest', { length: 71 }).notNull(),
+    envelopeDigest: varchar('envelope_digest', { length: 71 }).notNull(),
+    storageKey: text('storage_key').notNull(),
+    mediaType: varchar('media_type', { length: 128 }).notNull(),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    itemSnapshot: jsonb('item_snapshot').notNull().$type<Record<string, unknown>>(),
+    sourceProvenance: jsonb('source_provenance').$type<Record<string, unknown> | null>(),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.publisherId, table.accountId],
+      foreignColumns: [developerPublishers.publisherId, developerPublishers.accountId],
+      name: 'developer_module_artifacts_publisher_account_fk',
+    }).onDelete('restrict'),
+    unique('developer_module_artifacts_artifact_account_unique').on(
+      table.artifactId,
+      table.accountId,
+    ),
+    unique('developer_module_artifacts_account_digest_unique').on(
+      table.accountId,
+      table.artifactDigest,
+    ),
+    index('idx_developer_module_artifacts_account_created').on(
+      table.accountId,
+      table.createdAt,
+      table.artifactId,
+    ),
+    check(
+      'developer_module_artifacts_digest_check',
+      sql`${table.artifactDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.envelopeDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'developer_module_artifacts_media_type_check',
+      sql`${table.mediaType} = 'application/vnd.openopc.developer-module.v2+json'`,
+    ),
+    check(
+      'developer_module_artifacts_size_check',
+      sql`${table.sizeBytes} BETWEEN 1 AND 536870912`,
+    ),
+    check(
+      'developer_module_artifacts_storage_key_check',
+      sql`octet_length(${table.storageKey}) BETWEEN 1 AND 2048`,
+    ),
+    check(
+      'developer_module_artifacts_item_snapshot_check',
+      sql`jsonb_typeof(${table.itemSnapshot}) = 'object'
+        AND pg_column_size(${table.itemSnapshot}) <= 1048576`,
+    ),
+    check(
+      'developer_module_artifacts_source_provenance_check',
+      sql`${table.sourceProvenance} IS NULL
+        OR (
+          jsonb_typeof(${table.sourceProvenance}) = 'object'
+          AND pg_column_size(${table.sourceProvenance}) <= 16384
+        )`,
+    ),
+  ],
+);
+
 export const developerModuleReleases = kortixSchema.table(
   'developer_module_releases',
   {
@@ -6173,6 +6322,11 @@ export const developerModuleReleases = kortixSchema.table(
     reviewRequirements: jsonb('review_requirements').notNull().$type<string[]>(),
     status: developerModuleReleaseStatusEnum('status').default('validated').notNull(),
     reviewRevision: integer('review_revision').default(0).notNull(),
+    artifactId: uuid('artifact_id'),
+    artifactDigest: varchar('artifact_digest', { length: 71 }),
+    sbomDigest: varchar('sbom_digest', { length: 71 }),
+    trustAttestationDigest: varchar('trust_attestation_digest', { length: 71 }),
+    verificationPolicyDigest: varchar('verification_policy_digest', { length: 71 }),
     signatureAlgorithm: varchar('signature_algorithm', { length: 16 }),
     signatureKeyId: varchar('signature_key_id', { length: 128 }),
     signature: varchar('signature', { length: 96 }),
@@ -6194,11 +6348,21 @@ export const developerModuleReleases = kortixSchema.table(
       foreignColumns: [developerPublishers.publisherId, developerPublishers.accountId],
       name: 'developer_module_releases_publisher_account_fk',
     }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.artifactId, table.accountId],
+      foreignColumns: [developerModuleArtifacts.artifactId, developerModuleArtifacts.accountId],
+      name: 'developer_module_releases_artifact_account_fk',
+    }).onDelete('restrict'),
     unique('developer_module_releases_module_version_unique').on(
       table.moduleId,
       table.moduleVersion,
     ),
     unique('developer_module_releases_release_account_unique').on(table.releaseId, table.accountId),
+    unique('developer_module_releases_release_account_artifact_unique').on(
+      table.releaseId,
+      table.accountId,
+      table.artifactId,
+    ),
     unique('developer_module_releases_installation_identity_unique').on(
       table.releaseId,
       table.accountId,
@@ -6237,6 +6401,27 @@ export const developerModuleReleases = kortixSchema.table(
     check(
       'developer_module_releases_digest_check',
       sql`${table.manifestDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'developer_module_releases_artifact_digest_check',
+      sql`(
+        ${table.artifactId} IS NULL
+        AND ${table.artifactDigest} IS NULL
+      ) OR (
+        ${table.artifactId} IS NOT NULL
+        AND ${table.artifactDigest} ~ '^sha256:[0-9a-f]{64}$'
+      )`,
+    ),
+    check(
+      'developer_module_releases_trust_before_distribution_check',
+      sql`${table.status} NOT IN ('signed', 'published')
+        OR (
+          ${table.artifactId} IS NOT NULL
+          AND ${table.artifactDigest} ~ '^sha256:[0-9a-f]{64}$'
+          AND ${table.sbomDigest} ~ '^sha256:[0-9a-f]{64}$'
+          AND ${table.trustAttestationDigest} ~ '^sha256:[0-9a-f]{64}$'
+          AND ${table.verificationPolicyDigest} ~ '^sha256:[0-9a-f]{64}$'
+        )`,
     ),
     check(
       'developer_module_releases_review_requirements_check',
@@ -6281,6 +6466,325 @@ export const developerModuleReleases = kortixSchema.table(
         OR ${table.signatureAlgorithm} IS NULL
         OR ${table.revokedAt} IS NOT NULL
       )`,
+    ),
+  ],
+);
+
+export const developerModuleVerificationRuns = kortixSchema.table(
+  'developer_module_verification_runs',
+  {
+    runId: uuid('run_id').defaultRandom().primaryKey(),
+    releaseId: uuid('release_id').notNull(),
+    artifactId: uuid('artifact_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    policyDigest: varchar('policy_digest', { length: 71 }).notNull(),
+    scannerSetDigest: varchar('scanner_set_digest', { length: 71 }).notNull(),
+    sandboxProfileDigest: varchar('sandbox_profile_digest', { length: 71 }).notNull(),
+    attempt: integer('attempt').notNull(),
+    state: developerVerificationStateEnum('state').default('queued').notNull(),
+    leaseOwner: varchar('lease_owner', { length: 128 }),
+    leaseTokenHash: varchar('lease_token_hash', { length: 71 }),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true, mode: 'string' }),
+    heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
+    terminalReason: varchar('terminal_reason', { length: 256 }),
+    sbomDigest: varchar('sbom_digest', { length: 71 }),
+    attestationDigest: varchar('attestation_digest', { length: 71 }),
+    resourceSummary: jsonb('resource_summary')
+      .default({})
+      .notNull()
+      .$type<Record<string, unknown>>(),
+    startedAt: timestamp('started_at', { withTimezone: true, mode: 'string' }),
+    finishedAt: timestamp('finished_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.releaseId, table.accountId, table.artifactId],
+      foreignColumns: [
+        developerModuleReleases.releaseId,
+        developerModuleReleases.accountId,
+        developerModuleReleases.artifactId,
+      ],
+      name: 'developer_module_verification_runs_release_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.artifactId, table.accountId],
+      foreignColumns: [developerModuleArtifacts.artifactId, developerModuleArtifacts.accountId],
+      name: 'developer_module_verification_runs_artifact_account_fk',
+    }).onDelete('restrict'),
+    unique('developer_module_verification_runs_run_account_unique').on(
+      table.runId,
+      table.accountId,
+    ),
+    unique('developer_module_verification_runs_release_policy_attempt_unique').on(
+      table.releaseId,
+      table.policyDigest,
+      table.attempt,
+    ),
+    uniqueIndex('idx_developer_module_verification_runs_active_unique')
+      .on(table.releaseId, table.policyDigest)
+      .where(sql`${table.state} IN ('queued', 'running')`),
+    index('idx_developer_module_verification_runs_claim').on(
+      table.state,
+      table.createdAt,
+      table.runId,
+    ),
+    index('idx_developer_module_verification_runs_lease_expiry')
+      .on(table.leaseExpiresAt)
+      .where(sql`${table.state} = 'running'`),
+    index('idx_developer_module_verification_runs_account_release_attempt').on(
+      table.accountId,
+      table.releaseId,
+      table.attempt,
+    ),
+    check(
+      'developer_module_verification_runs_digest_check',
+      sql`${table.policyDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.scannerSetDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.sandboxProfileDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND (
+          ${table.sbomDigest} IS NULL
+          OR ${table.sbomDigest} ~ '^sha256:[0-9a-f]{64}$'
+        )
+        AND (
+          ${table.attestationDigest} IS NULL
+          OR ${table.attestationDigest} ~ '^sha256:[0-9a-f]{64}$'
+        )`,
+    ),
+    check('developer_module_verification_runs_attempt_check', sql`${table.attempt} > 0`),
+    check(
+      'developer_module_verification_runs_lease_check',
+      sql`(
+        ${table.state} = 'running'
+        AND ${table.leaseOwner} IS NOT NULL
+        AND ${table.leaseTokenHash} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.leaseExpiresAt} IS NOT NULL
+        AND ${table.heartbeatAt} IS NOT NULL
+        AND ${table.startedAt} IS NOT NULL
+      ) OR ${table.state} <> 'running'`,
+    ),
+    check(
+      'developer_module_verification_runs_terminal_check',
+      sql`(
+        ${table.state} IN ('passed', 'failed', 'inconclusive', 'cancelled')
+        AND ${table.terminalReason} IS NOT NULL
+        AND ${table.finishedAt} IS NOT NULL
+      ) OR ${table.state} IN ('queued', 'running')`,
+    ),
+    check(
+      'developer_module_verification_runs_passed_evidence_check',
+      sql`${table.state} <> 'passed'
+        OR (
+          ${table.sbomDigest} ~ '^sha256:[0-9a-f]{64}$'
+          AND ${table.attestationDigest} ~ '^sha256:[0-9a-f]{64}$'
+        )`,
+    ),
+    check(
+      'developer_module_verification_runs_resource_summary_check',
+      sql`jsonb_typeof(${table.resourceSummary}) = 'object'
+        AND pg_column_size(${table.resourceSummary}) <= 32768`,
+    ),
+  ],
+);
+
+export const developerModuleVerificationFindings = kortixSchema.table(
+  'developer_module_verification_findings',
+  {
+    findingId: uuid('finding_id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    fingerprint: varchar('fingerprint', { length: 71 }).notNull(),
+    scanner: varchar('scanner', { length: 128 }).notNull(),
+    ruleId: varchar('rule_id', { length: 256 }).notNull(),
+    severity: developerFindingSeverityEnum('severity').notNull(),
+    path: text('path'),
+    location: jsonb('location').$type<Record<string, unknown> | null>(),
+    summary: text('summary').notNull(),
+    disposition: varchar('disposition', { length: 32 }).default('blocking').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId, table.accountId],
+      foreignColumns: [developerModuleVerificationRuns.runId, developerModuleVerificationRuns.accountId],
+      name: 'developer_module_verification_findings_run_account_fk',
+    }).onDelete('cascade'),
+    unique('developer_module_verification_findings_run_fingerprint_unique').on(
+      table.runId,
+      table.fingerprint,
+    ),
+    index('idx_developer_module_verification_findings_account_run_severity').on(
+      table.accountId,
+      table.runId,
+      table.severity,
+    ),
+    check(
+      'developer_module_verification_findings_fingerprint_check',
+      sql`${table.fingerprint} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'developer_module_verification_findings_scanner_rule_check',
+      sql`length(BTRIM(${table.scanner})) BETWEEN 1 AND 128
+        AND length(BTRIM(${table.ruleId})) BETWEEN 1 AND 256`,
+    ),
+    check(
+      'developer_module_verification_findings_path_check',
+      sql`${table.path} IS NULL OR octet_length(${table.path}) BETWEEN 1 AND 2048`,
+    ),
+    check(
+      'developer_module_verification_findings_location_check',
+      sql`${table.location} IS NULL
+        OR (
+          jsonb_typeof(${table.location}) = 'object'
+          AND pg_column_size(${table.location}) <= 4096
+        )`,
+    ),
+    check(
+      'developer_module_verification_findings_summary_check',
+      sql`length(BTRIM(${table.summary})) BETWEEN 1 AND 2000
+        AND octet_length(${table.summary}) <= 4096`,
+    ),
+    check(
+      'developer_module_verification_findings_disposition_check',
+      sql`${table.disposition} IN ('blocking', 'observed')`,
+    ),
+  ],
+);
+
+export const developerModuleTrustAttestations = kortixSchema.table(
+  'developer_module_trust_attestations',
+  {
+    attestationId: uuid('attestation_id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    attestationDigest: varchar('attestation_digest', { length: 71 }).notNull(),
+    subjectArtifactDigest: varchar('subject_artifact_digest', { length: 71 }).notNull(),
+    predicateType: varchar('predicate_type', { length: 256 }).notNull(),
+    policyDigest: varchar('policy_digest', { length: 71 }).notNull(),
+    result: developerVerificationStateEnum('result').notNull(),
+    sbomDigest: varchar('sbom_digest', { length: 71 }).notNull(),
+    dsseEnvelope: jsonb('dsse_envelope').notNull().$type<Record<string, unknown>>(),
+    issuer: varchar('issuer', { length: 256 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId, table.accountId],
+      foreignColumns: [developerModuleVerificationRuns.runId, developerModuleVerificationRuns.accountId],
+      name: 'developer_module_trust_attestations_run_account_fk',
+    }).onDelete('cascade'),
+    unique('developer_module_trust_attestations_run_digest_unique').on(
+      table.runId,
+      table.attestationDigest,
+    ),
+    index('idx_developer_module_trust_attestations_account_run').on(
+      table.accountId,
+      table.runId,
+      table.createdAt,
+    ),
+    check(
+      'developer_module_trust_attestations_digest_check',
+      sql`${table.attestationDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.subjectArtifactDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.policyDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.sbomDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'developer_module_trust_attestations_result_check',
+      sql`${table.result} IN ('passed', 'failed', 'inconclusive', 'cancelled')`,
+    ),
+    check(
+      'developer_module_trust_attestations_predicate_check',
+      sql`length(BTRIM(${table.predicateType})) BETWEEN 1 AND 256
+        AND ${table.predicateType} LIKE 'https://%'`,
+    ),
+    check(
+      'developer_module_trust_attestations_dsse_check',
+      sql`jsonb_typeof(${table.dsseEnvelope}) = 'object'
+        AND pg_column_size(${table.dsseEnvelope}) <= 1048576`,
+    ),
+    check(
+      'developer_module_trust_attestations_issuer_check',
+      sql`length(BTRIM(${table.issuer})) BETWEEN 1 AND 256`,
+    ),
+  ],
+);
+
+export const developerModuleVerificationCapabilities = kortixSchema.table(
+  'developer_module_verification_capabilities',
+  {
+    capabilityId: uuid('capability_id').defaultRandom().primaryKey(),
+    runId: uuid('run_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    sandboxInstanceId: varchar('sandbox_instance_id', { length: 128 }).notNull(),
+    audience: varchar('audience', { length: 128 }).notNull(),
+    tokenHash: varchar('token_hash', { length: 71 }).notNull(),
+    nonceHash: varchar('nonce_hash', { length: 71 }).notNull(),
+    allowedActions: jsonb('allowed_actions').default([]).notNull().$type<string[]>(),
+    maxCalls: integer('max_calls').notNull(),
+    callsUsed: integer('calls_used').default(0).notNull(),
+    maxPayloadBytes: bigint('max_payload_bytes', { mode: 'number' }).notNull(),
+    payloadBytesUsed: bigint('payload_bytes_used', { mode: 'number' }).default(0).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runId, table.accountId],
+      foreignColumns: [developerModuleVerificationRuns.runId, developerModuleVerificationRuns.accountId],
+      name: 'developer_module_verification_capabilities_run_account_fk',
+    }).onDelete('cascade'),
+    unique('developer_module_verification_capabilities_run_sandbox_unique').on(
+      table.runId,
+      table.sandboxInstanceId,
+    ),
+    index('idx_developer_module_verification_capabilities_token_hash')
+      .on(table.tokenHash)
+      .where(sql`${table.revokedAt} IS NULL`),
+    index('idx_developer_module_verification_capabilities_expiry')
+      .on(table.expiresAt)
+      .where(sql`${table.revokedAt} IS NULL`),
+    check(
+      'developer_module_verification_capabilities_hash_check',
+      sql`${table.tokenHash} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.nonceHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'developer_module_verification_capabilities_identity_check',
+      sql`length(BTRIM(${table.sandboxInstanceId})) BETWEEN 1 AND 128
+        AND length(BTRIM(${table.audience})) BETWEEN 1 AND 128`,
+    ),
+    check(
+      'developer_module_verification_capabilities_actions_check',
+      sql`jsonb_typeof(${table.allowedActions}) = 'array'
+        AND jsonb_array_length(${table.allowedActions}) <= 128
+        AND pg_column_size(${table.allowedActions}) <= 16384`,
+    ),
+    check(
+      'developer_module_verification_capabilities_usage_check',
+      sql`${table.maxCalls} BETWEEN 1 AND 10000
+        AND ${table.callsUsed} BETWEEN 0 AND ${table.maxCalls}
+        AND ${table.maxPayloadBytes} BETWEEN 1 AND 104857600
+        AND ${table.payloadBytesUsed} BETWEEN 0 AND ${table.maxPayloadBytes}`,
+    ),
+    check(
+      'developer_module_verification_capabilities_expiry_check',
+      sql`${table.expiresAt} > ${table.createdAt}`,
     ),
   ],
 );

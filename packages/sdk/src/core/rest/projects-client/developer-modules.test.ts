@@ -3,6 +3,7 @@ import { beforeEach, expect, mock, test } from 'bun:test';
 import { createKortix } from '../../client/kortix';
 import { configureKortix } from '../../http/config';
 import {
+  type DeveloperModuleRelease,
   getDeveloperModuleRelease,
   getDeveloperModuleReviewHistory,
   listDeveloperModuleReleases,
@@ -78,6 +79,43 @@ test('developer module release SDK sends account-scoped submit, list and get req
       body: undefined,
     },
   ]);
+});
+
+test('developer module release transport preserves public signature metadata', async () => {
+  const release: DeveloperModuleRelease = {
+    release_id: 'release-1',
+    account_id: 'account-1',
+    item_name: 'example',
+    publisher_id: 'publisher-1',
+    module_id: 'example.module',
+    module_version: '1.0.0',
+    manifest: { compatibility: { platform: '^1.0.0' } },
+    manifest_digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    review_requirements: ['manifest_review'],
+    status: 'published',
+    review_revision: 4,
+    signature_algorithm: 'ed25519',
+    signature_key_id: 'openopc-2026',
+    signature: 'base64url:public-signature',
+    signature_payload_digest:
+      'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    signed_at: '2026-07-24T12:00:00.000Z',
+    published_at: '2026-07-24T12:01:00.000Z',
+    revoked_at: null,
+    created_by: 'user-1',
+    created_at: '2026-07-24T11:00:00.000Z',
+    updated_at: '2026-07-24T12:01:00.000Z',
+  };
+  globalThis.fetch = mock(
+    async () =>
+      new Response(JSON.stringify(release), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  ) as unknown as typeof fetch;
+
+  await expect(getDeveloperModuleRelease('release-1')).resolves.toEqual(release);
+  expect(release).not.toHaveProperty('private_key');
 });
 
 test('createKortix exposes the developer module release facade', async () => {

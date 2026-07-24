@@ -342,6 +342,17 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
       /** Mint a fresh scoped git push token for a managed project (409 for BYO repos). */
       gitToken: () => P.getProjectGitToken(projectId),
 
+      /** Exact-release project module installation and lifecycle operations. */
+      modules: {
+        list: () => P.listProjectModules(projectId),
+        install: (...a: DropFirst<Parameters<typeof P.installProjectModule>>) =>
+          P.installProjectModule(projectId, ...a),
+        update: (...a: DropFirst<Parameters<typeof P.updateProjectModule>>) =>
+          P.updateProjectModule(projectId, ...a),
+        rollback: (...a: DropFirst<Parameters<typeof P.rollbackProjectModule>>) =>
+          P.rollbackProjectModule(projectId, ...a),
+      },
+
       secrets: {
         list: () => P.listProjectSecrets(projectId),
         upsert: (input: Parameters<typeof P.upsertProjectSecret>[1]) =>

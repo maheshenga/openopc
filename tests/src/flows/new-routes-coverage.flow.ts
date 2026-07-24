@@ -437,6 +437,13 @@ flow(
       'GET /v1/admin/developer/modules/reviews',
       'GET /v1/admin/developer/modules/releases/:releaseId/review',
       'POST /v1/admin/developer/modules/releases/:releaseId/review-decisions',
+      'POST /v1/admin/developer/modules/releases/:releaseId/sign',
+      'POST /v1/admin/developer/modules/releases/:releaseId/publish',
+      'GET /v1/projects/:projectId/modules',
+      'POST /v1/projects/:projectId/modules/install',
+      'POST /v1/projects/:projectId/modules/:moduleId/update',
+      'POST /v1/projects/:projectId/modules/:moduleId/rollback',
+      'GET /v1/marketplace/items',
     ],
   },
   async (ctx) => {
@@ -474,6 +481,40 @@ flow(
           .post('/v1/admin/developer/modules/releases/:releaseId/review-decisions', {}, { params }),
       ]);
       for (const response of responses) response.status(401);
+    });
+    await ctx.step('developer module distribution mutations require authentication', async () => {
+      const releaseId = '30000000-0000-4000-a000-000000000003';
+      const params = { releaseId };
+      const responses = await Promise.all([
+        ctx.client
+          .as(ctx.P.ANON)
+          .post('/v1/admin/developer/modules/releases/:releaseId/sign', {}, { params }),
+        ctx.client
+          .as(ctx.P.ANON)
+          .post('/v1/admin/developer/modules/releases/:releaseId/publish', {}, { params }),
+      ]);
+      for (const response of responses) response.status(401);
+    });
+    await ctx.step('project module routes require authentication', async () => {
+      const params = {
+        projectId: '00000000-0000-4000-a000-000000000000',
+        moduleId: 'example.module',
+      };
+      const responses = await Promise.all([
+        ctx.client.as(ctx.P.ANON).get('/v1/projects/:projectId/modules', { params }),
+        ctx.client.as(ctx.P.ANON).post('/v1/projects/:projectId/modules/install', {}, { params }),
+        ctx.client
+          .as(ctx.P.ANON)
+          .post('/v1/projects/:projectId/modules/:moduleId/update', {}, { params }),
+        ctx.client
+          .as(ctx.P.ANON)
+          .post('/v1/projects/:projectId/modules/:moduleId/rollback', {}, { params }),
+      ]);
+      for (const response of responses) response.status(401);
+    });
+    await ctx.step('public Marketplace list remains readable', async () => {
+      const response = await ctx.client.as(ctx.P.ANON).get('/v1/marketplace/items');
+      response.status(200);
     });
   },
 );

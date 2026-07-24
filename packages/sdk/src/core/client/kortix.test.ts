@@ -42,6 +42,21 @@ test('project(id) handle binds the id and hits the right endpoint', async () => 
   expect(last().method).toBe('GET');
 });
 
+test('project(id).modules binds project module lifecycle endpoints', async () => {
+  const modules = kortix.project('PID123').modules;
+  await modules.list();
+  await modules.install({ release_id: 'REL1', expected_install_revision: 0 });
+  await modules.update('MOD1', { release_id: 'REL2', expected_install_revision: 1 });
+  await modules.rollback('MOD1', { release_id: 'REL1', expected_install_revision: 2 });
+
+  expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+    'GET http://test.local/projects/PID123/modules',
+    'POST http://test.local/projects/PID123/modules/install',
+    'POST http://test.local/projects/PID123/modules/MOD1/update',
+    'POST http://test.local/projects/PID123/modules/MOD1/rollback',
+  ]);
+});
+
 test('project(id).intelligence binds capability, task, and workflow endpoints', async () => {
   globalThis.fetch = mock(async (url: unknown, opts: { method?: string; body?: unknown } = {}) => {
     const requestUrl = String(url);

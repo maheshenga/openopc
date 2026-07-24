@@ -20,6 +20,13 @@ const SUBMITTED_RELEASE: DeveloperModuleRelease = {
   review_requirements: ['manifest_review', 'human_review'],
   status: 'validated',
   review_revision: 0,
+  signature_algorithm: null,
+  signature_key_id: null,
+  signature: null,
+  signature_payload_digest: null,
+  signed_at: null,
+  published_at: null,
+  revoked_at: null,
   created_by: '13000000-0000-4000-a000-000000000001',
   created_at: '2026-07-24T00:00:00.000Z',
   updated_at: '2026-07-24T00:00:00.000Z',
@@ -111,7 +118,10 @@ describe('Developer module submit controller', () => {
   test('concurrent confirmations share one pending promise', async () => {
     let resolveSubmit!: (value: ReturnType<typeof submission>) => void;
     const submit = mock(
-      () => new Promise<ReturnType<typeof submission>>((resolve) => (resolveSubmit = resolve)),
+      () =>
+        new Promise<ReturnType<typeof submission>>((resolve) => {
+          resolveSubmit = resolve;
+        }),
     );
     const controller = createDeveloperModuleSubmitController({
       validate: async () => ({ valid: true, issues: [] }),

@@ -1,9 +1,9 @@
+import { describe, expect, test } from 'bun:test';
 import type {
   DeveloperModuleRelease,
   DeveloperModuleReviewEvent,
   DeveloperModuleReviewEvidence,
 } from '@kortix/sdk';
-import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { AdminDeveloperReviewDetailView } from './review-detail-page';
@@ -21,6 +21,13 @@ const RELEASE: DeveloperModuleRelease = {
   review_requirements: ['manifest_review', 'human_review'],
   status: 'review_pending',
   review_revision: 4,
+  signature_algorithm: null,
+  signature_key_id: null,
+  signature: null,
+  signature_payload_digest: null,
+  signed_at: null,
+  published_at: null,
+  revoked_at: null,
   created_by: '34000000-0000-4000-a000-000000000003',
   created_at: '2026-07-24T05:00:00.000Z',
   updated_at: '2026-07-24T05:30:00.000Z',

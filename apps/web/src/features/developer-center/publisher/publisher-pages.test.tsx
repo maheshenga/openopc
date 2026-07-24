@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { renderToStaticMarkup } from 'react-dom/server';
 import type { DeveloperModuleRelease, DeveloperModuleReviewEvent } from '@kortix/sdk';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 import { PublisherReleaseDetailView } from './release-detail-page';
 import { PublisherReleaseListView } from './release-list-page';
@@ -17,6 +17,13 @@ const RELEASE: DeveloperModuleRelease = {
   review_requirements: ['manifest_review', 'human_review'],
   status: 'validated',
   review_revision: 3,
+  signature_algorithm: null,
+  signature_key_id: null,
+  signature: null,
+  signature_payload_digest: null,
+  signed_at: null,
+  published_at: null,
+  revoked_at: null,
   created_by: '13000000-0000-4000-a000-000000000001',
   created_at: '2026-07-24T00:00:00.000Z',
   updated_at: '2026-07-24T00:00:00.000Z',

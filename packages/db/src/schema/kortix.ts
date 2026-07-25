@@ -6173,14 +6173,52 @@ export const projectModuleInstallationActionEnum = kortixSchema.enum(
   ['install', 'update', 'rollback'],
 );
 
-export const developerPublishers = kortixSchema.table(
-  'developer_publishers',
+export const developerInvitationStateEnum = kortixSchema.enum('developer_invitation_state', [
+  'pending',
+  'accepted',
+  'expired',
+  'revoked',
+]);
+
+export const developerOrganizationVerificationStateEnum = kortixSchema.enum(
+  'developer_organization_verification_state',
+  ['pending', 'verified', 'rejected', 'suspended'],
+);
+
+export const developerPublisherRoleEnum = kortixSchema.enum('developer_publisher_role', [
+  'owner',
+  'developer',
+  'release_manager',
+  'finance_viewer',
+  'support_viewer',
+]);
+
+export const developerPublisherStatusEnum = kortixSchema.enum('developer_publisher_status', [
+  'active',
+  'suspended',
+]);
+
+export const developerOrganizations = kortixSchema.table(
+  'developer_organizations',
   {
-    publisherId: varchar('publisher_id', { length: 63 }).primaryKey(),
+    organizationId: uuid('organization_id').defaultRandom().primaryKey(),
     accountId: uuid('account_id')
       .notNull()
       .references(() => accounts.accountId, { onDelete: 'cascade' }),
-    displayName: varchar('display_name', { length: 255 }).notNull(),
+    name: varchar('name', { length: 255 }).notNull(),
+    verificationState: developerOrganizationVerificationStateEnum('verification_state')
+      .default('pending')
+      .notNull(),
+    verificationMetadata: jsonb('verification_metadata')
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    verificationRevision: integer('verification_revision').default(0).notNull(),
+    verificationChangedBy: uuid('verification_changed_by'),
+    verificationChangedAt: timestamp('verification_changed_at', {
+      withTimezone: true,
+      mode: 'string',
+    }),
     createdBy: uuid('created_by').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
@@ -6190,12 +6228,299 @@ export const developerPublishers = kortixSchema.table(
       .notNull(),
   },
   (table) => [
+    unique('developer_organizations_organization_account_unique').on(
+      table.organizationId,
+      table.accountId,
+    ),
+    unique('developer_organizations_account_unique').on(table.accountId),
+    index('idx_developer_organizations_account_state').on(
+      table.accountId,
+      table.verificationState,
+    ),
+    check(
+      'developer_organizations_name_check',
+      sql`length(BTRIM(${table.name})) BETWEEN 1 AND 255`,
+    ),
+    check(
+      'developer_organizations_metadata_check',
+      sql`jsonb_typeof(${table.verificationMetadata}) = 'object' AND pg_column_size(${table.verificationMetadata}) <= 8192`,
+    ),
+    check(
+      'developer_organizations_revision_check',
+      sql`${table.verificationRevision} >= 0`,
+    ),
+    check(
+      'developer_organizations_verification_transition_check',
+      sql`(
+        ${table.verificationState} = 'pending'
+        AND ${table.verificationChangedBy} IS NULL
+        AND ${table.verificationChangedAt} IS NULL
+      ) OR (
+        ${table.verificationState} IN ('verified', 'rejected', 'suspended')
+        AND ${table.verificationChangedBy} IS NOT NULL
+        AND ${table.verificationChangedAt} IS NOT NULL
+      )`,
+    ),
+  ],
+);
+
+export const developerInvitations = kortixSchema.table(
+  'developer_invitations',
+  {
+    invitationId: uuid('invitation_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    organizationId: uuid('organization_id'),
+    email: varchar('email', { length: 320 }).notNull(),
+    tokenHash: varchar('token_hash', { length: 64 })
+      .notNull()
+      .unique('developer_invitations_token_hash_unique'),
+    state: developerInvitationStateEnum('state').default('pending').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    acceptedBy: uuid('accepted_by'),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true, mode: 'string' }),
+    revokedBy: uuid('revoked_by'),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('developer_invitations_invitation_account_unique').on(
+      table.invitationId,
+      table.accountId,
+    ),
+    foreignKey({
+      columns: [table.organizationId, table.accountId],
+      foreignColumns: [developerOrganizations.organizationId, developerOrganizations.accountId],
+      name: 'developer_invitations_organization_account_fk',
+    }).onDelete('restrict'),
+    uniqueIndex('idx_developer_invitations_pending_email_unique')
+      .on(table.accountId, sql`lower(${table.email})`)
+      .where(sql`${table.state} = 'pending'`),
+    index('idx_developer_invitations_account_state_expiry').on(
+      table.accountId,
+      table.state,
+      table.expiresAt,
+    ),
+    check(
+      'developer_invitations_token_hash_check',
+      sql`${table.tokenHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'developer_invitations_email_check',
+      sql`${table.email} = lower(BTRIM(${table.email})) AND length(${table.email}) BETWEEN 3 AND 320`,
+    ),
+    check('developer_invitations_expiry_check', sql`${table.expiresAt} > ${table.createdAt}`),
+    check(
+      'developer_invitations_state_check',
+      sql`(
+        ${table.state} IN ('pending', 'expired')
+        AND ${table.acceptedBy} IS NULL
+        AND ${table.acceptedAt} IS NULL
+        AND ${table.revokedBy} IS NULL
+        AND ${table.revokedAt} IS NULL
+      ) OR (
+        ${table.state} = 'accepted'
+        AND ${table.acceptedBy} IS NOT NULL
+        AND ${table.acceptedAt} IS NOT NULL
+        AND ${table.revokedBy} IS NULL
+        AND ${table.revokedAt} IS NULL
+      ) OR (
+        ${table.state} = 'revoked'
+        AND ${table.acceptedBy} IS NULL
+        AND ${table.acceptedAt} IS NULL
+        AND ${table.revokedBy} IS NOT NULL
+        AND ${table.revokedAt} IS NOT NULL
+      )`,
+    ),
+  ],
+);
+
+export const developerPublishers = kortixSchema.table(
+  'developer_publishers',
+  {
+    publisherId: varchar('publisher_id', { length: 63 }).primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    organizationId: uuid('organization_id').notNull(),
+    slug: varchar('slug', { length: 63 })
+      .notNull()
+      .unique('developer_publishers_slug_unique'),
+    displayName: varchar('display_name', { length: 255 }).notNull(),
+    status: developerPublisherStatusEnum('status').default('active').notNull(),
+    authorityRevision: integer('authority_revision').default(0).notNull(),
+    suspendedReason: varchar('suspended_reason', { length: 1024 }),
+    suspendedBy: uuid('suspended_by'),
+    suspendedAt: timestamp('suspended_at', { withTimezone: true, mode: 'string' }),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.organizationId, table.accountId],
+      foreignColumns: [developerOrganizations.organizationId, developerOrganizations.accountId],
+      name: 'developer_publishers_organization_account_fk',
+    }).onDelete('restrict'),
     unique('developer_publishers_publisher_account_unique').on(table.publisherId, table.accountId),
+    unique('developer_publishers_publisher_account_organization_unique').on(
+      table.publisherId,
+      table.accountId,
+      table.organizationId,
+    ),
+    uniqueIndex('idx_developer_publishers_slug_lower_unique').on(sql`lower(${table.slug})`),
     index('idx_developer_publishers_account_created').on(table.accountId, table.createdAt),
+    index('idx_developer_publishers_organization_created').on(
+      table.organizationId,
+      table.createdAt,
+    ),
     check('developer_publishers_id_check', sql`${table.publisherId} ~ '^[a-z0-9][a-z0-9-]{0,62}$'`),
+    check(
+      'developer_publishers_slug_identity_check',
+      sql`${table.publisherId} = ${table.slug} AND ${table.slug} = lower(${table.slug})`,
+    ),
     check(
       'developer_publishers_display_name_check',
       sql`length(BTRIM(${table.displayName})) BETWEEN 1 AND 255`,
+    ),
+    check('developer_publishers_authority_revision_check', sql`${table.authorityRevision} >= 0`),
+    check(
+      'developer_publishers_suspension_check',
+      sql`(
+        ${table.status} = 'active'
+        AND ${table.suspendedReason} IS NULL
+        AND ${table.suspendedBy} IS NULL
+        AND ${table.suspendedAt} IS NULL
+      ) OR (
+        ${table.status} = 'suspended'
+        AND length(BTRIM(${table.suspendedReason})) BETWEEN 1 AND 1024
+        AND ${table.suspendedBy} IS NOT NULL
+        AND ${table.suspendedAt} IS NOT NULL
+      )`,
+    ),
+  ],
+);
+
+export const developerPublisherMembers = kortixSchema.table(
+  'developer_publisher_members',
+  {
+    memberId: uuid('member_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    publisherId: varchar('publisher_id', { length: 63 }).notNull(),
+    userId: uuid('user_id').notNull(),
+    role: developerPublisherRoleEnum('role').notNull(),
+    revision: integer('revision').default(0).notNull(),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedBy: uuid('updated_by'),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.publisherId, table.accountId],
+      foreignColumns: [developerPublishers.publisherId, developerPublishers.accountId],
+      name: 'developer_publisher_members_publisher_account_fk',
+    }).onDelete('cascade'),
+    unique('developer_publisher_members_publisher_user_unique').on(
+      table.publisherId,
+      table.userId,
+    ),
+    unique('developer_publisher_members_member_account_unique').on(
+      table.memberId,
+      table.accountId,
+    ),
+    index('idx_developer_publisher_members_account_publisher_role').on(
+      table.accountId,
+      table.publisherId,
+      table.role,
+    ),
+    check('developer_publisher_members_revision_check', sql`${table.revision} >= 0`),
+  ],
+);
+
+export const developerPublisherAuditEvents = kortixSchema.table(
+  'developer_publisher_audit_events',
+  {
+    eventId: uuid('event_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    organizationId: uuid('organization_id'),
+    publisherId: varchar('publisher_id', { length: 63 }),
+    invitationId: uuid('invitation_id'),
+    action: varchar('action', { length: 64 }).notNull(),
+    actorUserId: uuid('actor_user_id').notNull(),
+    subjectUserId: uuid('subject_user_id'),
+    fromState: jsonb('from_state').$type<Record<string, unknown> | null>(),
+    toState: jsonb('to_state').$type<Record<string, unknown> | null>(),
+    metadata: jsonb('metadata')
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.organizationId, table.accountId],
+      foreignColumns: [developerOrganizations.organizationId, developerOrganizations.accountId],
+      name: 'developer_publisher_audit_events_organization_account_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.publisherId, table.accountId],
+      foreignColumns: [developerPublishers.publisherId, developerPublishers.accountId],
+      name: 'developer_publisher_audit_events_publisher_account_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.invitationId, table.accountId],
+      foreignColumns: [developerInvitations.invitationId, developerInvitations.accountId],
+      name: 'developer_publisher_audit_events_invitation_account_fk',
+    }).onDelete('restrict'),
+    unique('developer_publisher_audit_events_event_account_unique').on(
+      table.eventId,
+      table.accountId,
+    ),
+    index('idx_developer_publisher_audit_events_account_created').on(
+      table.accountId,
+      table.createdAt,
+    ),
+    index('idx_developer_publisher_audit_events_publisher_created').on(
+      table.publisherId,
+      table.createdAt,
+    ),
+    check(
+      'developer_publisher_audit_events_resource_check',
+      sql`${table.organizationId} IS NOT NULL OR ${table.publisherId} IS NOT NULL OR ${table.invitationId} IS NOT NULL`,
+    ),
+    check(
+      'developer_publisher_audit_events_action_check',
+      sql`${table.action} ~ '^[a-z][a-z0-9_]{0,63}$'`,
+    ),
+    check(
+      'developer_publisher_audit_events_json_check',
+      sql`(
+        (${table.fromState} IS NULL OR jsonb_typeof(${table.fromState}) = 'object')
+        AND (${table.toState} IS NULL OR jsonb_typeof(${table.toState}) = 'object')
+        AND jsonb_typeof(${table.metadata}) = 'object'
+        AND COALESCE(pg_column_size(${table.fromState}), 0)
+          + COALESCE(pg_column_size(${table.toState}), 0)
+          + pg_column_size(${table.metadata}) <= 16384
+      )`,
     ),
   ],
 );
@@ -7131,13 +7456,89 @@ export const projectModuleInstallationEvents = kortixSchema.table(
   ],
 );
 
+export const developerOrganizationsRelations = relations(
+  developerOrganizations,
+  ({ one, many }) => ({
+    account: one(accounts, {
+      fields: [developerOrganizations.accountId],
+      references: [accounts.accountId],
+    }),
+    invitations: many(developerInvitations),
+    publishers: many(developerPublishers),
+    auditEvents: many(developerPublisherAuditEvents),
+  }),
+);
+
+export const developerInvitationsRelations = relations(
+  developerInvitations,
+  ({ one, many }) => ({
+    account: one(accounts, {
+      fields: [developerInvitations.accountId],
+      references: [accounts.accountId],
+    }),
+    organization: one(developerOrganizations, {
+      fields: [developerInvitations.organizationId, developerInvitations.accountId],
+      references: [developerOrganizations.organizationId, developerOrganizations.accountId],
+    }),
+    auditEvents: many(developerPublisherAuditEvents),
+  }),
+);
+
 export const developerPublishersRelations = relations(developerPublishers, ({ one, many }) => ({
   account: one(accounts, {
     fields: [developerPublishers.accountId],
     references: [accounts.accountId],
   }),
+  organization: one(developerOrganizations, {
+    fields: [developerPublishers.organizationId, developerPublishers.accountId],
+    references: [developerOrganizations.organizationId, developerOrganizations.accountId],
+  }),
+  members: many(developerPublisherMembers),
+  auditEvents: many(developerPublisherAuditEvents),
   releases: many(developerModuleReleases),
 }));
+
+export const developerPublisherMembersRelations = relations(
+  developerPublisherMembers,
+  ({ one }) => ({
+    account: one(accounts, {
+      fields: [developerPublisherMembers.accountId],
+      references: [accounts.accountId],
+    }),
+    publisher: one(developerPublishers, {
+      fields: [developerPublisherMembers.publisherId, developerPublisherMembers.accountId],
+      references: [developerPublishers.publisherId, developerPublishers.accountId],
+    }),
+  }),
+);
+
+export const developerPublisherAuditEventsRelations = relations(
+  developerPublisherAuditEvents,
+  ({ one }) => ({
+    account: one(accounts, {
+      fields: [developerPublisherAuditEvents.accountId],
+      references: [accounts.accountId],
+    }),
+    organization: one(developerOrganizations, {
+      fields: [
+        developerPublisherAuditEvents.organizationId,
+        developerPublisherAuditEvents.accountId,
+      ],
+      references: [developerOrganizations.organizationId, developerOrganizations.accountId],
+    }),
+    publisher: one(developerPublishers, {
+      fields: [developerPublisherAuditEvents.publisherId, developerPublisherAuditEvents.accountId],
+      references: [developerPublishers.publisherId, developerPublishers.accountId],
+    }),
+    invitation: one(developerInvitations, {
+      fields: [
+        developerPublisherAuditEvents.invitationId,
+        developerPublisherAuditEvents.accountId,
+      ],
+      references: [developerInvitations.invitationId, developerInvitations.accountId],
+    }),
+  }),
+);
 
 export const developerModuleReleasesRelations = relations(
   developerModuleReleases,

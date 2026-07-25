@@ -15,6 +15,7 @@ import type {
   chatInstalls,
   chatThreads,
   creditAccounts,
+  developerInvitations,
   developerModuleArtifactUploads,
   developerModuleArtifacts,
   developerModuleReleaseDistributionEvents,
@@ -24,6 +25,10 @@ import type {
   developerModuleVerificationCapabilities,
   developerModuleVerificationFindings,
   developerModuleVerificationRuns,
+  developerOrganizations,
+  developerPublisherAuditEvents,
+  developerPublisherMembers,
+  developerPublisherRoleEnum,
   developerPublishers,
   gatewayApiKeys,
   gatewayBudgets,
@@ -132,8 +137,17 @@ export type AutomationKillSwitch = typeof automationKillSwitches.$inferSelect;
 export type NewAutomationKillSwitch = typeof automationKillSwitches.$inferInsert;
 
 // OpenOPC Developer Center
+export type DeveloperInvitation = typeof developerInvitations.$inferSelect;
+export type NewDeveloperInvitation = typeof developerInvitations.$inferInsert;
+export type DeveloperOrganization = typeof developerOrganizations.$inferSelect;
+export type NewDeveloperOrganization = typeof developerOrganizations.$inferInsert;
 export type DeveloperPublisher = typeof developerPublishers.$inferSelect;
 export type NewDeveloperPublisher = typeof developerPublishers.$inferInsert;
+export type DeveloperPublisherMember = typeof developerPublisherMembers.$inferSelect;
+export type NewDeveloperPublisherMember = typeof developerPublisherMembers.$inferInsert;
+export type DeveloperPublisherAuditEvent = typeof developerPublisherAuditEvents.$inferSelect;
+export type NewDeveloperPublisherAuditEvent = typeof developerPublisherAuditEvents.$inferInsert;
+export type DeveloperPublisherRole = (typeof developerPublisherRoleEnum.enumValues)[number];
 export type DeveloperModuleArtifactUpload = typeof developerModuleArtifactUploads.$inferSelect;
 export type NewDeveloperModuleArtifactUpload = typeof developerModuleArtifactUploads.$inferInsert;
 export type DeveloperModuleArtifact = typeof developerModuleArtifacts.$inferSelect;

@@ -4,6 +4,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { createEd25519EvidenceSigner } from './attestation';
 import { DeveloperTrustPipeline } from './pipeline';
 import { defineDeveloperTrustPolicy } from './policy';
+import type { DeveloperModuleSandboxInput, DeveloperModuleSandboxResult } from './sandbox/types';
 import type { DeveloperScannerAdapter, ScannerResult } from './scanners/types';
 import { policyInput } from './test-fixtures';
 
@@ -72,9 +73,64 @@ function evidence(
   };
 }
 
+function sandboxEvidence(
+  overrides: Partial<DeveloperModuleSandboxResult> = {},
+): DeveloperModuleSandboxResult {
+  const item = claim();
+  return {
+    runId: item.runId,
+    sandboxInstanceId: 'sandbox-instance-1',
+    artifactDigest: item.artifactDigest,
+    sandboxProfileDigest: item.sandboxProfileDigest,
+    state: 'passed',
+    terminalReason: 'sandbox_verification_completed',
+    stdoutDigest: digest('3'),
+    stderrDigest: digest('4'),
+    evidenceDigest: digest('5'),
+    resourceUsage: { cpuMillis: 10, peakMemoryBytes: 1_024, pids: 2, outputBytes: 16 },
+    tests: [{ id: 'load-entry', outcome: 'passed', summary: 'Entry loaded' }],
+    capabilityAttempts: [],
+    networkAttempts: [],
+    ...overrides,
+  };
+}
+
+function preparedSandboxInput(item: ReturnType<typeof claim>): DeveloperModuleSandboxInput {
+  return {
+    artifactDigest: item.artifactDigest,
+    artifactMount: {
+      source: '/var/lib/openopc/artifacts/aa/fixture',
+      target: '/artifact',
+      digest: item.artifactDigest,
+      readOnly: true,
+    },
+    profile: item.verificationProfile,
+    fixtures: [],
+    verificationCapability: 'verification-capability-fixture',
+    limits: {
+      cpuMillis: 1_000,
+      memoryBytes: 512 * 1024 * 1024,
+      pids: 128,
+      fileDescriptors: 256,
+      maxFileBytes: 128 * 1024 * 1024,
+      maxOutputBytes: 1024 * 1024,
+      wallTimeMs: 60_000,
+    },
+    networkPolicy: {
+      mode: 'none',
+      allowedOrigins: [],
+      allowedMethods: ['GET'],
+      maxRequestBytes: 1_024,
+      maxResponseBytes: 4_096,
+      maxRedirects: 0,
+    },
+  };
+}
+
 function pipelineWith(
   replacements: Partial<Record<DeveloperScannerAdapter['name'], ScannerResult | Error>> = {},
   onScan?: () => void,
+  sandboxOutcome: DeveloperModuleSandboxResult | Error | null = sandboxEvidence(),
 ) {
   const policy = defineDeveloperTrustPolicy(policyInput());
   const { privateKey } = generateKeyPairSync('ed25519');
@@ -88,6 +144,24 @@ function pipelineWith(
       issuer: 'openopc-developer-trust-worker',
     }),
     now: () => new Date('2026-07-25T00:00:00.000Z'),
+    ...(sandboxOutcome === null
+      ? {}
+      : {
+          sandbox: {
+            port: {
+              async run() {
+                if (sandboxOutcome instanceof Error) throw sandboxOutcome;
+                return structuredClone(sandboxOutcome);
+              },
+            },
+            async prepare(item: ReturnType<typeof claim>) {
+              return {
+                sandboxInstanceId: 'sandbox-instance-1',
+                input: preparedSandboxInput(item),
+              };
+            },
+          },
+        }),
   });
 }
 
@@ -187,5 +261,38 @@ describe('developer trust pipeline', () => {
 
     expect(result).toMatchObject({ state: 'inconclusive', terminalReason: 'sbom_unavailable' });
     expect(JSON.stringify(result)).not.toContain(rawSource);
+  });
+
+  test.each([
+    [
+      'failed sandbox',
+      sandboxEvidence({ state: 'failed', terminalReason: 'wall_time_limit' }),
+      'failed',
+      'sandbox_failed',
+    ],
+    [
+      'stale sandbox',
+      sandboxEvidence({ runId: 'stale-run' }),
+      'inconclusive',
+      'stale_sandbox_result',
+    ],
+    [
+      'sandbox crash',
+      new Error('fixture sandbox raw crash'),
+      'inconclusive',
+      'sandbox_unavailable',
+    ],
+  ] as const)(
+    '%s cannot produce passing evidence',
+    async (_label, outcome, state, terminalReason) => {
+      const result = await pipelineWith({}, undefined, outcome).run(claim());
+      expect(result).toMatchObject({ state, terminalReason });
+      expect(JSON.stringify(result)).not.toContain('fixture sandbox raw crash');
+    },
+  );
+
+  test('missing required sandbox is inconclusive', async () => {
+    const result = await pipelineWith({}, undefined, null).run(claim());
+    expect(result).toMatchObject({ state: 'inconclusive', terminalReason: 'sandbox_unavailable' });
   });
 });

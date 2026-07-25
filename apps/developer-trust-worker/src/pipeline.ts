@@ -8,6 +8,11 @@ import {
 } from './attestation';
 import { type DeveloperTrustPolicyV1, assertDeveloperTrustPolicyClaim } from './policy';
 import type {
+  DeveloperModuleSandboxInput,
+  DeveloperModuleSandboxPort,
+  DeveloperModuleSandboxResult,
+} from './sandbox/types';
+import type {
   DeveloperScannerAdapter,
   ScannerFinding,
   ScannerInput,
@@ -56,17 +61,32 @@ export class DeveloperTrustPipeline {
   readonly #scanners: DeveloperScannerAdapter[];
   readonly #signer: EvidenceSigner;
   readonly #now: () => Date;
+  readonly #sandbox?: {
+    port: DeveloperModuleSandboxPort;
+    prepare(item: DeveloperTrustWorkItem): Promise<{
+      sandboxInstanceId: string;
+      input: DeveloperModuleSandboxInput;
+    }>;
+  };
 
   constructor(input: {
     policy: DeveloperTrustPolicyV1;
     scanners: DeveloperScannerAdapter[];
     signer: EvidenceSigner;
     now?: () => Date;
+    sandbox?: {
+      port: DeveloperModuleSandboxPort;
+      prepare(item: DeveloperTrustWorkItem): Promise<{
+        sandboxInstanceId: string;
+        input: DeveloperModuleSandboxInput;
+      }>;
+    };
   }) {
     this.#policy = input.policy;
     this.#scanners = [...input.scanners];
     this.#signer = input.signer;
     this.#now = input.now ?? (() => new Date());
+    this.#sandbox = input.sandbox;
   }
 
   async run(item: DeveloperTrustWorkItem): Promise<DeveloperTrustPipelineResult> {
@@ -141,6 +161,7 @@ export class DeveloperTrustPipeline {
 
     let state: DeveloperTrustPipelineResult['state'];
     let terminalReason: string;
+    let sandboxResult: DeveloperModuleSandboxResult | null = null;
     if (invalidResult || results.some((result) => result.state === 'inconclusive')) {
       state = 'inconclusive';
       terminalReason = invalidResult ? 'scanner_result_invalid' : 'scanner_inconclusive';
@@ -154,6 +175,53 @@ export class DeveloperTrustPipeline {
       state = 'passed';
       terminalReason = 'verification_completed';
     }
+
+    if (state === 'passed' && item.verificationProfile !== 'declarative') {
+      if (!this.#sandbox) {
+        state = 'inconclusive';
+        terminalReason = 'sandbox_unavailable';
+      } else {
+        let prepared: { sandboxInstanceId: string; input: DeveloperModuleSandboxInput } | undefined;
+        try {
+          prepared = await this.#sandbox.prepare(item);
+          if (!validPreparedSandbox(prepared, item)) {
+            state = 'inconclusive';
+            terminalReason = 'sandbox_input_invalid';
+          } else {
+            const candidate = await this.#sandbox.port.run(prepared.input, controller.signal);
+            if (
+              candidate.runId !== item.runId ||
+              candidate.sandboxInstanceId !== prepared.sandboxInstanceId ||
+              candidate.artifactDigest !== item.artifactDigest ||
+              candidate.sandboxProfileDigest !== item.sandboxProfileDigest
+            ) {
+              state = 'inconclusive';
+              terminalReason = 'stale_sandbox_result';
+            } else if (!validSandboxResult(candidate, prepared.input)) {
+              state = 'inconclusive';
+              terminalReason = 'sandbox_result_invalid';
+            } else {
+              sandboxResult = candidate;
+              evidenceDigests.push(candidate.evidenceDigest);
+              evidenceDigests.sort(compareText);
+              if (candidate.state === 'failed') {
+                state = 'failed';
+                terminalReason = 'sandbox_failed';
+              } else if (candidate.state === 'inconclusive' || candidate.state === 'cancelled') {
+                state = 'inconclusive';
+                terminalReason = 'sandbox_inconclusive';
+              } else {
+                state = 'passed';
+                terminalReason = 'verification_completed';
+              }
+            }
+          }
+        } catch {
+          state = 'inconclusive';
+          terminalReason = 'sandbox_unavailable';
+        }
+      }
+    }
     return this.#finalize(item, {
       state,
       terminalReason,
@@ -162,6 +230,7 @@ export class DeveloperTrustPipeline {
       sbom,
       startedAt,
       scannerResults: results,
+      sandboxResult,
     });
   }
 
@@ -175,6 +244,7 @@ export class DeveloperTrustPipeline {
       sbom: ScannerResult['sbom'] | null;
       startedAt: string;
       scannerResults?: ScannerResult[];
+      sandboxResult?: DeveloperModuleSandboxResult | null;
     },
   ): Promise<DeveloperTrustPipelineResult> {
     const sbomDigest = evidenceDigest(
@@ -207,6 +277,8 @@ export class DeveloperTrustPipeline {
       inconclusive_scanners: scannerResults.filter((result) => result.state === 'inconclusive')
         .length,
       sbom_available: Boolean(input.sbom),
+      sandbox_state: input.sandboxResult?.state ?? null,
+      sandbox_resource_usage: input.sandboxResult ? { ...input.sandboxResult.resourceUsage } : null,
     };
     return {
       state: input.state,
@@ -229,6 +301,108 @@ export class DeveloperTrustPipeline {
       },
     };
   }
+}
+
+function validPreparedSandbox(
+  prepared: {
+    sandboxInstanceId: string;
+    input: DeveloperModuleSandboxInput;
+  },
+  item: DeveloperTrustWorkItem,
+): boolean {
+  return (
+    safeBoundedText(prepared.sandboxInstanceId, 128) &&
+    prepared.input.artifactDigest === item.artifactDigest &&
+    prepared.input.artifactMount.digest === item.artifactDigest &&
+    prepared.input.artifactMount.readOnly === true &&
+    prepared.input.artifactMount.target === '/artifact' &&
+    prepared.input.profile === item.verificationProfile &&
+    typeof prepared.input.verificationCapability === 'string' &&
+    prepared.input.verificationCapability.length >= 16 &&
+    prepared.input.verificationCapability.length <= 4096
+  );
+}
+
+function validSandboxResult(
+  result: DeveloperModuleSandboxResult,
+  input: DeveloperModuleSandboxInput,
+): boolean {
+  if (
+    !result ||
+    typeof result !== 'object' ||
+    !['passed', 'failed', 'inconclusive', 'cancelled'].includes(result.state) ||
+    !safeBoundedText(result.terminalReason, 128) ||
+    !DIGEST.test(result.stdoutDigest) ||
+    !DIGEST.test(result.stderrDigest) ||
+    !DIGEST.test(result.evidenceDigest) ||
+    !Array.isArray(result.tests) ||
+    result.tests.length > 100 ||
+    !Array.isArray(result.capabilityAttempts) ||
+    result.capabilityAttempts.length > 1_000 ||
+    !Array.isArray(result.networkAttempts) ||
+    result.networkAttempts.length > 1_000 ||
+    !validResourceUsage(result.resourceUsage, input)
+  ) {
+    return false;
+  }
+  const testsValid = result.tests.every(
+    (test) =>
+      safeBoundedText(test.id, 128) &&
+      safeBoundedText(test.summary, 240) &&
+      !CREDENTIAL_TEXT.test(test.summary) &&
+      (test.outcome === 'passed' || test.outcome === 'failed'),
+  );
+  const capabilitiesValid = result.capabilityAttempts.every(
+    (attempt) =>
+      safeBoundedText(attempt.action, 128) &&
+      (attempt.outcome === 'allowed' || attempt.outcome === 'denied'),
+  );
+  const networkValid = result.networkAttempts.every((attempt) => {
+    if (
+      !safeBoundedText(attempt.origin, 512) ||
+      !safeBoundedText(attempt.method, 16) ||
+      (attempt.outcome !== 'allowed' && attempt.outcome !== 'denied')
+    ) {
+      return false;
+    }
+    try {
+      const origin = new URL(attempt.origin);
+      return origin.origin === attempt.origin && origin.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  });
+  const inconsistentPass =
+    result.state === 'passed' &&
+    (result.tests.some((test) => test.outcome === 'failed') ||
+      result.capabilityAttempts.some((attempt) => attempt.outcome === 'denied') ||
+      result.networkAttempts.some((attempt) => attempt.outcome === 'denied'));
+  return testsValid && capabilitiesValid && networkValid && !inconsistentPass;
+}
+
+function validResourceUsage(
+  usage: DeveloperModuleSandboxResult['resourceUsage'],
+  input: DeveloperModuleSandboxInput,
+): boolean {
+  return (
+    usage !== null &&
+    typeof usage === 'object' &&
+    [usage.cpuMillis, usage.peakMemoryBytes, usage.pids, usage.outputBytes].every(
+      (value) => Number.isSafeInteger(value) && value >= 0,
+    ) &&
+    usage.peakMemoryBytes <= input.limits.memoryBytes &&
+    usage.pids <= input.limits.pids &&
+    usage.outputBytes <= input.limits.maxOutputBytes
+  );
+}
+
+function safeBoundedText(value: unknown, maxLength: number): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= maxLength &&
+    !/[\0\r\n]/.test(value)
+  );
 }
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;

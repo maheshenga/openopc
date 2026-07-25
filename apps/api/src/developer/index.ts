@@ -108,6 +108,16 @@ const releaseService = new DeveloperModuleReleaseService({
   repository: releaseRepository,
   artifacts: artifactRepository,
 });
+export const developerModuleVerificationRepository =
+  createDrizzleDeveloperModuleVerificationRepository(db);
+export const developerModuleVerificationService = new DeveloperModuleVerificationService({
+  repository: developerModuleVerificationRepository,
+  currentPolicy: DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING,
+});
+export const developerModuleTrustGate = new DeveloperModuleTrustGate({
+  repository: developerModuleVerificationRepository,
+  currentPolicyDigest: DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING.policyDigest,
+});
 const distributionRepository: DeveloperModuleDistributionRepository =
   createDrizzleDeveloperModuleDistributionRepository(db);
 const moduleSignerConfig = resolveModuleSignerConfig(config);
@@ -121,6 +131,7 @@ try {
 export const developerModuleDistributionService = new DeveloperModuleDistributionService({
   repository: distributionRepository,
   signer: configuredSigner,
+  trustGate: developerModuleTrustGate,
 });
 export const projectModuleInstallationService = new ProjectModuleInstallationService({
   repository: createProjectInstallationRepository(db),
@@ -137,16 +148,7 @@ const reviewRepository: DeveloperModuleReviewRepository =
 export const developerModuleReviewService = new DeveloperModuleReviewService({
   repository: reviewRepository,
   distributionRepository,
-});
-export const developerModuleVerificationRepository =
-  createDrizzleDeveloperModuleVerificationRepository(db);
-export const developerModuleVerificationService = new DeveloperModuleVerificationService({
-  repository: developerModuleVerificationRepository,
-  currentPolicy: DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING,
-});
-export const developerModuleTrustGate = new DeveloperModuleTrustGate({
-  repository: developerModuleVerificationRepository,
-  currentPolicyDigest: DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING.policyDigest,
+  trustGate: developerModuleTrustGate,
 });
 
 export const developerApp = createDeveloperApp({

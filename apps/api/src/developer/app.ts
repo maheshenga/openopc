@@ -12,7 +12,11 @@ import {
   DeveloperModuleReleaseError,
   type DeveloperModuleReleaseService,
 } from './releases';
-import { DeveloperModuleReviewError, type DeveloperModuleReviewService } from './reviews';
+import {
+  DEVELOPER_MODULE_HUMAN_REQUIREMENTS,
+  DeveloperModuleReviewError,
+  type DeveloperModuleReviewService,
+} from './reviews';
 import {
   DeveloperModuleVerificationError,
   type DeveloperModuleVerificationService,
@@ -130,18 +134,31 @@ const DeveloperModuleReleaseQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
-const DeveloperModuleReviewEvidenceSchema = z
+const DeveloperModuleHumanReviewEvidenceSchema = z
   .object({
-    requirement: z.enum(DEVELOPER_MODULE_REVIEW_REQUIREMENTS),
+    requirement: z.enum(DEVELOPER_MODULE_HUMAN_REQUIREMENTS),
     outcome: z.literal('passed'),
     method: z.literal('manual'),
     summary: z.string(),
     observed_at: z.string(),
-    tool: z.string().optional(),
-    tool_version: z.string().optional(),
-    evidence_digest: z.string().optional(),
   })
   .strict();
+
+const DeveloperModuleAutomaticEvidenceSchema = z
+  .object({
+    requirement: z.enum(['source_scan', 'sandbox_test']),
+    outcome: z.literal('passed'),
+    method: z.literal('system_attestation'),
+    run_id: z.string().uuid(),
+    evidence_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    policy_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  })
+  .strict();
+
+const DeveloperModuleReviewEvidenceSchema = z.union([
+  DeveloperModuleHumanReviewEvidenceSchema,
+  DeveloperModuleAutomaticEvidenceSchema,
+]);
 
 const DeveloperModuleReviewEventSchema = z.object({
   review_event_id: z.string().uuid(),

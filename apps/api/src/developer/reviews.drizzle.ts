@@ -15,6 +15,9 @@ import {
 } from './reviews';
 
 type DeveloperModuleReviewEventRow = typeof developerModuleReleaseReviewEvents.$inferSelect;
+type DeveloperModuleReviewEvidenceRow = NonNullable<
+  typeof developerModuleReleaseReviewEvents.$inferInsert.evidence
+>[number];
 
 type ReviewCursor = {
   updatedAt: string;
@@ -139,7 +142,9 @@ export function createDrizzleDeveloperModuleReviewRepository(
             : new DeveloperModuleReviewError('DEVELOPER_RELEASE_NOT_FOUND', 404);
         }
 
-        const clonedEvidence = structuredClone(command.evidence) as DeveloperModuleReviewEvidence[];
+        const clonedEvidence: DeveloperModuleReviewEvidenceRow[] = structuredClone([
+          ...command.evidence,
+        ]);
         const [event] = await tx
           .insert(developerModuleReleaseReviewEvents)
           .values({
@@ -152,7 +157,7 @@ export function createDrizzleDeveloperModuleReviewRepository(
             actorUserId: command.actorUserId,
             actorKind: command.actorKind,
             reason: command.reason,
-            evidence: clonedEvidence as unknown as Record<string, unknown>[],
+            evidence: clonedEvidence,
           })
           .returning();
         if (!event) throw new Error('Developer module review event insert returned no row');

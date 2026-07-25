@@ -121,6 +121,28 @@ async function setup(
     repository: distributionRepository,
     signer: signingPort,
     verifiers: [signingPort],
+    trustGate: {
+      evaluate: async (candidate) => {
+        if (
+          !candidate.artifact_digest ||
+          !candidate.sbom_digest ||
+          !candidate.trust_attestation_digest ||
+          !candidate.verification_policy_digest
+        ) {
+          throw new Error('Trusted installation fixture requires complete digests');
+        }
+        return {
+          ok: true as const,
+          evidence: {
+            run_id: '70000000-0000-4000-a000-000000000007',
+            artifact_digest: candidate.artifact_digest,
+            sbom_digest: candidate.sbom_digest,
+            attestation_digest: candidate.trust_attestation_digest,
+            policy_digest: candidate.verification_policy_digest,
+          },
+        };
+      },
+    },
     now: () => NOW,
   });
   for (const release of releases) {

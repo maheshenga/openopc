@@ -7,7 +7,7 @@ import {
 } from '../developer/distribution';
 import type { DeveloperModuleRelease } from '../developer/releases';
 import {
-  type DeveloperModuleReviewEvidence,
+  type DeveloperModuleHumanReviewEvidence,
   DeveloperModuleReviewService,
   createMemoryDeveloperModuleReviewRepository,
 } from '../developer/reviews';
@@ -26,6 +26,13 @@ const ADMIN_ID = '20000000-0000-4000-a000-000000000004';
 const MEMBER_ADMIN_ID = '20000000-0000-4000-a000-000000000005';
 const RELEASE_ID = '30000000-0000-4000-a000-000000000003';
 const NOW = new Date('2026-07-24T15:00:00.000Z');
+const TRUST_EVIDENCE = {
+  run_id: '60000000-0000-4000-a000-000000000006',
+  artifact_digest: `sha256:${'c'.repeat(64)}`,
+  sbom_digest: `sha256:${'d'.repeat(64)}`,
+  attestation_digest: `sha256:${'e'.repeat(64)}`,
+  policy_digest: `sha256:${'f'.repeat(64)}`,
+} as const;
 
 function release(
   status: DeveloperModuleRelease['status'] = 'validated',
@@ -70,14 +77,19 @@ function release(
   };
 }
 
-function completeEvidence(): DeveloperModuleReviewEvidence[] {
-  return release().review_requirements.map((requirement, index) => ({
-    requirement,
-    outcome: 'passed',
-    method: 'manual',
-    summary: `Manual check ${index + 1} passed`,
-    observed_at: '2026-07-24T14:00:00.000Z',
-  }));
+function completeEvidence(): DeveloperModuleHumanReviewEvidence[] {
+  return release()
+    .review_requirements.filter(
+      (requirement): requirement is DeveloperModuleHumanReviewEvidence['requirement'] =>
+        requirement !== 'source_scan' && requirement !== 'sandbox_test',
+    )
+    .map((requirement, index) => ({
+      requirement,
+      outcome: 'passed',
+      method: 'manual',
+      summary: `Manual check ${index + 1} passed`,
+      observed_at: '2026-07-24T14:00:00.000Z',
+    }));
 }
 
 async function pendingService(input?: { members?: string[] }) {
@@ -93,7 +105,11 @@ async function pendingService(input?: { members?: string[] }) {
       return () => `40000000-0000-4000-a000-${String(++value).padStart(12, '0')}`;
     })(),
   });
-  const service = new DeveloperModuleReviewService({ repository, now: () => NOW });
+  const service = new DeveloperModuleReviewService({
+    repository,
+    trustGate: { evaluate: async () => ({ ok: true, evidence: TRUST_EVIDENCE }) },
+    now: () => NOW,
+  });
   await service.requestReview({
     accountId: ACCOUNT_ID,
     releaseId: RELEASE_ID,
@@ -240,7 +256,7 @@ describe('admin developer module review API', () => {
     expect(JSON.stringify(audits)).not.toMatch(/retention|manifest|evidence/i);
   });
 
-  test('approves only with complete manual evidence and denies publisher-account members', async () => {
+  test('approves only with complete human evidence and denies publisher-account members', async () => {
     const service = await pendingService({ members: [MEMBER_ADMIN_ID] });
     const app = appHarness({ service });
     const body = {
@@ -278,7 +294,21 @@ describe('admin developer module review API', () => {
     expect(approval.status).toBe(200);
     expect(await approval.json()).toEqual({
       release: expect.objectContaining({ status: 'approved', review_revision: 2 }),
-      event: expect.objectContaining({ action: 'approve', evidence: completeEvidence() }),
+      event: expect.objectContaining({
+        action: 'approve',
+        evidence: [
+          completeEvidence()[0],
+          {
+            requirement: 'source_scan',
+            outcome: 'passed',
+            method: 'system_attestation',
+            run_id: TRUST_EVIDENCE.run_id,
+            evidence_digest: TRUST_EVIDENCE.attestation_digest,
+            policy_digest: TRUST_EVIDENCE.policy_digest,
+          },
+          completeEvidence()[1],
+        ],
+      }),
     });
   });
 
@@ -352,6 +382,35 @@ describe('admin developer module review API', () => {
     expect((await service.adminGet({ releaseId: RELEASE_ID })).release).toEqual(
       expect.objectContaining({ status: 'changes_requested', review_revision: 2 }),
     );
+  });
+
+  test('rejects request JSON that manually claims automatic trust evidence', async () => {
+    const app = appHarness({ service: await pendingService() });
+    const response = await app.request(
+      `/developer/modules/releases/${RELEASE_ID}/review-decisions`,
+      {
+        method: 'POST',
+        headers: { ...adminHeaders, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          decision: 'approve',
+          expected_status: 'review_pending',
+          expected_revision: 1,
+          evidence: [
+            ...completeEvidence(),
+            {
+              requirement: 'source_scan',
+              outcome: 'passed',
+              method: 'manual',
+              summary: 'Manually claimed automatic result.',
+              observed_at: '2026-07-24T14:00:00.000Z',
+            },
+          ],
+        }),
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual(expect.objectContaining({ status: 400 }));
   });
 
   test('reuses review-decisions to revoke signed releases through the distribution service', async () => {

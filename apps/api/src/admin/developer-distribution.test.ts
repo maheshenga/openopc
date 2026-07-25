@@ -51,9 +51,9 @@ function release(
     manifest_digest: canonicalDeveloperModuleManifestDigest(manifest),
     artifact_id: '50000000-0000-4000-a000-000000000005',
     artifact_digest: `sha256:${'c'.repeat(64)}`,
-    sbom_digest: null,
-    trust_attestation_digest: null,
-    verification_policy_digest: null,
+    sbom_digest: `sha256:${'d'.repeat(64)}`,
+    trust_attestation_digest: `sha256:${'e'.repeat(64)}`,
+    verification_policy_digest: `sha256:${'f'.repeat(64)}`,
     review_requirements: ['manifest_review', 'source_scan', 'human_review'],
     status,
     review_revision: reviewRevision,
@@ -100,6 +100,28 @@ function service(input?: {
     }),
     signer: input?.signerAvailable === false ? null : signingPort,
     verifiers: [signingPort],
+    trustGate: {
+      evaluate: async (candidate) => {
+        if (
+          !candidate.artifact_digest ||
+          !candidate.sbom_digest ||
+          !candidate.trust_attestation_digest ||
+          !candidate.verification_policy_digest
+        ) {
+          throw new Error('Trusted distribution fixture requires complete digests');
+        }
+        return {
+          ok: true as const,
+          evidence: {
+            run_id: '60000000-0000-4000-a000-000000000006',
+            artifact_digest: candidate.artifact_digest,
+            sbom_digest: candidate.sbom_digest,
+            attestation_digest: candidate.trust_attestation_digest,
+            policy_digest: candidate.verification_policy_digest,
+          },
+        };
+      },
+    },
     now: () => NOW,
   });
 }

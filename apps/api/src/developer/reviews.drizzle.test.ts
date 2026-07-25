@@ -44,15 +44,30 @@ const releaseRow = {
   updatedAt: CREATED_AT,
 };
 
-const evidence: DeveloperModuleReviewEvidence[] = releaseRow.reviewRequirements.map(
-  (requirement, index) => ({
-    requirement: requirement as DeveloperModuleReviewEvidence['requirement'],
+const evidence = [
+  {
+    requirement: 'manifest_review',
     outcome: 'passed',
     method: 'manual',
-    summary: `Manual check ${index + 1}`,
+    summary: 'Manifest review passed',
     observed_at: '2026-07-24T13:00:00.000Z',
-  }),
-);
+  },
+  {
+    requirement: 'source_scan',
+    outcome: 'passed',
+    method: 'system_attestation',
+    run_id: '60000000-0000-4000-a000-000000000006',
+    evidence_digest: `sha256:${'e'.repeat(64)}`,
+    policy_digest: `sha256:${'f'.repeat(64)}`,
+  },
+  {
+    requirement: 'human_review',
+    outcome: 'passed',
+    method: 'manual',
+    summary: 'Human review passed',
+    observed_at: '2026-07-24T13:00:00.000Z',
+  },
+] satisfies DeveloperModuleReviewEvidence[];
 
 const eventRow = {
   reviewEventId: EVENT_ID,

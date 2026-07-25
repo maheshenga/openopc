@@ -10,6 +10,7 @@ import {
   verifyDeveloperModuleReleaseTrustSignature,
 } from './module-signing';
 import type { DeveloperModuleRelease, DeveloperModuleReleaseStatus } from './releases';
+import type { DeveloperModuleTrustGate } from './trust-gate';
 
 export type DeveloperModuleDistributionAction = 'sign' | 'publish' | 'revoke';
 
@@ -82,6 +83,7 @@ export type DeveloperModuleDistributionErrorCode =
   | 'DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED'
   | 'DEVELOPER_DISTRIBUTION_CONFLICT'
   | 'DEVELOPER_DISTRIBUTION_REASON_INVALID'
+  | 'DEVELOPER_TRUST_GATE_UNMET'
   | 'DEVELOPER_RELEASE_NOT_FOUND';
 
 export class DeveloperModuleDistributionError extends Error {
@@ -169,6 +171,7 @@ export class DeveloperModuleDistributionService {
       repository: DeveloperModuleDistributionRepository;
       signer?: ModuleSigningPort | null;
       verifiers?: readonly ModuleSigningPort[];
+      trustGate?: Pick<DeveloperModuleTrustGate, 'evaluate'>;
       now?: () => Date;
     },
   ) {
@@ -235,6 +238,23 @@ export class DeveloperModuleDistributionService {
       fail('DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED', 403);
     }
     if (!this.signer) fail('DEVELOPER_MODULE_SIGNER_UNAVAILABLE', 503);
+    let trust: Awaited<ReturnType<DeveloperModuleTrustGate['evaluate']>>;
+    try {
+      if (!this.input.trustGate) fail('DEVELOPER_TRUST_GATE_UNMET', 409);
+      trust = await this.input.trustGate.evaluate(release);
+    } catch (error) {
+      if (error instanceof DeveloperModuleDistributionError) throw error;
+      fail('DEVELOPER_TRUST_GATE_UNMET', 409);
+    }
+    if (
+      !trust.ok ||
+      trust.evidence.artifact_digest !== release.artifact_digest ||
+      trust.evidence.sbom_digest !== release.sbom_digest ||
+      trust.evidence.attestation_digest !== release.trust_attestation_digest ||
+      trust.evidence.policy_digest !== release.verification_policy_digest
+    ) {
+      fail('DEVELOPER_TRUST_GATE_UNMET', 409);
+    }
 
     const payload = signaturePayload(release);
     let signature: DeveloperModuleSignature;

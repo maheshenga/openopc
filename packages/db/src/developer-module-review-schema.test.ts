@@ -107,12 +107,12 @@ describe('developer module review durable schema', () => {
         'developer_module_release_review_events_transition_check',
       ),
     ).toContain('review_pending');
-    expect(
-      checkConstraintSql(
-        developerModuleReleaseReviewEvents,
-        'developer_module_release_review_events_evidence_check',
-      ),
-    ).toContain('pg_column_size');
+    const evidenceCheck = checkConstraintSql(
+      developerModuleReleaseReviewEvents,
+      'developer_module_release_review_events_evidence_check',
+    );
+    expect(evidenceCheck).toContain('pg_column_size');
+    expect(evidenceCheck).toContain('developer_module_review_evidence_valid');
   });
 });
 
@@ -138,5 +138,26 @@ describe('developer module review migration', () => {
     );
     expect(migration).toMatch(/GRANT UPDATE \(status, review_revision, updated_at\)/i);
     expect(migration).not.toMatch(/DROP\s+(?:TABLE|COLUMN)/i);
+  });
+
+  test('trust migration makes automatic review evidence server-only and unique', () => {
+    const migration = readFileSync(
+      join(import.meta.dir, '..', 'migrations', '20260725120000000_developer_module_trust.sql'),
+      'utf8',
+    );
+
+    expect(migration).toContain('developer_module_review_evidence_valid');
+    expect(migration).toContain("'source_scan'");
+    expect(migration).toContain("'sandbox_test'");
+    expect(migration).toContain("'system_attestation'");
+    expect(migration).toContain("COUNT(DISTINCT item ->> 'requirement')");
+    expect(migration).toContain("item ->> 'requirement' IS NULL");
+    expect(migration).toContain("item ->> 'run_id' IS NULL");
+    expect(migration).toContain("item ->> 'evidence_digest' IS NULL");
+    expect(migration).toContain("item ->> 'policy_digest' IS NULL");
+    expect(migration).toContain("item ->> 'summary' IS NULL");
+    expect(migration).toContain(
+      'DROP CONSTRAINT IF EXISTS developer_module_release_review_events_evidence_check',
+    );
   });
 });

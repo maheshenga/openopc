@@ -237,6 +237,83 @@ BEGIN
 END
 $developer_trust$;
 
+CREATE OR REPLACE FUNCTION kortix.developer_module_review_evidence_valid(
+  input_evidence jsonb
+)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+SET search_path = pg_catalog
+AS $$
+  SELECT
+    jsonb_typeof(input_evidence) = 'array'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(input_evidence) AS entries(item)
+      WHERE jsonb_typeof(item) <> 'object'
+        OR item ->> 'outcome' IS DISTINCT FROM 'passed'
+        OR item ->> 'requirement' IS NULL
+        OR item ->> 'requirement' NOT IN (
+          'source_scan',
+          'sandbox_test',
+          'manifest_review',
+          'permission_review',
+          'desktop_security_review',
+          'human_review'
+        )
+        OR (
+          item ->> 'requirement' IN ('source_scan', 'sandbox_test')
+          AND (
+            item ->> 'method' IS DISTINCT FROM 'system_attestation'
+            OR item ->> 'run_id' IS NULL
+            OR item ->> 'run_id' !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+            OR item ->> 'evidence_digest' IS NULL
+            OR item ->> 'evidence_digest' !~ '^sha256:[0-9a-f]{64}$'
+            OR item ->> 'policy_digest' IS NULL
+            OR item ->> 'policy_digest' !~ '^sha256:[0-9a-f]{64}$'
+            OR item ?| ARRAY['summary', 'observed_at', 'tool', 'tool_version']
+          )
+        )
+        OR (
+          item ->> 'requirement' IN (
+            'manifest_review',
+            'permission_review',
+            'desktop_security_review',
+            'human_review'
+          )
+          AND (
+            item ->> 'method' IS DISTINCT FROM 'manual'
+            OR item ->> 'summary' IS NULL
+            OR length(BTRIM(item ->> 'summary')) NOT BETWEEN 1 AND 1000
+            OR octet_length(item ->> 'summary') > 2048
+            OR item ->> 'observed_at' IS NULL
+            OR item ?| ARRAY['run_id', 'evidence_digest', 'policy_digest']
+          )
+        )
+    )
+    AND (
+      SELECT COUNT(*) = COUNT(DISTINCT item ->> 'requirement')
+      FROM jsonb_array_elements(input_evidence) AS entries(item)
+    );
+$$;
+
+ALTER TABLE kortix.developer_module_release_review_events
+  DROP CONSTRAINT IF EXISTS developer_module_release_review_events_evidence_check;
+ALTER TABLE kortix.developer_module_release_review_events
+  ADD CONSTRAINT developer_module_release_review_events_evidence_check
+  CHECK (
+    jsonb_typeof(evidence) = 'array'
+    AND jsonb_array_length(evidence) <= 16
+    AND pg_column_size(evidence) <= 32768
+    AND kortix.developer_module_review_evidence_valid(evidence)
+    AND (
+      (action = 'approve' AND jsonb_array_length(evidence) BETWEEN 2 AND 16)
+      OR (action <> 'approve' AND jsonb_array_length(evidence) = 0)
+    )
+  );
+
 CREATE TABLE IF NOT EXISTS kortix.developer_module_verification_runs (
   run_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   release_id uuid NOT NULL,

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import type { DeveloperModuleRelease, DeveloperModuleReviewRequirement } from './releases';
 import {
+  type DeveloperModuleHumanReviewEvidence,
   DeveloperModuleReviewError,
   type DeveloperModuleReviewEvidence,
   DeveloperModuleReviewService,
@@ -17,6 +18,39 @@ const MEMBER_REVIEWER_ID = '20000000-0000-4000-a000-000000000005';
 const RELEASE_ID = '30000000-0000-4000-a000-000000000003';
 const NOW = new Date('2026-07-24T15:00:00.000Z');
 const CREATED_AT = '2026-07-24T12:00:00.000Z';
+const TRUST_EVIDENCE = {
+  run_id: '60000000-0000-4000-a000-000000000006',
+  artifact_digest: `sha256:${'c'.repeat(64)}`,
+  sbom_digest: `sha256:${'d'.repeat(64)}`,
+  attestation_digest: `sha256:${'e'.repeat(64)}`,
+  policy_digest: `sha256:${'f'.repeat(64)}`,
+} as const;
+
+type TrustState =
+  | 'passed'
+  | 'queued'
+  | 'running'
+  | 'failed'
+  | 'inconclusive'
+  | 'cancelled'
+  | 'stale-policy';
+
+function trustGate(state: TrustState = 'passed') {
+  return {
+    async evaluate() {
+      if (state === 'passed') return { ok: true as const, evidence: TRUST_EVIDENCE };
+      return {
+        ok: false as const,
+        code:
+          state === 'queued' || state === 'running'
+            ? ('DEVELOPER_TRUST_PENDING' as const)
+            : state === 'stale-policy'
+              ? ('DEVELOPER_TRUST_POLICY_STALE' as const)
+              : ('DEVELOPER_TRUST_NOT_PASSED' as const),
+      };
+    },
+  };
+}
 
 function release(
   status: DeveloperModuleRelease['status'] = 'validated',
@@ -66,7 +100,7 @@ function release(
   };
 }
 
-function harness(initialRelease = release()) {
+function harness(initialRelease = release(), trustState: TrustState = 'passed') {
   let ordinal = 0;
   const repository = createMemoryDeveloperModuleReviewRepository({
     releases: [initialRelease],
@@ -80,23 +114,29 @@ function harness(initialRelease = release()) {
   });
   return {
     repository,
-    service: new DeveloperModuleReviewService({ repository, now: () => NOW }),
+    service: new DeveloperModuleReviewService({
+      repository,
+      trustGate: trustGate(trustState),
+      now: () => NOW,
+    }),
   };
 }
 
 function completeEvidence(
   requirements = release().review_requirements,
-): DeveloperModuleReviewEvidence[] {
-  return requirements.map((requirement, index) => ({
-    requirement,
-    outcome: 'passed' as const,
-    method: 'manual' as const,
-    summary: `Manual check ${index + 1} passed`,
-    observed_at: '2026-07-24T14:00:00.000Z',
-    tool: 'openopc-review-console',
-    tool_version: '1.0.0',
-    evidence_digest: `sha256:${String(index + 1).repeat(64)}`,
-  }));
+): DeveloperModuleHumanReviewEvidence[] {
+  return requirements
+    .filter(
+      (requirement): requirement is DeveloperModuleHumanReviewEvidence['requirement'] =>
+        requirement !== 'source_scan' && requirement !== 'sandbox_test',
+    )
+    .map((requirement, index) => ({
+      requirement,
+      outcome: 'passed' as const,
+      method: 'manual' as const,
+      summary: `Manual check ${index + 1} passed`,
+      observed_at: '2026-07-24T14:00:00.000Z',
+    }));
 }
 
 function firstCompleteEvidence(): DeveloperModuleReviewEvidence {
@@ -241,7 +281,7 @@ describe('developer module review service', () => {
     });
   });
 
-  test('approves only with a complete manual evidence snapshot', async () => {
+  test('merges complete human evidence with current system attestation evidence', async () => {
     const { service } = await pendingHarness();
     const evidence = completeEvidence();
 
@@ -261,19 +301,75 @@ describe('developer module review service', () => {
       from_status: 'review_pending',
       to_status: 'approved',
       actor_kind: 'platform_admin',
-      evidence,
+      evidence: [
+        evidence[0],
+        {
+          requirement: 'source_scan',
+          outcome: 'passed',
+          method: 'system_attestation',
+          run_id: TRUST_EVIDENCE.run_id,
+          evidence_digest: TRUST_EVIDENCE.attestation_digest,
+          policy_digest: TRUST_EVIDENCE.policy_digest,
+        },
+        evidence[1],
+      ],
     });
   });
 
+  test.each(['source_scan', 'sandbox_test'] as const)(
+    'rejects manually forged %s automatic evidence',
+    async (requirement) => {
+      const { service } = harness(release('review_pending', 1, [requirement]));
+      await expect(
+        service.decide({
+          releaseId: RELEASE_ID,
+          actorUserId: REVIEWER_ID,
+          decision: 'approve',
+          expectedStatus: 'review_pending',
+          expectedRevision: 1,
+          evidence: [
+            {
+              requirement,
+              outcome: 'passed',
+              method: 'manual',
+              summary: 'Manually claimed automatic result.',
+              observed_at: '2026-07-24T14:00:00.000Z',
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        code: 'DEVELOPER_REVIEW_AUTOMATIC_EVIDENCE_FORBIDDEN',
+        status: 400,
+      });
+    },
+  );
+
+  test.each(['queued', 'running', 'failed', 'inconclusive', 'cancelled', 'stale-policy'] as const)(
+    '%s verification blocks approval',
+    async (state) => {
+      const { service } = harness(release('review_pending', 1), state);
+      await expect(
+        service.decide({
+          releaseId: RELEASE_ID,
+          actorUserId: REVIEWER_ID,
+          decision: 'approve',
+          expectedStatus: 'review_pending',
+          expectedRevision: 1,
+          evidence: completeEvidence(),
+        }),
+      ).rejects.toMatchObject({ code: 'DEVELOPER_TRUST_GATE_UNMET', status: 409 });
+    },
+  );
+
   test('rejects incomplete, duplicate, undeclared, or automated approval evidence', async () => {
     const invalidEvidence = [
-      completeEvidence().slice(0, 2),
+      completeEvidence().slice(0, 1),
       [...completeEvidence(), firstCompleteEvidence()],
       [
         ...completeEvidence(),
         {
           ...firstCompleteEvidence(),
-          requirement: 'sandbox_test',
+          requirement: 'permission_review',
         },
       ],
       completeEvidence().map((entry) => ({ ...entry, method: 'automated' })),
@@ -299,7 +395,7 @@ describe('developer module review service', () => {
     }
   });
 
-  test('validates strict evidence fields, timestamps, identifiers, digests, and safe text', async () => {
+  test('validates strict human evidence fields, timestamps, and safe text', async () => {
     const mutations: Array<(evidence: ReturnType<typeof completeEvidence>) => unknown> = [
       (evidence) => evidence.map((entry, index) => (index ? entry : { ...entry, extra: 'nope' })),
       (evidence) =>
@@ -309,12 +405,6 @@ describe('developer module review service', () => {
       (evidence) =>
         evidence.map((entry, index) =>
           index ? entry : { ...entry, observed_at: '2026-07-24T11:00:00.000Z' },
-        ),
-      (evidence) =>
-        evidence.map((entry, index) => (index ? entry : { ...entry, tool: 'bad tool name' })),
-      (evidence) =>
-        evidence.map((entry, index) =>
-          index ? entry : { ...entry, evidence_digest: 'sha256:not-a-digest' },
         ),
       (evidence) =>
         evidence.map((entry, index) =>

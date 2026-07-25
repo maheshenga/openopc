@@ -9,6 +9,7 @@ import type {
   DeveloperModuleReleaseStatus,
   DeveloperModuleReviewRequirement,
 } from './releases';
+import type { DeveloperModuleTrustGate } from './trust-gate';
 
 export const DEVELOPER_MODULE_REVIEW_ACTIONS = [
   'submit',
@@ -24,16 +25,37 @@ export type DeveloperModuleReviewActorKind = (typeof DEVELOPER_MODULE_REVIEW_ACT
 
 export type DeveloperModuleReviewDecision = 'request_changes' | 'approve' | 'revoke';
 
-export interface DeveloperModuleReviewEvidence {
-  requirement: DeveloperModuleReviewRequirement;
+export const DEVELOPER_MODULE_AUTOMATIC_REQUIREMENTS = ['source_scan', 'sandbox_test'] as const;
+export type DeveloperModuleAutomaticRequirement =
+  (typeof DEVELOPER_MODULE_AUTOMATIC_REQUIREMENTS)[number];
+export const DEVELOPER_MODULE_HUMAN_REQUIREMENTS = [
+  'manifest_review',
+  'permission_review',
+  'desktop_security_review',
+  'human_review',
+] as const;
+export type DeveloperModuleHumanRequirement = (typeof DEVELOPER_MODULE_HUMAN_REQUIREMENTS)[number];
+
+export interface DeveloperModuleHumanReviewEvidence {
+  requirement: DeveloperModuleHumanRequirement;
   outcome: 'passed';
   method: 'manual';
   summary: string;
   observed_at: string;
-  tool?: string;
-  tool_version?: string;
-  evidence_digest?: `sha256:${string}`;
 }
+
+export interface DeveloperModuleAutomaticEvidence {
+  requirement: DeveloperModuleAutomaticRequirement;
+  outcome: 'passed';
+  method: 'system_attestation';
+  run_id: string;
+  evidence_digest: `sha256:${string}`;
+  policy_digest: `sha256:${string}`;
+}
+
+export type DeveloperModuleReviewEvidence =
+  | DeveloperModuleHumanReviewEvidence
+  | DeveloperModuleAutomaticEvidence;
 
 export interface DeveloperModuleReviewEvent {
   review_event_id: string;
@@ -76,7 +98,9 @@ export type DeveloperModuleReviewErrorCode =
   | 'DEVELOPER_REVIEW_REASON_REQUIRED'
   | 'DEVELOPER_REVIEW_REASON_INVALID'
   | 'DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE'
+  | 'DEVELOPER_REVIEW_AUTOMATIC_EVIDENCE_FORBIDDEN'
   | 'DEVELOPER_REVIEW_SELF_APPROVAL_DENIED'
+  | 'DEVELOPER_TRUST_GATE_UNMET'
   | 'DEVELOPER_REVIEW_INPUT_INVALID';
 
 export class DeveloperModuleReviewError extends Error {
@@ -122,25 +146,13 @@ const REVIEW_REASON_MAX_BYTES = 8_192;
 const EVIDENCE_SUMMARY_MAX_CHARS = 1_000;
 const EVIDENCE_SUMMARY_MAX_BYTES = 2_048;
 const EVIDENCE_MAX_BYTES = 32_768;
-const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const TOOL_VERSION = /^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$/;
-const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const SECRET_PATTERNS = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
   /\b(?:password|passwd|secret|token|api[_ -]?key)\s*[:=]\s*\S{4,}/i,
   /\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b/,
   /\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{8,}\b/i,
 ];
-const EVIDENCE_KEYS = new Set([
-  'requirement',
-  'outcome',
-  'method',
-  'summary',
-  'observed_at',
-  'tool',
-  'tool_version',
-  'evidence_digest',
-]);
+const HUMAN_EVIDENCE_KEYS = new Set(['requirement', 'outcome', 'method', 'summary', 'observed_at']);
 
 function cloneRelease(release: DeveloperModuleRelease): DeveloperModuleRelease {
   return structuredClone(release);
@@ -227,27 +239,62 @@ function normalizeSummary(value: unknown): string {
   return summary;
 }
 
-function normalizeEvidence(
+function isAutomaticRequirement(
+  requirement: DeveloperModuleReviewRequirement,
+): requirement is DeveloperModuleAutomaticRequirement {
+  return DEVELOPER_MODULE_AUTOMATIC_REQUIREMENTS.includes(
+    requirement as DeveloperModuleAutomaticRequirement,
+  );
+}
+
+function isHumanRequirement(
+  requirement: DeveloperModuleReviewRequirement,
+): requirement is DeveloperModuleHumanRequirement {
+  return DEVELOPER_MODULE_HUMAN_REQUIREMENTS.includes(
+    requirement as DeveloperModuleHumanRequirement,
+  );
+}
+
+function normalizeHumanEvidence(
   value: unknown,
   release: DeveloperModuleRelease,
   now: Date,
-): DeveloperModuleReviewEvidence[] {
-  if (!Array.isArray(value) || value.length !== release.review_requirements.length) {
+): DeveloperModuleHumanReviewEvidence[] {
+  if (!Array.isArray(value)) {
     fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
   }
-  const allowedRequirements = new Set(release.review_requirements);
-  const byRequirement = new Map<DeveloperModuleReviewRequirement, DeveloperModuleReviewEvidence>();
+  for (const raw of value) {
+    if (
+      isPlainObject(raw) &&
+      (raw.method === 'system_attestation' ||
+        (typeof raw.requirement === 'string' &&
+          DEVELOPER_MODULE_AUTOMATIC_REQUIREMENTS.includes(
+            raw.requirement as DeveloperModuleAutomaticRequirement,
+          )))
+    ) {
+      fail('DEVELOPER_REVIEW_AUTOMATIC_EVIDENCE_FORBIDDEN', 400);
+    }
+  }
+  const humanRequirements = release.review_requirements.filter(isHumanRequirement);
+  if (value.length !== humanRequirements.length) {
+    fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
+  }
+  const allowedRequirements = new Set(humanRequirements);
+  const byRequirement = new Map<
+    DeveloperModuleHumanRequirement,
+    DeveloperModuleHumanReviewEvidence
+  >();
   const releaseCreatedAt = Date.parse(release.created_at);
 
   for (const raw of value) {
-    if (!isPlainObject(raw) || Object.keys(raw).some((key) => !EVIDENCE_KEYS.has(key))) {
+    if (!isPlainObject(raw) || Object.keys(raw).some((key) => !HUMAN_EVIDENCE_KEYS.has(key))) {
       fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
     }
     const requirement = raw.requirement;
     if (
       typeof requirement !== 'string' ||
-      !allowedRequirements.has(requirement as DeveloperModuleReviewRequirement) ||
-      byRequirement.has(requirement as DeveloperModuleReviewRequirement) ||
+      !allowedRequirements.has(requirement as DeveloperModuleHumanRequirement) ||
+      byRequirement.has(requirement as DeveloperModuleHumanRequirement) ||
       raw.outcome !== 'passed' ||
       raw.method !== 'manual'
     ) {
@@ -265,43 +312,20 @@ function normalizeEvidence(
     ) {
       fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
     }
-    if (raw.tool !== undefined && (typeof raw.tool !== 'string' || !IDENTIFIER.test(raw.tool))) {
-      fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
-    }
-    if (
-      raw.tool_version !== undefined &&
-      (typeof raw.tool_version !== 'string' ||
-        !TOOL_VERSION.test(raw.tool_version) ||
-        raw.tool === undefined)
-    ) {
-      fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
-    }
-    if (
-      raw.evidence_digest !== undefined &&
-      (typeof raw.evidence_digest !== 'string' || !SHA256.test(raw.evidence_digest))
-    ) {
-      fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
-    }
-
-    const evidence: DeveloperModuleReviewEvidence = {
-      requirement: requirement as DeveloperModuleReviewRequirement,
+    const evidence: DeveloperModuleHumanReviewEvidence = {
+      requirement: requirement as DeveloperModuleHumanRequirement,
       outcome: 'passed',
       method: 'manual',
       summary: normalizeSummary(raw.summary),
       observed_at: raw.observed_at,
-      ...(raw.tool !== undefined ? { tool: raw.tool as string } : {}),
-      ...(raw.tool_version !== undefined ? { tool_version: raw.tool_version as string } : {}),
-      ...(raw.evidence_digest !== undefined
-        ? { evidence_digest: raw.evidence_digest as `sha256:${string}` }
-        : {}),
     };
     byRequirement.set(evidence.requirement, evidence);
   }
 
-  if (byRequirement.size !== release.review_requirements.length) {
+  if (byRequirement.size !== humanRequirements.length) {
     fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
   }
-  const normalized = release.review_requirements.map((requirement) => {
+  const normalized = humanRequirements.map((requirement) => {
     const evidence = byRequirement.get(requirement);
     if (!evidence) fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
     return evidence;
@@ -310,6 +334,47 @@ function normalizeEvidence(
     fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
   }
   return structuredClone(normalized);
+}
+
+async function automaticEvidence(
+  release: DeveloperModuleRelease,
+  trustGate: Pick<DeveloperModuleTrustGate, 'evaluate'> | undefined,
+): Promise<DeveloperModuleAutomaticEvidence[]> {
+  if (!trustGate) fail('DEVELOPER_TRUST_GATE_UNMET', 409);
+  let result: Awaited<ReturnType<DeveloperModuleTrustGate['evaluate']>>;
+  try {
+    result = await trustGate.evaluate(release);
+  } catch {
+    fail('DEVELOPER_TRUST_GATE_UNMET', 409);
+  }
+  if (!result.ok) fail('DEVELOPER_TRUST_GATE_UNMET', 409);
+  return release.review_requirements.filter(isAutomaticRequirement).map((requirement) => ({
+    requirement,
+    outcome: 'passed',
+    method: 'system_attestation',
+    run_id: result.evidence.run_id,
+    evidence_digest: result.evidence.attestation_digest,
+    policy_digest: result.evidence.policy_digest,
+  }));
+}
+
+function mergeEvidence(
+  release: DeveloperModuleRelease,
+  humanEvidence: readonly DeveloperModuleHumanReviewEvidence[],
+  systemEvidence: readonly DeveloperModuleAutomaticEvidence[],
+): DeveloperModuleReviewEvidence[] {
+  const byRequirement = new Map<DeveloperModuleReviewRequirement, DeveloperModuleReviewEvidence>(
+    [...humanEvidence, ...systemEvidence].map((evidence) => [evidence.requirement, evidence]),
+  );
+  const merged = release.review_requirements.map((requirement) => {
+    const evidence = byRequirement.get(requirement);
+    if (!evidence) fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
+    return evidence;
+  });
+  if (Buffer.byteLength(JSON.stringify(merged), 'utf8') > EVIDENCE_MAX_BYTES) {
+    fail('DEVELOPER_REVIEW_EVIDENCE_INCOMPLETE', 400);
+  }
+  return structuredClone(merged);
 }
 
 function expectedRelease(
@@ -334,6 +399,7 @@ export class DeveloperModuleReviewService {
     private readonly input: {
       repository: DeveloperModuleReviewRepository;
       distributionRepository?: Pick<DeveloperModuleDistributionRepository, 'history'>;
+      trustGate?: Pick<DeveloperModuleTrustGate, 'evaluate'>;
       now?: () => Date;
     },
   ) {
@@ -406,7 +472,12 @@ export class DeveloperModuleReviewService {
       }
       toStatus = 'approved';
       reasonRequired = false;
-      evidence = normalizeEvidence(input.evidence, release, this.now());
+      const humanEvidence = normalizeHumanEvidence(input.evidence, release, this.now());
+      evidence = mergeEvidence(
+        release,
+        humanEvidence,
+        await automaticEvidence(release, this.input.trustGate),
+      );
     } else if (input.decision === 'revoke' && release.status === 'approved') {
       toStatus = 'revoked';
       reasonRequired = true;

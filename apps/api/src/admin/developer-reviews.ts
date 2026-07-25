@@ -14,6 +14,7 @@ import {
   DEVELOPER_MODULE_REVIEW_REQUIREMENTS,
 } from '../developer/releases';
 import {
+  DEVELOPER_MODULE_HUMAN_REQUIREMENTS,
   DeveloperModuleReviewError,
   type DeveloperModuleReviewService,
 } from '../developer/reviews';
@@ -54,21 +55,28 @@ export const DeveloperModuleReleaseSchema = z.object({
   updated_at: z.string(),
 });
 
-const EvidenceSchema = z
+const HumanEvidenceSchema = z
   .object({
-    requirement: z.enum(DEVELOPER_MODULE_REVIEW_REQUIREMENTS),
+    requirement: z.enum(DEVELOPER_MODULE_HUMAN_REQUIREMENTS),
     outcome: z.literal('passed'),
     method: z.literal('manual'),
     summary: z.string().max(1_000),
     observed_at: z.string(),
-    tool: z.string().optional(),
-    tool_version: z.string().optional(),
-    evidence_digest: z
-      .string()
-      .regex(/^sha256:[0-9a-f]{64}$/)
-      .optional(),
   })
   .strict();
+
+const AutomaticEvidenceSchema = z
+  .object({
+    requirement: z.enum(['source_scan', 'sandbox_test']),
+    outcome: z.literal('passed'),
+    method: z.literal('system_attestation'),
+    run_id: z.string().uuid(),
+    evidence_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+    policy_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+  })
+  .strict();
+
+const EvidenceSchema = z.union([HumanEvidenceSchema, AutomaticEvidenceSchema]);
 
 const ReviewEventSchema = z.object({
   review_event_id: z.string().uuid(),
@@ -126,7 +134,7 @@ const DecisionBodySchema = z
     expected_status: z.enum(DEVELOPER_MODULE_RELEASE_STATUSES),
     expected_revision: z.number().int().min(0),
     reason: z.string().max(4_000).optional(),
-    evidence: z.array(EvidenceSchema).max(16).optional(),
+    evidence: z.array(HumanEvidenceSchema).max(16).optional(),
   })
   .strict();
 

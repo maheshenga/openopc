@@ -6115,6 +6115,27 @@ export const developerModuleReviewActorKindEnum = kortixSchema.enum(
   ['publisher', 'platform_admin'],
 );
 
+export type DeveloperModuleReviewEvidenceRow =
+  | {
+      requirement:
+        | 'manifest_review'
+        | 'permission_review'
+        | 'desktop_security_review'
+        | 'human_review';
+      outcome: 'passed';
+      method: 'manual';
+      summary: string;
+      observed_at: string;
+    }
+  | {
+      requirement: 'source_scan' | 'sandbox_test';
+      outcome: 'passed';
+      method: 'system_attestation';
+      run_id: string;
+      evidence_digest: `sha256:${string}`;
+      policy_digest: `sha256:${string}`;
+    };
+
 export const developerModuleDistributionActionEnum = kortixSchema.enum(
   'developer_module_distribution_action',
   ['sign', 'publish', 'revoke'],
@@ -6818,7 +6839,7 @@ export const developerModuleReleaseReviewEvents = kortixSchema.table(
     actorUserId: uuid('actor_user_id').notNull(),
     actorKind: developerModuleReviewActorKindEnum('actor_kind').notNull(),
     reason: text('reason'),
-    evidence: jsonb('evidence').default([]).notNull().$type<Record<string, unknown>[]>(),
+    evidence: jsonb('evidence').default([]).notNull().$type<DeveloperModuleReviewEvidenceRow[]>(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
       .notNull(),
@@ -6858,6 +6879,7 @@ export const developerModuleReleaseReviewEvents = kortixSchema.table(
       sql`jsonb_typeof(${table.evidence}) = 'array'
         AND jsonb_array_length(${table.evidence}) <= 16
         AND pg_column_size(${table.evidence}) <= 32768
+        AND kortix.developer_module_review_evidence_valid(${table.evidence})
         AND (
           (${table.action} = 'approve' AND jsonb_array_length(${table.evidence}) BETWEEN 2 AND 16)
           OR (${table.action} <> 'approve' AND jsonb_array_length(${table.evidence}) = 0)

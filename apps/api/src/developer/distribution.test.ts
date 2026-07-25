@@ -15,6 +15,43 @@ const ADMIN_ID = '20000000-0000-4000-a000-000000000004';
 const RELEASE_ID = '30000000-0000-4000-a000-000000000003';
 const NOW = new Date('2026-07-24T15:00:00.000Z');
 
+type TrustState =
+  | 'passed'
+  | 'queued'
+  | 'running'
+  | 'failed'
+  | 'inconclusive'
+  | 'cancelled'
+  | 'stale-policy';
+
+function trustGate(state: TrustState = 'passed') {
+  return {
+    async evaluate() {
+      if (state === 'passed') {
+        return {
+          ok: true as const,
+          evidence: {
+            run_id: '60000000-0000-4000-a000-000000000006',
+            artifact_digest: `sha256:${'c'.repeat(64)}` as const,
+            sbom_digest: `sha256:${'d'.repeat(64)}` as const,
+            attestation_digest: `sha256:${'e'.repeat(64)}` as const,
+            policy_digest: `sha256:${'f'.repeat(64)}` as const,
+          },
+        };
+      }
+      return {
+        ok: false as const,
+        code:
+          state === 'queued' || state === 'running'
+            ? ('DEVELOPER_TRUST_PENDING' as const)
+            : state === 'stale-policy'
+              ? ('DEVELOPER_TRUST_POLICY_STALE' as const)
+              : ('DEVELOPER_TRUST_NOT_PASSED' as const),
+      };
+    },
+  };
+}
+
 function release(
   status: DeveloperModuleRelease['status'] = 'approved',
   reviewRevision = 2,
@@ -77,6 +114,7 @@ test('signs approved declarative release and publishes only after verification',
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: signingPort(),
+    trustGate: trustGate(),
     now: () => NOW,
   });
 
@@ -110,6 +148,7 @@ test('denies signing by a publisher-account member', async () => {
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: signingPort(),
+    trustGate: trustGate(),
     now: () => NOW,
   });
 
@@ -153,6 +192,40 @@ test('fails closed when the module signer is unavailable without mutating the re
   });
 });
 
+test.each(['queued', 'running', 'failed', 'inconclusive', 'cancelled', 'stale-policy'] as const)(
+  '%s verification blocks signing before the signing port is called',
+  async (state) => {
+    let signingCalls = 0;
+    const signer = signingPort();
+    const repository = createMemoryDeveloperModuleDistributionRepository({
+      releases: [release()],
+      now: () => NOW,
+    });
+    const service = new DeveloperModuleDistributionService({
+      repository,
+      signer: {
+        ...signer,
+        async sign(payload) {
+          signingCalls += 1;
+          return signer.sign(payload);
+        },
+      },
+      trustGate: trustGate(state),
+      now: () => NOW,
+    });
+
+    await expect(
+      service.sign({
+        releaseId: RELEASE_ID,
+        actorUserId: ADMIN_ID,
+        expectedStatus: 'approved',
+        expectedRevision: 2,
+      }),
+    ).rejects.toMatchObject({ code: 'DEVELOPER_TRUST_GATE_UNMET', status: 409 });
+    expect(signingCalls).toBe(0);
+  },
+);
+
 test('signs an approved non-declarative release without executing it', async () => {
   const executable = release();
   executable.manifest.execution = { mode: 'server-adapter', entry: 'server.ts' };
@@ -165,6 +238,7 @@ test('signs an approved non-declarative release without executing it', async () 
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: signingPort(),
+    trustGate: trustGate(),
     now: () => NOW,
   });
 
@@ -233,6 +307,7 @@ test.each([
     repository,
     signer,
     verifiers: [signer],
+    trustGate: trustGate(),
     now: () => NOW,
   });
   await service.sign({
@@ -298,6 +373,7 @@ test('revokes a published release with an immutable emergency event', async () =
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: signingPort(),
+    trustGate: trustGate(),
     now: () => NOW,
   });
   await service.sign({
@@ -353,6 +429,7 @@ test('rejects publication when the persisted manifest no longer matches its dige
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: signingPort(),
+    trustGate: trustGate(),
     now: () => NOW,
   });
   await service.sign({
@@ -447,6 +524,7 @@ test('replays the same successful sign command idempotently', async () => {
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: countingSigner,
+    trustGate: trustGate(),
     now: () => NOW,
   });
   const command = {
@@ -474,6 +552,7 @@ test('replays the same successful publish command idempotently', async () => {
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: signingPort(),
+    trustGate: trustGate(),
     now: () => NOW,
   });
   await service.sign({
@@ -543,6 +622,7 @@ test('maps signer failures to a code-only unavailable error without partial stat
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: failingSigner,
+    trustGate: trustGate(),
     now: () => NOW,
   });
 
@@ -578,6 +658,7 @@ test('discards generated signature state when the repository event write conflic
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: signingPort(),
+    trustGate: trustGate(),
     now: () => NOW,
   });
 
@@ -608,6 +689,7 @@ test('fails publication when the persisted signature key is no longer available'
   await new DeveloperModuleDistributionService({
     repository,
     signer: originalSigner,
+    trustGate: trustGate(),
     now: () => NOW,
   }).sign({
     releaseId: RELEASE_ID,
@@ -682,6 +764,7 @@ test('rejects an invalid persisted detached signature', async () => {
   const service = new DeveloperModuleDistributionService({
     repository,
     signer: signingPort(),
+    trustGate: trustGate(),
     now: () => NOW,
   });
   await service.sign({

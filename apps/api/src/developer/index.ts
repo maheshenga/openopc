@@ -7,8 +7,16 @@ import { registerDeveloperModuleMarketplaceSource } from '../marketplace/develop
 import { supabaseAuth } from '../middleware/auth';
 import { db } from '../shared/db';
 import { resolveScopedAccountId } from '../shared/resolve-account';
+import { getDefaultStudioApiRuntime } from '../studio/default-routes';
 import type { AppEnv } from '../types';
 import { createDeveloperApp } from './app';
+import {
+  type DeveloperModuleArtifactRepository,
+  DeveloperModuleArtifactService,
+  createUnavailableDeveloperArtifactStore,
+} from './artifacts';
+import { createDrizzleDeveloperModuleArtifactRepository } from './artifacts.drizzle';
+import { createDeveloperModuleS3ArtifactStore } from './artifacts.s3';
 import {
   type DeveloperModuleDistributionRepository,
   DeveloperModuleDistributionService,
@@ -26,6 +34,9 @@ import { type DeveloperModuleReviewRepository, DeveloperModuleReviewService } fr
 import { createDrizzleDeveloperModuleReviewRepository } from './reviews.drizzle';
 
 export { createDeveloperApp, type DeveloperAppDependencies } from './app';
+export * from './artifacts';
+export { createDrizzleDeveloperModuleArtifactRepository } from './artifacts.drizzle';
+export { createDeveloperModuleS3ArtifactStore } from './artifacts.s3';
 export * from './distribution';
 export { createDrizzleDeveloperModuleDistributionRepository } from './distribution.drizzle';
 export * from './installations';
@@ -64,9 +75,29 @@ async function resolveDeveloperAccountId(
   return resolveScopedAccountId(context, source);
 }
 
+const artifactRepository: DeveloperModuleArtifactRepository =
+  createDrizzleDeveloperModuleArtifactRepository(db);
+const artifactStore = (() => {
+  try {
+    const runtime = getDefaultStudioApiRuntime();
+    return runtime.enabled
+      ? createDeveloperModuleS3ArtifactStore(runtime.store)
+      : createUnavailableDeveloperArtifactStore();
+  } catch {
+    return createUnavailableDeveloperArtifactStore();
+  }
+})();
+export const developerModuleArtifactService = new DeveloperModuleArtifactService({
+  repository: artifactRepository,
+  store: artifactStore,
+  codeModulesEnabled: process.env.DEVELOPER_CODE_MODULES_ENABLED === 'true',
+});
 const releaseRepository: DeveloperModuleReleaseRepository =
   createDrizzleDeveloperModuleReleaseRepository(db);
-const releaseService = new DeveloperModuleReleaseService({ repository: releaseRepository });
+const releaseService = new DeveloperModuleReleaseService({
+  repository: releaseRepository,
+  artifacts: artifactRepository,
+});
 const distributionRepository: DeveloperModuleDistributionRepository =
   createDrizzleDeveloperModuleDistributionRepository(db);
 const moduleSignerConfig = resolveModuleSignerConfig(config);
@@ -109,6 +140,7 @@ export const developerApp = createDeveloperApp({
       { type: 'account' },
       context.get('iamTokenId'),
     ),
+  artifactService: developerModuleArtifactService,
   releaseService,
   reviewService: developerModuleReviewService,
 });

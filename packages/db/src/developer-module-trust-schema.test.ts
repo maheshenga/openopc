@@ -177,6 +177,7 @@ describe('developer module trust Drizzle schema', () => {
         'expected_digest',
         'expected_size',
         'staging_storage_key',
+        'artifact_id',
         'expires_at',
         'created_by',
         'created_at',

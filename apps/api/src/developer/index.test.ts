@@ -1,8 +1,16 @@
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import type { RegistryItem, RegistryModuleManifest } from '@kortix/registry';
 import { HTTPException } from 'hono/http-exception';
 
 import { ACCOUNT_ACTIONS } from '../iam/actions';
 import { type DeveloperAppDependencies, createDeveloperApp } from './app';
+import {
+  DeveloperModuleArtifactService,
+  createMemoryDeveloperArtifactStore,
+  createMemoryDeveloperModuleArtifactRepository,
+  serializeDeveloperModuleArtifactPackage,
+} from './artifacts';
 import {
   DeveloperModuleReleaseService,
   createMemoryDeveloperModuleReleaseRepository,
@@ -16,11 +24,18 @@ const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000009';
 const USER_ID = '20000000-0000-4000-a000-000000000002';
 
-const validModuleItem = () => ({
+type ValidModuleItem = RegistryItem & {
+  type: 'registry:module';
+  module: RegistryModuleManifest & {
+    permissions: NonNullable<RegistryModuleManifest['permissions']>;
+  };
+};
+
+const validModuleItem = (): ValidModuleItem => ({
   name: 'recruiting-workbench',
   type: 'registry:module',
   module: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: 'acme.recruiting',
     version: '1.0.0',
     publisher: { id: 'acme', displayName: 'Acme' },
@@ -39,13 +54,20 @@ const validModuleItem = () => ({
 const authenticatedApp = (
   input: {
     accountId?: string;
+    artifactService?: DeveloperAppDependencies['artifactService'];
     releaseService?: DeveloperAppDependencies['releaseService'];
     reviewService?: DeveloperAppDependencies['reviewService'];
     resolvedSources?: Array<'body' | 'query'>;
     authorizeAccount?: DeveloperAppDependencies['authorizeAccount'];
   } = {},
-) =>
-  createDeveloperApp({
+) => {
+  const artifacts = createMemoryDeveloperModuleArtifactRepository();
+  const artifactService = new DeveloperModuleArtifactService({
+    repository: artifacts,
+    store: createMemoryDeveloperArtifactStore().store,
+    codeModulesEnabled: true,
+  });
+  return createDeveloperApp({
     authenticate: async (context, next) => {
       context.set('userId', USER_ID);
       context.set('userEmail', 'developer@example.com');
@@ -55,10 +77,12 @@ const authenticatedApp = (
       input.resolvedSources?.push(source);
       return input.accountId ?? ACCOUNT_ID;
     },
+    artifactService: input.artifactService ?? artifactService,
     releaseService:
       input.releaseService ??
       new DeveloperModuleReleaseService({
         repository: createMemoryDeveloperModuleReleaseRepository(),
+        artifacts,
       }),
     reviewService:
       input.reviewService ??
@@ -67,16 +91,74 @@ const authenticatedApp = (
       }),
     authorizeAccount: input.authorizeAccount ?? (async () => undefined),
   });
+};
+
+type DeveloperTestApp = ReturnType<typeof authenticatedApp>;
+
+async function createArtifactRequest(
+  app: DeveloperTestApp,
+  item = validModuleItem(),
+  accountId = ACCOUNT_ID,
+) {
+  return app.request('/modules/artifacts/declarative', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ account_id: accountId, item }),
+  });
+}
+
+async function submitReleaseRequest(
+  app: DeveloperTestApp,
+  item = validModuleItem(),
+  accountId = ACCOUNT_ID,
+) {
+  const artifactResponse = await createArtifactRequest(app, item, accountId);
+  const artifact = (await artifactResponse.json()) as { artifact_id: string };
+  return app.request('/modules/releases', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ account_id: accountId, artifact_id: artifact.artifact_id }),
+  });
+}
+
+async function seededReleaseFixture() {
+  const artifacts = createMemoryDeveloperModuleArtifactRepository();
+  const artifactService = new DeveloperModuleArtifactService({
+    repository: artifacts,
+    store: createMemoryDeveloperArtifactStore().store,
+  });
+  const artifact = await artifactService.createDeclarative({
+    accountId: ACCOUNT_ID,
+    actorUserId: USER_ID,
+    item: validModuleItem(),
+  });
+  const releaseService = new DeveloperModuleReleaseService({
+    repository: createMemoryDeveloperModuleReleaseRepository(),
+    artifacts,
+  });
+  const seeded = await releaseService.submit({
+    accountId: ACCOUNT_ID,
+    actorUserId: USER_ID,
+    artifactId: artifact.artifact_id,
+  });
+  return { artifacts, artifact, artifactService, releaseService, seeded };
+}
 
 describe('developer module validation API', () => {
   test('rejects unauthenticated validation requests', async () => {
+    const artifacts = createMemoryDeveloperModuleArtifactRepository();
     const app = createDeveloperApp({
       authenticate: async () => {
         throw new HTTPException(401, { message: 'Unauthorized' });
       },
       resolveAccountId: async () => ACCOUNT_ID,
+      artifactService: new DeveloperModuleArtifactService({
+        repository: artifacts,
+        store: createMemoryDeveloperArtifactStore().store,
+      }),
       releaseService: new DeveloperModuleReleaseService({
         repository: createMemoryDeveloperModuleReleaseRepository(),
+        artifacts,
       }),
       reviewService: new DeveloperModuleReviewService({
         repository: createMemoryDeveloperModuleReviewRepository(),
@@ -149,13 +231,19 @@ describe('developer module validation API', () => {
   });
 
   test('requires authentication for every release endpoint', async () => {
+    const artifacts = createMemoryDeveloperModuleArtifactRepository();
     const app = createDeveloperApp({
       authenticate: async () => {
         throw new HTTPException(401, { message: 'Unauthorized' });
       },
       resolveAccountId: async () => ACCOUNT_ID,
+      artifactService: new DeveloperModuleArtifactService({
+        repository: artifacts,
+        store: createMemoryDeveloperArtifactStore().store,
+      }),
       releaseService: new DeveloperModuleReleaseService({
         repository: createMemoryDeveloperModuleReleaseRepository(),
+        artifacts,
       }),
       reviewService: new DeveloperModuleReviewService({
         repository: createMemoryDeveloperModuleReviewRepository(),
@@ -203,11 +291,7 @@ describe('developer module validation API', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(validModuleItem()),
     });
-    const submitted = await app.request('/modules/releases', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account_id: ACCOUNT_ID, item: validModuleItem() }),
-    });
+    const submitted = await submitReleaseRequest(app);
     const releaseId = ((await submitted.json()) as { release: { release_id: string } }).release
       .release_id;
     await app.request(`/modules/releases?account_id=${ACCOUNT_ID}`);
@@ -216,6 +300,7 @@ describe('developer module validation API', () => {
     expect(validation.status).toBe(200);
     expect(actions).toEqual([
       ACCOUNT_ACTIONS.ACCOUNT_WRITE,
+      ACCOUNT_ACTIONS.ACCOUNT_WRITE,
       ACCOUNT_ACTIONS.ACCOUNT_READ,
       ACCOUNT_ACTIONS.ACCOUNT_READ,
     ]);
@@ -223,8 +308,19 @@ describe('developer module validation API', () => {
 
   test('resolves the canonical account before authorization and mutation', async () => {
     const order: string[] = [];
+    const artifacts = createMemoryDeveloperModuleArtifactRepository();
+    const artifactService = new DeveloperModuleArtifactService({
+      repository: artifacts,
+      store: createMemoryDeveloperArtifactStore().store,
+    });
+    const artifact = await artifactService.createDeclarative({
+      accountId: ACCOUNT_ID,
+      actorUserId: USER_ID,
+      item: validModuleItem(),
+    });
     const delegate = new DeveloperModuleReleaseService({
       repository: createMemoryDeveloperModuleReleaseRepository(),
+      artifacts,
     });
     const app = createDeveloperApp({
       authenticate: async (context, next) => {
@@ -239,6 +335,7 @@ describe('developer module validation API', () => {
       authorizeAccount: async () => {
         order.push('authorize');
       },
+      artifactService,
       releaseService: {
         async submit(input) {
           order.push('submit');
@@ -259,25 +356,19 @@ describe('developer module validation API', () => {
     const response = await app.request('/modules/releases', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ item: validModuleItem() }),
+      body: JSON.stringify({ artifact_id: artifact.artifact_id }),
     });
     expect(response.status).toBe(201);
     expect(order).toEqual(['resolve', 'authorize', 'submit']);
   });
 
   test('requires account write permission for submissions and review requests', async () => {
-    const releaseService = new DeveloperModuleReleaseService({
-      repository: createMemoryDeveloperModuleReleaseRepository(),
-    });
-    const seeded = await releaseService.submit({
-      accountId: ACCOUNT_ID,
-      actorUserId: USER_ID,
-      item: validModuleItem(),
-    });
+    const { artifact, artifactService, releaseService, seeded } = await seededReleaseFixture();
     const reviewService = new DeveloperModuleReviewService({
       repository: createMemoryDeveloperModuleReviewRepository({ releases: [seeded.release] }),
     });
     const app = authenticatedApp({
+      artifactService,
       releaseService,
       reviewService,
       authorizeAccount: async (_context, _accountId, action) => {
@@ -290,7 +381,7 @@ describe('developer module validation API', () => {
     const submission = await app.request('/modules/releases', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ item: validModuleItem() }),
+      body: JSON.stringify({ artifact_id: artifact.artifact_id }),
     });
     const review = await app.request(
       `/modules/releases/${seeded.release.release_id}/review-requests`,
@@ -309,18 +400,11 @@ describe('developer module validation API', () => {
   });
 
   test('requests review and returns account-scoped immutable history', async () => {
-    const releaseService = new DeveloperModuleReleaseService({
-      repository: createMemoryDeveloperModuleReleaseRepository(),
-    });
-    const seeded = await releaseService.submit({
-      accountId: ACCOUNT_ID,
-      actorUserId: USER_ID,
-      item: validModuleItem(),
-    });
+    const { artifactService, releaseService, seeded } = await seededReleaseFixture();
     const reviewService = new DeveloperModuleReviewService({
       repository: createMemoryDeveloperModuleReviewRepository({ releases: [seeded.release] }),
     });
-    const app = authenticatedApp({ releaseService, reviewService });
+    const app = authenticatedApp({ artifactService, releaseService, reviewService });
 
     const requested = await app.request(
       `/modules/releases/${seeded.release.release_id}/review-requests`,
@@ -351,18 +435,11 @@ describe('developer module validation API', () => {
   });
 
   test('rejects malformed, stale, and cross-account review requests with code-only errors', async () => {
-    const releaseService = new DeveloperModuleReleaseService({
-      repository: createMemoryDeveloperModuleReleaseRepository(),
-    });
-    const seeded = await releaseService.submit({
-      accountId: ACCOUNT_ID,
-      actorUserId: USER_ID,
-      item: validModuleItem(),
-    });
+    const { artifactService, releaseService, seeded } = await seededReleaseFixture();
     const reviewService = new DeveloperModuleReviewService({
       repository: createMemoryDeveloperModuleReviewRepository({ releases: [seeded.release] }),
     });
-    const app = authenticatedApp({ releaseService, reviewService });
+    const app = authenticatedApp({ artifactService, releaseService, reviewService });
     const path = `/modules/releases/${seeded.release.release_id}/review-requests`;
 
     const malformed = await app.request(path, {
@@ -375,7 +452,12 @@ describe('developer module validation API', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ expected_status: 'validated', expected_revision: 9 }),
     });
-    const other = authenticatedApp({ accountId: OTHER_ACCOUNT_ID, releaseService, reviewService });
+    const other = authenticatedApp({
+      accountId: OTHER_ACCOUNT_ID,
+      artifactService,
+      releaseService,
+      reviewService,
+    });
     const crossAccount = await other.request(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -393,11 +475,7 @@ describe('developer module validation API', () => {
     const resolvedSources: Array<'body' | 'query'> = [];
     const app = authenticatedApp({ resolvedSources });
 
-    const submitted = await app.request('/modules/releases', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account_id: ACCOUNT_ID, item: validModuleItem() }),
-    });
+    const submitted = await submitReleaseRequest(app);
     const submission = (await submitted.json()) as {
       created: boolean;
       release: { release_id: string; status: string; account_id: string };
@@ -419,7 +497,7 @@ describe('developer module validation API', () => {
       expect.objectContaining({ releases: [expect.objectContaining({ account_id: ACCOUNT_ID })] }),
     );
     expect(fetched.status).toBe(200);
-    expect(resolvedSources).toEqual(['body', 'query', 'query']);
+    expect(resolvedSources).toEqual(['body', 'body', 'query', 'query']);
   });
 
   test('returns safe errors for invalid submissions without credential echo', async () => {
@@ -427,7 +505,7 @@ describe('developer module validation API', () => {
     const item = validModuleItem();
     item.module.permissions.secrets = ['OPENAI_API_KEY=sk-live-super-secret'];
 
-    const response = await app.request('/modules/releases', {
+    const response = await app.request('/modules/artifacts/declarative', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ item }),
@@ -435,26 +513,142 @@ describe('developer module validation API', () => {
     const body = await response.text();
 
     expect(response.status).toBe(400);
-    expect(body).toContain('DEVELOPER_MODULE_INVALID');
+    expect(body).toContain('DEVELOPER_ARTIFACT_INVALID');
     expect(body).not.toContain('sk-live-super-secret');
   });
 
-  test('returns 404 instead of exposing another account release', async () => {
-    const releaseService = new DeveloperModuleReleaseService({
-      repository: createMemoryDeveloperModuleReleaseRepository(),
+  test('returns 404 instead of exposing another account artifact or release', async () => {
+    const { artifact, artifactService, releaseService } = await seededReleaseFixture();
+    const ownerApp = authenticatedApp({ accountId: ACCOUNT_ID, artifactService, releaseService });
+    const otherApp = authenticatedApp({
+      accountId: OTHER_ACCOUNT_ID,
+      artifactService,
+      releaseService,
     });
-    const ownerApp = authenticatedApp({ accountId: ACCOUNT_ID, releaseService });
-    const otherApp = authenticatedApp({ accountId: OTHER_ACCOUNT_ID, releaseService });
     const submitted = await ownerApp.request('/modules/releases', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ item: validModuleItem() }),
+      body: JSON.stringify({ artifact_id: artifact.artifact_id }),
     });
     const body = (await submitted.json()) as { release: { release_id: string } };
 
-    const response = await otherApp.request(`/modules/releases/${body.release.release_id}`);
+    const artifactResponse = await otherApp.request(
+      `/modules/artifacts/${artifact.artifact_id}?account_id=${OTHER_ACCOUNT_ID}`,
+    );
+    const releaseResponse = await otherApp.request(`/modules/releases/${body.release.release_id}`);
 
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'DEVELOPER_RELEASE_NOT_FOUND' });
+    expect(artifactResponse.status).toBe(404);
+    expect(await artifactResponse.json()).toEqual({ error: 'DEVELOPER_ARTIFACT_NOT_FOUND' });
+    expect(releaseResponse.status).toBe(404);
+    expect(await releaseResponse.json()).toEqual({ error: 'DEVELOPER_RELEASE_NOT_FOUND' });
+  });
+});
+
+describe('developer module artifact API', () => {
+  test('creates a declarative artifact and rejects raw-item release submission', async () => {
+    const app = authenticatedApp();
+    const artifact = await app.request('/modules/artifacts/declarative', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account_id: ACCOUNT_ID, item: validModuleItem() }),
+    });
+    const rawRelease = await app.request('/modules/releases', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account_id: ACCOUNT_ID, item: validModuleItem() }),
+    });
+
+    expect(artifact.status).toBe(201);
+    expect(await artifact.json()).toEqual(
+      expect.objectContaining({
+        artifact_id: expect.any(String),
+        artifact_digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      }),
+    );
+    expect(rawRelease.status).toBe(400);
+    expect(await rawRelease.json()).toEqual({ error: 'DEVELOPER_RELEASE_ARTIFACT_REQUIRED' });
+  });
+
+  test('creates, finalizes, reads, and cancels uploads with idempotent HTTP status and IAM', async () => {
+    const artifacts = createMemoryDeveloperModuleArtifactRepository();
+    const memoryStore = createMemoryDeveloperArtifactStore();
+    const artifactService = new DeveloperModuleArtifactService({
+      repository: artifacts,
+      store: memoryStore.store,
+      codeModulesEnabled: true,
+    });
+    const actions: string[] = [];
+    const app = authenticatedApp({
+      artifactService,
+      releaseService: new DeveloperModuleReleaseService({
+        repository: createMemoryDeveloperModuleReleaseRepository(),
+        artifacts,
+      }),
+      authorizeAccount: async (_context, accountId, action) => {
+        expect(accountId).toBe(ACCOUNT_ID);
+        actions.push(action);
+      },
+    });
+    const bytes = serializeDeveloperModuleArtifactPackage({ item: validModuleItem() });
+    const expectedDigest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+    const createUpload = () =>
+      app.request('/modules/artifact-uploads', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          account_id: ACCOUNT_ID,
+          publisher_id: 'acme',
+          expected_size: bytes.byteLength,
+          expected_digest: expectedDigest,
+        }),
+      });
+
+    const uploadResponse = await createUpload();
+    const upload = (await uploadResponse.json()) as {
+      upload_id: string;
+      upload_url: string;
+      headers: Record<string, string>;
+    };
+    await memoryStore.upload(upload.upload_url, bytes, upload.headers);
+    const finalizePath = `/modules/artifact-uploads/${upload.upload_id}/finalize`;
+    const first = await app.request(finalizePath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account_id: ACCOUNT_ID }),
+    });
+    const artifact = (await first.json()) as { artifact_id: string };
+    const second = await app.request(finalizePath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account_id: ACCOUNT_ID }),
+    });
+    const fetched = await app.request(
+      `/modules/artifacts/${artifact.artifact_id}?account_id=${ACCOUNT_ID}`,
+    );
+
+    const cancelledUploadResponse = await createUpload();
+    const cancelledUpload = (await cancelledUploadResponse.json()) as { upload_id: string };
+    const cancelled = await app.request(
+      `/modules/artifact-uploads/${cancelledUpload.upload_id}?account_id=${ACCOUNT_ID}`,
+      { method: 'DELETE' },
+    );
+
+    expect(uploadResponse.status).toBe(201);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual(
+      expect.objectContaining({ artifact_id: artifact.artifact_id }),
+    );
+    expect(fetched.status).toBe(200);
+    expect(cancelledUploadResponse.status).toBe(201);
+    expect(cancelled.status).toBe(204);
+    expect(actions).toEqual([
+      ACCOUNT_ACTIONS.ACCOUNT_WRITE,
+      ACCOUNT_ACTIONS.ACCOUNT_WRITE,
+      ACCOUNT_ACTIONS.ACCOUNT_WRITE,
+      ACCOUNT_ACTIONS.ACCOUNT_READ,
+      ACCOUNT_ACTIONS.ACCOUNT_WRITE,
+      ACCOUNT_ACTIONS.ACCOUNT_WRITE,
+    ]);
   });
 });

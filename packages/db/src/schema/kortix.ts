@@ -6191,6 +6191,7 @@ export const developerModuleArtifactUploads = kortixSchema.table(
     expectedDigest: varchar('expected_digest', { length: 71 }).notNull(),
     expectedSize: bigint('expected_size', { mode: 'number' }).notNull(),
     stagingStorageKey: text('staging_storage_key').notNull(),
+    artifactId: uuid('artifact_id'),
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
     createdBy: uuid('created_by').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
@@ -6205,6 +6206,11 @@ export const developerModuleArtifactUploads = kortixSchema.table(
       columns: [table.publisherId, table.accountId],
       foreignColumns: [developerPublishers.publisherId, developerPublishers.accountId],
       name: 'developer_module_artifact_uploads_publisher_account_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.artifactId, table.accountId],
+      foreignColumns: [developerModuleArtifacts.artifactId, developerModuleArtifacts.accountId],
+      name: 'developer_module_artifact_uploads_artifact_account_fk',
     }).onDelete('restrict'),
     unique('developer_module_artifact_uploads_upload_account_unique').on(
       table.uploadId,
@@ -6230,6 +6236,16 @@ export const developerModuleArtifactUploads = kortixSchema.table(
     check(
       'developer_module_artifact_uploads_expiry_check',
       sql`${table.expiresAt} > ${table.createdAt}`,
+    ),
+    check(
+      'developer_module_artifact_uploads_finalized_artifact_check',
+      sql`(
+        ${table.state} = 'finalized'
+        AND ${table.artifactId} IS NOT NULL
+      ) OR (
+        ${table.state} <> 'finalized'
+        AND ${table.artifactId} IS NULL
+      )`,
     ),
   ],
 );

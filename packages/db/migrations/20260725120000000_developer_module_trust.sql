@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS kortix.developer_module_artifact_uploads (
   expected_digest varchar(71) NOT NULL,
   expected_size bigint NOT NULL,
   staging_storage_key text NOT NULL,
+  artifact_id uuid,
   expires_at timestamptz NOT NULL,
   created_by uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -82,7 +83,12 @@ CREATE TABLE IF NOT EXISTS kortix.developer_module_artifact_uploads (
   CONSTRAINT developer_module_artifact_uploads_storage_key_check
     CHECK (octet_length(staging_storage_key) BETWEEN 1 AND 2048),
   CONSTRAINT developer_module_artifact_uploads_expiry_check
-    CHECK (expires_at > created_at)
+    CHECK (expires_at > created_at),
+  CONSTRAINT developer_module_artifact_uploads_finalized_artifact_check
+    CHECK (
+      (state = 'finalized' AND artifact_id IS NOT NULL)
+      OR (state <> 'finalized' AND artifact_id IS NULL)
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_developer_module_artifact_uploads_account_state_expiry
@@ -138,6 +144,26 @@ CREATE TABLE IF NOT EXISTS kortix.developer_module_artifacts (
 
 CREATE INDEX IF NOT EXISTS idx_developer_module_artifacts_account_created
   ON kortix.developer_module_artifacts(account_id, created_at, artifact_id);
+
+ALTER TABLE kortix.developer_module_artifact_uploads
+  ADD COLUMN IF NOT EXISTS artifact_id uuid;
+
+DO $developer_trust$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'developer_module_artifact_uploads_artifact_account_fk'
+      AND conrelid = 'kortix.developer_module_artifact_uploads'::regclass
+  ) THEN
+    ALTER TABLE kortix.developer_module_artifact_uploads
+      ADD CONSTRAINT developer_module_artifact_uploads_artifact_account_fk
+      FOREIGN KEY (artifact_id, account_id)
+      REFERENCES kortix.developer_module_artifacts(artifact_id, account_id)
+      ON DELETE RESTRICT;
+  END IF;
+END
+$developer_trust$;
 
 ALTER TABLE kortix.developer_module_releases
   ADD COLUMN IF NOT EXISTS artifact_id uuid,
@@ -719,7 +745,7 @@ GRANT SELECT, INSERT
     kortix.developer_module_verification_runs
   TO service_role;
 
-GRANT UPDATE (state, updated_at)
+GRANT UPDATE (state, artifact_id, updated_at)
   ON TABLE kortix.developer_module_artifact_uploads
   TO service_role;
 

@@ -25,7 +25,7 @@ const RELEASE_ID = '30000000-0000-4000-a000-000000000003';
 const NOW = new Date('2026-07-24T15:00:00.000Z');
 
 const manifest = {
-  schemaVersion: 1 as const,
+  schemaVersion: 2 as const,
   id: 'acme.recruiting',
   version: '1.0.0',
   publisher: { id: 'acme', displayName: 'Acme' },
@@ -49,6 +49,11 @@ function release(
     module_version: manifest.version,
     manifest,
     manifest_digest: canonicalDeveloperModuleManifestDigest(manifest),
+    artifact_id: '50000000-0000-4000-a000-000000000005',
+    artifact_digest: `sha256:${'c'.repeat(64)}`,
+    sbom_digest: null,
+    trust_attestation_digest: null,
+    verification_policy_digest: null,
     review_requirements: ['manifest_review', 'source_scan', 'human_review'],
     status,
     review_revision: reviewRevision,

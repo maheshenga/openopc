@@ -26,7 +26,7 @@ const releaseRow = {
   moduleId: 'acme.recruiting',
   moduleVersion: '1.0.0',
   manifest: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: 'acme.recruiting',
     version: '1.0.0',
     publisher: { id: 'acme', displayName: 'Acme' },

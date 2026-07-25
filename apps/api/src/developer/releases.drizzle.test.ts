@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import type { Database } from '@kortix/db';
-import { developerModuleReleases, developerPublishers } from '@kortix/db';
+import {
+  developerModuleReleases,
+  developerModuleVerificationRuns,
+  developerPublishers,
+} from '@kortix/db';
 import { PgDialect } from 'drizzle-orm/pg-core';
 
 import { DeveloperModuleReleaseError, type DeveloperModuleReleaseInsert } from './releases';
@@ -17,7 +21,7 @@ const submission: DeveloperModuleReleaseInsert = {
   actorUserId: USER_ID,
   itemName: 'recruiting-workbench',
   manifest: {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: 'acme.recruiting',
     version: '1.0.0',
     publisher: { id: 'acme', displayName: 'Acme' },
@@ -27,6 +31,13 @@ const submission: DeveloperModuleReleaseInsert = {
     execution: { mode: 'declarative' },
   },
   manifestDigest: `sha256:${'a'.repeat(64)}`,
+  artifactId: '40000000-0000-4000-a000-000000000004',
+  artifactDigest: `sha256:${'b'.repeat(64)}`,
+  verification: {
+    policyDigest: `sha256:${'c'.repeat(64)}`,
+    scannerSetDigest: `sha256:${'d'.repeat(64)}`,
+    sandboxProfileDigest: `sha256:${'e'.repeat(64)}`,
+  },
   reviewRequirements: ['manifest_review', 'source_scan', 'human_review'],
 };
 
@@ -48,6 +59,11 @@ const releaseRow = {
   moduleVersion: '1.0.0',
   manifest: submission.manifest,
   manifestDigest: submission.manifestDigest,
+  artifactId: submission.artifactId,
+  artifactDigest: submission.artifactDigest,
+  sbomDigest: null,
+  trustAttestationDigest: null,
+  verificationPolicyDigest: null,
   reviewRequirements: submission.reviewRequirements,
   status: 'validated' as const,
   reviewRevision: 0,
@@ -59,28 +75,39 @@ const releaseRow = {
 type FixtureInput = {
   publisherInserts?: unknown[][];
   releaseInserts?: unknown[][];
+  runInserts?: unknown[][];
   selects?: unknown[][];
 };
 
 function databaseFixture(input: FixtureInput = {}) {
   const publisherInserts = [...(input.publisherInserts ?? [])];
   const releaseInserts = [...(input.releaseInserts ?? [])];
+  const runInserts = [...(input.runInserts ?? [])];
   const selects = [...(input.selects ?? [])];
   const whereClauses: unknown[] = [];
+  const insertedValues: Array<{ table: unknown; value: unknown }> = [];
 
   const query = {
     insert(table: unknown) {
       return {
-        values() {
+        values(value: unknown) {
+          insertedValues.push({ table, value });
+          const rows = () =>
+            table === developerPublishers
+              ? (publisherInserts.shift() ?? [])
+              : table === developerModuleReleases
+                ? (releaseInserts.shift() ?? [])
+                : (runInserts.shift() ?? []);
           return {
             onConflictDoNothing() {
               return {
                 async returning() {
-                  return table === developerPublishers
-                    ? (publisherInserts.shift() ?? [])
-                    : (releaseInserts.shift() ?? []);
+                  return rows();
                 },
               };
+            },
+            async returning() {
+              return rows();
             },
           };
         },
@@ -118,7 +145,7 @@ function databaseFixture(input: FixtureInput = {}) {
     },
   } as unknown as Database;
 
-  return { database, whereClauses };
+  return { database, whereClauses, insertedValues };
 }
 
 function conditionParams(condition: unknown): unknown[] {
@@ -127,9 +154,10 @@ function conditionParams(condition: unknown): unknown[] {
 
 describe('developer module release Drizzle repository', () => {
   test('claims the publisher and inserts one immutable release transactionally', async () => {
-    const { database } = databaseFixture({
+    const { database, insertedValues } = databaseFixture({
       publisherInserts: [[publisherRow]],
       releaseInserts: [[releaseRow]],
+      runInserts: [[{ runId: '50000000-0000-4000-a000-000000000005' }]],
     });
     const repository = createDrizzleDeveloperModuleReleaseRepository(database);
 
@@ -141,8 +169,22 @@ describe('developer module release Drizzle repository', () => {
         release_id: RELEASE_ID,
         account_id: ACCOUNT_ID,
         manifest_digest: submission.manifestDigest,
+        artifact_id: submission.artifactId,
+        artifact_digest: submission.artifactDigest,
         status: 'validated',
         review_revision: 0,
+      }),
+    );
+    expect(
+      insertedValues.find((entry) => entry.table === developerModuleVerificationRuns)?.value,
+    ).toEqual(
+      expect.objectContaining({
+        releaseId: RELEASE_ID,
+        artifactId: submission.artifactId,
+        accountId: ACCOUNT_ID,
+        policyDigest: submission.verification.policyDigest,
+        state: 'queued',
+        attempt: 1,
       }),
     );
   });

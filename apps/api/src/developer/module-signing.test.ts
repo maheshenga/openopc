@@ -13,7 +13,7 @@ function moduleItem() {
     name: 'recruiting-workbench',
     type: 'registry:module',
     module: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: 'acme.recruiting',
       version: '1.0.0',
       publisher: { id: 'acme', displayName: 'Acme' },

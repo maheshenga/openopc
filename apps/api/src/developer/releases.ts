@@ -4,6 +4,7 @@ import {
   readRegistryModuleManifest,
   validateRegistryItem,
 } from '@kortix/registry';
+import { DeveloperModuleArtifactError, type DeveloperModuleArtifactRepository } from './artifacts';
 
 export const DEVELOPER_MODULE_RELEASE_STATUSES = [
   'validated',
@@ -39,6 +40,11 @@ export interface DeveloperModuleRelease {
   module_version: string;
   manifest: RegistryModuleManifest;
   manifest_digest: `sha256:${string}`;
+  artifact_id: string | null;
+  artifact_digest: `sha256:${string}` | null;
+  sbom_digest: `sha256:${string}` | null;
+  trust_attestation_digest: `sha256:${string}` | null;
+  verification_policy_digest: `sha256:${string}` | null;
   review_requirements: DeveloperModuleReviewRequirement[];
   status: DeveloperModuleReleaseStatus;
   review_revision: number;
@@ -60,7 +66,16 @@ export interface DeveloperModuleReleaseInsert {
   itemName: string;
   manifest: RegistryModuleManifest;
   manifestDigest: `sha256:${string}`;
+  artifactId: string;
+  artifactDigest: `sha256:${string}`;
+  verification: DeveloperModuleVerificationQueueBinding;
   reviewRequirements: DeveloperModuleReviewRequirement[];
+}
+
+export interface DeveloperModuleVerificationQueueBinding {
+  policyDigest: `sha256:${string}`;
+  scannerSetDigest: `sha256:${string}`;
+  sandboxProfileDigest: `sha256:${string}`;
 }
 
 export interface DeveloperModuleReleaseRepository {
@@ -85,6 +100,17 @@ export class DeveloperModuleReleaseError extends Error {
     this.name = 'DeveloperModuleReleaseError';
   }
 }
+
+function bindingDigest(label: string): `sha256:${string}` {
+  return `sha256:${createHash('sha256').update(`openopc-developer-trust-bootstrap\0${label}`).digest('hex')}`;
+}
+
+export const DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING: DeveloperModuleVerificationQueueBinding =
+  Object.freeze({
+    policyDigest: bindingDigest('policy-v1'),
+    scannerSetDigest: bindingDigest('scanner-set-v1'),
+    sandboxProfileDigest: bindingDigest('sandbox-profile-v1'),
+  });
 
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') {
@@ -136,24 +162,29 @@ export class DeveloperModuleReleaseService {
   constructor(
     private readonly input: {
       repository: DeveloperModuleReleaseRepository;
+      artifacts: Pick<DeveloperModuleArtifactRepository, 'getArtifact'>;
+      verification?: DeveloperModuleVerificationQueueBinding;
     },
   ) {}
 
   async submit(input: {
     accountId: string;
     actorUserId: string;
-    item: unknown;
+    artifactId: string;
   }): Promise<{ release: DeveloperModuleRelease; created: boolean }> {
-    const validation = validateRegistryItem(input.item);
-    const manifest = readRegistryModuleManifest(input.item);
-    const itemName =
-      typeof input.item === 'object' && input.item !== null && !Array.isArray(input.item)
-        ? (input.item as Record<string, unknown>).name
-        : null;
+    const artifact = await this.input.artifacts.getArtifact(input.accountId, input.artifactId);
+    if (!artifact) throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_NOT_FOUND', 404);
+    const item = artifact.item_snapshot;
+    const validation = validateRegistryItem(item);
+    const manifest = readRegistryModuleManifest(item);
+    const itemName = item.name;
     if (!validation.valid || !manifest || typeof itemName !== 'string') {
       throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_INVALID', 400);
     }
     if (!manifest.id.startsWith(`${manifest.publisher.id}.`)) {
+      throw new DeveloperModuleReleaseError('DEVELOPER_PUBLISHER_MISMATCH', 400);
+    }
+    if (manifest.publisher.id !== artifact.publisher_id) {
       throw new DeveloperModuleReleaseError('DEVELOPER_PUBLISHER_MISMATCH', 400);
     }
 
@@ -163,6 +194,9 @@ export class DeveloperModuleReleaseService {
       itemName,
       manifest,
       manifestDigest: canonicalDeveloperModuleManifestDigest(manifest),
+      artifactId: artifact.artifact_id,
+      artifactDigest: artifact.artifact_digest,
+      verification: this.input.verification ?? DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING,
       reviewRequirements: reviewRequirements(manifest),
     });
   }
@@ -205,7 +239,8 @@ export function createMemoryDeveloperModuleReleaseRepository(input?: {
         if (
           !existing ||
           existing.account_id !== submission.accountId ||
-          existing.manifest_digest !== submission.manifestDigest
+          existing.manifest_digest !== submission.manifestDigest ||
+          existing.artifact_digest !== submission.artifactDigest
         ) {
           throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
         }
@@ -222,6 +257,11 @@ export function createMemoryDeveloperModuleReleaseRepository(input?: {
         module_version: submission.manifest.version,
         manifest: structuredClone(submission.manifest),
         manifest_digest: submission.manifestDigest,
+        artifact_id: submission.artifactId,
+        artifact_digest: submission.artifactDigest,
+        sbom_digest: null,
+        trust_attestation_digest: null,
+        verification_policy_digest: null,
         review_requirements: [...submission.reviewRequirements],
         status: 'validated',
         review_revision: 0,

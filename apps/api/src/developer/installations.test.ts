@@ -30,7 +30,7 @@ function manifest(
   compatibility: { platform: string; registry?: string } = { platform: '^1.0.0' },
 ) {
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     id: MODULE_ID,
     version,
     publisher: { id: 'acme', displayName: 'Acme' },
@@ -57,6 +57,11 @@ function baseRelease(
     module_version: version,
     manifest: itemManifest,
     manifest_digest: canonicalDeveloperModuleManifestDigest(itemManifest),
+    artifact_id: '50000000-0000-4000-a000-000000000005',
+    artifact_digest: `sha256:${'c'.repeat(64)}`,
+    sbom_digest: null,
+    trust_attestation_digest: null,
+    verification_policy_digest: null,
     review_requirements: ['manifest_review', 'source_scan', 'human_review'],
     status: 'approved',
     review_revision: 2,

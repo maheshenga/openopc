@@ -1,4 +1,9 @@
-import { type Database, developerModuleReleases, developerPublishers } from '@kortix/db';
+import {
+  type Database,
+  developerModuleReleases,
+  developerModuleVerificationRuns,
+  developerPublishers,
+} from '@kortix/db';
 import type { RegistryModuleManifest } from '@kortix/registry';
 import { and, desc, eq } from 'drizzle-orm';
 
@@ -23,6 +28,11 @@ export function serializeDeveloperModuleReleaseRow(
     module_version: row.moduleVersion,
     manifest: structuredClone(row.manifest) as unknown as RegistryModuleManifest,
     manifest_digest: row.manifestDigest as `sha256:${string}`,
+    artifact_id: row.artifactId,
+    artifact_digest: row.artifactDigest as `sha256:${string}` | null,
+    sbom_digest: row.sbomDigest as `sha256:${string}` | null,
+    trust_attestation_digest: row.trustAttestationDigest as `sha256:${string}` | null,
+    verification_policy_digest: row.verificationPolicyDigest as `sha256:${string}` | null,
     review_requirements: [...row.reviewRequirements] as DeveloperModuleReviewRequirement[],
     status: row.status,
     review_revision: row.reviewRevision,
@@ -78,6 +88,8 @@ export function createDrizzleDeveloperModuleReleaseRepository(
             moduleVersion: input.manifest.version,
             manifest: input.manifest as unknown as Record<string, unknown>,
             manifestDigest: input.manifestDigest,
+            artifactId: input.artifactId,
+            artifactDigest: input.artifactDigest,
             reviewRequirements: [...input.reviewRequirements],
             status: 'validated',
             createdBy: input.actorUserId,
@@ -88,6 +100,19 @@ export function createDrizzleDeveloperModuleReleaseRepository(
           .returning();
 
         if (inserted) {
+          await tx
+            .insert(developerModuleVerificationRuns)
+            .values({
+              releaseId: inserted.releaseId,
+              artifactId: input.artifactId,
+              accountId: input.accountId,
+              policyDigest: input.verification.policyDigest,
+              scannerSetDigest: input.verification.scannerSetDigest,
+              sandboxProfileDigest: input.verification.sandboxProfileDigest,
+              attempt: 1,
+              state: 'queued',
+            })
+            .returning({ runId: developerModuleVerificationRuns.runId });
           return { release: serializeDeveloperModuleReleaseRow(inserted), created: true };
         }
 
@@ -104,7 +129,8 @@ export function createDrizzleDeveloperModuleReleaseRepository(
         if (
           !existingRelease ||
           existingRelease.accountId !== input.accountId ||
-          existingRelease.manifestDigest !== input.manifestDigest
+          existingRelease.manifestDigest !== input.manifestDigest ||
+          existingRelease.artifactDigest !== input.artifactDigest
         ) {
           throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
         }

@@ -170,6 +170,7 @@
     "CreateAuditWebhookInput",
     "CreateCheckoutSessionInput",
     "CreateDeveloperModuleArtifactUploadInput",
+    "CreateDeveloperPublisherInput",
     "CreateInstanceRequest",
     "CreateMilestoneBody",
     "CreateProjectAgentInput",
@@ -194,6 +195,8 @@
     "DEFAULT_TRANSCRIPT_OPTIONS",
     "DESTRUCTIVE_PHASES",
     "DetectedLocalhostUrl",
+    "DeveloperAccess",
+    "DeveloperInvitation",
     "DeveloperModuleArtifact",
     "DeveloperModuleArtifactUploadTicket",
     "DeveloperModuleAutomaticReviewEvidence",
@@ -221,6 +224,10 @@
     "DeveloperModuleVerificationFinding",
     "DeveloperModuleVerificationRun",
     "DeveloperModuleVerificationState",
+    "DeveloperOrganization",
+    "DeveloperPublisher",
+    "DeveloperPublisherMember",
+    "DeveloperPublisherRole",
     "Diagnostic",
     "DiffLine",
     "DiffLineType",
@@ -1460,6 +1467,7 @@
     "UnknownError1",
     "UpdateAuditWebhookInput",
     "UpdateChannelBindingInput",
+    "UpdateDeveloperPublisherMemberInput",
     "UpdateMilestoneBody",
     "UpdatePhase",
     "UpdateProjectAgentInput",
@@ -1902,6 +1910,7 @@
     "__getConfigResolver",
     "__setConfigResolver",
     "acceptAccountInvite",
+    "acceptDeveloperInvitation",
     "acceptInvite",
     "actReviewItem",
     "activateConnectionProfile",
@@ -1954,6 +1963,7 @@
     "createConnector",
     "createDeclarativeDeveloperModuleArtifact",
     "createDeveloperModuleArtifactUpload",
+    "createDeveloperPublisher",
     "createGatewayKey",
     "createInstance",
     "createIntelligenceAssetDownloadUrl",
@@ -2062,6 +2072,7 @@
     "getCurrentInstanceIdFromPathname",
     "getCurrentInstanceIdFromWindow",
     "getDefaultAccountState",
+    "getDeveloperAccess",
     "getDeveloperModuleArtifact",
     "getDeveloperModuleRelease",
     "getDeveloperModuleReviewHistory",
@@ -2224,6 +2235,7 @@
     "listCredentialEvents",
     "listCredentials",
     "listDeveloperModuleReleases",
+    "listDeveloperPublishers",
     "listEnv",
     "listFeaturedMarketplaces",
     "listFields",
@@ -2420,6 +2432,7 @@
     "updateAgentConfig",
     "updateChannelBinding",
     "updateConnectionProfileCredential",
+    "updateDeveloperPublisherMember",
     "updateEmailPolicy",
     "updateExperimentalFeature",
     "updateKortixPty",
@@ -2823,11 +2836,7 @@
     "writeLastSeen",
     "writeStartStash"
   ],
-  "./server": [
-    "createScopedKortix",
-    "getScopedConfig",
-    "runWithKortix"
-  ],
+  "./server": ["createScopedKortix", "getScopedConfig", "runWithKortix"],
   "./internal/sync-store": [
     "Binary",
     "MessageError",
@@ -2862,9 +2871,7 @@
     "setSandboxVersion",
     "useSandboxConnectionStore"
   ],
-  "./internal/opencode-pending-store": [
-    "useOpenCodePendingStore"
-  ],
+  "./internal/opencode-pending-store": ["useOpenCodePendingStore"],
   "./internal/idb-sync-cache": [
     "clearSessionIDBCache",
     "deleteSessionFromIDB",
@@ -4459,6 +4466,7 @@
     "CreateAuditWebhookInput",
     "CreateCheckoutSessionInput",
     "CreateDeveloperModuleArtifactUploadInput",
+    "CreateDeveloperPublisherInput",
     "CreateProjectRepoInput",
     "CreateProjectSessionInput",
     "CreateProjectTriggerInput",
@@ -4469,6 +4477,8 @@
     "CreatedAccountToken",
     "CreatedGatewayKey",
     "CreatedProjectCliToken",
+    "DeveloperAccess",
+    "DeveloperInvitation",
     "DeveloperModuleArtifact",
     "DeveloperModuleArtifactUploadTicket",
     "DeveloperModuleAutomaticReviewEvidence",
@@ -4496,6 +4506,10 @@
     "DeveloperModuleVerificationFinding",
     "DeveloperModuleVerificationRun",
     "DeveloperModuleVerificationState",
+    "DeveloperOrganization",
+    "DeveloperPublisher",
+    "DeveloperPublisherMember",
+    "DeveloperPublisherRole",
     "EmailInstallation",
     "EmailMode",
     "EmailSenderPolicy",
@@ -4732,6 +4746,7 @@
     "TranscriptionResponse",
     "UpdateAuditWebhookInput",
     "UpdateChannelBindingInput",
+    "UpdateDeveloperPublisherMemberInput",
     "UpdateProjectDefaultAgentResponse",
     "UpdateProjectTriggerInput",
     "UpdateSandboxTemplateInput",
@@ -4745,6 +4760,7 @@
     "WorkflowProtocolVersion",
     "WorkflowRun",
     "acceptAccountInvite",
+    "acceptDeveloperInvitation",
     "actReviewItem",
     "activateConnectionProfile",
     "addMarketplaceSource",
@@ -4773,6 +4789,7 @@
     "createConnector",
     "createDeclarativeDeveloperModuleArtifact",
     "createDeveloperModuleArtifactUpload",
+    "createDeveloperPublisher",
     "createGatewayKey",
     "createIntelligenceAssetDownloadUrl",
     "createIntelligenceTask",
@@ -4830,6 +4847,7 @@
     "getConnectorConfig",
     "getConnectorPolicies",
     "getDefaultAccountState",
+    "getDeveloperAccess",
     "getDeveloperModuleArtifact",
     "getDeveloperModuleRelease",
     "getDeveloperModuleReviewHistory",
@@ -4904,6 +4922,7 @@
     "listConnectionProfiles",
     "listConnectors",
     "listDeveloperModuleReleases",
+    "listDeveloperPublishers",
     "listFeaturedMarketplaces",
     "listGatewayLogs",
     "listGitHubInstallations",
@@ -5017,6 +5036,7 @@
     "updateAgentConfig",
     "updateChannelBinding",
     "updateConnectionProfileCredential",
+    "updateDeveloperPublisherMember",
     "updateEmailPolicy",
     "updateExperimentalFeature",
     "updateProject",
@@ -5036,16 +5056,8 @@
     "validateProjectManifest",
     "validateToken"
   ],
-  "./feature-flags": [
-    "FeatureFlags",
-    "featureFlags",
-    "parseFlagOverride"
-  ],
-  "./fresh-sessions": [
-    "clearSessionFresh",
-    "isSessionFresh",
-    "markSessionFresh"
-  ],
+  "./feature-flags": ["FeatureFlags", "featureFlags", "parseFlagOverride"],
+  "./fresh-sessions": ["clearSessionFresh", "isSessionFresh", "markSessionFresh"],
   "./instance-routes": [
     "ACTIVE_INSTANCE_COOKIE",
     "INSTANCE_SCOPED_ROUTES",
@@ -5379,13 +5391,7 @@
     "turnHasSteps",
     "unwrapError"
   ],
-  "./sync-store": [
-    "Binary",
-    "MessageError",
-    "MessageWithParts",
-    "ascendingId",
-    "useSyncStore"
-  ],
+  "./sync-store": ["Binary", "MessageError", "MessageWithParts", "ascendingId", "useSyncStore"],
   "./server-store": [
     "deriveSubdomainOpts",
     "getActiveDbSandboxId",
@@ -5413,9 +5419,7 @@
     "setSandboxVersion",
     "useSandboxConnectionStore"
   ],
-  "./opencode-pending-store": [
-    "useOpenCodePendingStore"
-  ],
+  "./opencode-pending-store": ["useOpenCodePendingStore"],
   "./idb-sync-cache": [
     "clearSessionIDBCache",
     "deleteSessionFromIDB",

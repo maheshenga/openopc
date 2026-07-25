@@ -9,6 +9,7 @@ import {
   createUnavailableDeveloperArtifactStore,
   serializeDeveloperModuleArtifactPackage,
 } from './artifacts';
+import { DeveloperPublisherError } from './publishers';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000009';
@@ -93,6 +94,31 @@ function fixture() {
 }
 
 describe('developer module artifact service', () => {
+  test('checks Publisher upload authority before claiming or persisting an artifact', async () => {
+    const repository = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
+    const calls: unknown[][] = [];
+    const service = new DeveloperModuleArtifactService({
+      repository,
+      store: createMemoryDeveloperArtifactStore().store,
+      now: () => NOW,
+      permissions: {
+        async requirePermission(...args) {
+          calls.push(args);
+          throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_SUSPENDED', 409);
+        },
+      },
+    });
+
+    await expect(
+      service.createDeclarative({
+        accountId: ACCOUNT_ID,
+        actorUserId: USER_ID,
+        item: declarativeItem(),
+      }),
+    ).rejects.toMatchObject({ code: 'DEVELOPER_PUBLISHER_SUSPENDED', status: 409 });
+    expect(calls).toEqual([['acme', { accountId: ACCOUNT_ID, userId: USER_ID }, 'upload']]);
+  });
+
   test('synthesizes and persists a canonical declarative artifact', async () => {
     const { service } = fixture();
 

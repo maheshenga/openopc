@@ -266,6 +266,93 @@ export interface ListDeveloperModuleReleasesOptions extends DeveloperModuleRelea
   limit?: number;
 }
 
+export type DeveloperPublisherRole =
+  | 'owner'
+  | 'developer'
+  | 'release_manager'
+  | 'finance_viewer'
+  | 'support_viewer';
+
+export interface DeveloperOrganization {
+  organization_id: string;
+  account_id: string;
+  name: string;
+  verification_state: 'pending' | 'verified' | 'rejected' | 'suspended';
+  verification_metadata: Record<string, unknown>;
+  verification_revision: number;
+  verification_changed_by: string | null;
+  verification_changed_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeveloperInvitation {
+  invitation_id: string;
+  account_id: string;
+  organization_id: string | null;
+  email: string;
+  state: 'pending' | 'accepted' | 'expired' | 'revoked';
+  expires_at: string;
+  accepted_by: string | null;
+  accepted_at: string | null;
+  revoked_by: string | null;
+  revoked_at: string | null;
+  created_by: string;
+  created_at: string;
+}
+
+export interface DeveloperPublisher {
+  publisher_id: string;
+  account_id: string;
+  organization_id: string;
+  slug: string;
+  display_name: string;
+  status: 'active' | 'suspended';
+  authority_revision: number;
+  suspended_reason: string | null;
+  suspended_by: string | null;
+  suspended_at: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeveloperPublisherMember {
+  member_id: string;
+  account_id: string;
+  publisher_id: string;
+  user_id: string;
+  role: DeveloperPublisherRole;
+  revision: number;
+  created_by: string;
+  created_at: string;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+export interface DeveloperAccess {
+  account_id: string;
+  user_id: string;
+  organization: DeveloperOrganization | null;
+  invitations: DeveloperInvitation[];
+  publishers: Array<{
+    publisher: DeveloperPublisher;
+    membership: DeveloperPublisherMember | null;
+  }>;
+}
+
+export interface CreateDeveloperPublisherInput extends DeveloperModuleReleaseAccountOptions {
+  organizationId: string;
+  slug: string;
+  displayName: string;
+}
+
+export interface UpdateDeveloperPublisherMemberInput extends DeveloperModuleReleaseAccountOptions {
+  role: DeveloperPublisherRole;
+  expectedRevision: number | null;
+}
+
 /** Validate one registry:module item without publishing or persisting it. */
 export async function validateDeveloperModule(
   item: Record<string, unknown>,
@@ -282,6 +369,76 @@ function releaseQuery(options?: ListDeveloperModuleReleasesOptions): string {
   if (options?.limit !== undefined) search.set('limit', String(options.limit));
   const query = search.toString();
   return query ? `?${query}` : '';
+}
+
+/** Read the current organization's invitations, Publishers, and memberships. */
+export async function getDeveloperAccess(
+  options?: DeveloperModuleReleaseAccountOptions,
+): Promise<DeveloperAccess> {
+  return unwrap(
+    await backendApi.get<DeveloperAccess>(`/developer/access${releaseQuery(options)}`),
+    'Failed to read developer access',
+  );
+}
+
+/** Accept one developer invitation without persisting its one-time token. */
+export async function acceptDeveloperInvitation(
+  token: string,
+  options?: DeveloperModuleReleaseAccountOptions,
+): Promise<DeveloperInvitation> {
+  return unwrap(
+    await backendApi.post<DeveloperInvitation>('/developer/invitations/accept', {
+      ...(options?.accountId ? { account_id: options.accountId } : {}),
+      token,
+    }),
+    'Failed to accept developer invitation',
+  );
+}
+
+/** Claim a globally unique Publisher for one verified organization. */
+export async function createDeveloperPublisher(input: CreateDeveloperPublisherInput): Promise<{
+  publisher: DeveloperPublisher;
+  organization: DeveloperOrganization;
+  member: DeveloperPublisherMember | null;
+}> {
+  return unwrap(
+    await backendApi.post('/developer/publishers', {
+      ...(input.accountId ? { account_id: input.accountId } : {}),
+      organization_id: input.organizationId,
+      slug: input.slug,
+      display_name: input.displayName,
+    }),
+    'Failed to create developer Publisher',
+  );
+}
+
+/** List Publishers through the current account boundary. */
+export async function listDeveloperPublishers(
+  options?: DeveloperModuleReleaseAccountOptions,
+): Promise<{ publishers: DeveloperPublisher[] }> {
+  return unwrap(
+    await backendApi.get(`/developer/publishers${releaseQuery(options)}`),
+    'Failed to list developer Publishers',
+  );
+}
+
+/** Create or revision-fence one Publisher member role. */
+export async function updateDeveloperPublisherMember(
+  publisherId: string,
+  userId: string,
+  input: UpdateDeveloperPublisherMemberInput,
+): Promise<DeveloperPublisherMember> {
+  return unwrap(
+    await backendApi.put<DeveloperPublisherMember>(
+      `/developer/publishers/${encodeURIComponent(publisherId)}/members/${encodeURIComponent(userId)}`,
+      {
+        ...(input.accountId ? { account_id: input.accountId } : {}),
+        role: input.role,
+        expected_revision: input.expectedRevision,
+      },
+    ),
+    'Failed to update developer Publisher member',
+  );
 }
 
 /** Create a canonical artifact for one declarative registry item. */

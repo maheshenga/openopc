@@ -7,6 +7,7 @@ import {
   createMemoryDeveloperModuleDistributionRepository,
 } from './distribution';
 import { createEd25519ModuleSigningPort } from './module-signing';
+import { DeveloperPublisherError } from './publishers';
 import { type DeveloperModuleRelease, canonicalDeveloperModuleManifestDigest } from './releases';
 import { type DeveloperModuleReviewRepository, DeveloperModuleReviewService } from './reviews';
 
@@ -137,6 +138,53 @@ test('signs approved declarative release and publishes only after verification',
   expect(published.release.status).toBe('published');
   expect(published.release.review_revision).toBe(4);
   expect(published.event.action).toBe('publish');
+});
+
+test('checks Publisher platform-review authority before signing or publishing', async () => {
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [release()],
+    now: () => NOW,
+  });
+  const allowed = new DeveloperModuleDistributionService({
+    repository,
+    signer: signingPort(),
+    trustGate: trustGate(),
+    now: () => NOW,
+  });
+  await allowed.sign({
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'approved',
+    expectedRevision: 2,
+  });
+  const calls: unknown[][] = [];
+  const denied = new DeveloperModuleDistributionService({
+    repository,
+    signer: signingPort(),
+    trustGate: trustGate(),
+    permissions: {
+      async requirePermission(...args) {
+        calls.push(args);
+        throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_SUSPENDED', 409);
+      },
+    },
+    now: () => NOW,
+  });
+
+  await expect(
+    denied.publish({
+      releaseId: RELEASE_ID,
+      actorUserId: ADMIN_ID,
+      expectedStatus: 'signed',
+      expectedRevision: 3,
+    }),
+  ).rejects.toMatchObject({ code: 'DEVELOPER_PUBLISHER_SUSPENDED', status: 409 });
+  expect(calls).toEqual([
+    ['acme', { accountId: ACCOUNT_ID, userId: ADMIN_ID, platformAdmin: true }, 'platform_review'],
+  ]);
+  expect(await repository.getAdmin(RELEASE_ID)).toEqual(
+    expect.objectContaining({ status: 'signed', review_revision: 3 }),
+  );
 });
 
 test('denies signing by a publisher-account member', async () => {

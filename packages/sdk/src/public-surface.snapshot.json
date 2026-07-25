@@ -21,6 +21,7 @@
     "__getConfigResolver",
     "__setConfigResolver",
     "acceptAccountInvite",
+    "acceptDeveloperInvitation",
     "acceptInvite",
     "actReviewItem",
     "activateConnectionProfile",
@@ -73,6 +74,7 @@
     "createConnector",
     "createDeclarativeDeveloperModuleArtifact",
     "createDeveloperModuleArtifactUpload",
+    "createDeveloperPublisher",
     "createGatewayKey",
     "createInstance",
     "createIntelligenceAssetDownloadUrl",
@@ -180,6 +182,7 @@
     "getCurrentInstanceIdFromPathname",
     "getCurrentInstanceIdFromWindow",
     "getDefaultAccountState",
+    "getDeveloperAccess",
     "getDeveloperModuleArtifact",
     "getDeveloperModuleRelease",
     "getDeveloperModuleReviewHistory",
@@ -342,6 +345,7 @@
     "listCredentialEvents",
     "listCredentials",
     "listDeveloperModuleReleases",
+    "listDeveloperPublishers",
     "listEnv",
     "listFeaturedMarketplaces",
     "listFields",
@@ -538,6 +542,7 @@
     "updateAgentConfig",
     "updateChannelBinding",
     "updateConnectionProfileCredential",
+    "updateDeveloperPublisherMember",
     "updateEmailPolicy",
     "updateExperimentalFeature",
     "updateKortixPty",
@@ -830,16 +835,8 @@
     "writeLastSeen",
     "writeStartStash"
   ],
-  "./server": [
-    "createScopedKortix",
-    "getScopedConfig",
-    "runWithKortix"
-  ],
-  "./internal/sync-store": [
-    "Binary",
-    "ascendingId",
-    "useSyncStore"
-  ],
+  "./server": ["createScopedKortix", "getScopedConfig", "runWithKortix"],
+  "./internal/sync-store": ["Binary", "ascendingId", "useSyncStore"],
   "./internal/server-store": [
     "deriveSubdomainOpts",
     "getActiveDbSandboxId",
@@ -865,9 +862,7 @@
     "setSandboxVersion",
     "useSandboxConnectionStore"
   ],
-  "./internal/opencode-pending-store": [
-    "useOpenCodePendingStore"
-  ],
+  "./internal/opencode-pending-store": ["useOpenCodePendingStore"],
   "./internal/idb-sync-cache": [
     "clearSessionIDBCache",
     "deleteSessionFromIDB",
@@ -992,6 +987,7 @@
     "PublicSessionShareError",
     "SessionStartError",
     "acceptAccountInvite",
+    "acceptDeveloperInvitation",
     "actReviewItem",
     "activateConnectionProfile",
     "addMarketplaceSource",
@@ -1020,6 +1016,7 @@
     "createConnector",
     "createDeclarativeDeveloperModuleArtifact",
     "createDeveloperModuleArtifactUpload",
+    "createDeveloperPublisher",
     "createGatewayKey",
     "createIntelligenceAssetDownloadUrl",
     "createIntelligenceTask",
@@ -1077,6 +1074,7 @@
     "getConnectorConfig",
     "getConnectorPolicies",
     "getDefaultAccountState",
+    "getDeveloperAccess",
     "getDeveloperModuleArtifact",
     "getDeveloperModuleRelease",
     "getDeveloperModuleReviewHistory",
@@ -1151,6 +1149,7 @@
     "listConnectionProfiles",
     "listConnectors",
     "listDeveloperModuleReleases",
+    "listDeveloperPublishers",
     "listFeaturedMarketplaces",
     "listGatewayLogs",
     "listGitHubInstallations",
@@ -1264,6 +1263,7 @@
     "updateAgentConfig",
     "updateChannelBinding",
     "updateConnectionProfileCredential",
+    "updateDeveloperPublisherMember",
     "updateEmailPolicy",
     "updateExperimentalFeature",
     "updateProject",
@@ -1283,15 +1283,8 @@
     "validateProjectManifest",
     "validateToken"
   ],
-  "./feature-flags": [
-    "featureFlags",
-    "parseFlagOverride"
-  ],
-  "./fresh-sessions": [
-    "clearSessionFresh",
-    "isSessionFresh",
-    "markSessionFresh"
-  ],
+  "./feature-flags": ["featureFlags", "parseFlagOverride"],
+  "./fresh-sessions": ["clearSessionFresh", "isSessionFresh", "markSessionFresh"],
   "./instance-routes": [
     "ACTIVE_INSTANCE_COOKIE",
     "INSTANCE_SCOPED_ROUTES",
@@ -1367,11 +1360,7 @@
     "updateSandboxMemberScope",
     "updateSandboxMemberSpendCap"
   ],
-  "./event-stream": [
-    "heartbeatGapEvent",
-    "narrowChatEvent",
-    "openEventStream"
-  ],
+  "./event-stream": ["heartbeatGapEvent", "narrowChatEvent", "openEventStream"],
   "./files": [
     "SANDBOX_FS_ROOTS",
     "copyFile",
@@ -1499,11 +1488,7 @@
     "turnHasSteps",
     "unwrapError"
   ],
-  "./sync-store": [
-    "Binary",
-    "ascendingId",
-    "useSyncStore"
-  ],
+  "./sync-store": ["Binary", "ascendingId", "useSyncStore"],
   "./server-store": [
     "deriveSubdomainOpts",
     "getActiveDbSandboxId",
@@ -1529,9 +1514,7 @@
     "setSandboxVersion",
     "useSandboxConnectionStore"
   ],
-  "./opencode-pending-store": [
-    "useOpenCodePendingStore"
-  ],
+  "./opencode-pending-store": ["useOpenCodePendingStore"],
   "./idb-sync-cache": [
     "clearSessionIDBCache",
     "deleteSessionFromIDB",

@@ -9,6 +9,7 @@ import {
   signDeveloperModulePayload,
   verifyDeveloperModuleReleaseTrustSignature,
 } from './module-signing';
+import type { DeveloperPublisherPermissionPort } from './publishers';
 import type { DeveloperModuleRelease, DeveloperModuleReleaseStatus } from './releases';
 import type { DeveloperModuleTrustGate } from './trust-gate';
 
@@ -172,6 +173,7 @@ export class DeveloperModuleDistributionService {
       signer?: ModuleSigningPort | null;
       verifiers?: readonly ModuleSigningPort[];
       trustGate?: Pick<DeveloperModuleTrustGate, 'evaluate'>;
+      permissions?: DeveloperPublisherPermissionPort;
       now?: () => Date;
     },
   ) {
@@ -179,6 +181,27 @@ export class DeveloperModuleDistributionService {
     this.now = input.now ?? (() => new Date());
     const verifiers = input.verifiers ?? (this.signer ? [this.signer] : []);
     this.verifiers = new Map(verifiers.map((verifier) => [verifier.keyId, verifier]));
+  }
+
+  private async requirePlatformReview(
+    release: DeveloperModuleRelease,
+    actorUserId: string,
+  ): Promise<void> {
+    if (this.input.permissions) {
+      await this.input.permissions.requirePermission(
+        release.publisher_id,
+        {
+          accountId: release.account_id,
+          userId: actorUserId,
+          platformAdmin: true,
+        },
+        'platform_review',
+      );
+      return;
+    }
+    if (await this.input.repository.isPublisherAccountMember(release.account_id, actorUserId)) {
+      fail('DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED', 403);
+    }
   }
 
   private async replayCompletedTransition(
@@ -232,11 +255,7 @@ export class DeveloperModuleDistributionService {
       if (replay) return replay;
     }
     const release = assertExpectedRelease(current, input.expectedStatus, input.expectedRevision);
-    if (
-      await this.input.repository.isPublisherAccountMember(release.account_id, input.actorUserId)
-    ) {
-      fail('DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED', 403);
-    }
+    await this.requirePlatformReview(release, input.actorUserId);
     if (!this.signer) fail('DEVELOPER_MODULE_SIGNER_UNAVAILABLE', 503);
     let trust: Awaited<ReturnType<DeveloperModuleTrustGate['evaluate']>>;
     try {
@@ -291,11 +310,7 @@ export class DeveloperModuleDistributionService {
       if (replay) return replay;
     }
     const release = assertExpectedRelease(current, input.expectedStatus, input.expectedRevision);
-    if (
-      await this.input.repository.isPublisherAccountMember(release.account_id, input.actorUserId)
-    ) {
-      fail('DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED', 403);
-    }
+    await this.requirePlatformReview(release, input.actorUserId);
     if (
       release.signature_algorithm !== 'ed25519' ||
       !release.signature_key_id ||
@@ -342,11 +357,7 @@ export class DeveloperModuleDistributionService {
       if (replay) return replay;
     }
     const release = assertExpectedRelease(current, input.expectedStatus, input.expectedRevision);
-    if (
-      await this.input.repository.isPublisherAccountMember(release.account_id, input.actorUserId)
-    ) {
-      fail('DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED', 403);
-    }
+    await this.requirePlatformReview(release, input.actorUserId);
     return await this.input.repository.transition({
       releaseId: input.releaseId,
       actorUserId: input.actorUserId,

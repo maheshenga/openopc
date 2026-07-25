@@ -7,6 +7,12 @@ import { auth, errors, json, makeOpenApiApp } from '../openapi';
 import type { AppEnv } from '../types';
 import { DeveloperModuleArtifactError, type DeveloperModuleArtifactService } from './artifacts';
 import {
+  DEVELOPER_ORGANIZATION_VERIFICATION_STATES,
+  DEVELOPER_PUBLISHER_ROLES,
+  DeveloperPublisherError,
+  type DeveloperPublisherService,
+} from './publishers';
+import {
   DEVELOPER_MODULE_RELEASE_STATUSES,
   DEVELOPER_MODULE_REVIEW_REQUIREMENTS,
   DeveloperModuleReleaseError,
@@ -205,6 +211,97 @@ const DeveloperModuleTrustQuerySchema = z
   .strict();
 const DigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 
+const DeveloperOrganizationSchema = z.object({
+  organization_id: z.string().uuid(),
+  account_id: z.string().uuid(),
+  name: z.string(),
+  verification_state: z.enum(DEVELOPER_ORGANIZATION_VERIFICATION_STATES),
+  verification_metadata: z.record(z.unknown()),
+  verification_revision: z.number().int().nonnegative(),
+  verification_changed_by: z.string().uuid().nullable(),
+  verification_changed_at: z.string().nullable(),
+  created_by: z.string().uuid(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const DeveloperInvitationSchema = z.object({
+  invitation_id: z.string().uuid(),
+  account_id: z.string().uuid(),
+  organization_id: z.string().uuid().nullable(),
+  email: z.string(),
+  state: z.enum(['pending', 'accepted', 'expired', 'revoked']),
+  expires_at: z.string(),
+  accepted_by: z.string().uuid().nullable(),
+  accepted_at: z.string().nullable(),
+  revoked_by: z.string().uuid().nullable(),
+  revoked_at: z.string().nullable(),
+  created_by: z.string().uuid(),
+  created_at: z.string(),
+});
+
+export const DeveloperPublisherSchema = z.object({
+  publisher_id: z.string(),
+  account_id: z.string().uuid(),
+  organization_id: z.string().uuid(),
+  slug: z.string(),
+  display_name: z.string(),
+  status: z.enum(['active', 'suspended']),
+  authority_revision: z.number().int().nonnegative(),
+  suspended_reason: z.string().nullable(),
+  suspended_by: z.string().uuid().nullable(),
+  suspended_at: z.string().nullable(),
+  created_by: z.string().uuid(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const DeveloperPublisherMemberSchema = z.object({
+  member_id: z.string().uuid(),
+  account_id: z.string().uuid(),
+  publisher_id: z.string(),
+  user_id: z.string().uuid(),
+  role: z.enum(DEVELOPER_PUBLISHER_ROLES),
+  revision: z.number().int().nonnegative(),
+  created_by: z.string().uuid(),
+  created_at: z.string(),
+  updated_by: z.string().uuid().nullable(),
+  updated_at: z.string(),
+});
+
+const DeveloperAccessSchema = z.object({
+  account_id: z.string().uuid(),
+  user_id: z.string().uuid(),
+  organization: DeveloperOrganizationSchema.nullable(),
+  invitations: z.array(DeveloperInvitationSchema),
+  publishers: z.array(
+    z.object({
+      publisher: DeveloperPublisherSchema,
+      membership: DeveloperPublisherMemberSchema.nullable(),
+    }),
+  ),
+});
+
+const DeveloperAccountQuerySchema = z.object({ account_id: z.string().uuid().optional() }).strict();
+const DeveloperInvitationAcceptBodySchema = z
+  .object({ account_id: z.string().uuid().optional(), token: z.string().min(1).max(512) })
+  .strict();
+const DeveloperPublisherCreateBodySchema = z
+  .object({
+    account_id: z.string().uuid().optional(),
+    organization_id: z.string().uuid(),
+    slug: z.string(),
+    display_name: z.string(),
+  })
+  .strict();
+const DeveloperPublisherMemberBodySchema = z
+  .object({
+    account_id: z.string().uuid().optional(),
+    role: z.enum(DEVELOPER_PUBLISHER_ROLES),
+    expected_revision: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+
 export const DeveloperModuleVerificationRunSchema = z.object({
   run_id: z.string().uuid(),
   release_id: z.string().uuid(),
@@ -301,9 +398,19 @@ export type DeveloperAppDependencies = Readonly<{
   releaseService: Pick<DeveloperModuleReleaseService, 'submit' | 'list' | 'get'>;
   reviewService: Pick<DeveloperModuleReviewService, 'requestReview' | 'history'>;
   verificationService: Pick<DeveloperModuleVerificationService, 'getTrustView' | 'retryPublisher'>;
+  publisherService: Pick<
+    DeveloperPublisherService,
+    | 'getDeveloperAccess'
+    | 'acceptInvitation'
+    | 'createPublisher'
+    | 'listPublishers'
+    | 'setMemberRole'
+    | 'auditHistory'
+  >;
 }>;
 
 function reviewErrorResponse(context: Context<AppEnv>, error: unknown) {
+  if (error instanceof DeveloperPublisherError) return publisherErrorResponse(context, error);
   if (!(error instanceof DeveloperModuleReviewError)) throw error;
   const body = { error: error.code };
   if (error.status === 400) return context.json(body, 400);
@@ -313,6 +420,7 @@ function reviewErrorResponse(context: Context<AppEnv>, error: unknown) {
 }
 
 function artifactErrorResponse(context: Context<AppEnv>, error: unknown) {
+  if (error instanceof DeveloperPublisherError) return publisherErrorResponse(context, error);
   if (!(error instanceof DeveloperModuleArtifactError)) throw error;
   const body = { error: error.code };
   if (error.status === 400) return context.json(body, 400);
@@ -325,6 +433,15 @@ function verificationErrorResponse(context: Context<AppEnv>, error: unknown) {
   if (!(error instanceof DeveloperModuleVerificationError)) throw error;
   const body = { error: error.code };
   if (error.status === 400) return context.json(body, 400);
+  if (error.status === 404) return context.json(body, 404);
+  return context.json(body, 409);
+}
+
+function publisherErrorResponse(context: Context<AppEnv>, error: unknown) {
+  if (!(error instanceof DeveloperPublisherError)) throw error;
+  const body = { error: error.code };
+  if (error.status === 400) return context.json(body, 400);
+  if (error.status === 403) return context.json(body, 403);
   if (error.status === 404) return context.json(body, 404);
   return context.json(body, 409);
 }
@@ -354,6 +471,189 @@ export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
       },
     }),
     (context) => context.json(validateRegistryItem(context.req.valid('json')), 200),
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/access',
+      tags: ['developer'],
+      summary: 'Read the current developer organization and Publisher access',
+      ...auth,
+      request: { query: DeveloperAccountQuerySchema },
+      responses: {
+        200: json(DeveloperAccessSchema, 'Developer access state'),
+        ...errors(400, 401, 403),
+      },
+    }),
+    async (context) => {
+      const accountId = await dependencies.resolveAccountId(context, 'query');
+      context.set('accountId', accountId);
+      await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_READ);
+      const access = await dependencies.publisherService.getDeveloperAccess({
+        accountId,
+        userId: context.get('userId'),
+        email: context.get('userEmail'),
+      });
+      return context.json(access, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'post',
+      path: '/invitations/accept',
+      tags: ['developer'],
+      summary: 'Accept a one-time developer invitation',
+      ...auth,
+      request: {
+        body: {
+          required: true,
+          content: { 'application/json': { schema: DeveloperInvitationAcceptBodySchema } },
+        },
+      },
+      responses: {
+        200: json(DeveloperInvitationSchema, 'Developer invitation accepted'),
+        ...errors(400, 401, 403, 404, 409),
+      },
+    }),
+    async (context) => {
+      const accountId = await dependencies.resolveAccountId(context, 'body');
+      context.set('accountId', accountId);
+      await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_WRITE);
+      try {
+        const invitation = await dependencies.publisherService.acceptInvitation(
+          context.req.valid('json').token,
+          {
+            accountId,
+            userId: context.get('userId'),
+            email: context.get('userEmail'),
+          },
+        );
+        return context.json(invitation, 200);
+      } catch (error) {
+        return publisherErrorResponse(context, error);
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'post',
+      path: '/publishers',
+      tags: ['developer'],
+      summary: 'Create a Publisher for a verified developer organization',
+      ...auth,
+      request: {
+        body: {
+          required: true,
+          content: { 'application/json': { schema: DeveloperPublisherCreateBodySchema } },
+        },
+      },
+      responses: {
+        201: json(
+          z.object({
+            publisher: DeveloperPublisherSchema,
+            organization: DeveloperOrganizationSchema,
+            member: DeveloperPublisherMemberSchema.nullable(),
+          }),
+          'Publisher created',
+        ),
+        ...errors(400, 401, 403, 404, 409),
+      },
+    }),
+    async (context) => {
+      const accountId = await dependencies.resolveAccountId(context, 'body');
+      context.set('accountId', accountId);
+      await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_WRITE);
+      const body = context.req.valid('json');
+      try {
+        const authority = await dependencies.publisherService.createPublisher({
+          actor: {
+            accountId,
+            userId: context.get('userId'),
+            email: context.get('userEmail'),
+          },
+          organizationId: body.organization_id,
+          slug: body.slug,
+          displayName: body.display_name,
+        });
+        return context.json(authority, 201);
+      } catch (error) {
+        return publisherErrorResponse(context, error);
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/publishers',
+      tags: ['developer'],
+      summary: 'List account-scoped Publishers',
+      ...auth,
+      request: { query: DeveloperAccountQuerySchema },
+      responses: {
+        200: json(z.object({ publishers: z.array(DeveloperPublisherSchema) }), 'Publishers'),
+        ...errors(400, 401, 403),
+      },
+    }),
+    async (context) => {
+      const accountId = await dependencies.resolveAccountId(context, 'query');
+      context.set('accountId', accountId);
+      await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_READ);
+      const publishers = await dependencies.publisherService.listPublishers({
+        accountId,
+        userId: context.get('userId'),
+        email: context.get('userEmail'),
+      });
+      return context.json({ publishers: [...publishers] }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'put',
+      path: '/publishers/{publisherId}/members/{userId}',
+      tags: ['developer'],
+      summary: 'Create or revision-fence a Publisher member role',
+      ...auth,
+      request: {
+        params: z.object({ publisherId: z.string(), userId: z.string().uuid() }),
+        body: {
+          required: true,
+          content: { 'application/json': { schema: DeveloperPublisherMemberBodySchema } },
+        },
+      },
+      responses: {
+        200: json(DeveloperPublisherMemberSchema, 'Publisher member updated'),
+        201: json(DeveloperPublisherMemberSchema, 'Publisher member created'),
+        ...errors(400, 401, 403, 404, 409),
+      },
+    }),
+    async (context) => {
+      const accountId = await dependencies.resolveAccountId(context, 'body');
+      context.set('accountId', accountId);
+      await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_WRITE);
+      const body = context.req.valid('json');
+      const params = context.req.valid('param');
+      try {
+        const member = await dependencies.publisherService.setMemberRole({
+          actor: {
+            accountId,
+            userId: context.get('userId'),
+            email: context.get('userEmail'),
+          },
+          publisherId: params.publisherId,
+          userId: params.userId,
+          role: body.role,
+          expectedRevision: body.expected_revision,
+        });
+        return context.json(member, body.expected_revision === null ? 201 : 200);
+      } catch (error) {
+        return publisherErrorResponse(context, error);
+      }
+    },
   );
 
   app.openapi(
@@ -557,6 +857,7 @@ export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
         await dependencies.artifactService.cancelUpload({
           accountId,
           uploadId: context.req.valid('param').uploadId,
+          actorUserId: context.get('userId'),
         });
         return context.body(null, 204);
       } catch (error) {
@@ -632,6 +933,9 @@ export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
         });
         return context.json(result, result.created ? 201 : 200);
       } catch (error) {
+        if (error instanceof DeveloperPublisherError) {
+          return publisherErrorResponse(context, error);
+        }
         if (error instanceof DeveloperModuleArtifactError) {
           return artifactErrorResponse(context, error);
         }

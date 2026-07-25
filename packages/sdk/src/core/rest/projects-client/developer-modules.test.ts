@@ -4,18 +4,23 @@ import { createKortix } from '../../client/kortix';
 import { configureKortix } from '../../http/config';
 import {
   type DeveloperModuleRelease,
+  acceptDeveloperInvitation,
   cancelDeveloperModuleArtifactUpload,
   createDeclarativeDeveloperModuleArtifact,
   createDeveloperModuleArtifactUpload,
+  createDeveloperPublisher,
   finalizeDeveloperModuleArtifactUpload,
+  getDeveloperAccess,
   getDeveloperModuleArtifact,
   getDeveloperModuleRelease,
   getDeveloperModuleReviewHistory,
   getDeveloperModuleTrust,
   listDeveloperModuleReleases,
+  listDeveloperPublishers,
   requestDeveloperModuleReview,
   retryDeveloperModuleVerification,
   submitDeveloperModuleRelease,
+  updateDeveloperPublisherMember,
   validateDeveloperModule,
 } from './developer-modules';
 
@@ -60,6 +65,81 @@ test('createKortix exposes developer module validation', async () => {
   await expect(
     kortix.developer.modules.validate({ name: 'example', type: 'registry:module' }),
   ).resolves.toEqual({ valid: true, issues: [] });
+});
+
+test('developer Publisher SDK maps access, invitation, creation, list, and role updates', async () => {
+  await getDeveloperAccess({ accountId: 'acc-1' });
+  await acceptDeveloperInvitation('one-time-token', { accountId: 'acc-1' });
+  await createDeveloperPublisher({
+    accountId: 'acc-1',
+    organizationId: 'org-1',
+    slug: 'acme',
+    displayName: 'Acme',
+  });
+  await listDeveloperPublishers({ accountId: 'acc-1' });
+  await updateDeveloperPublisherMember('publisher/with slash', 'user with slash', {
+    accountId: 'acc-1',
+    role: 'release_manager',
+    expectedRevision: 2,
+  });
+
+  expect(calls).toEqual([
+    {
+      url: 'http://test.local/developer/access?account_id=acc-1',
+      method: 'GET',
+      body: undefined,
+    },
+    {
+      url: 'http://test.local/developer/invitations/accept',
+      method: 'POST',
+      body: { account_id: 'acc-1', token: 'one-time-token' },
+    },
+    {
+      url: 'http://test.local/developer/publishers',
+      method: 'POST',
+      body: {
+        account_id: 'acc-1',
+        organization_id: 'org-1',
+        slug: 'acme',
+        display_name: 'Acme',
+      },
+    },
+    {
+      url: 'http://test.local/developer/publishers?account_id=acc-1',
+      method: 'GET',
+      body: undefined,
+    },
+    {
+      url: 'http://test.local/developer/publishers/publisher%2Fwith%20slash/members/user%20with%20slash',
+      method: 'PUT',
+      body: { account_id: 'acc-1', role: 'release_manager', expected_revision: 2 },
+    },
+  ]);
+});
+
+test('createKortix exposes the developer Publisher facade', async () => {
+  const kortix = createKortix({ backendUrl: 'http://test.local', getToken: async () => 'tok' });
+
+  await kortix.developer.getAccess({ accountId: 'acc-1' });
+  await kortix.developer.acceptInvitation('one-time-token', { accountId: 'acc-1' });
+  await kortix.developer.publishers.create({
+    organizationId: 'org-1',
+    slug: 'acme',
+    displayName: 'Acme',
+  });
+  await kortix.developer.publishers.list();
+  await kortix.developer.publishers.updateMember('acme', 'user-1', {
+    role: 'developer',
+    expectedRevision: null,
+  });
+
+  expect(calls.map((call) => call.url)).toEqual([
+    'http://test.local/developer/access?account_id=acc-1',
+    'http://test.local/developer/invitations/accept',
+    'http://test.local/developer/publishers',
+    'http://test.local/developer/publishers',
+    'http://test.local/developer/publishers/acme/members/user-1',
+  ]);
 });
 
 test('developer module release SDK submits only an artifact id, then sends scoped list and get requests', async () => {

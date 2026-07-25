@@ -15,6 +15,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import {
   developerModuleDistributionEnabled,
   developerModuleDistributionService,
+  developerPublisherService,
   developerModuleReviewService,
   developerModuleVerificationService,
 } from '../developer';
@@ -24,6 +25,7 @@ import { requireAdmin } from '../middleware/require-admin';
 import { makeOpenApiApp, json, errors, auth } from '../openapi';
 import { recordAuditEvent } from '../shared/audit';
 import { registerAdminDeveloperDistributionRoutes } from './developer-distribution';
+import { registerAdminDeveloperPublisherRoutes } from './developer-publishers';
 import { registerAdminDeveloperReviewRoutes } from './developer-reviews';
 
 export const adminApp = makeOpenApiApp<AppEnv>();
@@ -34,6 +36,9 @@ registerAdminDeveloperDistributionRoutes(adminApp, {
   distributionService: developerModuleDistributionService,
   enabled: developerModuleDistributionEnabled,
   recordAuditEvent,
+});
+registerAdminDeveloperPublisherRoutes(adminApp, {
+  publisherService: developerPublisherService,
 });
 registerAdminDeveloperReviewRoutes(adminApp, {
   reviewService: developerModuleReviewService,

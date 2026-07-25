@@ -11,6 +11,7 @@ import {
   createMemoryDeveloperModuleArtifactRepository,
   serializeDeveloperModuleArtifactPackage,
 } from './artifacts';
+import { DeveloperPublisherService, createMemoryDeveloperPublisherRepository } from './publishers';
 import {
   DeveloperModuleReleaseService,
   createMemoryDeveloperModuleReleaseRepository,
@@ -66,6 +67,12 @@ function emptyVerificationService() {
   });
 }
 
+function emptyPublisherService() {
+  return new DeveloperPublisherService({
+    repository: createMemoryDeveloperPublisherRepository(),
+  });
+}
+
 const authenticatedApp = (
   input: {
     accountId?: string;
@@ -73,6 +80,7 @@ const authenticatedApp = (
     releaseService?: DeveloperAppDependencies['releaseService'];
     reviewService?: DeveloperAppDependencies['reviewService'];
     verificationService?: DeveloperAppDependencies['verificationService'];
+    publisherService?: DeveloperAppDependencies['publisherService'];
     resolvedSources?: Array<'body' | 'query'>;
     authorizeAccount?: DeveloperAppDependencies['authorizeAccount'];
   } = {},
@@ -107,6 +115,7 @@ const authenticatedApp = (
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
     verificationService: input.verificationService ?? emptyVerificationService(),
+    publisherService: input.publisherService ?? emptyPublisherService(),
     authorizeAccount: input.authorizeAccount ?? (async () => undefined),
   });
 };
@@ -182,6 +191,7 @@ describe('developer module validation API', () => {
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
       verificationService: emptyVerificationService(),
+      publisherService: emptyPublisherService(),
       authorizeAccount: async () => undefined,
     });
     const response = await app.request('/modules/validate', {
@@ -268,6 +278,7 @@ describe('developer module validation API', () => {
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
       verificationService: emptyVerificationService(),
+      publisherService: emptyPublisherService(),
       authorizeAccount: async () => undefined,
     });
 
@@ -372,6 +383,7 @@ describe('developer module validation API', () => {
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
       verificationService: emptyVerificationService(),
+      publisherService: emptyPublisherService(),
     });
 
     const response = await app.request('/modules/releases', {
@@ -750,5 +762,103 @@ describe('developer module artifact API', () => {
     expect(hiddenRetry.status).toBe(404);
     expect(await hiddenRetry.json()).toEqual({ error: 'DEVELOPER_RELEASE_NOT_FOUND' });
     expect(actions).toEqual([ACCOUNT_ACTIONS.ACCOUNT_READ, ACCOUNT_ACTIONS.ACCOUNT_WRITE]);
+  });
+});
+
+describe('developer Publisher API', () => {
+  test('accepts invitations, creates and lists a Publisher, and revision-fences roles', async () => {
+    const organizationId = '30000000-0000-4000-a000-000000000003';
+    const targetUserId = '20000000-0000-4000-a000-000000000004';
+    const repository = createMemoryDeveloperPublisherRepository({
+      organizations: [
+        {
+          organization_id: organizationId,
+          account_id: ACCOUNT_ID,
+          name: 'Acme Studio',
+          verification_state: 'verified',
+          verification_metadata: {},
+          verification_revision: 1,
+          verification_changed_by: targetUserId,
+          verification_changed_at: '2026-07-26T00:00:00.000Z',
+          created_by: USER_ID,
+          created_at: '2026-07-26T00:00:00.000Z',
+          updated_at: '2026-07-26T00:00:00.000Z',
+        },
+      ],
+    });
+    const publisherService = new DeveloperPublisherService({
+      repository,
+      now: () => new Date('2026-07-26T01:00:00.000Z'),
+      createToken: () => 'public-route-invitation-token',
+    });
+    const invited = await publisherService.invite({
+      actor: {
+        accountId: ACCOUNT_ID,
+        userId: targetUserId,
+        email: 'admin@example.com',
+        platformAdmin: true,
+      },
+      accountId: ACCOUNT_ID,
+      organizationId,
+      organizationName: 'Acme Studio',
+      email: 'developer@example.com',
+    });
+    const app = authenticatedApp({ publisherService });
+
+    const accepted = await app.request('/invitations/accept', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account_id: ACCOUNT_ID, token: invited.token }),
+    });
+    const created = await app.request('/publishers', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        account_id: ACCOUNT_ID,
+        organization_id: organizationId,
+        slug: 'Acme-Labs',
+        display_name: 'Acme Labs',
+      }),
+    });
+    const role = await app.request(`/publishers/acme-labs/members/${targetUserId}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        account_id: ACCOUNT_ID,
+        role: 'release_manager',
+        expected_revision: null,
+      }),
+    });
+    const access = await app.request(`/access?account_id=${ACCOUNT_ID}`);
+    const listed = await app.request(`/publishers?account_id=${ACCOUNT_ID}`);
+
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual(expect.objectContaining({ state: 'accepted' }));
+    expect(created.status).toBe(201);
+    expect(await created.json()).toEqual({
+      publisher: expect.objectContaining({ publisher_id: 'acme-labs' }),
+      organization: expect.objectContaining({ organization_id: organizationId }),
+      member: expect.objectContaining({ user_id: USER_ID, role: 'owner' }),
+    });
+    expect(role.status).toBe(201);
+    expect(await role.json()).toEqual(
+      expect.objectContaining({ user_id: targetUserId, role: 'release_manager', revision: 0 }),
+    );
+    expect(access.status).toBe(200);
+    expect(await access.json()).toEqual(
+      expect.objectContaining({
+        account_id: ACCOUNT_ID,
+        publishers: [
+          expect.objectContaining({
+            publisher: expect.objectContaining({ publisher_id: 'acme-labs' }),
+            membership: expect.objectContaining({ role: 'owner' }),
+          }),
+        ],
+      }),
+    );
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual({
+      publishers: [expect.objectContaining({ publisher_id: 'acme-labs' })],
+    });
   });
 });

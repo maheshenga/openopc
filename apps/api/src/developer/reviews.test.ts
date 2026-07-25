@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
+import { DeveloperPublisherError } from './publishers';
 import type { DeveloperModuleRelease, DeveloperModuleReviewRequirement } from './releases';
 import {
   type DeveloperModuleHumanReviewEvidence,
@@ -159,6 +160,33 @@ async function pendingHarness() {
 }
 
 describe('developer module review service', () => {
+  test('checks Publisher release authority before appending a review request', async () => {
+    const { repository } = harness();
+    const calls: unknown[][] = [];
+    const service = new DeveloperModuleReviewService({
+      repository,
+      permissions: {
+        async requirePermission(...args) {
+          calls.push(args);
+          throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_SUSPENDED', 409);
+        },
+      },
+      now: () => NOW,
+    });
+
+    await expect(
+      service.requestReview({
+        accountId: ACCOUNT_ID,
+        releaseId: RELEASE_ID,
+        actorUserId: PUBLISHER_ID,
+        expectedStatus: 'validated',
+        expectedRevision: 0,
+      }),
+    ).rejects.toMatchObject({ code: 'DEVELOPER_PUBLISHER_SUSPENDED', status: 409 });
+    expect(calls).toEqual([['acme', { accountId: ACCOUNT_ID, userId: PUBLISHER_ID }, 'release']]);
+    await expect(repository.history(ACCOUNT_ID, RELEASE_ID)).resolves.toEqual([]);
+  });
+
   test('submits a validated release and appends immutable sequence one', async () => {
     const { service } = harness();
 
@@ -448,6 +476,43 @@ describe('developer module review service', () => {
         }),
       );
     }
+  });
+
+  test('checks unrelated platform-review authority before revoking an approved release', async () => {
+    const { repository } = harness(release('approved', 4));
+    const calls: unknown[][] = [];
+    const service = new DeveloperModuleReviewService({
+      repository,
+      permissions: {
+        async requirePermission(...args) {
+          calls.push(args);
+          throw new DeveloperPublisherError('DEVELOPER_SEGREGATION_OF_DUTIES_REQUIRED', 403);
+        },
+      },
+      now: () => NOW,
+    });
+
+    await expect(
+      service.decide({
+        releaseId: RELEASE_ID,
+        actorUserId: MEMBER_REVIEWER_ID,
+        decision: 'revoke',
+        expectedStatus: 'approved',
+        expectedRevision: 4,
+        reason: 'Emergency takedown after a verified security report.',
+      }),
+    ).rejects.toMatchObject({
+      code: 'DEVELOPER_SEGREGATION_OF_DUTIES_REQUIRED',
+      status: 403,
+    });
+    expect(calls).toEqual([
+      [
+        'acme',
+        { accountId: ACCOUNT_ID, userId: MEMBER_REVIEWER_ID, platformAdmin: true },
+        'platform_review',
+      ],
+    ]);
+    await expect(repository.history(ACCOUNT_ID, RELEASE_ID)).resolves.toEqual([]);
   });
 
   test('revokes an approved release only with an emergency reason', async () => {

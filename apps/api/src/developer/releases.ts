@@ -5,6 +5,7 @@ import {
   validateRegistryItem,
 } from '@kortix/registry';
 import { DeveloperModuleArtifactError, type DeveloperModuleArtifactRepository } from './artifacts';
+import type { DeveloperPublisherPermissionPort } from './publishers';
 
 export const DEVELOPER_MODULE_RELEASE_STATUSES = [
   'validated',
@@ -164,6 +165,7 @@ export class DeveloperModuleReleaseService {
       repository: DeveloperModuleReleaseRepository;
       artifacts: Pick<DeveloperModuleArtifactRepository, 'getArtifact'>;
       verification?: DeveloperModuleVerificationQueueBinding;
+      permissions?: DeveloperPublisherPermissionPort;
     },
   ) {}
 
@@ -187,6 +189,11 @@ export class DeveloperModuleReleaseService {
     if (manifest.publisher.id !== artifact.publisher_id) {
       throw new DeveloperModuleReleaseError('DEVELOPER_PUBLISHER_MISMATCH', 400);
     }
+    await this.input.permissions?.requirePermission(
+      artifact.publisher_id,
+      { accountId: input.accountId, userId: input.actorUserId },
+      'release',
+    );
 
     return await this.input.repository.submit({
       accountId: input.accountId,

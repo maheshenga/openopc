@@ -9,6 +9,7 @@ import {
   createRegistryModuleArtifactEnvelope,
   validateRegistryItem,
 } from '@kortix/registry';
+import type { DeveloperPublisherPermissionPort } from './publishers';
 
 export const DEVELOPER_ARTIFACT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 export const DEVELOPER_ARTIFACT_UPLOAD_TTL_MS = 5 * 60_000;
@@ -387,6 +388,7 @@ export class DeveloperModuleArtifactService {
       now?: () => Date;
       codeModulesEnabled?: boolean;
       trustInfrastructureReady?: () => boolean | Promise<boolean>;
+      permissions?: DeveloperPublisherPermissionPort;
     },
   ) {
     this.now = input.now ?? (() => new Date());
@@ -427,6 +429,11 @@ export class DeveloperModuleArtifactService {
     ) {
       throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_INVALID', 400);
     }
+    await this.input.permissions?.requirePermission(
+      envelope.descriptor.module.publisherId,
+      { accountId: input.accountId, userId: input.actorUserId },
+      'upload',
+    );
     await this.input.repository.claimPublisher({
       accountId: input.accountId,
       publisherId: envelope.descriptor.module.publisherId,
@@ -475,6 +482,11 @@ export class DeveloperModuleArtifactService {
     ) {
       throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_INVALID', 400);
     }
+    await this.input.permissions?.requirePermission(
+      input.publisherId,
+      { accountId: input.accountId, userId: input.actorUserId },
+      'upload',
+    );
     await this.input.repository.claimPublisher({
       accountId: input.accountId,
       publisherId: input.publisherId,
@@ -542,6 +554,11 @@ export class DeveloperModuleArtifactService {
     await this.assertCodeModuleSubmissionEnabled();
     const upload = await this.input.repository.getUpload(input.accountId, input.uploadId);
     if (!upload) throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_UPLOAD_NOT_FOUND', 404);
+    await this.input.permissions?.requirePermission(
+      upload.publisher_id,
+      { accountId: input.accountId, userId: input.actorUserId },
+      'upload',
+    );
     if (upload.state === 'finalized' && upload.artifact_id) {
       const existing = await this.input.repository.getArtifact(input.accountId, upload.artifact_id);
       if (existing) return { artifact: publicArtifact(existing), created: false };
@@ -633,9 +650,23 @@ export class DeveloperModuleArtifactService {
     return { artifact: publicArtifact(stored), created: true };
   }
 
-  async cancelUpload(input: { accountId: string; uploadId: string }): Promise<void> {
+  async cancelUpload(input: {
+    accountId: string;
+    uploadId: string;
+    actorUserId?: string;
+  }): Promise<void> {
     const upload = await this.input.repository.getUpload(input.accountId, input.uploadId);
     if (!upload) throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_UPLOAD_NOT_FOUND', 404);
+    if (this.input.permissions) {
+      if (!input.actorUserId) {
+        throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_PUBLISHER_CONFLICT', 409);
+      }
+      await this.input.permissions.requirePermission(
+        upload.publisher_id,
+        { accountId: input.accountId, userId: input.actorUserId },
+        'upload',
+      );
+    }
     if (upload.state === 'cancelled') return;
     if (upload.state === 'finalized') {
       throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_UPLOAD_STATE_INVALID', 409);

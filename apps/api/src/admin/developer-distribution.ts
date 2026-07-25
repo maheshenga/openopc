@@ -5,6 +5,7 @@ import {
   DeveloperModuleDistributionError,
   type DeveloperModuleDistributionService,
 } from '../developer/distribution';
+import { DeveloperPublisherError } from '../developer/publishers';
 import { DEVELOPER_MODULE_RELEASE_STATUSES } from '../developer/releases';
 import { auth, errors, json } from '../openapi';
 import type { AuditEventInput } from '../shared/audit';
@@ -51,6 +52,12 @@ export type AdminDeveloperDistributionRouteDependencies = Readonly<{
 }>;
 
 function errorResponse(context: Context<AppEnv>, error: unknown) {
+  if (error instanceof DeveloperPublisherError) {
+    const body = { error: error.code };
+    if (error.status === 403) return context.json(body, 403);
+    if (error.status === 404) return context.json(body, 404);
+    return context.json(body, 409);
+  }
   if (!(error instanceof DeveloperModuleDistributionError)) throw error;
   const body = { error: error.code };
   if (error.status === 400) return context.json(body, 400);

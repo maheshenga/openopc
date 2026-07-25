@@ -9,6 +9,7 @@ import {
   DeveloperModuleDistributionError,
   type DeveloperModuleDistributionService,
 } from '../developer/distribution';
+import { DeveloperPublisherError } from '../developer/publishers';
 import {
   DEVELOPER_MODULE_RELEASE_STATUSES,
   DEVELOPER_MODULE_REVIEW_REQUIREMENTS,
@@ -155,7 +156,8 @@ function errorResponse(context: Context<AppEnv>, error: unknown) {
   if (
     !(error instanceof DeveloperModuleReviewError) &&
     !(error instanceof DeveloperModuleDistributionError) &&
-    !(error instanceof DeveloperModuleVerificationError)
+    !(error instanceof DeveloperModuleVerificationError) &&
+    !(error instanceof DeveloperPublisherError)
   ) {
     throw error;
   }

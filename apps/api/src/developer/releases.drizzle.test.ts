@@ -11,7 +11,6 @@ import { DeveloperModuleReleaseError, type DeveloperModuleReleaseInsert } from '
 import { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzle';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
-const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000009';
 const USER_ID = '20000000-0000-4000-a000-000000000002';
 const RELEASE_ID = '30000000-0000-4000-a000-000000000003';
 const CREATED_AT = '2026-07-24T12:00:00.000Z';
@@ -73,14 +72,12 @@ const releaseRow = {
 };
 
 type FixtureInput = {
-  publisherInserts?: unknown[][];
   releaseInserts?: unknown[][];
   runInserts?: unknown[][];
   selects?: unknown[][];
 };
 
 function databaseFixture(input: FixtureInput = {}) {
-  const publisherInserts = [...(input.publisherInserts ?? [])];
   const releaseInserts = [...(input.releaseInserts ?? [])];
   const runInserts = [...(input.runInserts ?? [])];
   const selects = [...(input.selects ?? [])];
@@ -93,11 +90,9 @@ function databaseFixture(input: FixtureInput = {}) {
         values(value: unknown) {
           insertedValues.push({ table, value });
           const rows = () =>
-            table === developerPublishers
-              ? (publisherInserts.shift() ?? [])
-              : table === developerModuleReleases
-                ? (releaseInserts.shift() ?? [])
-                : (runInserts.shift() ?? []);
+            table === developerModuleReleases
+              ? (releaseInserts.shift() ?? [])
+              : (runInserts.shift() ?? []);
           return {
             onConflictDoNothing() {
               return {
@@ -153,9 +148,9 @@ function conditionParams(condition: unknown): unknown[] {
 }
 
 describe('developer module release Drizzle repository', () => {
-  test('claims the publisher and inserts one immutable release transactionally', async () => {
+  test('requires an existing Publisher and inserts one immutable release transactionally', async () => {
     const { database, insertedValues } = databaseFixture({
-      publisherInserts: [[publisherRow]],
+      selects: [[{ publisherId: 'acme' }]],
       releaseInserts: [[releaseRow]],
       runInserts: [[{ runId: '50000000-0000-4000-a000-000000000005' }]],
     });
@@ -187,13 +182,13 @@ describe('developer module release Drizzle repository', () => {
         attempt: 1,
       }),
     );
+    expect(insertedValues.some((entry) => entry.table === developerPublishers)).toBe(false);
   });
 
-  test('returns an existing same-digest version but rejects a publisher owned elsewhere', async () => {
+  test('returns an existing same-digest version but rejects a missing Publisher', async () => {
     const idempotent = databaseFixture({
-      publisherInserts: [[]],
       releaseInserts: [[]],
-      selects: [[publisherRow], [releaseRow]],
+      selects: [[{ publisherId: 'acme' }], [releaseRow]],
     });
     const repository = createDrizzleDeveloperModuleReleaseRepository(idempotent.database);
 
@@ -202,8 +197,7 @@ describe('developer module release Drizzle repository', () => {
     );
 
     const conflict = databaseFixture({
-      publisherInserts: [[]],
-      selects: [[{ ...publisherRow, accountId: OTHER_ACCOUNT_ID }]],
+      selects: [[]],
     });
     await expect(
       createDrizzleDeveloperModuleReleaseRepository(conflict.database).submit(submission),
@@ -214,9 +208,11 @@ describe('developer module release Drizzle repository', () => {
 
   test('rejects a reused module version with a different digest', async () => {
     const { database } = databaseFixture({
-      publisherInserts: [[]],
       releaseInserts: [[]],
-      selects: [[publisherRow], [{ ...releaseRow, manifestDigest: `sha256:${'b'.repeat(64)}` }]],
+      selects: [
+        [{ publisherId: 'acme' }],
+        [{ ...releaseRow, manifestDigest: `sha256:${'b'.repeat(64)}` }],
+      ],
     });
 
     await expect(

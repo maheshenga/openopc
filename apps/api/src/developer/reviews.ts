@@ -4,6 +4,7 @@ import type {
   DeveloperModuleDistributionEvent,
   DeveloperModuleDistributionRepository,
 } from './distribution';
+import type { DeveloperPublisherPermissionPort } from './publishers';
 import type {
   DeveloperModuleRelease,
   DeveloperModuleReleaseStatus,
@@ -400,6 +401,7 @@ export class DeveloperModuleReviewService {
       repository: DeveloperModuleReviewRepository;
       distributionRepository?: Pick<DeveloperModuleDistributionRepository, 'history'>;
       trustGate?: Pick<DeveloperModuleTrustGate, 'evaluate'>;
+      permissions?: DeveloperPublisherPermissionPort;
       now?: () => Date;
     },
   ) {
@@ -426,6 +428,12 @@ export class DeveloperModuleReviewService {
           ? { action: 'resubmit' as const, reasonRequired: true }
           : null;
     if (!transition) fail('DEVELOPER_REVIEW_TRANSITION_INVALID', 409);
+
+    await this.input.permissions?.requirePermission(
+      release.publisher_id,
+      { accountId: release.account_id, userId: input.actorUserId },
+      'release',
+    );
 
     return this.input.repository.transition({
       accountId: release.account_id,
@@ -463,12 +471,24 @@ export class DeveloperModuleReviewService {
       toStatus = 'changes_requested';
       reasonRequired = true;
     } else if (input.decision === 'approve' && release.status === 'review_pending') {
-      const isPublisherMember = await this.input.repository.isPublisherAccountMember(
-        release.account_id,
-        input.actorUserId,
-      );
-      if (release.created_by === input.actorUserId || isPublisherMember) {
-        fail('DEVELOPER_REVIEW_SELF_APPROVAL_DENIED', 403);
+      if (this.input.permissions) {
+        await this.input.permissions.requirePermission(
+          release.publisher_id,
+          {
+            accountId: release.account_id,
+            userId: input.actorUserId,
+            platformAdmin: true,
+          },
+          'platform_review',
+        );
+      } else {
+        const isPublisherMember = await this.input.repository.isPublisherAccountMember(
+          release.account_id,
+          input.actorUserId,
+        );
+        if (release.created_by === input.actorUserId || isPublisherMember) {
+          fail('DEVELOPER_REVIEW_SELF_APPROVAL_DENIED', 403);
+        }
       }
       toStatus = 'approved';
       reasonRequired = false;
@@ -479,6 +499,15 @@ export class DeveloperModuleReviewService {
         await automaticEvidence(release, this.input.trustGate),
       );
     } else if (input.decision === 'revoke' && release.status === 'approved') {
+      await this.input.permissions?.requirePermission(
+        release.publisher_id,
+        {
+          accountId: release.account_id,
+          userId: input.actorUserId,
+          platformAdmin: true,
+        },
+        'platform_review',
+      );
       toStatus = 'revoked';
       reasonRequired = true;
     } else {

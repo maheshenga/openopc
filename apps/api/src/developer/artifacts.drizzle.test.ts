@@ -17,7 +17,6 @@ import {
 } from './artifacts.drizzle';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
-const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000009';
 const USER_ID = '20000000-0000-4000-a000-000000000002';
 const UPLOAD_ID = '30000000-0000-4000-a000-000000000003';
 const ARTIFACT_ID = '40000000-0000-4000-a000-000000000004';
@@ -187,8 +186,8 @@ describe('developer module artifact Drizzle repository', () => {
     expect(serializeDeveloperModuleArtifactRow(artifactRow)).toEqual(artifactRecord);
   });
 
-  test('claims publisher ownership and rejects an account that reuses the namespace', async () => {
-    const claimedFixture = databaseFixture({ inserts: [[{ publisherId: 'acme' }]] });
+  test('requires an existing account-scoped Publisher without creating one implicitly', async () => {
+    const claimedFixture = databaseFixture({ selects: [[{ publisherId: 'acme' }]] });
     const claimedRepository = createDrizzleDeveloperModuleArtifactRepository(
       claimedFixture.database,
     );
@@ -198,14 +197,12 @@ describe('developer module artifact Drizzle repository', () => {
       displayName: 'Acme',
       actorUserId: USER_ID,
     });
-    expect(claimedFixture.insertedValues[0]).toEqual(
-      expect.objectContaining({ publisherId: 'acme', accountId: ACCOUNT_ID }),
+    expect(claimedFixture.insertedValues).toEqual([]);
+    expect(params(claimedFixture.conditions[0])).toEqual(
+      expect.arrayContaining([ACCOUNT_ID, 'acme']),
     );
 
-    const conflictFixture = databaseFixture({
-      inserts: [[]],
-      selects: [[{ publisherId: 'acme', accountId: OTHER_ACCOUNT_ID }]],
-    });
+    const conflictFixture = databaseFixture({ selects: [[]] });
     const conflictRepository = createDrizzleDeveloperModuleArtifactRepository(
       conflictFixture.database,
     );
@@ -219,7 +216,9 @@ describe('developer module artifact Drizzle repository', () => {
     ).rejects.toEqual(
       expect.objectContaining({ code: 'DEVELOPER_ARTIFACT_PUBLISHER_CONFLICT', status: 409 }),
     );
-    expect(params(conflictFixture.conditions[0])).toContain('acme');
+    expect(params(conflictFixture.conditions[0])).toEqual(
+      expect.arrayContaining([ACCOUNT_ID, 'acme']),
+    );
   });
 
   test('creates uploads and always qualifies reads by account', async () => {

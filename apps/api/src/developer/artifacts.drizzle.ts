@@ -111,28 +111,19 @@ export function createDrizzleDeveloperModuleArtifactRepository(
 ): DeveloperModuleArtifactRepository {
   return {
     async claimPublisher(input) {
-      await db.transaction(async (tx) => {
-        const [claimed] = await tx
-          .insert(developerPublishers)
-          .values({
-            publisherId: input.publisherId,
-            accountId: input.accountId,
-            displayName: input.displayName.trim() || input.publisherId,
-            createdBy: input.actorUserId,
-          })
-          .onConflictDoNothing({ target: developerPublishers.publisherId })
-          .returning({ publisherId: developerPublishers.publisherId });
-        if (claimed) return;
-
-        const [existing] = await tx
-          .select()
-          .from(developerPublishers)
-          .where(eq(developerPublishers.publisherId, input.publisherId))
-          .limit(1);
-        if (!existing || existing.accountId !== input.accountId) {
-          throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_PUBLISHER_CONFLICT', 409);
-        }
-      });
+      const [existing] = await db
+        .select({ publisherId: developerPublishers.publisherId })
+        .from(developerPublishers)
+        .where(
+          and(
+            eq(developerPublishers.accountId, input.accountId),
+            eq(developerPublishers.publisherId, input.publisherId),
+          ),
+        )
+        .limit(1);
+      if (!existing) {
+        throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_PUBLISHER_CONFLICT', 409);
+      }
     },
 
     async createUpload(input) {

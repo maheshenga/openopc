@@ -8,6 +8,7 @@ import {
   createMemoryDeveloperArtifactStore,
   createMemoryDeveloperModuleArtifactRepository,
 } from './artifacts';
+import { DeveloperPublisherError } from './publishers';
 import {
   DeveloperModuleReleaseError,
   DeveloperModuleReleaseService,
@@ -90,6 +91,31 @@ async function submitItem(
 }
 
 describe('developer module release service', () => {
+  test('checks Publisher release authority before creating a release', async () => {
+    const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
+    const artifact = await seedArtifact(artifacts, validModuleItem());
+    const calls: unknown[][] = [];
+    const service = new DeveloperModuleReleaseService({
+      repository: createMemoryDeveloperModuleReleaseRepository({ now: () => NOW }),
+      artifacts,
+      permissions: {
+        async requirePermission(...args) {
+          calls.push(args);
+          throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_FORBIDDEN', 403);
+        },
+      },
+    });
+
+    await expect(
+      service.submit({
+        accountId: ACCOUNT_ID,
+        actorUserId: USER_ID,
+        artifactId: artifact.artifact_id,
+      }),
+    ).rejects.toMatchObject({ code: 'DEVELOPER_PUBLISHER_FORBIDDEN', status: 403 });
+    expect(calls).toEqual([['acme', { accountId: ACCOUNT_ID, userId: USER_ID }, 'release']]);
+  });
+
   test('submits a release only from a finalized artifact in the same account', async () => {
     const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
     const artifactService = new DeveloperModuleArtifactService({

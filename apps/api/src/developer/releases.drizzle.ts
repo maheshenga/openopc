@@ -55,27 +55,18 @@ export function createDrizzleDeveloperModuleReleaseRepository(
   return {
     async submit(input) {
       return db.transaction(async (tx) => {
-        const [claimedPublisher] = await tx
-          .insert(developerPublishers)
-          .values({
-            publisherId: input.manifest.publisher.id,
-            accountId: input.accountId,
-            displayName:
-              input.manifest.publisher.displayName?.trim() || input.manifest.publisher.id,
-            createdBy: input.actorUserId,
-          })
-          .onConflictDoNothing({ target: developerPublishers.publisherId })
-          .returning();
-
-        if (!claimedPublisher) {
-          const [existingPublisher] = await tx
-            .select()
-            .from(developerPublishers)
-            .where(eq(developerPublishers.publisherId, input.manifest.publisher.id))
-            .limit(1);
-          if (!existingPublisher || existingPublisher.accountId !== input.accountId) {
-            throw new DeveloperModuleReleaseError('DEVELOPER_PUBLISHER_CONFLICT', 409);
-          }
+        const [existingPublisher] = await tx
+          .select({ publisherId: developerPublishers.publisherId })
+          .from(developerPublishers)
+          .where(
+            and(
+              eq(developerPublishers.accountId, input.accountId),
+              eq(developerPublishers.publisherId, input.manifest.publisher.id),
+            ),
+          )
+          .limit(1);
+        if (!existingPublisher) {
+          throw new DeveloperModuleReleaseError('DEVELOPER_PUBLISHER_CONFLICT', 409);
         }
 
         const [inserted] = await tx

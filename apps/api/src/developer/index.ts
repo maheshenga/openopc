@@ -28,6 +28,8 @@ import {
   createConfiguredModuleSigningPort,
   resolveModuleSignerConfig,
 } from './module-signer-config';
+import { DeveloperPublisherService } from './publishers';
+import { createDrizzleDeveloperPublisherRepository } from './publishers.drizzle';
 import {
   DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING,
   type DeveloperModuleReleaseRepository,
@@ -55,6 +57,8 @@ export {
 } from './module-signer-config';
 export * from './releases';
 export { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzle';
+export * from './publishers';
+export { createDrizzleDeveloperPublisherRepository } from './publishers.drizzle';
 export * from './reviews';
 export { createDrizzleDeveloperModuleReviewRepository } from './reviews.drizzle';
 export * from './trust-gate';
@@ -89,6 +93,9 @@ async function resolveDeveloperAccountId(
 
 const artifactRepository: DeveloperModuleArtifactRepository =
   createDrizzleDeveloperModuleArtifactRepository(db);
+export const developerPublisherService = new DeveloperPublisherService({
+  repository: createDrizzleDeveloperPublisherRepository(db),
+});
 const artifactStore = (() => {
   try {
     const runtime = getDefaultStudioApiRuntime();
@@ -106,6 +113,7 @@ const developerTrustReadiness = createDeveloperTrustReadinessClient({
 export const developerModuleArtifactService = new DeveloperModuleArtifactService({
   repository: artifactRepository,
   store: artifactStore,
+  permissions: developerPublisherService,
   codeModulesEnabled: process.env.DEVELOPER_CODE_MODULES_ENABLED === 'true',
   trustInfrastructureReady: () => developerTrustReadiness.isReady(),
 });
@@ -114,6 +122,7 @@ const releaseRepository: DeveloperModuleReleaseRepository =
 const releaseService = new DeveloperModuleReleaseService({
   repository: releaseRepository,
   artifacts: artifactRepository,
+  permissions: developerPublisherService,
 });
 export const developerModuleVerificationRepository =
   createDrizzleDeveloperModuleVerificationRepository(db);
@@ -139,6 +148,7 @@ export const developerModuleDistributionService = new DeveloperModuleDistributio
   repository: distributionRepository,
   signer: configuredSigner,
   trustGate: developerModuleTrustGate,
+  permissions: developerPublisherService,
 });
 export const projectModuleInstallationService = new ProjectModuleInstallationService({
   repository: createProjectInstallationRepository(db),
@@ -156,6 +166,7 @@ export const developerModuleReviewService = new DeveloperModuleReviewService({
   repository: reviewRepository,
   distributionRepository,
   trustGate: developerModuleTrustGate,
+  permissions: developerPublisherService,
 });
 
 export const developerApp = createDeveloperApp({
@@ -173,4 +184,5 @@ export const developerApp = createDeveloperApp({
   releaseService,
   reviewService: developerModuleReviewService,
   verificationService: developerModuleVerificationService,
+  publisherService: developerPublisherService,
 });

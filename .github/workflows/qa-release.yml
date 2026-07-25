@@ -26,6 +26,10 @@ on:
         description: "Staging automated pentest target origin without /v1"
         required: false
         type: string
+      module_runner_url:
+        description: "Private staging module Runner API URL"
+        required: false
+        type: string
 
 concurrency:
   group: qa-release-${{ github.ref }}
@@ -49,6 +53,8 @@ jobs:
       WEB_BASE_URL_INPUT: ${{ inputs.web_base_url || vars.QA_WEB_BASE_URL || vars.E2E_BASE_URL }}
       DAST_TARGET_URL_INPUT: ${{ inputs.dast_target_url || vars.QA_DAST_TARGET_URL }}
       PENTEST_TARGET_URL_INPUT: ${{ inputs.pentest_target_url || vars.QA_PENTEST_TARGET_URL }}
+      MODULE_BETA_RUNNER_URL_INPUT: ${{ inputs.module_runner_url || vars.QA_MODULE_RUNNER_URL }}
+      MODULE_BETA_GATES_REQUIRED: ${{ vars.QA_RUN_MODULE_BETA_GATES || 'false' }}
       KE2E_OWNER_EMAIL: ${{ secrets.KE2E_OWNER_EMAIL }}
       KE2E_OWNER_PASSWORD: ${{ secrets.KE2E_OWNER_PASSWORD }}
       KE2E_SUPABASE_URL: ${{ secrets.KE2E_SUPABASE_URL }}
@@ -72,42 +78,10 @@ jobs:
           node-version: 22
 
       - name: Normalize and guard release targets
-        run: |
-          set -euo pipefail
-          api="${API_BASE_URL_INPUT%/}"
-          web="${WEB_BASE_URL_INPUT%/}"
-          dast="${DAST_TARGET_URL_INPUT:-}"
-          pentest="${PENTEST_TARGET_URL_INPUT:-}"
-          if [ -z "$dast" ] && [ -n "$api" ]; then
-            dast="${api%/v1}"
-          fi
-          if [ -z "$pentest" ] && [ -n "$api" ]; then
-            pentest="${api%/v1}"
-          fi
-          if [ -z "$api" ] || [ -z "$web" ] || [ -z "$dast" ] || [ -z "$pentest" ]; then
-            echo "::error::Release QA requires QA_API_BASE_URL, QA_WEB_BASE_URL, QA_DAST_TARGET_URL, and QA_PENTEST_TARGET_URL (or matching workflow inputs)."
-            exit 1
-          fi
-          case "$dast $pentest" in
-            *prod*|*production*|https://api.kortix.com*|https://kortix.com*)
-              echo "::error::Refusing to run DAST/pentest against production-looking target: dast=$dast pentest=$pentest"
-              exit 1
-              ;;
-          esac
-          {
-            echo "API_BASE_URL=$api"
-            echo "KE2E_API_URL=$api"
-            echo "BASE_URL=$api"
-            echo "E2E_BASE_URL=$web"
-            echo "TARGET_URL=$dast"
-            echo "PENTEST_TARGET_URL=$pentest"
-            echo "PENTEST_LIVE_CONFIRM=ci"
-            echo "KE2E_LIVE_CONFIRM=ci"
-          } >> "$GITHUB_ENV"
-          echo "Release API target: $api"
-          echo "Release web target: $web"
-          echo "Release DAST target: $dast"
-          echo "Release pentest target: $pentest"
+        run: bun scripts/release/module-beta-targets.ts --github-env
+
+      - name: Validate module beta evidence ledger
+        run: pnpm module-beta:evidence:validate
 
       - name: Install test dependencies
         run: cd tests && bun install --frozen-lockfile

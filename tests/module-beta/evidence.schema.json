@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openopc.dev/schemas/module-beta-evidence.v1.json",
+  "title": "OpenOPC module internal-beta evidence ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "records"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "records": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/evidenceRecord" }
+    }
+  },
+  "allOf": [
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G1" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G2" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G3" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G4" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G5" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G6" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G7" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G8" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G9" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G10" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G11" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    },
+    {
+      "properties": {
+        "records": {
+          "contains": { "properties": { "gate": { "const": "G12" } }, "required": ["gate"] },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "evidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "gate",
+        "lane",
+        "command",
+        "environment",
+        "dependencyIdentities",
+        "commit",
+        "startedAt",
+        "finishedAt",
+        "outcome",
+        "artifactPaths"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "gate": {
+          "enum": ["G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10", "G11", "G12"]
+        },
+        "lane": {
+          "enum": ["focused", "package", "integration", "browser", "deployment", "production"]
+        },
+        "command": { "type": ["string", "null"] },
+        "environment": { "enum": ["local", "staging", "production"] },
+        "dependencyIdentities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "commit": { "type": ["string", "null"] },
+        "startedAt": { "type": ["string", "null"], "format": "date-time" },
+        "finishedAt": { "type": ["string", "null"], "format": "date-time" },
+        "outcome": { "enum": ["not-run", "passed", "failed"] },
+        "artifactPaths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "outcome": { "const": "passed" } }, "required": ["outcome"] },
+          "then": {
+            "properties": {
+              "command": { "type": "string", "minLength": 1 },
+              "dependencyIdentities": { "minItems": 1 },
+              "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+              "startedAt": { "type": "string", "format": "date-time" },
+              "finishedAt": { "type": "string", "format": "date-time" },
+              "artifactPaths": { "minItems": 1 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

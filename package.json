@@ -31,6 +31,7 @@
     "test:packages": "pnpm --filter \"./packages/**\" --if-present test",
     "test:apps": "pnpm --filter \"./apps/**\" --if-present test",
     "test:suite": "pnpm --filter @kortix/tests test",
+    "module-beta:evidence:validate": "bun scripts/release/module-beta-targets.ts --check-fixture tests/module-beta/evidence.json",
     "lint:biome": "biome check .",
     "lint:biome:fix": "biome check --write .",
     "format": "biome format --write .",

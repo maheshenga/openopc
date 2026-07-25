@@ -2,10 +2,11 @@
 
 import {
   type DeveloperModuleValidationIssue,
+  createDeclarativeDeveloperModuleArtifact,
   submitDeveloperModuleRelease,
   validateDeveloperModule,
 } from '@kortix/sdk';
-import { ArrowLeft, FileJson, ShieldCheck, Upload } from 'lucide-react';
+import { ArrowLeft, Box, FileJson, ShieldCheck, Upload, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
@@ -19,13 +20,33 @@ import { useCurrentAccountStore } from '@/stores/current-account-store';
 
 import { DEVELOPER_MODULE_INPUT_MAX_BYTES, developerCenterErrorCode } from '../model';
 import {
+  type DeveloperModuleArtifactUploadState,
+  createDeveloperModuleArtifactUploadController,
+  defaultDeveloperModuleArtifactUploadDependencies,
+} from './artifact-upload-controller';
+import {
   type DeveloperModuleSubmitControllerState,
   type SubmitControllerStage,
   type SubmitInputErrorCode,
+  createArtifactBackedDeveloperModuleSubmit,
   createDeveloperModuleSubmitController,
 } from './submit-controller';
 
+export type DeveloperModuleSubmitMode = 'declarative' | 'package';
+
+const EMPTY_PACKAGE_STATE: DeveloperModuleArtifactUploadState = {
+  stage: 'idle',
+  fileName: null,
+  fileSize: 0,
+  progress: 0,
+  digest: null,
+  uploadId: null,
+  artifact: null,
+  submission: null,
+};
+
 export interface DeveloperModuleSubmitViewProps {
+  mode?: DeveloperModuleSubmitMode;
   stage: SubmitControllerStage;
   text: string;
   item: Record<string, unknown> | null;
@@ -35,10 +56,141 @@ export interface DeveloperModuleSubmitViewProps {
   pending: boolean;
   validating?: boolean;
   errorCode: string | null;
+  packageFileName?: string | null;
+  packagePublisherId?: string;
+  packageState?: DeveloperModuleArtifactUploadState;
+  onModeChange?: (mode: DeveloperModuleSubmitMode) => void;
   onTextChange: (value: string) => void;
   onFile?: (file: File) => void | Promise<void>;
   onValidate: () => void | Promise<void>;
   onConfirm: () => void | Promise<void>;
+  onPackagePublisherIdChange?: (value: string) => void;
+  onPackageFile?: (file: File) => void;
+  onStartPackage?: () => void | Promise<void>;
+  onCancelPackage?: () => void | Promise<void>;
+}
+
+function packageStageLabel(stage: DeveloperModuleArtifactUploadState['stage']): string {
+  if (stage === 'hashing') return 'Hashing package';
+  if (stage === 'requesting_upload') return 'Preparing upload';
+  if (stage === 'uploading') return 'Uploading package';
+  if (stage === 'finalizing') return 'Finalizing artifact';
+  if (stage === 'submitting') return 'Submitting release';
+  if (stage === 'submitted') return 'Release submitted';
+  if (stage === 'cancelled') return 'Upload cancelled';
+  if (stage === 'error') return 'Upload failed';
+  return 'Ready to upload';
+}
+
+function DeveloperModulePackageUploadView({
+  canWrite,
+  fileName,
+  publisherId,
+  state,
+  onPublisherIdChange,
+  onFile,
+  onStart,
+  onCancel,
+}: {
+  canWrite: boolean;
+  fileName: string | null;
+  publisherId: string;
+  state: DeveloperModuleArtifactUploadState;
+  onPublisherIdChange: (value: string) => void;
+  onFile: (file: File) => void;
+  onStart: () => void | Promise<void>;
+  onCancel: () => void | Promise<void>;
+}) {
+  const active = ['hashing', 'requesting_upload', 'uploading', 'finalizing', 'submitting'].includes(
+    state.stage,
+  );
+  const selectedFileName = state.fileName ?? fileName;
+
+  return (
+    <section className="space-y-5" aria-label="Package upload">
+      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_18rem]">
+        <label
+          htmlFor="developer-module-package"
+          className="flex min-h-36 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed p-5 text-center"
+        >
+          <Box className="size-5" />
+          <span className="mt-2 break-all text-sm font-medium">
+            {selectedFileName ?? 'Select module package'}
+          </span>
+          <span className="mt-1 text-xs text-muted-foreground">Maximum 512 MiB</span>
+          <Input
+            id="developer-module-package"
+            type="file"
+            accept=".openopc,.json,application/octet-stream,application/vnd.openopc.developer-module.v2+json"
+            className="sr-only"
+            disabled={active}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) onFile(file);
+            }}
+          />
+        </label>
+        <div className="space-y-2">
+          <label htmlFor="developer-module-publisher" className="text-sm font-medium">
+            Publisher ID
+          </label>
+          <Input
+            id="developer-module-publisher"
+            value={publisherId}
+            placeholder="acme"
+            disabled={active}
+            onChange={(event) => onPublisherIdChange(event.target.value)}
+          />
+        </div>
+      </div>
+
+      {state.stage !== 'idle' ? (
+        <div className="space-y-2 border-y py-4">
+          <div className="flex items-center justify-between gap-3 text-sm">
+            <span className="font-medium">{packageStageLabel(state.stage)}</span>
+            <span className="tabular-nums text-muted-foreground">{state.progress}%</span>
+          </div>
+          <div
+            className="h-2 overflow-hidden rounded-full bg-foreground/10"
+            aria-label="Upload progress"
+          >
+            <div
+              className="h-full bg-foreground transition-[width]"
+              style={{ width: `${Math.min(Math.max(state.progress, 0), 100)}%` }}
+            />
+          </div>
+          {state.digest ? (
+            <p className="break-all font-mono text-xs text-muted-foreground">
+              Local digest: {state.digest}
+            </p>
+          ) : null}
+          {state.artifact ? (
+            <p className="break-all font-mono text-xs">
+              Server artifact digest: {state.artifact.artifact_digest}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!canWrite ? (
+        <p className="text-sm text-muted-foreground">Account write permission is required.</p>
+      ) : active ? (
+        <Button type="button" variant="outline" onClick={() => void onCancel()}>
+          <XCircle />
+          Cancel upload
+        </Button>
+      ) : state.stage === 'submitted' ? null : (
+        <Button
+          type="button"
+          disabled={!fileName || !publisherId.trim()}
+          onClick={() => void onStart()}
+        >
+          <Upload />
+          Upload package
+        </Button>
+      )}
+    </section>
+  );
 }
 
 function textValue(item: Record<string, unknown>, ...keys: string[]): string {
@@ -56,6 +208,7 @@ function listValue(value: unknown): string {
 }
 
 export function DeveloperModuleSubmitView({
+  mode = 'declarative',
   stage,
   text,
   item,
@@ -65,10 +218,18 @@ export function DeveloperModuleSubmitView({
   pending,
   validating = false,
   errorCode,
+  packageFileName = null,
+  packagePublisherId = '',
+  packageState = EMPTY_PACKAGE_STATE,
+  onModeChange = () => undefined,
   onTextChange,
   onFile,
   onValidate,
   onConfirm,
+  onPackagePublisherIdChange = () => undefined,
+  onPackageFile = () => undefined,
+  onStartPackage = () => undefined,
+  onCancelPackage = () => undefined,
 }: DeveloperModuleSubmitViewProps) {
   const confirmation = stage !== 'input' && item;
 
@@ -95,7 +256,43 @@ export function DeveloperModuleSubmitView({
         </div>
       ) : null}
 
-      {!confirmation ? (
+      <div
+        role="tablist"
+        aria-label="Submission type"
+        className="inline-flex h-9 w-fit items-center gap-1 rounded-lg bg-foreground/5 p-1"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'declarative'}
+          className="h-7 rounded-md px-3 text-sm font-medium aria-selected:bg-background aria-selected:shadow-sm"
+          onClick={() => onModeChange('declarative')}
+        >
+          Declarative JSON
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'package'}
+          className="h-7 rounded-md px-3 text-sm font-medium aria-selected:bg-background aria-selected:shadow-sm"
+          onClick={() => onModeChange('package')}
+        >
+          Package upload
+        </button>
+      </div>
+
+      {mode === 'package' ? (
+        <DeveloperModulePackageUploadView
+          canWrite={canWrite}
+          fileName={packageFileName}
+          publisherId={packagePublisherId}
+          state={packageState}
+          onPublisherIdChange={onPackagePublisherIdChange}
+          onFile={onPackageFile}
+          onStart={onStartPackage}
+          onCancel={onCancelPackage}
+        />
+      ) : !confirmation ? (
         <section className="space-y-5" aria-label="Module manifest input">
           <div className="grid gap-3 md:grid-cols-[16rem_minmax(0,1fr)]">
             <label
@@ -239,12 +436,28 @@ export function PublisherModuleSubmitPage() {
   const router = useRouter();
   const selectedAccountId = useCurrentAccountStore((state) => state.selectedAccountId);
   const writePermission = usePermission(selectedAccountId ?? undefined, 'account.write');
+  const [mode, setMode] = useState<DeveloperModuleSubmitMode>('declarative');
+  const [packageFile, setPackageFile] = useState<File | null>(null);
+  const [packagePublisherId, setPackagePublisherId] = useState('');
+  const [packageState, setPackageState] =
+    useState<DeveloperModuleArtifactUploadState>(EMPTY_PACKAGE_STATE);
   const controller = useMemo(
     () =>
       createDeveloperModuleSubmitController({
         validate: validateDeveloperModule,
-        submit: (item, accountId) => submitDeveloperModuleRelease(item, { accountId }),
+        submit: createArtifactBackedDeveloperModuleSubmit({
+          createArtifact: createDeclarativeDeveloperModuleArtifact,
+          submitRelease: submitDeveloperModuleRelease,
+        }),
       }),
+    [],
+  );
+  const packageController = useMemo(
+    () =>
+      createDeveloperModuleArtifactUploadController(
+        defaultDeveloperModuleArtifactUploadDependencies,
+        setPackageState,
+      ),
     [],
   );
   const [controllerState, setControllerState] = useState<DeveloperModuleSubmitControllerState>(() =>
@@ -300,8 +513,37 @@ export function PublisherModuleSubmitPage() {
     }
   };
 
+  const selectPackage = (file: File) => {
+    setErrorCode(null);
+    if (packageState.stage !== 'idle' && packageState.stage !== 'submitted') {
+      try {
+        packageController.reset();
+      } catch {
+        return;
+      }
+    }
+    setPackageFile(file);
+  };
+
+  const submitPackage = async () => {
+    if (!selectedAccountId || !packageFile || !packagePublisherId.trim()) return;
+    setErrorCode(null);
+    try {
+      const result = await packageController.start(packageFile, {
+        accountId: selectedAccountId,
+        publisherId: packagePublisherId.trim(),
+      });
+      if (result) {
+        router.push(`/developer/modules/${encodeURIComponent(result.release.release_id)}`);
+      }
+    } catch (error) {
+      setErrorCode(developerCenterErrorCode(error));
+    }
+  };
+
   return (
     <DeveloperModuleSubmitView
+      mode={mode}
       stage={controllerState.stage}
       text={controllerState.text}
       item={controllerState.parsedItem}
@@ -311,10 +553,18 @@ export function PublisherModuleSubmitPage() {
       pending={controllerState.stage === 'submitting'}
       validating={validating}
       errorCode={errorCode}
+      packageFileName={packageFile?.name ?? null}
+      packagePublisherId={packagePublisherId}
+      packageState={packageState}
+      onModeChange={setMode}
       onTextChange={changeText}
       onFile={loadFile}
       onValidate={validate}
       onConfirm={confirm}
+      onPackagePublisherIdChange={setPackagePublisherId}
+      onPackageFile={selectPackage}
+      onStartPackage={submitPackage}
+      onCancelPackage={() => packageController.cancel()}
     />
   );
 }

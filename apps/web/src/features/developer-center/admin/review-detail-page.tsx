@@ -1,7 +1,11 @@
 'use client';
 
-import type { DeveloperModuleRelease, DeveloperModuleReviewEvidence } from '@kortix/sdk';
-import { ArrowLeft, ClipboardCheck, ShieldAlert } from 'lucide-react';
+import type {
+  DeveloperModuleHumanReviewEvidence,
+  DeveloperModuleRelease,
+  DeveloperModuleTrustView,
+} from '@kortix/sdk';
+import { ArrowLeft, ClipboardCheck, ShieldAlert, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 
@@ -21,10 +25,12 @@ import { Input } from '@/components/ui/input';
 import Loading from '@/components/ui/loading';
 import { Textarea } from '@/components/ui/textarea';
 
+import { developerModuleTrustGateStatus, humanReviewRequirements } from '../model';
 import { DeveloperModuleManifestView } from '../shared/module-manifest-view';
 import { DeveloperModuleRequirements } from '../shared/module-requirements';
 import { DeveloperModuleStatusBadge } from '../shared/module-status-badge';
 import { DeveloperModuleReviewTimeline } from '../shared/review-timeline';
+import { DeveloperModuleTrustSummary } from '../shared/trust-summary';
 import {
   type AdminDeveloperLifecycleEvent,
   type AdminDeveloperReviewDecision,
@@ -35,6 +41,8 @@ import {
   useAdminDeveloperDistribution,
   useAdminDeveloperReviewDecision,
   useAdminDeveloperReviewDetail,
+  useAdminDeveloperTrust,
+  useAdminDeveloperVerification,
 } from './query';
 
 export type AdminReviewDetailState = 'loading' | 'error' | 'ready';
@@ -53,6 +61,9 @@ function detailErrorMessage(errorCode: string | null): string {
   if (errorCode === 'DEVELOPER_REVIEW_SELF_APPROVAL_DENIED') {
     return 'An independent administrator must approve this release.';
   }
+  if (errorCode === 'DEVELOPER_TRUST_GATE_UNMET') {
+    return 'Server trust requirements changed. Inspect the latest automatic evidence.';
+  }
   return 'The review detail could not be loaded. Try again.';
 }
 
@@ -60,21 +71,25 @@ export interface AdminDeveloperReviewDetailViewProps {
   state: AdminReviewDetailState;
   release: DeveloperModuleRelease | null;
   history: readonly AdminDeveloperLifecycleEvent[];
-  evidence: readonly DeveloperModuleReviewEvidence[];
+  trust?: DeveloperModuleTrustView | null;
+  evidence: readonly DeveloperModuleHumanReviewEvidence[];
   reason: string;
   pending: boolean;
   reloadPending?: boolean;
   conflict: boolean;
   distributionPending?: boolean;
+  verificationPending?: boolean;
   revokeOpen: boolean;
   errorCode: string | null;
   onReasonChange: (value: string) => void;
-  onEvidenceChange: (index: number, patch: Partial<DeveloperModuleReviewEvidence>) => void;
+  onEvidenceChange: (index: number, patch: Partial<DeveloperModuleHumanReviewEvidence>) => void;
   onDecision: (
     decision: AdminDeveloperReviewDecision,
-    input: { reason?: string; evidence?: readonly DeveloperModuleReviewEvidence[] },
+    input: { reason?: string; evidence?: readonly DeveloperModuleHumanReviewEvidence[] },
   ) => void;
   onDistributionAction?: (action: 'sign' | 'publish') => void;
+  onRetryVerification?: () => void;
+  onCancelVerification?: () => void;
   onReload: () => void | Promise<void>;
   onRevokeOpenChange: (open: boolean) => void;
 }
@@ -83,18 +98,22 @@ export function AdminDeveloperReviewDetailView({
   state,
   release,
   history,
+  trust,
   evidence,
   reason,
   pending,
   reloadPending = false,
   conflict,
   distributionPending = false,
+  verificationPending = false,
   revokeOpen,
   errorCode,
   onReasonChange,
   onEvidenceChange,
   onDecision,
   onDistributionAction = () => undefined,
+  onRetryVerification = () => undefined,
+  onCancelVerification = () => undefined,
   onReload,
   onRevokeOpenChange,
 }: AdminDeveloperReviewDetailViewProps) {
@@ -110,9 +129,17 @@ export function AdminDeveloperReviewDetailView({
   const evidenceComplete = isApprovalEvidenceComplete(release.review_requirements, evidence, {
     releaseCreatedAt: release.created_at,
   });
+  const trustStatus =
+    trust === undefined
+      ? { ready: true as const, code: null, message: 'Automatic trust checks passed.' }
+      : developerModuleTrustGateStatus(release, trust);
+  const manualRequirements = humanReviewRequirements(release.review_requirements);
+  const latestVerification = trust?.attempts.at(-1);
+  const verificationActive =
+    latestVerification?.state === 'queued' || latestVerification?.state === 'running';
   const reasonComplete = isReviewReasonValid(reason);
   const optionalReasonValid = !reason.trim() || reasonComplete;
-  const controlsPending = pending || reloadPending;
+  const controlsPending = pending || reloadPending || verificationPending;
   const reviewPending = release.status === 'review_pending';
   const approved = release.status === 'approved';
   const distributionAction =
@@ -212,6 +239,7 @@ export function AdminDeveloperReviewDetailView({
                   conflict ||
                   !reviewPending ||
                   !evidenceComplete ||
+                  !trustStatus.ready ||
                   !optionalReasonValid
                 }
                 onClick={() => onDecision('approve', { evidence })}
@@ -263,7 +291,12 @@ export function AdminDeveloperReviewDetailView({
                 <Button
                   type="button"
                   data-testid={`${distributionAction}-release`}
-                  disabled={controlsPending || conflict || distributionPending}
+                  disabled={
+                    controlsPending ||
+                    conflict ||
+                    distributionPending ||
+                    (distributionAction === 'sign' && !trustStatus.ready)
+                  }
                   onClick={() => onDistributionAction(distributionAction)}
                 >
                   {distributionPending ? <Loading /> : null}
@@ -278,16 +311,42 @@ export function AdminDeveloperReviewDetailView({
                 Confirm emergency revoke {release.module_id} version {release.module_version}
               </span>
             </div>
-            {!evidenceComplete && reviewPending ? (
+            {(!evidenceComplete || !trustStatus.ready) && reviewPending ? (
               <p className="text-muted-foreground text-xs">
-                Complete one manual passed attestation for every requirement before approval.
+                Complete every human review and automatic trust requirement before approval.
               </p>
             ) : null}
           </section>
         </div>
       </div>
 
-      {reviewPending ? (
+      {trust !== undefined ? (
+        <div className="space-y-3">
+          <DeveloperModuleTrustSummary
+            trust={trust}
+            gateStatus={trustStatus}
+            requirements={release.review_requirements}
+            canRetry
+            retryPending={verificationPending}
+            showProvenance
+            onRetry={onRetryVerification}
+          />
+          {verificationActive ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={verificationPending}
+              onClick={onCancelVerification}
+            >
+              {verificationPending ? <Loading /> : <XCircle />}
+              {verificationPending ? 'Cancelling...' : 'Cancel verification'}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {reviewPending && manualRequirements.length > 0 ? (
         <section className="space-y-4 border-t pt-6" aria-label="Manual review evidence">
           <div>
             <h2 className="text-base font-semibold">Manual review evidence</h2>
@@ -297,7 +356,7 @@ export function AdminDeveloperReviewDetailView({
             </p>
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
-            {release.review_requirements.map((requirement, index) => {
+            {manualRequirements.map((requirement, index) => {
               const entry = evidence[index] ?? {
                 requirement,
                 outcome: 'passed' as const,
@@ -308,7 +367,7 @@ export function AdminDeveloperReviewDetailView({
               return (
                 <div
                   key={requirement}
-                  className="border-border/60 bg-card space-y-3 rounded-xl border p-4"
+                  className="border-border/60 bg-card space-y-3 rounded-lg border p-4"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold">{requirement}</h3>
@@ -334,39 +393,6 @@ export function AdminDeveloperReviewDetailView({
                       })
                     }
                   />
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <Input
-                      value={entry.tool ?? ''}
-                      placeholder="Tool (optional)"
-                      aria-label={`${requirement} tool`}
-                      disabled={controlsPending || conflict}
-                      onChange={(event) =>
-                        onEvidenceChange(index, { tool: event.target.value || undefined })
-                      }
-                    />
-                    <Input
-                      value={entry.tool_version ?? ''}
-                      placeholder="Tool version"
-                      aria-label={`${requirement} tool version`}
-                      disabled={controlsPending || conflict}
-                      onChange={(event) =>
-                        onEvidenceChange(index, { tool_version: event.target.value || undefined })
-                      }
-                    />
-                  </div>
-                  <Input
-                    value={entry.evidence_digest ?? ''}
-                    placeholder="sha256:... (optional)"
-                    aria-label={`${requirement} evidence digest`}
-                    disabled={controlsPending || conflict}
-                    onChange={(event) =>
-                      onEvidenceChange(index, {
-                        evidence_digest: (event.target.value || undefined) as
-                          | DeveloperModuleReviewEvidence['evidence_digest']
-                          | undefined,
-                      })
-                    }
-                  />
                 </div>
               );
             })}
@@ -383,10 +409,12 @@ export function AdminDeveloperReviewDetailView({
 
 export function AdminDeveloperReviewDetailPage({ releaseId }: { releaseId: string }) {
   const detailQuery = useAdminDeveloperReviewDetail(releaseId);
+  const trustQuery = useAdminDeveloperTrust(releaseId);
   const mutation = useAdminDeveloperReviewDecision();
   const distributionMutation = useAdminDeveloperDistribution();
+  const verificationMutation = useAdminDeveloperVerification();
   const [reason, setReason] = useState('');
-  const [evidence, setEvidence] = useState<DeveloperModuleReviewEvidence[]>([]);
+  const [evidence, setEvidence] = useState<DeveloperModuleHumanReviewEvidence[]>([]);
   const [revokeOpen, setRevokeOpen] = useState(false);
   const [reloadPending, setReloadPending] = useState(false);
   const loadedRelease = detailQuery.data?.release;
@@ -403,30 +431,41 @@ export function AdminDeveloperReviewDetailPage({ releaseId }: { releaseId: strin
   const distributionErrorCode = distributionMutation.error
     ? adminDeveloperReviewErrorCode(distributionMutation.error)
     : null;
+  const verificationErrorCode = verificationMutation.error
+    ? adminDeveloperReviewErrorCode(verificationMutation.error)
+    : null;
   const conflict =
     mutationErrorCode === 'DEVELOPER_REVIEW_CONFLICT' ||
     distributionErrorCode === 'DEVELOPER_DISTRIBUTION_CONFLICT';
-  const state: AdminReviewDetailState = detailQuery.isLoading
-    ? 'loading'
-    : detailQuery.isError || !release
-      ? 'error'
-      : 'ready';
+  const state: AdminReviewDetailState =
+    detailQuery.isLoading || trustQuery.isLoading
+      ? 'loading'
+      : detailQuery.isError || trustQuery.isError || !release
+        ? 'error'
+        : 'ready';
 
   return (
     <AdminDeveloperReviewDetailView
       state={state}
       release={release}
       history={detailQuery.data?.history ?? []}
+      trust={trustQuery.data ?? null}
       evidence={evidence}
       reason={reason}
       pending={mutation.isPending}
       reloadPending={reloadPending}
       conflict={conflict}
+      verificationPending={verificationMutation.isPending}
       revokeOpen={revokeOpen}
       errorCode={
+        verificationErrorCode ??
         distributionErrorCode ??
         mutationErrorCode ??
-        (detailQuery.error ? adminDeveloperReviewErrorCode(detailQuery.error) : null)
+        (detailQuery.error
+          ? adminDeveloperReviewErrorCode(detailQuery.error)
+          : trustQuery.error
+            ? adminDeveloperReviewErrorCode(trustQuery.error)
+            : null)
       }
       onReasonChange={setReason}
       onEvidenceChange={(index, patch) =>
@@ -452,11 +491,15 @@ export function AdminDeveloperReviewDetailPage({ releaseId }: { releaseId: strin
         if (!currentRelease) return;
         distributionMutation.mutate({ release: currentRelease, action });
       }}
+      onRetryVerification={() => verificationMutation.mutate({ releaseId, action: 'retry' })}
+      onCancelVerification={() => verificationMutation.mutate({ releaseId, action: 'cancel' })}
       onReload={async () => {
         setReloadPending(true);
         try {
-          await detailQuery.refetch();
+          await Promise.all([detailQuery.refetch(), trustQuery.refetch()]);
           mutation.reset();
+          distributionMutation.reset();
+          verificationMutation.reset();
         } finally {
           setReloadPending(false);
         }

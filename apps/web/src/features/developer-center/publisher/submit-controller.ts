@@ -1,7 +1,10 @@
 import type {
+  DeveloperModuleArtifact,
+  DeveloperModuleReleaseAccountOptions,
   DeveloperModuleReleaseSubmission,
   DeveloperModuleValidationIssue,
   DeveloperModuleValidationResult,
+  SubmitDeveloperModuleReleaseInput,
 } from '@kortix/sdk';
 
 import { parseDeveloperModuleInput } from '../model';
@@ -28,6 +31,21 @@ export interface DeveloperModuleSubmitControllerDependencies {
     item: Record<string, unknown>,
     accountId: string,
   ) => Promise<DeveloperModuleReleaseSubmission>;
+}
+
+export function createArtifactBackedDeveloperModuleSubmit(dependencies: {
+  createArtifact: (
+    item: Record<string, unknown>,
+    options: DeveloperModuleReleaseAccountOptions,
+  ) => Promise<Pick<DeveloperModuleArtifact, 'artifact_id'>>;
+  submitRelease: (
+    input: SubmitDeveloperModuleReleaseInput,
+  ) => Promise<DeveloperModuleReleaseSubmission>;
+}): DeveloperModuleSubmitControllerDependencies['submit'] {
+  return async (item, accountId) => {
+    const artifact = await dependencies.createArtifact(item, { accountId });
+    return dependencies.submitRelease({ artifactId: artifact.artifact_id, accountId });
+  };
 }
 
 function cleanIssues(

@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test';
+import type { DeveloperModuleTrustView } from '@kortix/sdk';
 
 import {
   DEVELOPER_MODULE_INPUT_MAX_BYTES,
   developerCenterErrorCode,
+  developerModuleTrustGateStatus,
   filterRecentReleases,
+  humanReviewRequirements,
   parseDeveloperModuleInput,
   publisherActionFor,
   requirementComplexity,
@@ -61,10 +64,101 @@ describe('Developer Center model', () => {
     expect(developerCenterErrorCode({ code: 'DEVELOPER_INTERNAL_SECRET' })).toBe(
       'DEVELOPER_REQUEST_FAILED',
     );
+    expect(
+      developerCenterErrorCode({ body: { error: 'DEVELOPER_VERIFICATION_RETRY_NOT_ALLOWED' } }),
+    ).toBe('DEVELOPER_VERIFICATION_RETRY_NOT_ALLOWED');
   });
 
   test('derives complexity only from declared requirements', () => {
     expect(requirementComplexity(['manifest_review', 'human_review'])).toBe('standard');
     expect(requirementComplexity(['desktop_security_review', 'human_review'])).toBe('elevated');
+  });
+
+  test('keeps automatic requirements out of human review evidence', () => {
+    expect(
+      humanReviewRequirements([
+        'manifest_review',
+        'source_scan',
+        'sandbox_test',
+        'permission_review',
+      ]),
+    ).toEqual(['manifest_review', 'permission_review']);
+  });
+
+  test('derives the server trust gate reason from immutable evidence', () => {
+    const digest = (character: string) => `sha256:${character.repeat(64)}` as const;
+    const release = {
+      artifact_id: 'artifact-1',
+      artifact_digest: digest('a'),
+      sbom_digest: null,
+      trust_attestation_digest: null,
+      verification_policy_digest: digest('b'),
+      review_requirements: ['source_scan', 'sandbox_test'] as const,
+    };
+    const trust: DeveloperModuleTrustView = {
+      release_id: 'release-1',
+      account_id: 'account-1',
+      artifact: {
+        artifact_id: 'artifact-1',
+        artifact_digest: digest('a'),
+        media_type: 'application/vnd.openopc.developer-module.v2+json',
+        size_bytes: 12,
+        source_provenance: null,
+        created_at: '2026-07-25T12:00:00.000Z',
+      },
+      attempts: [
+        {
+          run_id: 'run-1',
+          attempt: 1,
+          state: 'running',
+          policy_digest: digest('b'),
+          scanner_set_digest: digest('c'),
+          sandbox_profile_digest: digest('d'),
+          terminal_reason: null,
+          sbom_digest: null,
+          attestation_digest: null,
+          started_at: '2026-07-25T12:01:00.000Z',
+          finished_at: null,
+          created_at: '2026-07-25T12:00:30.000Z',
+          findings: [],
+          attestation: null,
+        },
+      ],
+    };
+
+    expect(developerModuleTrustGateStatus(release, trust)).toEqual({
+      ready: false,
+      code: 'DEVELOPER_TRUST_PENDING',
+      message: 'Sandbox verification is still running.',
+    });
+
+    const passed: DeveloperModuleTrustView = structuredClone(trust);
+    passed.attempts[0] = {
+      ...passed.attempts[0],
+      state: 'passed',
+      sbom_digest: digest('e'),
+      attestation_digest: digest('f'),
+      finished_at: '2026-07-25T12:02:00.000Z',
+      attestation: {
+        attestation_digest: digest('f'),
+        subject_artifact_digest: digest('a'),
+        predicate_type: 'https://openopc.dev/attestation/module-trust/v1',
+        policy_digest: digest('b'),
+        result: 'passed',
+        sbom_digest: digest('e'),
+        issuer: 'openopc-developer-trust-worker',
+        created_at: '2026-07-25T12:02:00.000Z',
+      },
+    };
+    expect(
+      developerModuleTrustGateStatus(
+        {
+          ...release,
+          sbom_digest: digest('e'),
+          trust_attestation_digest: digest('f'),
+        },
+        passed,
+      ),
+    ).toEqual({ ready: true, code: null, message: 'Automatic trust checks passed.' });
   });
 });

@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import type { DeveloperModuleRelease, DeveloperModuleReviewEvent } from '@kortix/sdk';
+import type {
+  DeveloperModuleRelease,
+  DeveloperModuleReviewEvent,
+  DeveloperModuleTrustView,
+} from '@kortix/sdk';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { PublisherReleaseDetailView } from './release-detail-page';
@@ -14,6 +18,11 @@ const RELEASE: DeveloperModuleRelease = {
   module_version: '1.0.0',
   manifest: { id: 'acme.recruiting', permissions: { network: ['https://api.example.test'] } },
   manifest_digest: `sha256:${'a'.repeat(64)}`,
+  artifact_id: '15000000-0000-4000-a000-000000000001',
+  artifact_digest: `sha256:${'b'.repeat(64)}`,
+  sbom_digest: null,
+  trust_attestation_digest: null,
+  verification_policy_digest: `sha256:${'c'.repeat(64)}`,
   review_requirements: ['manifest_review', 'human_review'],
   status: 'validated',
   review_revision: 3,
@@ -45,6 +54,37 @@ const EVENT: DeveloperModuleReviewEvent = {
 };
 
 const noop = () => undefined;
+
+const RUNNING_TRUST: DeveloperModuleTrustView = {
+  release_id: RELEASE.release_id,
+  account_id: RELEASE.account_id,
+  artifact: {
+    artifact_id: '15000000-0000-4000-a000-000000000001',
+    artifact_digest: `sha256:${'b'.repeat(64)}`,
+    media_type: 'application/vnd.openopc.developer-module.v2+json',
+    size_bytes: 2048,
+    source_provenance: null,
+    created_at: RELEASE.created_at,
+  },
+  attempts: [
+    {
+      run_id: '16000000-0000-4000-a000-000000000001',
+      attempt: 1,
+      state: 'running',
+      policy_digest: `sha256:${'c'.repeat(64)}`,
+      scanner_set_digest: `sha256:${'d'.repeat(64)}`,
+      sandbox_profile_digest: `sha256:${'e'.repeat(64)}`,
+      terminal_reason: null,
+      sbom_digest: null,
+      attestation_digest: null,
+      started_at: '2026-07-24T00:01:00.000Z',
+      finished_at: null,
+      created_at: '2026-07-24T00:00:30.000Z',
+      findings: [],
+      attestation: null,
+    },
+  ],
+};
 
 describe('Publisher Developer Center pages', () => {
   test('renders recent releases and loaded-result filters without an all-time total', () => {
@@ -219,5 +259,61 @@ describe('Publisher Developer Center pages', () => {
     expect(html).toContain('openopc-2026');
     expect(html).toContain('2026-07-24T07:05:00.000Z');
     expect(html).not.toContain('Request review');
+  });
+
+  test('shows live automatic trust progress and bounded retry eligibility', () => {
+    const running = renderToStaticMarkup(
+      <PublisherReleaseDetailView
+        state="ready"
+        release={{
+          ...RELEASE,
+          review_requirements: ['source_scan', 'sandbox_test', 'human_review'],
+        }}
+        history={[]}
+        trust={RUNNING_TRUST}
+        canWrite
+        pending={false}
+        retryPending={false}
+        errorCode={null}
+        reason=""
+        onReasonChange={noop}
+        onRequestReview={noop}
+        onRetryVerification={noop}
+      />,
+    );
+    const failed = renderToStaticMarkup(
+      <PublisherReleaseDetailView
+        state="ready"
+        release={{
+          ...RELEASE,
+          review_requirements: ['source_scan', 'sandbox_test', 'human_review'],
+        }}
+        history={[]}
+        trust={{
+          ...RUNNING_TRUST,
+          attempts: [
+            {
+              ...RUNNING_TRUST.attempts[0],
+              state: 'failed',
+              terminal_reason: 'Sandbox policy denied the module.',
+              finished_at: '2026-07-24T00:02:00.000Z',
+            },
+          ],
+        }}
+        canWrite
+        pending={false}
+        retryPending={false}
+        errorCode={null}
+        reason=""
+        onReasonChange={noop}
+        onRequestReview={noop}
+        onRetryVerification={noop}
+      />,
+    );
+
+    expect(running).toContain('Sandbox verification is still running');
+    expect(running).not.toContain('Retry verification');
+    expect(failed).toContain('Sandbox policy denied the module');
+    expect(failed).toContain('Retry verification');
   });
 });

@@ -8,12 +8,12 @@ import {
 } from './evidence';
 
 import type {
+  DeveloperModuleHumanReviewEvidence,
+  DeveloperModuleHumanReviewRequirement,
   DeveloperModuleRelease,
-  DeveloperModuleReviewEvidence,
-  DeveloperModuleReviewRequirement,
 } from '@kortix/sdk';
 
-const REQUIREMENTS: DeveloperModuleReviewRequirement[] = ['manifest_review', 'human_review'];
+const REQUIREMENTS: DeveloperModuleHumanReviewRequirement[] = ['manifest_review', 'human_review'];
 const RELEASE = {
   release_id: '14000000-0000-4000-a000-000000000001',
   account_id: '24000000-0000-4000-a000-000000000002',
@@ -23,6 +23,11 @@ const RELEASE = {
   module_version: '1.0.0',
   manifest: {},
   manifest_digest: `sha256:${'b'.repeat(64)}`,
+  artifact_id: '44000000-0000-4000-a000-000000000004',
+  artifact_digest: `sha256:${'c'.repeat(64)}`,
+  sbom_digest: null,
+  trust_attestation_digest: null,
+  verification_policy_digest: `sha256:${'d'.repeat(64)}`,
   review_requirements: REQUIREMENTS,
   status: 'review_pending',
   review_revision: 4,
@@ -38,20 +43,13 @@ const RELEASE = {
   updated_at: '2026-07-24T05:30:00.000Z',
 } satisfies DeveloperModuleRelease;
 
-const COMPLETE_EVIDENCE: DeveloperModuleReviewEvidence[] = REQUIREMENTS.map(
+const COMPLETE_EVIDENCE: DeveloperModuleHumanReviewEvidence[] = REQUIREMENTS.map(
   (requirement, index) => ({
     requirement,
     outcome: 'passed',
     method: 'manual',
     summary: `${requirement} completed manually`,
     observed_at: `2026-07-24T06:0${index}:00.000Z`,
-    ...(index === 0
-      ? {
-          tool: 'openopc-review-console',
-          tool_version: '1.0.0',
-          evidence_digest: `sha256:${'a'.repeat(64)}` as const,
-        }
-      : {}),
   }),
 );
 
@@ -110,20 +108,20 @@ describe('Admin review evidence model', () => {
     ).toBe(false);
   });
 
-  test('accepts optional bounded tool metadata and only a valid SHA-256 digest', () => {
+  test('rejects legacy metadata fields that the strict API request schema does not accept', () => {
     expect(isApprovalEvidenceComplete(REQUIREMENTS, COMPLETE_EVIDENCE)).toBe(true);
     expect(
       isApprovalEvidenceComplete(REQUIREMENTS, [
         {
           ...COMPLETE_EVIDENCE[0],
-          evidence_digest: 'sha256:ABC' as `sha256:${string}`,
+          tool: 'openopc-review-console',
         },
         COMPLETE_EVIDENCE[1],
       ]),
     ).toBe(false);
     expect(
       isApprovalEvidenceComplete(REQUIREMENTS, [
-        { ...COMPLETE_EVIDENCE[0], tool: undefined, tool_version: '1.0.0' },
+        { ...COMPLETE_EVIDENCE[0], evidence_digest: `sha256:${'a'.repeat(64)}` },
         COMPLETE_EVIDENCE[1],
       ]),
     ).toBe(false);

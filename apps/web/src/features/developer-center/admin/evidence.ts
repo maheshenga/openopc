@@ -1,25 +1,15 @@
 import type {
+  DeveloperModuleHumanReviewEvidence,
+  DeveloperModuleHumanReviewRequirement,
   DeveloperModuleRelease,
-  DeveloperModuleReviewEvidence,
   DeveloperModuleReviewRequirement,
 } from '@kortix/sdk';
 
+import { humanReviewRequirements } from '../model';
 import type { AdminDeveloperReviewDecision, AdminDeveloperReviewDecisionBody } from './client';
 
 const SUMMARY_MAX_CHARS = 1_000;
-const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-const TOOL_VERSION = /^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$/;
-const SHA256 = /^sha256:[0-9a-f]{64}$/;
-const EVIDENCE_KEYS = new Set([
-  'requirement',
-  'outcome',
-  'method',
-  'summary',
-  'observed_at',
-  'tool',
-  'tool_version',
-  'evidence_digest',
-]);
+const EVIDENCE_KEYS = new Set(['requirement', 'outcome', 'method', 'summary', 'observed_at']);
 
 const REASON_MAX_CHARS = 4_000;
 const REASON_MAX_BYTES = 8_192;
@@ -36,8 +26,8 @@ export function isReviewReasonValid(reason: string | undefined): boolean {
 export function createEvidenceDrafts(
   requirements: readonly DeveloperModuleReviewRequirement[],
   observedAt = new Date().toISOString(),
-): DeveloperModuleReviewEvidence[] {
-  return requirements.map((requirement) => ({
+): DeveloperModuleHumanReviewEvidence[] {
+  return humanReviewRequirements(requirements).map((requirement) => ({
     requirement,
     outcome: 'passed',
     method: 'manual',
@@ -52,7 +42,7 @@ function canonicalIsoTimestamp(value: unknown): value is string {
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
-function isEvidenceEntry(value: unknown): value is DeveloperModuleReviewEvidence {
+function isEvidenceEntry(value: unknown): value is DeveloperModuleHumanReviewEvidence {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   if (Object.keys(record).some((key) => !EVIDENCE_KEYS.has(key))) return false;
@@ -67,37 +57,18 @@ function isEvidenceEntry(value: unknown): value is DeveloperModuleReviewEvidence
   ) {
     return false;
   }
-  if (
-    record.tool !== undefined &&
-    (typeof record.tool !== 'string' || !IDENTIFIER.test(record.tool))
-  ) {
-    return false;
-  }
-  if (
-    record.tool_version !== undefined &&
-    (record.tool === undefined ||
-      typeof record.tool_version !== 'string' ||
-      !TOOL_VERSION.test(record.tool_version))
-  ) {
-    return false;
-  }
-  if (
-    record.evidence_digest !== undefined &&
-    (typeof record.evidence_digest !== 'string' || !SHA256.test(record.evidence_digest))
-  ) {
-    return false;
-  }
   return true;
 }
 
 export function isApprovalEvidenceComplete(
   requirements: readonly DeveloperModuleReviewRequirement[],
-  evidence: readonly DeveloperModuleReviewEvidence[] | unknown,
+  evidence: readonly DeveloperModuleHumanReviewEvidence[] | unknown,
   bounds: { releaseCreatedAt?: string; now?: Date } = {},
-): evidence is DeveloperModuleReviewEvidence[] {
-  if (!Array.isArray(evidence) || evidence.length !== requirements.length) return false;
-  const declared = new Set(requirements);
-  const seen = new Set<DeveloperModuleReviewRequirement>();
+): evidence is DeveloperModuleHumanReviewEvidence[] {
+  const manualRequirements = humanReviewRequirements(requirements);
+  if (!Array.isArray(evidence) || evidence.length !== manualRequirements.length) return false;
+  const declared = new Set(manualRequirements);
+  const seen = new Set<DeveloperModuleHumanReviewRequirement>();
   const releaseCreatedAt = bounds.releaseCreatedAt ? Date.parse(bounds.releaseCreatedAt) : null;
   const now = bounds.now?.getTime() ?? Date.now();
 
@@ -109,11 +80,11 @@ export function isApprovalEvidenceComplete(
     if ((releaseCreatedAt !== null && observedAt < releaseCreatedAt) || observedAt > now) {
       return false;
     }
-    const requirement = entry.requirement as DeveloperModuleReviewRequirement;
+    const requirement = entry.requirement;
     if (!declared.has(requirement) || seen.has(requirement)) return false;
     seen.add(requirement);
   }
-  return seen.size === declared.size;
+  return seen.size === manualRequirements.length;
 }
 
 export function buildAdminDecisionBody(
@@ -122,7 +93,7 @@ export function buildAdminDecisionBody(
   decision: AdminDeveloperReviewDecision,
   input: {
     reason?: string;
-    evidence?: readonly DeveloperModuleReviewEvidence[];
+    evidence?: readonly DeveloperModuleHumanReviewEvidence[];
   } = {},
 ): AdminDeveloperReviewDecisionBody {
   const body: AdminDeveloperReviewDecisionBody = {

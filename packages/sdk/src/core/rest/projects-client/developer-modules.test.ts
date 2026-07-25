@@ -4,10 +4,17 @@ import { createKortix } from '../../client/kortix';
 import { configureKortix } from '../../http/config';
 import {
   type DeveloperModuleRelease,
+  cancelDeveloperModuleArtifactUpload,
+  createDeclarativeDeveloperModuleArtifact,
+  createDeveloperModuleArtifactUpload,
+  finalizeDeveloperModuleArtifactUpload,
+  getDeveloperModuleArtifact,
   getDeveloperModuleRelease,
   getDeveloperModuleReviewHistory,
+  getDeveloperModuleTrust,
   listDeveloperModuleReleases,
   requestDeveloperModuleReview,
+  retryDeveloperModuleVerification,
   submitDeveloperModuleRelease,
   validateDeveloperModule,
 } from './developer-modules';
@@ -55,10 +62,8 @@ test('createKortix exposes developer module validation', async () => {
   ).resolves.toEqual({ valid: true, issues: [] });
 });
 
-test('developer module release SDK sends account-scoped submit, list and get requests', async () => {
-  const item = { name: 'example', type: 'registry:module' };
-
-  await submitDeveloperModuleRelease(item, { accountId: 'acc-1' });
+test('developer module release SDK submits only an artifact id, then sends scoped list and get requests', async () => {
+  await submitDeveloperModuleRelease({ artifactId: 'artifact-1', accountId: 'acc-1' });
   await listDeveloperModuleReleases({ accountId: 'acc-1', limit: 20 });
   await getDeveloperModuleRelease('release-1', { accountId: 'acc-1' });
 
@@ -66,7 +71,7 @@ test('developer module release SDK sends account-scoped submit, list and get req
     {
       url: 'http://test.local/developer/modules/releases',
       method: 'POST',
-      body: { account_id: 'acc-1', item },
+      body: { account_id: 'acc-1', artifact_id: 'artifact-1' },
     },
     {
       url: 'http://test.local/developer/modules/releases?account_id=acc-1&limit=20',
@@ -81,6 +86,73 @@ test('developer module release SDK sends account-scoped submit, list and get req
   ]);
 });
 
+test('developer module artifact SDK covers declarative and package upload lifecycles', async () => {
+  const item = { name: 'example', type: 'registry:module' };
+  const digest = `sha256:${'a'.repeat(64)}` as const;
+
+  await createDeclarativeDeveloperModuleArtifact(item, { accountId: 'acc-1' });
+  await createDeveloperModuleArtifactUpload({
+    accountId: 'acc-1',
+    publisherId: 'acme',
+    expectedSize: 42,
+    expectedDigest: digest,
+  });
+  await finalizeDeveloperModuleArtifactUpload('upload/1', { accountId: 'acc-1' });
+  await cancelDeveloperModuleArtifactUpload('upload/1', { accountId: 'acc-1' });
+  await getDeveloperModuleArtifact('artifact/1', { accountId: 'acc-1' });
+
+  expect(calls).toEqual([
+    {
+      url: 'http://test.local/developer/modules/artifacts/declarative',
+      method: 'POST',
+      body: { account_id: 'acc-1', item },
+    },
+    {
+      url: 'http://test.local/developer/modules/artifact-uploads',
+      method: 'POST',
+      body: {
+        account_id: 'acc-1',
+        publisher_id: 'acme',
+        expected_size: 42,
+        expected_digest: digest,
+      },
+    },
+    {
+      url: 'http://test.local/developer/modules/artifact-uploads/upload%2F1/finalize',
+      method: 'POST',
+      body: { account_id: 'acc-1' },
+    },
+    {
+      url: 'http://test.local/developer/modules/artifact-uploads/upload%2F1?account_id=acc-1',
+      method: 'DELETE',
+      body: undefined,
+    },
+    {
+      url: 'http://test.local/developer/modules/artifacts/artifact%2F1?account_id=acc-1',
+      method: 'GET',
+      body: undefined,
+    },
+  ]);
+});
+
+test('developer module trust SDK reads safe evidence and retries through account scope', async () => {
+  await getDeveloperModuleTrust('release/1', { accountId: 'acc-1' });
+  await retryDeveloperModuleVerification('release/1', { accountId: 'acc-1' });
+
+  expect(calls).toEqual([
+    {
+      url: 'http://test.local/developer/modules/releases/release%2F1/trust?account_id=acc-1',
+      method: 'GET',
+      body: undefined,
+    },
+    {
+      url: 'http://test.local/developer/modules/releases/release%2F1/verification-retries',
+      method: 'POST',
+      body: { account_id: 'acc-1' },
+    },
+  ]);
+});
+
 test('developer module release transport preserves public signature metadata', async () => {
   const release: DeveloperModuleRelease = {
     release_id: 'release-1',
@@ -91,6 +163,13 @@ test('developer module release transport preserves public signature metadata', a
     module_version: '1.0.0',
     manifest: { compatibility: { platform: '^1.0.0' } },
     manifest_digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    artifact_id: 'artifact-1',
+    artifact_digest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    sbom_digest: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    trust_attestation_digest:
+      'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    verification_policy_digest:
+      'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
     review_requirements: ['manifest_review'],
     status: 'published',
     review_revision: 4,
@@ -120,16 +199,26 @@ test('developer module release transport preserves public signature metadata', a
 
 test('createKortix exposes the developer module release facade', async () => {
   const kortix = createKortix({ backendUrl: 'http://test.local', getToken: async () => 'tok' });
-  const item = { name: 'example', type: 'registry:module' };
 
-  await kortix.developer.modules.releases.submit(item, { accountId: 'acc-1' });
+  await kortix.developer.modules.artifacts.createDeclarative(
+    { name: 'example', type: 'registry:module' },
+    { accountId: 'acc-1' },
+  );
+  await kortix.developer.modules.releases.submit({ artifactId: 'artifact-1', accountId: 'acc-1' });
   await kortix.developer.modules.releases.list({ accountId: 'acc-1', limit: 10 });
   await kortix.developer.modules.releases.get('release-1', { accountId: 'acc-1' });
+  await kortix.developer.modules.releases.trust('release-1', { accountId: 'acc-1' });
+  await kortix.developer.modules.releases.retryVerification('release-1', {
+    accountId: 'acc-1',
+  });
 
   expect(calls.map((call) => call.url)).toEqual([
+    'http://test.local/developer/modules/artifacts/declarative',
     'http://test.local/developer/modules/releases',
     'http://test.local/developer/modules/releases?account_id=acc-1&limit=10',
     'http://test.local/developer/modules/releases/release-1?account_id=acc-1',
+    'http://test.local/developer/modules/releases/release-1/trust?account_id=acc-1',
+    'http://test.local/developer/modules/releases/release-1/verification-retries',
   ]);
 });
 

@@ -17,23 +17,23 @@ import type { OpencodeClient } from '@opencode-ai/sdk/v2/client';
  * for ergonomics. Reactive data still comes from `@kortix/sdk/react` hooks.
  */
 import * as F from '../files/client';
-import { getClient, getClientForUrl } from '../runtime/client';
 import { ApiError } from '../http/api/errors';
 import { type KortixPlatformConfig, configureKortix, platformConfig } from '../http/config';
 import * as P from '../rest/projects-client';
-import { getSessionHealth } from '../session/health';
-import { type SubdomainUrlOptions, proxyLocalhostUrl, rewriteLocalhostUrl } from '../session/url';
+import { getClient, getClientForUrl } from '../runtime/client';
 import { setCurrentRuntime } from '../session/current-runtime';
-import {
-  clearSessionRuntime,
-  getSessionRuntime,
-  type SessionRuntimeEntry,
-} from '../session/session-runtime-registry';
+import { getSessionHealth } from '../session/health';
 import { getSandboxUrlForExternalId } from '../session/server-store/url-helpers';
 import {
-  openEventStream,
+  type SessionRuntimeEntry,
+  clearSessionRuntime,
+  getSessionRuntime,
+} from '../session/session-runtime-registry';
+import { type SubdomainUrlOptions, proxyLocalhostUrl, rewriteLocalhostUrl } from '../session/url';
+import {
   type EventStreamHandle,
   type OpenCodeEvent,
+  openEventStream,
 } from '../stream/event-stream';
 
 /** A model the agent can run, as the opencode runtime identifies it. */
@@ -292,6 +292,19 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
     modules: {
       validate: (item: Parameters<typeof P.validateDeveloperModule>[0]) =>
         P.validateDeveloperModule(item),
+      artifacts: {
+        createDeclarative: (
+          ...args: Parameters<typeof P.createDeclarativeDeveloperModuleArtifact>
+        ) => P.createDeclarativeDeveloperModuleArtifact(...args),
+        createUpload: (...args: Parameters<typeof P.createDeveloperModuleArtifactUpload>) =>
+          P.createDeveloperModuleArtifactUpload(...args),
+        finalizeUpload: (...args: Parameters<typeof P.finalizeDeveloperModuleArtifactUpload>) =>
+          P.finalizeDeveloperModuleArtifactUpload(...args),
+        cancelUpload: (...args: Parameters<typeof P.cancelDeveloperModuleArtifactUpload>) =>
+          P.cancelDeveloperModuleArtifactUpload(...args),
+        get: (...args: Parameters<typeof P.getDeveloperModuleArtifact>) =>
+          P.getDeveloperModuleArtifact(...args),
+      },
       releases: {
         submit: (...args: Parameters<typeof P.submitDeveloperModuleRelease>) =>
           P.submitDeveloperModuleRelease(...args),
@@ -303,6 +316,10 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
           P.requestDeveloperModuleReview(...args),
         reviewHistory: (...args: Parameters<typeof P.getDeveloperModuleReviewHistory>) =>
           P.getDeveloperModuleReviewHistory(...args),
+        trust: (...args: Parameters<typeof P.getDeveloperModuleTrust>) =>
+          P.getDeveloperModuleTrust(...args),
+        retryVerification: (...args: Parameters<typeof P.retryDeveloperModuleVerification>) =>
+          P.retryDeveloperModuleVerification(...args),
       },
     },
   };
@@ -345,8 +362,7 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
       /** Exact-release project module installation and lifecycle operations. */
       modules: {
         list: () => P.listProjectModules(projectId),
-        history: (moduleId: string) =>
-          P.listProjectModuleInstallationHistory(projectId, moduleId),
+        history: (moduleId: string) => P.listProjectModuleInstallationHistory(projectId, moduleId),
         install: (...a: DropFirst<Parameters<typeof P.installProjectModule>>) =>
           P.installProjectModule(projectId, ...a),
         update: (...a: DropFirst<Parameters<typeof P.updateProjectModule>>) =>
@@ -670,10 +686,8 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
           start: (input: Parameters<typeof P.startIntelligenceWorkflow>[1]) =>
             P.startIntelligenceWorkflow(projectId, input),
           get: (runId: string) => P.getIntelligenceWorkflow(projectId, runId),
-          cancel: (
-            runId: string,
-            input: Parameters<typeof P.cancelIntelligenceWorkflow>[2],
-          ) => P.cancelIntelligenceWorkflow(projectId, runId, input),
+          cancel: (runId: string, input: Parameters<typeof P.cancelIntelligenceWorkflow>[2]) =>
+            P.cancelIntelligenceWorkflow(projectId, runId, input),
           events: (runId: string, cursor?: string | null, limit?: number) =>
             P.getIntelligenceWorkflowEvents(projectId, runId, cursor, limit),
           decideApproval: (
@@ -782,7 +796,7 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
           throw new ApiError(
             'Session sandbox has no external_id — cannot resolve its runtime URL',
             {
-            code: 'RUNTIME_UNAVAILABLE',
+              code: 'RUNTIME_UNAVAILABLE',
             },
           );
         }

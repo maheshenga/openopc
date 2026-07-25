@@ -1,9 +1,11 @@
 import type {
+  DeveloperModuleHumanReviewEvidence,
   DeveloperModuleRelease,
   DeveloperModuleReleaseStatus,
   DeveloperModuleReviewEvent,
-  DeveloperModuleReviewEvidence,
   DeveloperModuleReviewTransition,
+  DeveloperModuleTrustView,
+  DeveloperModuleVerificationRun,
 } from '@kortix/sdk';
 
 import { backendApi } from '@/lib/api-client';
@@ -43,7 +45,7 @@ export interface AdminDeveloperReviewDecisionBody {
   expected_status: DeveloperModuleReleaseStatus;
   expected_revision: number;
   reason?: string;
-  evidence?: DeveloperModuleReviewEvidence[];
+  evidence?: DeveloperModuleHumanReviewEvidence[];
 }
 
 export type AdminDeveloperReviewErrorCode =
@@ -60,6 +62,11 @@ export type AdminDeveloperReviewErrorCode =
   | 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE'
   | 'DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED'
   | 'DEVELOPER_DISTRIBUTION_CONFLICT'
+  | 'DEVELOPER_TRUST_GATE_UNMET'
+  | 'DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED'
+  | 'DEVELOPER_VERIFICATION_CONFLICT'
+  | 'DEVELOPER_VERIFICATION_RETRY_NOT_ALLOWED'
+  | 'DEVELOPER_VERIFICATION_CANCEL_NOT_ALLOWED'
   | 'DEVELOPER_REQUEST_FAILED';
 
 const STABLE_ERROR_CODES = new Set<AdminDeveloperReviewErrorCode>([
@@ -76,6 +83,11 @@ const STABLE_ERROR_CODES = new Set<AdminDeveloperReviewErrorCode>([
   'DEVELOPER_MODULE_NOT_DISTRIBUTABLE',
   'DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED',
   'DEVELOPER_DISTRIBUTION_CONFLICT',
+  'DEVELOPER_TRUST_GATE_UNMET',
+  'DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED',
+  'DEVELOPER_VERIFICATION_CONFLICT',
+  'DEVELOPER_VERIFICATION_RETRY_NOT_ALLOWED',
+  'DEVELOPER_VERIFICATION_CANCEL_NOT_ALLOWED',
 ]);
 
 export class AdminDeveloperReviewError extends Error {
@@ -160,6 +172,38 @@ export async function decideAdminDeveloperReview(
     await backendApi.post<DeveloperModuleReviewTransition>(
       `/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/review-decisions`,
       body,
+    ),
+  );
+}
+
+export async function getAdminDeveloperModuleTrust(
+  releaseId: string,
+): Promise<DeveloperModuleTrustView> {
+  return unwrapAdmin(
+    await backendApi.get<DeveloperModuleTrustView>(
+      `/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/trust`,
+    ),
+  );
+}
+
+export async function retryAdminDeveloperModuleVerification(
+  releaseId: string,
+): Promise<DeveloperModuleVerificationRun> {
+  return unwrapAdmin(
+    await backendApi.post<DeveloperModuleVerificationRun>(
+      `/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/verification-retries`,
+      {},
+    ),
+  );
+}
+
+export async function cancelAdminDeveloperModuleVerification(
+  releaseId: string,
+): Promise<DeveloperModuleVerificationRun> {
+  return unwrapAdmin(
+    await backendApi.post<DeveloperModuleVerificationRun>(
+      `/admin/developer/modules/releases/${encodeURIComponent(releaseId)}/verification-cancellations`,
+      {},
     ),
   );
 }

@@ -1,6 +1,10 @@
 'use client';
 
-import type { DeveloperModuleRelease, DeveloperModuleReviewEvidence } from '@kortix/sdk';
+import type {
+  DeveloperModuleHumanReviewEvidence,
+  DeveloperModuleRelease,
+  DeveloperModuleTrustView,
+} from '@kortix/sdk';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -10,10 +14,13 @@ import {
   type AdminDeveloperReviewDetail,
   type AdminDeveloperReviewPage,
   adminDeveloperReviewErrorCode,
+  cancelAdminDeveloperModuleVerification,
   decideAdminDeveloperReview,
+  getAdminDeveloperModuleTrust,
   getAdminDeveloperReview,
   listAdminDeveloperReviews,
   publishAdminDeveloperModuleRelease,
+  retryAdminDeveloperModuleVerification,
   signAdminDeveloperModuleRelease,
 } from './client';
 import { buildAdminDecisionBody } from './evidence';
@@ -23,6 +30,7 @@ export const adminDeveloperReviewKeys = {
   list: (status: DeveloperModuleRelease['status'], cursor: string | null) =>
     ['admin-developer-reviews', 'list', status, cursor ?? 'first'] as const,
   detail: (releaseId: string) => ['admin-developer-reviews', 'detail', releaseId] as const,
+  trust: (releaseId: string) => ['admin-developer-reviews', 'trust', releaseId] as const,
 };
 
 const queuePrefix = (status: DeveloperModuleRelease['status']) =>
@@ -47,6 +55,18 @@ export function adminDeveloperReviewDetailQuery(releaseId: string) {
   };
 }
 
+export function adminDeveloperTrustQuery(releaseId: string) {
+  return {
+    queryKey: adminDeveloperReviewKeys.trust(releaseId),
+    queryFn: () => getAdminDeveloperModuleTrust(releaseId),
+    staleTime: 2_000,
+    refetchInterval: (query: { state: { data: DeveloperModuleTrustView | undefined } }) => {
+      const state = query.state.data?.attempts.at(-1)?.state;
+      return state === 'queued' || state === 'running' ? 2_000 : false;
+    },
+  };
+}
+
 export function useAdminDeveloperReviewQueue(
   status: DeveloperModuleRelease['status'] = 'review_pending',
   cursor: string | null = null,
@@ -65,6 +85,13 @@ export function useAdminDeveloperReviewDetail(releaseId: string, enabled = true)
   });
 }
 
+export function useAdminDeveloperTrust(releaseId: string, enabled = true) {
+  return useQuery({
+    ...adminDeveloperTrustQuery(releaseId),
+    enabled: Boolean(releaseId) && enabled,
+  });
+}
+
 export interface AdminDeveloperReviewDecisionInput {
   release: Pick<
     DeveloperModuleRelease,
@@ -72,7 +99,7 @@ export interface AdminDeveloperReviewDecisionInput {
   >;
   decision: AdminDeveloperReviewDecision;
   reason?: string;
-  evidence?: readonly DeveloperModuleReviewEvidence[];
+  evidence?: readonly DeveloperModuleHumanReviewEvidence[];
 }
 
 export async function submitAdminDeveloperReviewDecision(input: AdminDeveloperReviewDecisionInput) {
@@ -108,7 +135,19 @@ export function useAdminDeveloperReviewDecision() {
       ]);
     },
     onError: async (error, input) => {
-      if (adminDeveloperReviewErrorCode(error) !== 'DEVELOPER_REVIEW_CONFLICT') return;
+      const code = adminDeveloperReviewErrorCode(error);
+      if (code === 'DEVELOPER_TRUST_GATE_UNMET') {
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: adminDeveloperReviewKeys.detail(input.release.release_id),
+          }),
+          queryClient.invalidateQueries({
+            queryKey: adminDeveloperReviewKeys.trust(input.release.release_id),
+          }),
+        ]);
+        return;
+      }
+      if (code !== 'DEVELOPER_REVIEW_CONFLICT') return;
       queryClient.removeQueries({
         queryKey: adminDeveloperReviewKeys.detail(input.release.release_id),
       });
@@ -162,12 +201,59 @@ export function useAdminDeveloperDistribution() {
       ]);
     },
     onError: async (error, input) => {
-      if (adminDeveloperReviewErrorCode(error) !== 'DEVELOPER_DISTRIBUTION_CONFLICT') return;
+      const code = adminDeveloperReviewErrorCode(error);
+      if (code === 'DEVELOPER_TRUST_GATE_UNMET') {
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: adminDeveloperReviewKeys.detail(input.release.release_id),
+          }),
+          queryClient.invalidateQueries({
+            queryKey: adminDeveloperReviewKeys.trust(input.release.release_id),
+          }),
+        ]);
+        return;
+      }
+      if (code !== 'DEVELOPER_DISTRIBUTION_CONFLICT') return;
       queryClient.removeQueries({
         queryKey: adminDeveloperReviewKeys.detail(input.release.release_id),
       });
       await queryClient.refetchQueries({
         queryKey: adminDeveloperReviewKeys.detail(input.release.release_id),
+      });
+    },
+  });
+}
+
+export type AdminDeveloperVerificationAction = 'retry' | 'cancel';
+
+export function submitAdminDeveloperVerification(input: {
+  releaseId: string;
+  action: AdminDeveloperVerificationAction;
+}) {
+  return input.action === 'retry'
+    ? retryAdminDeveloperModuleVerification(input.releaseId)
+    : cancelAdminDeveloperModuleVerification(input.releaseId);
+}
+
+export function useAdminDeveloperVerification() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: submitAdminDeveloperVerification,
+    retry: false,
+    onSuccess: async (_run, input) => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: adminDeveloperReviewKeys.trust(input.releaseId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: adminDeveloperReviewKeys.detail(input.releaseId),
+        }),
+      ]);
+    },
+    onError: async (_error, input) => {
+      await queryClient.invalidateQueries({
+        queryKey: adminDeveloperReviewKeys.trust(input.releaseId),
       });
     },
   });

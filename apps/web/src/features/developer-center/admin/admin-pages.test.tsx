@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import type {
+  DeveloperModuleHumanReviewEvidence,
   DeveloperModuleRelease,
   DeveloperModuleReviewEvent,
-  DeveloperModuleReviewEvidence,
+  DeveloperModuleTrustView,
 } from '@kortix/sdk';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -18,6 +19,11 @@ const RELEASE: DeveloperModuleRelease = {
   module_version: '1.0.0',
   manifest: { id: 'openopc.recruiting', permissions: { network: ['api.example.test'] } },
   manifest_digest: `sha256:${'a'.repeat(64)}`,
+  artifact_id: '44000000-0000-4000-a000-000000000004',
+  artifact_digest: `sha256:${'b'.repeat(64)}`,
+  sbom_digest: null,
+  trust_attestation_digest: null,
+  verification_policy_digest: `sha256:${'c'.repeat(64)}`,
   review_requirements: ['manifest_review', 'human_review'],
   status: 'review_pending',
   review_revision: 4,
@@ -56,15 +62,46 @@ const EVENT: DeveloperModuleReviewEvent = {
   created_at: '2026-07-24T05:30:00.000Z',
 };
 
-const COMPLETE_EVIDENCE: DeveloperModuleReviewEvidence[] = RELEASE.review_requirements.map(
-  (requirement, index) => ({
-    requirement,
-    outcome: 'passed',
-    method: 'manual',
-    summary: `${requirement} checked`,
-    observed_at: `2026-07-24T06:0${index}:00.000Z`,
-  }),
-);
+const COMPLETE_EVIDENCE: DeveloperModuleHumanReviewEvidence[] = (
+  ['manifest_review', 'human_review'] as const
+).map((requirement, index) => ({
+  requirement,
+  outcome: 'passed',
+  method: 'manual',
+  summary: `${requirement} checked`,
+  observed_at: `2026-07-24T06:0${index}:00.000Z`,
+}));
+
+const RUNNING_TRUST: DeveloperModuleTrustView = {
+  release_id: RELEASE.release_id,
+  account_id: RELEASE.account_id,
+  artifact: {
+    artifact_id: '44000000-0000-4000-a000-000000000004',
+    artifact_digest: `sha256:${'b'.repeat(64)}`,
+    media_type: 'application/vnd.openopc.developer-module.v2+json',
+    size_bytes: 2048,
+    source_provenance: { repository: 'https://example.test/openopc/recruiting' },
+    created_at: RELEASE.created_at,
+  },
+  attempts: [
+    {
+      run_id: '45000000-0000-4000-a000-000000000005',
+      attempt: 1,
+      state: 'running',
+      policy_digest: `sha256:${'c'.repeat(64)}`,
+      scanner_set_digest: `sha256:${'d'.repeat(64)}`,
+      sandbox_profile_digest: `sha256:${'e'.repeat(64)}`,
+      terminal_reason: null,
+      sbom_digest: null,
+      attestation_digest: null,
+      started_at: '2026-07-24T05:31:00.000Z',
+      finished_at: null,
+      created_at: '2026-07-24T05:30:30.000Z',
+      findings: [],
+      attestation: null,
+    },
+  ],
+};
 
 const noop = () => undefined;
 
@@ -384,5 +421,71 @@ describe('Admin Developer Center pages', () => {
     expect(revoked).toContain('No distribution actions available');
     expect(revoked).not.toContain('data-testid="sign-release"');
     expect(revoked).not.toContain('data-testid="publish-release"');
+  });
+
+  test('disables approval and signing with the current server trust reason', () => {
+    const release: DeveloperModuleRelease = {
+      ...RELEASE,
+      review_requirements: ['source_scan', 'sandbox_test', 'human_review'],
+    };
+    const reviewPending = renderToStaticMarkup(
+      <AdminDeveloperReviewDetailView
+        state="ready"
+        release={release}
+        history={[]}
+        trust={RUNNING_TRUST}
+        evidence={[
+          {
+            requirement: 'human_review',
+            outcome: 'passed',
+            method: 'manual',
+            summary: 'Independent review completed.',
+            observed_at: '2026-07-24T06:00:00.000Z',
+          },
+        ]}
+        reason=""
+        pending={false}
+        conflict={false}
+        verificationPending={false}
+        revokeOpen={false}
+        errorCode={null}
+        onReasonChange={noop}
+        onEvidenceChange={noop}
+        onDecision={noop}
+        onRetryVerification={noop}
+        onCancelVerification={noop}
+        onReload={noop}
+        onRevokeOpenChange={noop}
+      />,
+    );
+    const approved = renderToStaticMarkup(
+      <AdminDeveloperReviewDetailView
+        state="ready"
+        release={{ ...release, status: 'approved' }}
+        history={[]}
+        trust={RUNNING_TRUST}
+        evidence={[]}
+        reason=""
+        pending={false}
+        conflict={false}
+        verificationPending={false}
+        revokeOpen={false}
+        errorCode={null}
+        onReasonChange={noop}
+        onEvidenceChange={noop}
+        onDecision={noop}
+        onDistributionAction={noop}
+        onRetryVerification={noop}
+        onCancelVerification={noop}
+        onReload={noop}
+        onRevokeOpenChange={noop}
+      />,
+    );
+
+    expect(reviewPending).toContain('Sandbox verification is still running');
+    expect(buttonTag(reviewPending, 'approve-decision')).toContain('disabled=""');
+    expect(reviewPending).not.toContain('source_scan evidence summary');
+    expect(buttonTag(approved, 'sign-release')).toContain('disabled=""');
+    expect(approved).toContain('Cancel verification');
   });
 });

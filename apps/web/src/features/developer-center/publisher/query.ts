@@ -2,11 +2,14 @@
 
 import {
   type DeveloperModuleReviewTransition,
+  type DeveloperModuleTrustView,
   type RequestDeveloperModuleReviewInput,
   getDeveloperModuleRelease,
   getDeveloperModuleReviewHistory,
+  getDeveloperModuleTrust,
   listDeveloperModuleReleases,
   requestDeveloperModuleReview,
+  retryDeveloperModuleVerification,
 } from '@kortix/sdk';
 import { skipToken, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -20,6 +23,8 @@ export const developerModuleKeys = {
     [...developerModuleKeys.account(accountId), 'detail', releaseId] as const,
   history: (accountId: string, releaseId: string) =>
     [...developerModuleKeys.account(accountId), 'history', releaseId] as const,
+  trust: (accountId: string, releaseId: string) =>
+    [...developerModuleKeys.account(accountId), 'trust', releaseId] as const,
 };
 
 export function publisherModuleReleasesQuery(accountId: string) {
@@ -43,6 +48,23 @@ export function publisherModuleHistoryQuery(accountId: string, releaseId: string
     queryKey: developerModuleKeys.history(accountId, releaseId),
     queryFn: () => getDeveloperModuleReviewHistory(releaseId, { accountId }),
     staleTime: 15_000,
+  };
+}
+
+export function developerModuleTrustPollInterval(
+  trust: Pick<DeveloperModuleTrustView, 'attempts'> | null | undefined,
+): 2000 | false {
+  const state = trust?.attempts.at(-1)?.state;
+  return state === 'queued' || state === 'running' ? 2_000 : false;
+}
+
+export function publisherModuleTrustQuery(accountId: string, releaseId: string) {
+  return {
+    queryKey: developerModuleKeys.trust(accountId, releaseId),
+    queryFn: () => getDeveloperModuleTrust(releaseId, { accountId }),
+    staleTime: 2_000,
+    refetchInterval: (query: { state: { data: DeveloperModuleTrustView | undefined } }) =>
+      developerModuleTrustPollInterval(query.state.data),
   };
 }
 
@@ -86,6 +108,50 @@ export function usePublisherModuleHistory(
       : skipToken,
     enabled: Boolean(accountId) && Boolean(releaseId) && enabled,
     staleTime: 15_000,
+  });
+}
+
+export function usePublisherModuleTrust(
+  accountId: string | null,
+  releaseId: string,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: accountId
+      ? developerModuleKeys.trust(accountId, releaseId)
+      : [...developerModuleKeys.all, 'idle', 'trust', releaseId],
+    queryFn: accountId ? () => getDeveloperModuleTrust(releaseId, { accountId }) : skipToken,
+    enabled: Boolean(accountId) && Boolean(releaseId) && enabled,
+    staleTime: 2_000,
+    refetchInterval: (query) => developerModuleTrustPollInterval(query.state.data),
+  });
+}
+
+export interface PublisherVerificationRetryInput {
+  accountId: string;
+  releaseId: string;
+}
+
+export function submitPublisherVerificationRetry(input: PublisherVerificationRetryInput) {
+  return retryDeveloperModuleVerification(input.releaseId, { accountId: input.accountId });
+}
+
+export function useRetryPublisherVerification() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: submitPublisherVerificationRetry,
+    retry: false,
+    onSuccess: async (_run, input) => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: developerModuleKeys.trust(input.accountId, input.releaseId),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: developerModuleKeys.detail(input.accountId, input.releaseId),
+        }),
+      ]);
+    },
   });
 }
 

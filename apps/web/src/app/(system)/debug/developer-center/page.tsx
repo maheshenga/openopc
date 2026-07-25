@@ -1,19 +1,20 @@
 'use client';
 
 import {
+  type DeveloperModuleHumanReviewEvidence,
+  type DeveloperModuleRelease,
+  type DeveloperModuleReleaseStatus,
+  type DeveloperModuleReviewEvent,
+  type ProjectModuleInstallation,
+  type ProjectModuleInstallationEvent,
+  type ProjectModuleInstallationTransition,
+  createDeclarativeDeveloperModuleArtifact,
   getDeveloperModuleRelease,
   getDeveloperModuleReviewHistory,
   listDeveloperModuleReleases,
   requestDeveloperModuleReview,
   submitDeveloperModuleRelease,
   validateDeveloperModule,
-  type DeveloperModuleRelease,
-  type DeveloperModuleReleaseStatus,
-  type DeveloperModuleReviewEvent,
-  type DeveloperModuleReviewEvidence,
-  type ProjectModuleInstallation,
-  type ProjectModuleInstallationEvent,
-  type ProjectModuleInstallationTransition,
 } from '@kortix/sdk';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -22,12 +23,12 @@ import { invalidateTokenCache, setBootstrapAuthToken } from '@/lib/auth-token';
 import { useCurrentAccountStore } from '@/stores/current-account-store';
 
 import {
+  type AdminDeveloperReviewDecision,
+  type AdminDeveloperReviewDetail,
   adminDeveloperReviewErrorCode,
   decideAdminDeveloperReview,
   getAdminDeveloperReview,
   listAdminDeveloperReviews,
-  type AdminDeveloperReviewDecision,
-  type AdminDeveloperReviewDetail,
 } from '@/features/developer-center/admin/client';
 import {
   buildAdminDecisionBody,
@@ -42,9 +43,9 @@ import {
   type AdminReviewQueueState,
 } from '@/features/developer-center/admin/review-queue-page';
 import {
+  type ReleaseStatusFilter,
   developerCenterErrorCode,
   filterRecentReleases,
-  type ReleaseStatusFilter,
 } from '@/features/developer-center/model';
 import {
   PublisherReleaseDetailView,
@@ -65,8 +66,8 @@ import {
   updatePublishedProjectModule,
 } from '@/features/project-modules/client';
 import {
-  ProjectModulesView,
   type ProjectModulesPageState,
+  ProjectModulesView,
 } from '@/features/project-modules/project-modules-page';
 import { projectModuleErrorCode } from '@/features/project-modules/query';
 
@@ -117,8 +118,15 @@ function PublisherSubmitHarness({
   const controllerRef = useRef(
     createDeveloperModuleSubmitController({
       validate: (item) => validateDeveloperModule(item),
-      submit: (item, selectedAccountId) =>
-        submitDeveloperModuleRelease(item, { accountId: selectedAccountId }),
+      submit: async (item, selectedAccountId) => {
+        const artifact = await createDeclarativeDeveloperModuleArtifact(item, {
+          accountId: selectedAccountId,
+        });
+        return submitDeveloperModuleRelease({
+          artifactId: artifact.artifact_id,
+          accountId: selectedAccountId,
+        });
+      },
     }),
   );
   const controller = controllerRef.current;
@@ -195,10 +203,13 @@ function ProjectModulesDebugHarness({ canWrite }: { canWrite: boolean }) {
         listPublishedProjectModuleReleases(),
       ]);
       const histories = await Promise.all(
-        nextModules.map(async (installation) => [
-          installation.installation_id,
-          await listProjectModuleHistory(DEBUG_PROJECT_ID, installation.module_id),
-        ] as const),
+        nextModules.map(
+          async (installation) =>
+            [
+              installation.installation_id,
+              await listProjectModuleHistory(DEBUG_PROJECT_ID, installation.module_id),
+            ] as const,
+        ),
       );
       setModules(nextModules);
       setReleases(nextReleases);
@@ -262,11 +273,7 @@ function ProjectModulesDebugHarness({ canWrite }: { canWrite: boolean }) {
       errorCode={errorCode}
       onInstall={(releaseId) =>
         void mutate('install', () =>
-          installPublishedProjectModule(
-            DEBUG_PROJECT_ID,
-            releaseId,
-            `debug-install:${releaseId}`,
-          ),
+          installPublishedProjectModule(DEBUG_PROJECT_ID, releaseId, `debug-install:${releaseId}`),
         )
       }
       onUpdate={(moduleId, releaseId, revision) =>
@@ -318,7 +325,7 @@ function DebugDeveloperCenterHarness() {
   const [adminConflict, setAdminConflict] = useState(false);
   const [publisherReason, setPublisherReason] = useState('');
   const [adminReason, setAdminReason] = useState('');
-  const [adminEvidence, setAdminEvidence] = useState<DeveloperModuleReviewEvidence[]>([]);
+  const [adminEvidence, setAdminEvidence] = useState<DeveloperModuleHumanReviewEvidence[]>([]);
   const [adminPending, setAdminPending] = useState(false);
   const [revokeOpen, setRevokeOpen] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -328,6 +335,7 @@ function DebugDeveloperCenterHarness() {
   const selectedAccountId = useCurrentAccountStore((state) => state.selectedAccountId);
 
   useEffect(() => {
+    void refreshNonce;
     let cancelled = false;
     const load = async () => {
       setLoading(true);
@@ -378,13 +386,14 @@ function DebugDeveloperCenterHarness() {
     };
   }, [accountId, cursor, detailId, mode, refreshNonce, status]);
 
+  const adminDetailRelease = adminDetail?.release;
   useEffect(() => {
-    if (!adminDetail) return;
-    setAdminEvidence(createEvidenceDrafts(adminDetail.release.review_requirements));
+    if (!adminDetailRelease) return;
+    setAdminEvidence(createEvidenceDrafts(adminDetailRelease.review_requirements));
     setAdminReason('');
     setAdminConflict(false);
     setRevokeOpen(false);
-  }, [adminDetail?.release.release_id, adminDetail?.release.review_revision]);
+  }, [adminDetailRelease]);
 
   useEffect(() => {
     const restoreLocation = () => {
@@ -430,7 +439,7 @@ function DebugDeveloperCenterHarness() {
     decision: AdminDeveloperReviewDecision,
     input: {
       reason?: string;
-      evidence?: readonly DeveloperModuleReviewEvidence[];
+      evidence?: readonly DeveloperModuleHumanReviewEvidence[];
     },
   ) => {
     if (!adminDetail) return;

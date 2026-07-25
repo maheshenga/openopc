@@ -1,6 +1,10 @@
 'use client';
 
-import type { DeveloperModuleRelease, DeveloperModuleReviewEvent } from '@kortix/sdk';
+import type {
+  DeveloperModuleRelease,
+  DeveloperModuleReviewEvent,
+  DeveloperModuleTrustView,
+} from '@kortix/sdk';
 import { ArrowLeft, Send } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
@@ -11,15 +15,22 @@ import { Textarea } from '@/components/ui/textarea';
 import { usePermission } from '@/lib/use-permission';
 import { useCurrentAccountStore } from '@/stores/current-account-store';
 
-import { developerCenterErrorCode, publisherActionFor } from '../model';
+import {
+  developerCenterErrorCode,
+  developerModuleTrustGateStatus,
+  publisherActionFor,
+} from '../model';
 import { DeveloperModuleManifestView } from '../shared/module-manifest-view';
 import { DeveloperModuleRequirements } from '../shared/module-requirements';
 import { DeveloperModuleStatusBadge } from '../shared/module-status-badge';
 import { DeveloperModuleReviewTimeline } from '../shared/review-timeline';
+import { DeveloperModuleTrustSummary } from '../shared/trust-summary';
 import {
   usePublisherModuleDetail,
   usePublisherModuleHistory,
+  usePublisherModuleTrust,
   useRequestPublisherReview,
+  useRetryPublisherVerification,
 } from './query';
 
 export type PublisherReleaseDetailState =
@@ -33,24 +44,30 @@ export interface PublisherReleaseDetailViewProps {
   state: PublisherReleaseDetailState;
   release: DeveloperModuleRelease | null;
   history: readonly DeveloperModuleReviewEvent[];
+  trust?: DeveloperModuleTrustView | null;
   canWrite: boolean;
   pending: boolean;
+  retryPending?: boolean;
   errorCode: string | null;
   reason: string;
   onReasonChange: (value: string) => void;
   onRequestReview: (reason?: string) => void;
+  onRetryVerification?: () => void;
 }
 
 export function PublisherReleaseDetailView({
   state,
   release,
   history,
+  trust,
   canWrite,
   pending,
+  retryPending = false,
   errorCode,
   reason,
   onReasonChange,
   onRequestReview,
+  onRetryVerification = () => undefined,
 }: PublisherReleaseDetailViewProps) {
   if (state !== 'ready' || !release) {
     const message =
@@ -70,6 +87,10 @@ export function PublisherReleaseDetailView({
   }
 
   const action = publisherActionFor(release.status);
+  const trustStatus =
+    trust === undefined
+      ? { ready: true as const, code: null, message: 'Automatic trust checks passed.' }
+      : developerModuleTrustGateStatus(release, trust);
 
   return (
     <main className="mx-auto w-full max-w-6xl space-y-8 px-4 py-6 md:px-8">
@@ -158,6 +179,17 @@ export function PublisherReleaseDetailView({
         </div>
       </div>
 
+      {trust !== undefined ? (
+        <DeveloperModuleTrustSummary
+          trust={trust}
+          gateStatus={trustStatus}
+          requirements={release.review_requirements}
+          canRetry={canWrite}
+          retryPending={retryPending}
+          onRetry={onRetryVerification}
+        />
+      ) : null}
+
       <div className="border-t pt-6">
         <DeveloperModuleReviewTimeline events={history} />
       </div>
@@ -180,15 +212,19 @@ export function PublisherReleaseDetailPage({ releaseId }: { releaseId: string })
     releaseId,
     readPermission.allowed,
   );
+  const trustQuery = usePublisherModuleTrust(selectedAccountId, releaseId, readPermission.allowed);
   const reviewMutation = useRequestPublisherReview();
+  const retryMutation = useRetryPublisherVerification();
   const [reason, setReason] = useState('');
 
   let state: PublisherReleaseDetailState;
   if (!selectedAccountId) state = 'no_account';
   else if (readPermission.isLoading) state = 'loading';
   else if (readPermission.isError || !readPermission.allowed) state = 'permission_denied';
-  else if (detailQuery.isLoading || historyQuery.isLoading) state = 'loading';
-  else if (detailQuery.isError || historyQuery.isError || !detailQuery.data) state = 'error';
+  else if (detailQuery.isLoading || historyQuery.isLoading || trustQuery.isLoading)
+    state = 'loading';
+  else if (detailQuery.isError || historyQuery.isError || trustQuery.isError || !detailQuery.data)
+    state = 'error';
   else state = 'ready';
 
   const requestReview = (explanation?: string) => {
@@ -206,19 +242,30 @@ export function PublisherReleaseDetailPage({ releaseId }: { releaseId: string })
     });
   };
 
-  const error = reviewMutation.error ?? detailQuery.error ?? historyQuery.error;
+  const error =
+    reviewMutation.error ??
+    retryMutation.error ??
+    detailQuery.error ??
+    historyQuery.error ??
+    trustQuery.error;
 
   return (
     <PublisherReleaseDetailView
       state={state}
       release={detailQuery.data ?? null}
       history={historyQuery.data?.history ?? []}
+      trust={trustQuery.data ?? null}
       canWrite={writePermission.allowed}
       pending={reviewMutation.isPending}
+      retryPending={retryMutation.isPending}
       errorCode={error ? developerCenterErrorCode(error) : null}
       reason={reason}
       onReasonChange={setReason}
       onRequestReview={requestReview}
+      onRetryVerification={() => {
+        if (!selectedAccountId) return;
+        retryMutation.mutate({ accountId: selectedAccountId, releaseId });
+      }}
     />
   );
 }

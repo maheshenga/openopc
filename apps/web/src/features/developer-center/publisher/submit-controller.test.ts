@@ -2,7 +2,10 @@ import { describe, expect, mock, test } from 'bun:test';
 import type { DeveloperModuleRelease, DeveloperModuleReleaseSubmission } from '@kortix/sdk';
 
 import { DEVELOPER_MODULE_INPUT_MAX_BYTES } from '../model';
-import { createDeveloperModuleSubmitController } from './submit-controller';
+import {
+  createArtifactBackedDeveloperModuleSubmit,
+  createDeveloperModuleSubmitController,
+} from './submit-controller';
 
 const ACCOUNT_ID = '11000000-0000-4000-a000-000000000001';
 const VALID_ITEM = { type: 'registry:module', id: 'acme.recruiting', version: '1.0.0' };
@@ -17,6 +20,11 @@ const SUBMITTED_RELEASE: DeveloperModuleRelease = {
   module_version: '1.0.0',
   manifest: VALID_ITEM,
   manifest_digest: `sha256:${'a'.repeat(64)}`,
+  artifact_id: '14000000-0000-4000-a000-000000000001',
+  artifact_digest: `sha256:${'b'.repeat(64)}`,
+  sbom_digest: null,
+  trust_attestation_digest: null,
+  verification_policy_digest: `sha256:${'c'.repeat(64)}`,
   review_requirements: ['manifest_review', 'human_review'],
   status: 'validated',
   review_revision: 0,
@@ -40,6 +48,21 @@ function submission(): DeveloperModuleReleaseSubmission {
 }
 
 describe('Developer module submit controller', () => {
+  test('creates a canonical artifact before submitting an artifact-only release', async () => {
+    const createArtifact = mock(async () => ({ artifact_id: 'artifact-1' }));
+    const submitRelease = mock(async () => submission());
+    const submit = createArtifactBackedDeveloperModuleSubmit({ createArtifact, submitRelease });
+
+    await submit(VALID_ITEM, ACCOUNT_ID);
+
+    expect(createArtifact).toHaveBeenCalledWith(VALID_ITEM, { accountId: ACCOUNT_ID });
+    expect(submitRelease).toHaveBeenCalledWith({
+      artifactId: 'artifact-1',
+      accountId: ACCOUNT_ID,
+    });
+    expect(JSON.stringify(submitRelease.mock.calls)).not.toContain('registry:module');
+  });
+
   test('makes zero SDK calls for malformed or over-limit input', async () => {
     const validate = mock(async () => ({ valid: true, issues: [] }));
     const submit = mock(async () => submission());

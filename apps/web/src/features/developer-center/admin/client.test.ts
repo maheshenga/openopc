@@ -19,8 +19,14 @@ mock.module('@/lib/api-client', () => ({
   backendApi: { get, post },
 }));
 
-const { decideAdminDeveloperReview, getAdminDeveloperReview, listAdminDeveloperReviews } =
-  await import('./client');
+const {
+  cancelAdminDeveloperModuleVerification,
+  decideAdminDeveloperReview,
+  getAdminDeveloperModuleTrust,
+  getAdminDeveloperReview,
+  listAdminDeveloperReviews,
+  retryAdminDeveloperModuleVerification,
+} = await import('./client');
 
 const RELEASE_ID = '14000000-0000-4000-a000-000000000001';
 const COMPLETE_EVIDENCE = [
@@ -30,9 +36,6 @@ const COMPLETE_EVIDENCE = [
     method: 'manual' as const,
     summary: 'Manifest fields and permissions were reviewed.',
     observed_at: '2026-07-24T06:00:00.000Z',
-    tool: 'openopc-review-console',
-    tool_version: '1.0.0',
-    evidence_digest: `sha256:${'a'.repeat(64)}` as const,
   },
 ];
 
@@ -102,6 +105,34 @@ describe('private Admin developer review client', () => {
     );
   });
 
+  test('uses private safe trust read, retry and cancellation routes', async () => {
+    get.mockResolvedValueOnce({
+      success: true,
+      data: { release_id: RELEASE_ID, artifact: {}, attempts: [] },
+    });
+    post.mockResolvedValueOnce({ success: true, data: { run_id: 'run-2', state: 'queued' } });
+    post.mockResolvedValueOnce({
+      success: true,
+      data: { run_id: 'run-2', state: 'cancelled' },
+    });
+
+    await getAdminDeveloperModuleTrust(RELEASE_ID);
+    await retryAdminDeveloperModuleVerification(RELEASE_ID);
+    await cancelAdminDeveloperModuleVerification(RELEASE_ID);
+
+    expect(get).toHaveBeenCalledWith(`/admin/developer/modules/releases/${RELEASE_ID}/trust`);
+    expect(post).toHaveBeenNthCalledWith(
+      1,
+      `/admin/developer/modules/releases/${RELEASE_ID}/verification-retries`,
+      {},
+    );
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      `/admin/developer/modules/releases/${RELEASE_ID}/verification-cancellations`,
+      {},
+    );
+  });
+
   test('throws a stable server code without leaking an arbitrary error message', async () => {
     get.mockResolvedValueOnce({
       success: false,
@@ -132,6 +163,14 @@ describe('private Admin developer review client', () => {
     await expect(getAdminDeveloperReview(RELEASE_ID)).rejects.toMatchObject({
       message: 'DEVELOPER_REQUEST_FAILED',
       code: 'DEVELOPER_REQUEST_FAILED',
+    });
+
+    get.mockResolvedValueOnce({
+      success: false,
+      error: { body: { error: 'DEVELOPER_TRUST_GATE_UNMET' } },
+    });
+    await expect(getAdminDeveloperModuleTrust(RELEASE_ID)).rejects.toMatchObject({
+      code: 'DEVELOPER_TRUST_GATE_UNMET',
     });
   });
 });

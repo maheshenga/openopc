@@ -1,0 +1,18 @@
+{
+  "descriptorVersion": 1,
+  "runtime": {
+    "kind": "oci-image",
+    "image": "registry.openopc.example/modules/recruiting:latest",
+    "command": ["/opt/openopc/module"],
+    "args": [],
+    "profile": "gvisor-standard",
+    "limits": {
+      "cpuMillis": 60000,
+      "fuel": 1,
+      "memoryMiB": 512,
+      "outputBytes": 2097152,
+      "pids": 32,
+      "wallTimeMs": 60000
+    }
+  }
+}

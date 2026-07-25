@@ -1,0 +1,18 @@
+{
+  "descriptorVersion": 1,
+  "runtime": {
+    "kind": "wasi-component",
+    "component": "runtime/main.wasm",
+    "world": "openopc:module/runtime",
+    "operation": "run",
+    "imports": ["openopc:module/input", "openopc:module/output"],
+    "limits": {
+      "cpuMillis": 30000,
+      "fuel": 10000000,
+      "memoryMiB": 256,
+      "outputBytes": 1048576,
+      "pids": 16,
+      "wallTimeMs": 30000
+    }
+  }
+}

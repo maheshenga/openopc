@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 
 import {
   DeveloperModuleDistributionError,
@@ -39,9 +39,9 @@ function release(
     manifest_digest: `sha256:${'a'.repeat(64)}`,
     artifact_id: '50000000-0000-4000-a000-000000000005',
     artifact_digest: `sha256:${'c'.repeat(64)}`,
-    sbom_digest: null,
-    trust_attestation_digest: null,
-    verification_policy_digest: null,
+    sbom_digest: `sha256:${'d'.repeat(64)}`,
+    trust_attestation_digest: `sha256:${'e'.repeat(64)}`,
+    verification_policy_digest: `sha256:${'f'.repeat(64)}`,
     review_requirements: ['manifest_review', 'source_scan', 'human_review'],
     status,
     review_revision: reviewRevision,
@@ -153,9 +153,11 @@ test('fails closed when the module signer is unavailable without mutating the re
   });
 });
 
-test('rejects an approved release with an executable module manifest', async () => {
+test('signs an approved non-declarative release without executing it', async () => {
   const executable = release();
   executable.manifest.execution = { mode: 'server-adapter', entry: 'server.ts' };
+  executable.manifest.verification = { profile: 'server-conformance' };
+  executable.manifest_digest = canonicalDeveloperModuleManifestDigest(executable.manifest);
   const repository = createMemoryDeveloperModuleDistributionRepository({
     releases: [executable],
     now: () => NOW,
@@ -173,9 +175,82 @@ test('rejects an approved release with an executable module manifest', async () 
       expectedStatus: 'approved',
       expectedRevision: 2,
     }),
-  ).rejects.toEqual(
-    expect.objectContaining({ code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE', status: 409 }),
+  ).resolves.toMatchObject({ release: { status: 'signed' } });
+});
+
+test('has no schema-1 signature fallback when publishing persisted releases', async () => {
+  const signer = signingPort();
+  const signedRelease = release('signed', 3);
+  const schema1Bytes = new TextEncoder().encode(
+    `{"manifest_digest":"${signedRelease.manifest_digest}","module_id":"${signedRelease.module_id}","module_version":"${signedRelease.module_version}","publisher_id":"${signedRelease.publisher_id}","schema":1}`,
   );
+  signedRelease.signature_algorithm = 'ed25519';
+  signedRelease.signature_key_id = signer.keyId;
+  signedRelease.signature = await signer.sign(schema1Bytes);
+  signedRelease.signature_payload_digest = `sha256:${createHash('sha256').update(schema1Bytes).digest('hex')}`;
+  signedRelease.signed_at = NOW.toISOString();
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [signedRelease],
+    now: () => NOW,
+  });
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    verifiers: [signer],
+    now: () => NOW,
+  });
+
+  await expect(
+    service.publish({
+      releaseId: RELEASE_ID,
+      actorUserId: ADMIN_ID,
+      expectedStatus: 'signed',
+      expectedRevision: 3,
+    }),
+  ).rejects.toMatchObject({ code: 'DEVELOPER_MODULE_SIGNATURE_INVALID', status: 409 });
+});
+
+test.each([
+  'artifact_digest',
+  'sbom_digest',
+  'trust_attestation_digest',
+  'verification_policy_digest',
+] as const)('rejects publication after %s is tampered', async (digestField) => {
+  const signer = signingPort();
+  const delegate = createMemoryDeveloperModuleDistributionRepository({
+    releases: [release()],
+    now: () => NOW,
+  });
+  let tamper = false;
+  const repository = {
+    ...delegate,
+    async getAdmin(releaseId: string) {
+      const stored = await delegate.getAdmin(releaseId);
+      if (stored && tamper) stored[digestField] = `sha256:${'0'.repeat(64)}`;
+      return stored;
+    },
+  };
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    signer,
+    verifiers: [signer],
+    now: () => NOW,
+  });
+  await service.sign({
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'approved',
+    expectedRevision: 2,
+  });
+  tamper = true;
+
+  await expect(
+    service.publish({
+      releaseId: RELEASE_ID,
+      actorUserId: ADMIN_ID,
+      expectedStatus: 'signed',
+      expectedRevision: 3,
+    }),
+  ).rejects.toMatchObject({ code: 'DEVELOPER_MODULE_SIGNATURE_INVALID', status: 409 });
 });
 
 test('rejects stale distribution commands without signing', async () => {

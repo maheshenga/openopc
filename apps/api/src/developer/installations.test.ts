@@ -24,6 +24,13 @@ const RELEASE_V2 = '40000000-0000-4000-a000-000000000002';
 const RELEASE_NEVER_INSTALLED = '40000000-0000-4000-a000-000000000003';
 const MODULE_ID = 'acme.recruiting';
 const NOW = new Date('2026-07-24T16:00:00.000Z');
+const INSTALLATION_ACTIONS = ['install', 'update', 'rollback'] as const;
+const TRUST_DIGEST_FIELDS = [
+  'artifact_digest',
+  'sbom_digest',
+  'trust_attestation_digest',
+  'verification_policy_digest',
+] as const;
 
 function manifest(
   version: string,
@@ -59,9 +66,9 @@ function baseRelease(
     manifest_digest: canonicalDeveloperModuleManifestDigest(itemManifest),
     artifact_id: '50000000-0000-4000-a000-000000000005',
     artifact_digest: `sha256:${'c'.repeat(64)}`,
-    sbom_digest: null,
-    trust_attestation_digest: null,
-    verification_policy_digest: null,
+    sbom_digest: `sha256:${'d'.repeat(64)}`,
+    trust_attestation_digest: `sha256:${'e'.repeat(64)}`,
+    verification_policy_digest: `sha256:${'f'.repeat(64)}`,
     review_requirements: ['manifest_review', 'source_scan', 'human_review'],
     status: 'approved',
     review_revision: 2,
@@ -141,6 +148,7 @@ async function setup(
   });
   return {
     repository,
+    signingPort,
     distributionService,
     service: new ProjectModuleInstallationService({
       repository,
@@ -349,6 +357,69 @@ describe('project module installation service', () => {
         expectedInstallRevision: 0,
       }),
     ).rejects.toMatchObject({ code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE', status: 409 });
+  });
+
+  test.each(
+    INSTALLATION_ACTIONS.flatMap((action) =>
+      TRUST_DIGEST_FIELDS.map((digestField) => [action, digestField] as const),
+    ),
+  )('blocks %s after %s is tampered', async (action, digestField) => {
+    const { repository, signingPort, distributionService, service } = await setup();
+    const tamperedService = new ProjectModuleInstallationService({
+      repository,
+      releaseService: {
+        async getPublished(input) {
+          const published = await distributionService.getPublished(input);
+          published[digestField] = `sha256:${'0'.repeat(64)}`;
+          return published;
+        },
+      },
+      verifiers: [signingPort],
+      platformVersion: '1.0.0',
+      registryVersion: '1.0.0',
+    });
+
+    if (action !== 'install') {
+      await service.install({
+        ...projectInput,
+        releaseId: RELEASE_V1,
+        expectedInstallRevision: 0,
+      });
+    }
+    if (action === 'rollback') {
+      await service.update({
+        ...projectInput,
+        moduleId: MODULE_ID,
+        releaseId: RELEASE_V2,
+        expectedInstallRevision: 1,
+      });
+    }
+
+    const operation =
+      action === 'install'
+        ? tamperedService.install({
+            ...projectInput,
+            releaseId: RELEASE_V1,
+            expectedInstallRevision: 0,
+          })
+        : action === 'update'
+          ? tamperedService.update({
+              ...projectInput,
+              moduleId: MODULE_ID,
+              releaseId: RELEASE_V2,
+              expectedInstallRevision: 1,
+            })
+          : tamperedService.rollback({
+              ...projectInput,
+              moduleId: MODULE_ID,
+              releaseId: RELEASE_V1,
+              expectedInstallRevision: 2,
+            });
+
+    await expect(operation).rejects.toMatchObject({
+      code: 'DEVELOPER_MODULE_SIGNATURE_INVALID',
+      status: 409,
+    });
   });
 
   test('rejects signed, revoked, and unknown-key releases before mutating project state', async () => {

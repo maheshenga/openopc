@@ -1,12 +1,17 @@
 import { type KeyObject, createHash, sign as signBytes, verify as verifyBytes } from 'node:crypto';
-import { readRegistryModuleManifest, validateRegistryItem } from '@kortix/registry';
 
-export interface DeveloperModuleSignaturePayload {
-  schema: 1;
+import { type DeveloperModuleRelease, canonicalDeveloperModuleManifestDigest } from './releases';
+
+export interface DeveloperModuleSignaturePayloadV2 {
+  schema: 2;
   module_id: string;
   module_version: string;
   publisher_id: string;
+  artifact_digest: `sha256:${string}`;
   manifest_digest: `sha256:${string}`;
+  sbom_digest: `sha256:${string}`;
+  trust_attestation_digest: `sha256:${string}`;
+  verification_policy_digest: `sha256:${string}`;
 }
 
 export type DeveloperModuleDetachedSignature = `base64url:${string}`;
@@ -26,43 +31,49 @@ export interface DeveloperModuleSignature {
   signed_at: string;
 }
 
-export type DeclarativeModuleEligibility =
-  | { ok: true }
-  | { ok: false; code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE' };
+const SIGNATURE_PAYLOAD_V2_FIELDS = [
+  'schema',
+  'module_id',
+  'module_version',
+  'publisher_id',
+  'artifact_digest',
+  'manifest_digest',
+  'sbom_digest',
+  'trust_attestation_digest',
+  'verification_policy_digest',
+] as const;
 
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-    return JSON.stringify(value);
-  }
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new TypeError('Canonical JSON only supports finite numbers');
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right));
-    return `{${entries
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(',')}}`;
-  }
-  throw new TypeError('Canonical JSON only supports JSON values');
-}
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const DETACHED_ED25519_SIGNATURE = /^base64url:[A-Za-z0-9_-]{86}$/;
 
-export function canonicalDeveloperModuleSignaturePayload(
-  payload: DeveloperModuleSignaturePayload,
-): Uint8Array {
+function assertExactSignatureV2(payload: DeveloperModuleSignaturePayloadV2): void {
+  const candidate = payload as unknown as Record<string, unknown>;
+  const keys = Object.keys(candidate);
   if (
-    payload.schema !== 1 ||
-    !/^sha256:[0-9a-f]{64}$/.test(payload.manifest_digest) ||
-    !payload.module_id ||
-    !payload.module_version ||
-    !payload.publisher_id
+    keys.length !== SIGNATURE_PAYLOAD_V2_FIELDS.length ||
+    SIGNATURE_PAYLOAD_V2_FIELDS.some((field) => !Object.hasOwn(candidate, field)) ||
+    payload.schema !== 2 ||
+    typeof payload.module_id !== 'string' ||
+    payload.module_id.length === 0 ||
+    typeof payload.module_version !== 'string' ||
+    payload.module_version.length === 0 ||
+    typeof payload.publisher_id !== 'string' ||
+    payload.publisher_id.length === 0 ||
+    !SHA256_DIGEST.test(payload.artifact_digest) ||
+    !SHA256_DIGEST.test(payload.manifest_digest) ||
+    !SHA256_DIGEST.test(payload.sbom_digest) ||
+    !SHA256_DIGEST.test(payload.trust_attestation_digest) ||
+    !SHA256_DIGEST.test(payload.verification_policy_digest)
   ) {
     throw new TypeError('Invalid developer module signature payload');
   }
-  return new TextEncoder().encode(canonicalJson(payload));
+}
+
+export function canonicalDeveloperModuleSignaturePayloadV2(
+  payload: DeveloperModuleSignaturePayloadV2,
+): Uint8Array {
+  assertExactSignatureV2(payload);
+  return new TextEncoder().encode(JSON.stringify(payload));
 }
 
 export function createEd25519ModuleSigningPort(input: {
@@ -108,11 +119,11 @@ export function createEd25519ModuleSigningPort(input: {
 }
 
 export async function signDeveloperModulePayload(
-  payload: DeveloperModuleSignaturePayload,
+  payload: DeveloperModuleSignaturePayloadV2,
   signer: ModuleSigningPort,
   now: () => Date = () => new Date(),
 ): Promise<DeveloperModuleSignature> {
-  const bytes = canonicalDeveloperModuleSignaturePayload(payload);
+  const bytes = canonicalDeveloperModuleSignaturePayloadV2(payload);
   const signedAt = now();
   if (!Number.isFinite(signedAt.getTime())) throw new TypeError('Invalid module signing timestamp');
   const payloadDigest = createHash('sha256').update(bytes).digest('hex');
@@ -125,43 +136,50 @@ export async function signDeveloperModulePayload(
   };
 }
 
-export function isDistributableDeclarativeModule(item: unknown): DeclarativeModuleEligibility {
-  const validation = validateRegistryItem(item);
-  const manifest = readRegistryModuleManifest(item);
-  if (!validation.valid || !manifest) {
-    return { ok: false, code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE' };
+export function developerModuleReleaseSignaturePayloadV2(
+  release: DeveloperModuleRelease,
+): DeveloperModuleSignaturePayloadV2 {
+  return {
+    schema: 2,
+    module_id: release.module_id,
+    module_version: release.module_version,
+    publisher_id: release.publisher_id,
+    artifact_digest: release.artifact_digest as `sha256:${string}`,
+    manifest_digest: release.manifest_digest,
+    sbom_digest: release.sbom_digest as `sha256:${string}`,
+    trust_attestation_digest: release.trust_attestation_digest as `sha256:${string}`,
+    verification_policy_digest: release.verification_policy_digest as `sha256:${string}`,
+  };
+}
+
+export async function verifyDeveloperModuleReleaseTrustSignature(
+  release: DeveloperModuleRelease,
+  verifier: ModuleSigningPort,
+): Promise<boolean> {
+  if (
+    !['signed', 'published'].includes(release.status) ||
+    release.signature_algorithm !== 'ed25519' ||
+    release.signature_key_id !== verifier.keyId ||
+    verifier.algorithm !== 'ed25519' ||
+    !release.signature ||
+    !DETACHED_ED25519_SIGNATURE.test(release.signature) ||
+    !release.signature_payload_digest ||
+    !release.signed_at ||
+    canonicalDeveloperModuleManifestDigest(release.manifest) !== release.manifest_digest
+  ) {
+    return false;
   }
 
-  const candidate = item as Record<string, unknown>;
-  const execution = manifest.execution;
-  const files = candidate.files;
-  const dependencies = candidate.dependencies;
-  const devDependencies = candidate.devDependencies;
-  const registryDependencies = candidate.registryDependencies;
-  const envVars = candidate.envVars;
-  const inputs = candidate.inputs;
-  const hasFiles = Array.isArray(files) ? files.length > 0 : files !== undefined;
-  const hasDependencies = [dependencies, devDependencies, registryDependencies, inputs].some(
-    (value) => Array.isArray(value) && value.length > 0,
-  );
-  const hasEnvVars =
-    envVars !== undefined &&
-    (typeof envVars !== 'object' ||
-      envVars === null ||
-      Array.isArray(envVars) ||
-      Object.keys(envVars as Record<string, unknown>).length > 0);
-  const hasInputs = inputs !== undefined;
-  const hasExecutableUi = (manifest.ui ?? []).some((surface) => surface.entry !== undefined);
-  const hasDesktopPermission = (manifest.permissions?.desktop?.length ?? 0) > 0;
-
-  return execution.mode === 'declarative' &&
-    execution.entry === undefined &&
-    !hasFiles &&
-    !hasDependencies &&
-    !hasEnvVars &&
-    !hasInputs &&
-    !hasExecutableUi &&
-    !hasDesktopPermission
-    ? { ok: true }
-    : { ok: false, code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE' };
+  try {
+    const bytes = canonicalDeveloperModuleSignaturePayloadV2(
+      developerModuleReleaseSignaturePayloadV2(release),
+    );
+    const payloadDigest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+    return (
+      payloadDigest === release.signature_payload_digest &&
+      (await verifier.verify(bytes, release.signature))
+    );
+  } catch {
+    return false;
+  }
 }

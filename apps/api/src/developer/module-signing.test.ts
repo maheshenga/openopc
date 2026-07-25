@@ -2,101 +2,69 @@ import { expect, test } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
 
 import {
-  canonicalDeveloperModuleSignaturePayload,
+  type DeveloperModuleSignaturePayloadV2,
+  canonicalDeveloperModuleSignaturePayloadV2,
   createEd25519ModuleSigningPort,
-  isDistributableDeclarativeModule,
   signDeveloperModulePayload,
 } from './module-signing';
 
-function moduleItem() {
+function signaturePayloadV2(): DeveloperModuleSignaturePayloadV2 {
   return {
-    name: 'recruiting-workbench',
-    type: 'registry:module',
-    module: {
-      schemaVersion: 2,
-      id: 'acme.recruiting',
-      version: '1.0.0',
-      publisher: { id: 'acme', displayName: 'Acme' },
-      category: 'industry',
-      locales: ['en'],
-      compatibility: { platform: '^1.0.0' },
-      execution: { mode: 'declarative' },
-      capabilities: [{ id: 'acme.recruiting.score', kind: 'task' }],
-    },
-  };
-}
-
-test('accepts a manifest-only declarative module as distributable', () => {
-  expect(isDistributableDeclarativeModule(moduleItem())).toEqual({ ok: true });
-});
-
-test('rejects a module carrying template inputs even when the input shape is malformed', () => {
-  expect(
-    isDistributableDeclarativeModule({ ...moduleItem(), inputs: { prompt: 'secret' } }),
-  ).toEqual({ ok: false, code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE' });
-});
-
-test('rejects malformed environment variable declarations', () => {
-  expect(isDistributableDeclarativeModule({ ...moduleItem(), envVars: 'OPENAI_API_KEY' })).toEqual({
-    ok: false,
-    code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE',
-  });
-});
-
-test('rejects file payloads even when the file has a valid registry shape', () => {
-  expect(
-    isDistributableDeclarativeModule({
-      ...moduleItem(),
-      files: [{ path: 'run.ts', type: 'registry:file', content: 'export default {}' }],
-    }),
-  ).toEqual({ ok: false, code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE' });
-});
-
-test('rejects package and registry dependencies', () => {
-  expect(
-    isDistributableDeclarativeModule({
-      ...moduleItem(),
-      dependencies: ['@acme/runtime'],
-    }),
-  ).toEqual({ ok: false, code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE' });
-});
-
-test('rejects UI surfaces that point to executable entries', () => {
-  expect(
-    isDistributableDeclarativeModule({
-      ...moduleItem(),
-      module: {
-        ...moduleItem().module,
-        ui: [{ id: 'overview', surface: 'panel', entry: 'ui.ts' }],
-      },
-    }),
-  ).toEqual({ ok: false, code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE' });
-});
-
-test('rejects desktop-native permission declarations', () => {
-  expect(
-    isDistributableDeclarativeModule({
-      ...moduleItem(),
-      module: {
-        ...moduleItem().module,
-        permissions: { desktop: ['filesystem'] },
-      },
-    }),
-  ).toEqual({ ok: false, code: 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE' });
-});
-
-test('canonicalizes the signed release payload with stable sorted keys', () => {
-  const payload = canonicalDeveloperModuleSignaturePayload({
-    schema: 1,
+    schema: 2,
     module_id: 'acme.recruiting',
     module_version: '1.0.0',
     publisher_id: 'acme',
-    manifest_digest: `sha256:${'a'.repeat(64)}`,
-  });
+    artifact_digest: `sha256:${'a'.repeat(64)}`,
+    manifest_digest: `sha256:${'b'.repeat(64)}`,
+    sbom_digest: `sha256:${'c'.repeat(64)}`,
+    trust_attestation_digest: `sha256:${'d'.repeat(64)}`,
+    verification_policy_digest: `sha256:${'e'.repeat(64)}`,
+  };
+}
+
+test('canonicalizes the exact schema-2 signed release payload', () => {
+  const payload = canonicalDeveloperModuleSignaturePayloadV2(signaturePayloadV2());
 
   expect(new TextDecoder().decode(payload)).toBe(
-    `{"manifest_digest":"sha256:${'a'.repeat(64)}","module_id":"acme.recruiting","module_version":"1.0.0","publisher_id":"acme","schema":1}`,
+    `{"schema":2,"module_id":"acme.recruiting","module_version":"1.0.0","publisher_id":"acme","artifact_digest":"sha256:${'a'.repeat(64)}","manifest_digest":"sha256:${'b'.repeat(64)}","sbom_digest":"sha256:${'c'.repeat(64)}","trust_attestation_digest":"sha256:${'d'.repeat(64)}","verification_policy_digest":"sha256:${'e'.repeat(64)}"}`,
   );
+});
+
+test('schema-2 signature changes for every trust-bound digest', () => {
+  const base = signaturePayloadV2();
+  const bytes = canonicalDeveloperModuleSignaturePayloadV2(base);
+  for (const key of [
+    'artifact_digest',
+    'manifest_digest',
+    'sbom_digest',
+    'trust_attestation_digest',
+    'verification_policy_digest',
+  ] as const) {
+    expect(
+      canonicalDeveloperModuleSignaturePayloadV2({
+        ...base,
+        [key]: `sha256:${'f'.repeat(64)}`,
+      }),
+    ).not.toEqual(bytes);
+  }
+});
+
+test.each([
+  ['schema 1', { ...signaturePayloadV2(), schema: 1 }],
+  [
+    'a missing field',
+    Object.fromEntries(
+      Object.entries(signaturePayloadV2()).filter(([key]) => key !== 'artifact_digest'),
+    ),
+  ],
+  ['an extra field', { ...signaturePayloadV2(), legacy_digest: `sha256:${'f'.repeat(64)}` }],
+  ['an invalid digest', { ...signaturePayloadV2(), sbom_digest: 'sha256:not-a-digest' }],
+] as const)('rejects %s without a schema-1 fallback', (_label, payload) => {
+  expect(() =>
+    canonicalDeveloperModuleSignaturePayloadV2(
+      payload as unknown as DeveloperModuleSignaturePayloadV2,
+    ),
+  ).toThrow('Invalid developer module signature payload');
 });
 
 test('signs and verifies the canonical release payload with Ed25519', async () => {
@@ -107,13 +75,7 @@ test('signs and verifies the canonical release payload with Ed25519', async () =
     publicKey,
   });
   const signature = await port.sign(
-    canonicalDeveloperModuleSignaturePayload({
-      schema: 1,
-      module_id: 'acme.recruiting',
-      module_version: '1.0.0',
-      publisher_id: 'acme',
-      manifest_digest: `sha256:${'a'.repeat(64)}`,
-    }),
+    canonicalDeveloperModuleSignaturePayloadV2(signaturePayloadV2()),
   );
 
   expect(signature).toMatch(/^base64url:[A-Za-z0-9_-]+$/);
@@ -126,20 +88,14 @@ test('rejects a signature when the release payload is tampered', async () => {
     privateKey,
     publicKey,
   });
-  const payload = {
-    schema: 1 as const,
-    module_id: 'acme.recruiting',
-    module_version: '1.0.0',
-    publisher_id: 'acme',
-    manifest_digest: `sha256:${'a'.repeat(64)}` as `sha256:${string}`,
-  };
-  const bytes = canonicalDeveloperModuleSignaturePayload(payload);
+  const payload = signaturePayloadV2();
+  const bytes = canonicalDeveloperModuleSignaturePayloadV2(payload);
   const signature = await port.sign(bytes);
 
   expect(await port.verify(bytes, signature)).toBe(true);
   expect(
     await port.verify(
-      canonicalDeveloperModuleSignaturePayload({ ...payload, module_version: '1.0.1' }),
+      canonicalDeveloperModuleSignaturePayloadV2({ ...payload, module_version: '1.0.1' }),
       signature,
     ),
   ).toBe(false);
@@ -152,13 +108,7 @@ test('rejects detached signatures with an invalid wire prefix', async () => {
     privateKey,
     publicKey,
   });
-  const bytes = canonicalDeveloperModuleSignaturePayload({
-    schema: 1,
-    module_id: 'acme.recruiting',
-    module_version: '1.0.0',
-    publisher_id: 'acme',
-    manifest_digest: `sha256:${'a'.repeat(64)}`,
-  });
+  const bytes = canonicalDeveloperModuleSignaturePayloadV2(signaturePayloadV2());
 
   expect(await port.verify(bytes, 'base64:invalid' as `base64url:${string}`)).toBe(false);
 });
@@ -170,13 +120,7 @@ test('rejects detached signatures beyond the Ed25519 wire size', async () => {
     privateKey,
     publicKey,
   });
-  const bytes = canonicalDeveloperModuleSignaturePayload({
-    schema: 1,
-    module_id: 'acme.recruiting',
-    module_version: '1.0.0',
-    publisher_id: 'acme',
-    manifest_digest: `sha256:${'a'.repeat(64)}`,
-  });
+  const bytes = canonicalDeveloperModuleSignaturePayloadV2(signaturePayloadV2());
 
   expect(await port.verify(bytes, `base64url:${'A'.repeat(87)}`)).toBe(false);
 });
@@ -213,13 +157,7 @@ test('fails verification when a rotated public key does not match the signer', a
     privateKey,
     publicKey: rotatedPublicKey,
   });
-  const bytes = canonicalDeveloperModuleSignaturePayload({
-    schema: 1,
-    module_id: 'acme.recruiting',
-    module_version: '1.0.0',
-    publisher_id: 'acme',
-    manifest_digest: `sha256:${'a'.repeat(64)}`,
-  });
+  const bytes = canonicalDeveloperModuleSignaturePayloadV2(signaturePayloadV2());
   const signature = await createEd25519ModuleSigningPort({
     keyId: 'openopc-test-2026',
     privateKey,
@@ -238,13 +176,7 @@ test('keeps private key material out of serialized signer and attestation values
     publicKey,
   });
   const signed = await signDeveloperModulePayload(
-    {
-      schema: 1,
-      module_id: 'acme.recruiting',
-      module_version: '1.0.0',
-      publisher_id: 'acme',
-      manifest_digest: `sha256:${'a'.repeat(64)}`,
-    },
+    signaturePayloadV2(),
     port,
     () => new Date('2026-07-24T12:00:00.000Z'),
   );
@@ -255,13 +187,7 @@ test('keeps private key material out of serialized signer and attestation values
 test('creates a detached signature attestation with a payload digest and timestamp', async () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const signed = await signDeveloperModulePayload(
-    {
-      schema: 1,
-      module_id: 'acme.recruiting',
-      module_version: '1.0.0',
-      publisher_id: 'acme',
-      manifest_digest: `sha256:${'a'.repeat(64)}`,
-    },
+    signaturePayloadV2(),
     createEd25519ModuleSigningPort({ keyId: 'openopc-test-2026', privateKey, publicKey }),
     () => new Date('2026-07-24T12:00:00.000Z'),
   );

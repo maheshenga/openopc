@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import { satisfies, valid, validRange } from 'semver';
 
@@ -6,8 +6,11 @@ import {
   DeveloperModuleDistributionError,
   type DeveloperModuleDistributionService,
 } from './distribution';
-import { type ModuleSigningPort, canonicalDeveloperModuleSignaturePayload } from './module-signing';
-import { type DeveloperModuleRelease, canonicalDeveloperModuleManifestDigest } from './releases';
+import {
+  type ModuleSigningPort,
+  verifyDeveloperModuleReleaseTrustSignature,
+} from './module-signing';
+import type { DeveloperModuleRelease } from './releases';
 
 export type ProjectModuleInstallationStatus = 'active' | 'blocked';
 export type ProjectModuleInstallationAction = 'install' | 'update' | 'rollback';
@@ -151,16 +154,6 @@ function normalizeIdempotencyKey(value: string | undefined): string | undefined 
   return value;
 }
 
-function signaturePayload(release: DeveloperModuleRelease) {
-  return {
-    schema: 1 as const,
-    module_id: release.module_id,
-    module_version: release.module_version,
-    publisher_id: release.publisher_id,
-    manifest_digest: release.manifest_digest as `sha256:${string}`,
-  };
-}
-
 function compatibilityRanges(release: DeveloperModuleRelease): {
   platform: string;
   registry?: string;
@@ -228,19 +221,11 @@ export class ProjectModuleInstallationService {
     ) {
       throw new DeveloperModuleDistributionError('DEVELOPER_MODULE_SIGNATURE_INVALID', 409);
     }
-    if (canonicalDeveloperModuleManifestDigest(release.manifest) !== release.manifest_digest) {
-      throw new DeveloperModuleDistributionError('DEVELOPER_MODULE_SIGNATURE_INVALID', 409);
-    }
     const verifier = this.verifiers.get(release.signature_key_id);
     if (!verifier) {
       throw new DeveloperModuleDistributionError('DEVELOPER_MODULE_SIGNER_UNAVAILABLE', 503);
     }
-    const bytes = canonicalDeveloperModuleSignaturePayload(signaturePayload(release));
-    const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-    if (
-      digest !== release.signature_payload_digest ||
-      !(await verifier.verify(bytes, release.signature as `base64url:${string}`))
-    ) {
+    if (!(await verifyDeveloperModuleReleaseTrustSignature(release, verifier))) {
       throw new DeveloperModuleDistributionError('DEVELOPER_MODULE_SIGNATURE_INVALID', 409);
     }
 

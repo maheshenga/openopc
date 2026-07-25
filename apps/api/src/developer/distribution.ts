@@ -1,18 +1,15 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import {
   type DeveloperModuleSignature,
-  type DeveloperModuleSignaturePayload,
+  type DeveloperModuleSignaturePayloadV2,
   type ModuleSigningPort,
-  canonicalDeveloperModuleSignaturePayload,
-  isDistributableDeclarativeModule,
+  canonicalDeveloperModuleSignaturePayloadV2,
+  developerModuleReleaseSignaturePayloadV2,
   signDeveloperModulePayload,
+  verifyDeveloperModuleReleaseTrustSignature,
 } from './module-signing';
-import {
-  type DeveloperModuleRelease,
-  type DeveloperModuleReleaseStatus,
-  canonicalDeveloperModuleManifestDigest,
-} from './releases';
+import type { DeveloperModuleRelease, DeveloperModuleReleaseStatus } from './releases';
 
 export type DeveloperModuleDistributionAction = 'sign' | 'publish' | 'revoke';
 
@@ -112,22 +109,14 @@ function cloneEvent(event: DeveloperModuleDistributionEvent): DeveloperModuleDis
   return structuredClone(event);
 }
 
-function signaturePayload(release: DeveloperModuleRelease): DeveloperModuleSignaturePayload {
-  return {
-    schema: 1,
-    module_id: release.module_id,
-    module_version: release.module_version,
-    publisher_id: release.publisher_id,
-    manifest_digest: release.manifest_digest,
-  };
-}
-
-function distributableItem(release: DeveloperModuleRelease): Record<string, unknown> {
-  return {
-    name: release.item_name,
-    type: 'registry:module',
-    module: release.manifest,
-  };
+function signaturePayload(release: DeveloperModuleRelease): DeveloperModuleSignaturePayloadV2 {
+  const payload = developerModuleReleaseSignaturePayloadV2(release);
+  try {
+    canonicalDeveloperModuleSignaturePayloadV2(payload);
+  } catch {
+    fail('DEVELOPER_MODULE_SIGNATURE_INVALID', 409);
+  }
+  return payload;
 }
 
 function assertExpectedRelease(
@@ -245,18 +234,12 @@ export class DeveloperModuleDistributionService {
     ) {
       fail('DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED', 403);
     }
-    if (!isDistributableDeclarativeModule(distributableItem(release)).ok) {
-      fail('DEVELOPER_MODULE_NOT_DISTRIBUTABLE', 409);
-    }
     if (!this.signer) fail('DEVELOPER_MODULE_SIGNER_UNAVAILABLE', 503);
 
+    const payload = signaturePayload(release);
     let signature: DeveloperModuleSignature;
     try {
-      signature = await signDeveloperModulePayload(
-        signaturePayload(release),
-        this.signer,
-        this.now,
-      );
+      signature = await signDeveloperModulePayload(payload, this.signer, this.now);
     } catch {
       fail('DEVELOPER_MODULE_SIGNER_UNAVAILABLE', 503);
     }
@@ -302,17 +285,9 @@ export class DeveloperModuleDistributionService {
     ) {
       fail('DEVELOPER_MODULE_SIGNATURE_INVALID', 409);
     }
-    if (canonicalDeveloperModuleManifestDigest(release.manifest) !== release.manifest_digest) {
-      fail('DEVELOPER_MODULE_SIGNATURE_INVALID', 409);
-    }
     const verifier = this.verifiers.get(release.signature_key_id);
     if (!verifier) fail('DEVELOPER_MODULE_SIGNER_UNAVAILABLE', 503);
-    const bytes = canonicalDeveloperModuleSignaturePayload(signaturePayload(release));
-    const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-    if (
-      digest !== release.signature_payload_digest ||
-      !(await verifier.verify(bytes, release.signature))
-    ) {
+    if (!(await verifyDeveloperModuleReleaseTrustSignature(release, verifier))) {
       fail('DEVELOPER_MODULE_SIGNATURE_INVALID', 409);
     }
 

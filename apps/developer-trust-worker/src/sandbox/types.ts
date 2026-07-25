@@ -32,6 +32,9 @@ export interface DeveloperModuleNetworkPolicy {
 }
 
 export interface DeveloperModuleSandboxInput {
+  runId?: string;
+  sandboxInstanceId?: string;
+  sandboxProfileDigest?: `sha256:${string}`;
   artifactDigest: `sha256:${string}`;
   artifactMount: ReadonlyArtifactMount;
   profile: RegistryModuleVerificationProfile;
@@ -39,6 +42,20 @@ export interface DeveloperModuleSandboxInput {
   verificationCapability: string;
   limits: SandboxResourceLimits;
   networkPolicy: DeveloperModuleNetworkPolicy;
+  runtime?:
+    | {
+        kind: 'wasi-component';
+        componentPath: string;
+        world: string;
+        operation: string;
+      }
+    | {
+        kind: 'oci-image';
+        image: `sha256:${string}`;
+        command: readonly string[];
+        args: readonly string[];
+        profile: string;
+      };
 }
 
 export interface DeveloperModuleSandboxProfile {

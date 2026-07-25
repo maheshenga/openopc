@@ -76,8 +76,12 @@ function safeControlUrl(value: string): string {
   }
   const loopback =
     url.hostname === '127.0.0.1' || url.hostname === '::1' || url.hostname === 'localhost';
+  const privateService =
+    loopback ||
+    !url.hostname.includes('.') ||
+    /^10\.|^192\.168\.|^172\.(?:1[6-9]|2[0-9]|3[01])\./.test(url.hostname);
   if (
-    (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) ||
+    (url.protocol !== 'https:' && !(url.protocol === 'http:' && privateService)) ||
     url.username !== '' ||
     url.password !== '' ||
     url.hash !== '' ||
@@ -164,6 +168,9 @@ function validateResult(
     !result ||
     typeof result !== 'object' ||
     result.artifactDigest !== input.artifactDigest ||
+    (input.runId !== undefined && result.runId !== input.runId) ||
+    (input.sandboxInstanceId !== undefined &&
+      result.sandboxInstanceId !== input.sandboxInstanceId) ||
     result.sandboxProfileDigest !== profile.profileDigest ||
     !DIGEST.test(result.stdoutDigest) ||
     !DIGEST.test(result.stderrDigest) ||

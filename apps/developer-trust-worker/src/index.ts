@@ -8,9 +8,12 @@ export { createDeveloperTrustHealthHandler } from './health';
 export { startDeveloperTrustWorkerServer } from './main';
 export {
   createDeveloperTrustReadiness,
+  DEVELOPER_TRUST_READINESS_COMPONENTS,
   type DeveloperTrustReadiness,
+  type DeveloperTrustReadinessComponent,
+  type DeveloperTrustReadinessComponentName,
   type DeveloperTrustReadinessInput,
-  type DeveloperTrustScannerReadiness,
+  type DeveloperTrustReadinessReason,
 } from './readiness';
 
 export interface DeveloperTrustWorkerControlPort {
@@ -19,12 +22,14 @@ export interface DeveloperTrustWorkerControlPort {
     runId: string;
     workerId: string;
     leaseToken: string;
+    leaseGeneration?: number;
     leaseMs: number;
   }): Promise<void>;
   finalize(input: {
     runId: string;
     workerId: string;
     leaseToken: string;
+    leaseGeneration?: number;
     artifactDigest: `sha256:${string}`;
     policyDigest: `sha256:${string}`;
     scannerSetDigest: `sha256:${string}`;
@@ -51,11 +56,16 @@ function sameClaimIdentity(left: DeveloperTrustWorkItem, right: DeveloperTrustWo
     left.accountId === right.accountId &&
     left.artifactId === right.artifactId &&
     left.artifactDigest === right.artifactDigest &&
+    left.artifactStorageKey === right.artifactStorageKey &&
+    left.artifactSizeBytes === right.artifactSizeBytes &&
+    left.runtimeDescriptorPath === right.runtimeDescriptorPath &&
+    left.runtimeKind === right.runtimeKind &&
     left.policyDigest === right.policyDigest &&
     left.scannerSetDigest === right.scannerSetDigest &&
     left.sandboxProfileDigest === right.sandboxProfileDigest &&
     left.attempt === right.attempt &&
     left.leaseToken === right.leaseToken &&
+    left.leaseGeneration === right.leaseGeneration &&
     left.verificationProfile === right.verificationProfile &&
     left.moduleId === right.moduleId &&
     left.moduleVersion === right.moduleVersion
@@ -66,7 +76,10 @@ export function createDeveloperTrustWorker(input: {
   workerId: string;
   leaseMs: number;
   control: DeveloperTrustWorkerControlPort;
-  artifactProvider: { prepare(claim: DeveloperTrustWorkItem): Promise<DeveloperTrustWorkItem> };
+  artifactProvider: {
+    prepare(claim: DeveloperTrustWorkItem): Promise<DeveloperTrustWorkItem>;
+    release?(item: DeveloperTrustWorkItem): Promise<void>;
+  };
   pipeline: Pick<DeveloperTrustPipeline, 'run'>;
 }): { runOnce(): Promise<{ kind: 'idle' } | { kind: 'processed'; runId: string }> } {
   let running = false;
@@ -84,6 +97,7 @@ export function createDeveloperTrustWorker(input: {
           runId: claim.runId,
           workerId: input.workerId,
           leaseToken: claim.leaseToken,
+          leaseGeneration: claim.leaseGeneration ?? 1,
           leaseMs: input.leaseMs,
         };
         try {
@@ -107,8 +121,9 @@ export function createDeveloperTrustWorker(input: {
         };
         const interval = setInterval(heartbeat, Math.max(1_000, Math.floor(input.leaseMs / 3)));
         interval.unref?.();
+        let prepared: DeveloperTrustWorkItem | null = null;
         try {
-          const prepared = await input.artifactProvider.prepare(claim);
+          prepared = await input.artifactProvider.prepare(claim);
           if (!sameClaimIdentity(claim, prepared)) {
             throw new DeveloperTrustWorkerError('DEVELOPER_TRUST_WORK_ITEM_IDENTITY_MISMATCH');
           }
@@ -122,6 +137,7 @@ export function createDeveloperTrustWorker(input: {
             runId: claim.runId,
             workerId: input.workerId,
             leaseToken: claim.leaseToken,
+            leaseGeneration: claim.leaseGeneration ?? 1,
             artifactDigest: claim.artifactDigest,
             policyDigest: claim.policyDigest,
             scannerSetDigest: claim.scannerSetDigest,
@@ -135,6 +151,7 @@ export function createDeveloperTrustWorker(input: {
           return { kind: 'processed', runId: claim.runId };
         } finally {
           clearInterval(interval);
+          if (prepared) await input.artifactProvider.release?.(prepared);
         }
       } catch (error) {
         if (error instanceof DeveloperTrustWorkerError) throw error;

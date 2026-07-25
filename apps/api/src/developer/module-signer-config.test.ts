@@ -1,9 +1,14 @@
 import { generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { expect, test } from 'bun:test';
 
 import { DeveloperModuleDistributionError } from './distribution';
+import * as moduleSignerConfigModule from './module-signer-config';
 import {
+  createConfiguredModuleSignerKeyring,
   createConfiguredModuleSigningPort,
   resolveModuleSignerConfig,
 } from './module-signer-config';
@@ -113,4 +118,80 @@ test('falls back to legacy key names when normalized primary values are empty', 
     privateKeyBase64: PRIVATE_KEY_BASE64,
     publicKeyBase64: PUBLIC_KEY_BASE64,
   });
+});
+
+test('configured keyring exposes the active signer and retained verifiers', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'openopc-configured-keyring-'));
+  try {
+    const previous = generateKeyPairSync('ed25519');
+    writeFileSync(
+      join(directory, 'active.pk8'),
+      privateKey.export({ format: 'der', type: 'pkcs8' }),
+    );
+    writeFileSync(
+      join(directory, 'active.spki'),
+      publicKey.export({ format: 'der', type: 'spki' }),
+    );
+    writeFileSync(
+      join(directory, 'previous.spki'),
+      previous.publicKey.export({ format: 'der', type: 'spki' }),
+    );
+    const keyringFile = join(directory, 'keyring.json');
+    writeFileSync(
+      keyringFile,
+      JSON.stringify({
+        schema: 1,
+        environment: 'staging',
+        activeKeyId: 'openopc-release-staging-2026-b',
+        keys: [
+          {
+            keyId: 'openopc-release-staging-2026-b',
+            state: 'active',
+            privateKeyFile: 'active.pk8',
+            publicKeyFile: 'active.spki',
+          },
+          {
+            keyId: 'openopc-release-staging-2026-a',
+            state: 'verify',
+            publicKeyFile: 'previous.spki',
+          },
+        ],
+      }),
+    );
+
+    const config = resolveModuleSignerConfig({
+      OPENOPC_DEVELOPER_MODULE_DISTRIBUTION_ENABLED: 'true',
+      OPENOPC_DEVELOPER_MODULE_SIGNING_KEYRING_FILE: keyringFile,
+    });
+    const keyring = createConfiguredModuleSignerKeyring(config);
+
+    expect(keyring?.activeSigner().keyId).toBe('openopc-release-staging-2026-b');
+    expect(
+      keyring
+        ?.verifiers()
+        .map((verifier) => verifier.keyId)
+        .sort(),
+    ).toEqual(['openopc-release-staging-2026-a', 'openopc-release-staging-2026-b']);
+
+    const createPorts = (
+      moduleSignerConfigModule as unknown as {
+        createConfiguredModuleSigningPorts?: (
+          input: ReturnType<typeof resolveModuleSignerConfig>,
+        ) => {
+          signer: { keyId: string } | null;
+          verifiers: readonly { keyId: string }[];
+        };
+      }
+    ).createConfiguredModuleSigningPorts;
+    expect(createPorts).toBeFunction();
+    if (!createPorts) return;
+    const ports = createPorts(config);
+    expect(ports.signer?.keyId).toBe('openopc-release-staging-2026-b');
+    expect(ports.verifiers.map((verifier) => verifier.keyId).sort()).toEqual([
+      'openopc-release-staging-2026-a',
+      'openopc-release-staging-2026-b',
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

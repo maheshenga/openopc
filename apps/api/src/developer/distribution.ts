@@ -4,6 +4,7 @@ import {
   type DeveloperModuleSignature,
   type DeveloperModuleSignaturePayloadV2,
   type ModuleSigningPort,
+  type ModuleVerificationPort,
   canonicalDeveloperModuleSignaturePayloadV2,
   developerModuleReleaseSignaturePayloadV2,
   signDeveloperModulePayload,
@@ -164,14 +165,14 @@ function normalizeRevocationReason(value: unknown): string {
 
 export class DeveloperModuleDistributionService {
   private readonly signer: ModuleSigningPort | null;
-  private readonly verifiers: ReadonlyMap<string, ModuleSigningPort>;
+  private readonly verifiers: ReadonlyMap<string, ModuleVerificationPort>;
   private readonly now: () => Date;
 
   constructor(
     private readonly input: {
       repository: DeveloperModuleDistributionRepository;
       signer?: ModuleSigningPort | null;
-      verifiers?: readonly ModuleSigningPort[];
+      verifiers?: readonly ModuleVerificationPort[];
       trustGate?: Pick<DeveloperModuleTrustGate, 'evaluate'>;
       permissions?: DeveloperPublisherPermissionPort;
       now?: () => Date;

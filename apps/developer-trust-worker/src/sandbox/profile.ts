@@ -58,7 +58,8 @@ export function createSandboxInput(
     !validLimits(input.limits) ||
     !validNetworkPolicy(input.networkPolicy) ||
     !Array.isArray(input.fixtures) ||
-    input.fixtures.length > 100
+    input.fixtures.length > 100 ||
+    !validRuntimeCoordinates(input)
   ) {
     throw new TypeError('DEVELOPER_SANDBOX_INPUT_INVALID');
   }
@@ -78,6 +79,13 @@ export function createSandboxInput(
     return { action: fixture.action, response };
   });
   return deepFreeze({
+    ...(input.runId === undefined
+      ? {}
+      : {
+          runId: input.runId,
+          sandboxInstanceId: input.sandboxInstanceId,
+          sandboxProfileDigest: input.sandboxProfileDigest,
+        }),
     artifactDigest: input.artifactDigest,
     artifactMount: { ...input.artifactMount },
     profile: input.profile,
@@ -89,6 +97,7 @@ export function createSandboxInput(
       allowedOrigins: [...input.networkPolicy.allowedOrigins],
       allowedMethods: [...input.networkPolicy.allowedMethods],
     },
+    ...(input.runtime === undefined ? {} : { runtime: structuredClone(input.runtime) }),
   });
 }
 
@@ -139,6 +148,57 @@ function validNetworkPolicy(policy: DeveloperModuleNetworkPolicy): boolean {
     policy.maxRedirects <= 3 &&
     (policy.mode !== 'none' || (policy.allowedOrigins.length === 0 && policy.maxRedirects === 0))
   );
+}
+
+function validRuntimeCoordinates(input: DeveloperModuleSandboxInput): boolean {
+  const coordinates = [input.runId, input.sandboxInstanceId, input.sandboxProfileDigest];
+  if (coordinates.every((value) => value === undefined) && input.runtime === undefined) return true;
+  if (
+    typeof input.runId !== 'string' ||
+    input.runId.length < 1 ||
+    input.runId.length > 128 ||
+    /[\0\r\n]/.test(input.runId) ||
+    typeof input.sandboxInstanceId !== 'string' ||
+    input.sandboxInstanceId.length < 1 ||
+    input.sandboxInstanceId.length > 128 ||
+    /[\0\r\n]/.test(input.sandboxInstanceId) ||
+    typeof input.sandboxProfileDigest !== 'string' ||
+    !DIGEST.test(input.sandboxProfileDigest) ||
+    input.runtime === undefined
+  ) {
+    return false;
+  }
+  if (input.runtime.kind === 'wasi-component') {
+    return (
+      safeRuntimePath(input.runtime.componentPath) &&
+      safeRuntimeText(input.runtime.world, 256) &&
+      safeRuntimeText(input.runtime.operation, 128)
+    );
+  }
+  return (
+    DIGEST.test(input.runtime.image) &&
+    input.runtime.command.length > 0 &&
+    input.runtime.command.length <= 64 &&
+    input.runtime.args.length <= 128 &&
+    [...input.runtime.command, ...input.runtime.args].every((value) =>
+      safeRuntimeText(value, 1024),
+    ) &&
+    safeRuntimeText(input.runtime.profile, 128)
+  );
+}
+
+function safeRuntimePath(value: string): boolean {
+  return (
+    safeRuntimeText(value, 512) &&
+    !value.startsWith('/') &&
+    !value.includes('\\') &&
+    !/^[A-Za-z]:/.test(value) &&
+    value.split('/').every((part) => part !== '' && part !== '.' && part !== '..')
+  );
+}
+
+function safeRuntimeText(value: string, maxLength: number): boolean {
+  return value.length > 0 && value.length <= maxLength && !/[\0\r\n]/.test(value);
 }
 
 function deepFreeze<T>(value: T): T {

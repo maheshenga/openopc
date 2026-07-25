@@ -7,7 +7,7 @@ import {
   type DeveloperModuleDistributionService,
 } from './distribution';
 import {
-  type ModuleSigningPort,
+  type ModuleVerificationPort,
   verifyDeveloperModuleReleaseTrustSignature,
 } from './module-signing';
 import type { DeveloperModuleRelease } from './releases';
@@ -174,13 +174,13 @@ function compatibilityRanges(release: DeveloperModuleRelease): {
 }
 
 export class ProjectModuleInstallationService {
-  private readonly verifiers: ReadonlyMap<string, ModuleSigningPort>;
+  private readonly verifiers: ReadonlyMap<string, ModuleVerificationPort>;
 
   constructor(
     private readonly input: {
       repository: ProjectModuleInstallationRepository;
       releaseService: Pick<DeveloperModuleDistributionService, 'getPublished'>;
-      verifiers?: readonly ModuleSigningPort[];
+      verifiers?: readonly ModuleVerificationPort[];
       platformVersion?: string;
       registryVersion?: string;
     },

@@ -18,11 +18,14 @@ export interface DeveloperModuleSignaturePayloadV2 {
 
 export type DeveloperModuleDetachedSignature = `base64url:${string}`;
 
-export interface ModuleSigningPort {
+export interface ModuleVerificationPort {
   readonly algorithm: 'ed25519';
   readonly keyId: string;
-  sign(payload: Uint8Array): Promise<DeveloperModuleDetachedSignature>;
   verify(payload: Uint8Array, signature: DeveloperModuleDetachedSignature): Promise<boolean>;
+}
+
+export interface ModuleSigningPort extends ModuleVerificationPort {
+  sign(payload: Uint8Array): Promise<DeveloperModuleDetachedSignature>;
 }
 
 export interface DeveloperModuleSignature {
@@ -128,6 +131,35 @@ export function createEd25519ModuleSigningPort(input: {
   };
 }
 
+export function createEd25519ModuleVerificationPort(input: {
+  keyId: string;
+  publicKey: KeyObject;
+}): ModuleVerificationPort {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.keyId)) {
+    throw new TypeError('Invalid module signing key id');
+  }
+  if (input.publicKey.type !== 'public' || input.publicKey.asymmetricKeyType !== 'ed25519') {
+    throw new TypeError('Module verification key must be an Ed25519 public key');
+  }
+  return {
+    algorithm: 'ed25519',
+    keyId: input.keyId,
+    async verify(payload, signature) {
+      if (!DETACHED_ED25519_SIGNATURE.test(signature)) return false;
+      try {
+        return verifyBytes(
+          null,
+          Buffer.from(payload),
+          input.publicKey,
+          Buffer.from(signature.slice('base64url:'.length), 'base64url'),
+        );
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
 export async function signDeveloperModulePayload(
   payload: DeveloperModuleSignaturePayloadV2,
   signer: ModuleSigningPort,
@@ -166,7 +198,7 @@ export function developerModuleReleaseSignaturePayloadV2(
 
 export async function verifyDeveloperModuleReleaseTrustSignature(
   release: DeveloperModuleRelease,
-  verifier: ModuleSigningPort,
+  verifier: ModuleVerificationPort,
 ): Promise<boolean> {
   if (
     !['signed', 'published'].includes(release.status) ||

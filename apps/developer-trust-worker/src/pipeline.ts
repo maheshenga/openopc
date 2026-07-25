@@ -26,11 +26,16 @@ export interface DeveloperTrustWorkItem extends ScannerInput {
   accountId: string;
   artifactId: string;
   artifactDigest: `sha256:${string}`;
+  artifactStorageKey?: string;
+  artifactSizeBytes?: number;
+  runtimeDescriptorPath?: string | null;
+  runtimeKind?: 'wasi-component' | 'oci-image' | null;
   policyDigest: `sha256:${string}`;
   scannerSetDigest: `sha256:${string}`;
   sandboxProfileDigest: `sha256:${string}`;
   attempt: number;
   leaseToken: string;
+  leaseGeneration?: number;
   leaseExpiresAt: string;
   verificationProfile: RegistryModuleVerificationProfile;
 }

@@ -1,0 +1,13 @@
+rules:
+  - id: openopc.no-eval
+    message: Dynamic code evaluation is forbidden in developer modules.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+  - id: openopc.no-child-process-shell
+    message: Shell-backed child processes are forbidden in developer modules.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern: child_process.$F(..., {shell: true, ...})

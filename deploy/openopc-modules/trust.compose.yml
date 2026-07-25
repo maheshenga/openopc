@@ -1,0 +1,243 @@
+name: openopc-developer-trust-acceptance
+
+services:
+  postgres:
+    image: postgres:17.5-alpine@sha256:ec68817297c5984a00c85c9e3bbd88079d0217284f1a3f0525603a6f9b883916
+    environment:
+      POSTGRES_DB: openopc_trust_test
+      POSTGRES_USER: openopc
+      POSTGRES_PASSWORD: openopc-test
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U openopc -d openopc_trust_test]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [trust-private]
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  postgres-init:
+    image: postgres:17.5-alpine@sha256:ec68817297c5984a00c85c9e3bbd88079d0217284f1a3f0525603a6f9b883916
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: openopc-test
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        psql -h postgres -U openopc -d openopc_trust_test <<'SQL'
+        CREATE SCHEMA IF NOT EXISTS kortix;
+        CREATE TABLE IF NOT EXISTS kortix.developer_module_artifacts (
+          artifact_id uuid PRIMARY KEY,
+          account_id uuid NOT NULL,
+          artifact_digest varchar(71) NOT NULL,
+          storage_key text NOT NULL,
+          size_bytes bigint NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS kortix.developer_module_releases (
+          release_id uuid PRIMARY KEY,
+          account_id uuid NOT NULL,
+          artifact_id uuid NOT NULL,
+          module_id varchar(128) NOT NULL,
+          module_version varchar(128) NOT NULL,
+          manifest jsonb NOT NULL,
+          runtime_descriptor_path varchar(512),
+          runtime_kind varchar(32)
+        );
+        CREATE TABLE IF NOT EXISTS kortix.developer_module_verification_runs (
+          run_id uuid PRIMARY KEY,
+          release_id uuid NOT NULL,
+          artifact_id uuid NOT NULL,
+          account_id uuid NOT NULL,
+          policy_digest varchar(71) NOT NULL,
+          scanner_set_digest varchar(71) NOT NULL,
+          sandbox_profile_digest varchar(71) NOT NULL,
+          attempt integer NOT NULL,
+          state text NOT NULL,
+          lease_owner varchar(128),
+          lease_token_hash varchar(71),
+          lease_expires_at timestamptz,
+          heartbeat_at timestamptz,
+          terminal_reason varchar(256),
+          sbom_digest varchar(71),
+          attestation_digest varchar(71),
+          resource_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
+          started_at timestamptz,
+          finished_at timestamptz,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS kortix.developer_module_verification_findings (
+          finding_id uuid PRIMARY KEY,
+          run_id uuid NOT NULL,
+          account_id uuid NOT NULL,
+          fingerprint varchar(71) NOT NULL,
+          scanner varchar(128) NOT NULL,
+          rule_id varchar(256) NOT NULL,
+          severity text NOT NULL,
+          path text,
+          location jsonb,
+          summary text NOT NULL,
+          disposition varchar(32) NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS kortix.developer_module_trust_attestations (
+          attestation_id uuid PRIMARY KEY,
+          run_id uuid NOT NULL,
+          account_id uuid NOT NULL,
+          attestation_digest varchar(71) NOT NULL,
+          subject_artifact_digest varchar(71) NOT NULL,
+          predicate_type varchar(256) NOT NULL,
+          policy_digest varchar(71) NOT NULL,
+          result text NOT NULL,
+          sbom_digest varchar(71) NOT NULL,
+          dsse_envelope jsonb NOT NULL,
+          issuer varchar(256) NOT NULL
+        );
+        SQL
+    networks: [trust-private]
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:3f97c5651cb6662b880c787a232b6b34fec8d8922e08d6617b25d241a21164bb
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: openopc-test-access
+      MINIO_ROOT_PASSWORD: openopc-test-secret-change-me
+    networks: [trust-private]
+    tmpfs:
+      - /data
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z@sha256:2582c2f48b1e31545143ba5285c67d7b38c8b8f6912142d0630686dc7aaac28b
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        until mc alias set trust http://minio:9000 openopc-test-access openopc-test-secret-change-me; do sleep 1; done
+        mc mb --ignore-existing trust/developer-artifacts
+        mc anonymous set none trust/developer-artifacts
+    networks: [trust-private]
+
+  trust-secrets:
+    build:
+      context: ../..
+      dockerfile: apps/developer-trust-worker/Dockerfile
+      target: test
+    user: "0:0"
+    command:
+      - bun
+      - run
+      - /app/apps/developer-trust-worker/scripts/trust-acceptance-fixtures.ts
+      - --init-secrets
+      - /run/openopc-secrets
+    volumes:
+      - trust-secrets:/run/openopc-secrets
+    networks: [trust-private]
+
+  oci-control:
+    build:
+      context: ../..
+      dockerfile: apps/developer-trust-worker/Dockerfile
+      target: test
+    command:
+      - bun
+      - -e
+      - |
+        Bun.serve({hostname:'0.0.0.0',port:8090,async fetch(request){const path=new URL(request.url).pathname;if(path==='/readyz')return Response.json({ready:true});if(path==='/v1/verification/run'&&request.method==='POST')return Response.json({error:'NO_ACCEPTANCE_WORK_QUEUED'},{status:409});return new Response('not found',{status:404})}});await new Promise(()=>{});
+    healthcheck:
+      test: [CMD, bun, -e, "fetch('http://127.0.0.1:8090/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [trust-private]
+
+  trust-worker:
+    build:
+      context: ../..
+      dockerfile: apps/developer-trust-worker/Dockerfile
+      target: runtime
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+      trust-secrets:
+        condition: service_completed_successfully
+      oci-control:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export DEVELOPER_TRUST_WASMTIME_DIGEST="sha256:$(sha256sum /opt/openopc/bin/wasmtime | cut -d ' ' -f 1)"
+        export DEVELOPER_TRUST_POLICY_JSON="$(bun run /app/apps/developer-trust-worker/scripts/trust-acceptance-fixtures.ts --policy)"
+        exec bun run /app/apps/developer-trust-worker/src/main.ts
+    environment:
+      DEVELOPER_TRUST_ENABLED: "true"
+      DEVELOPER_TRUST_ENVIRONMENT: staging
+      DEVELOPER_TRUST_WORKER_ID: trust-worker-acceptance
+      DEVELOPER_TRUST_LEASE_MS: "30000"
+      DEVELOPER_TRUST_POLL_MS: "1000"
+      DEVELOPER_TRUST_DATABASE_URL_FILE: /run/openopc-secrets/database-url
+      DEVELOPER_TRUST_S3_ENDPOINT: http://minio:9000
+      DEVELOPER_TRUST_S3_REGION: us-east-1
+      DEVELOPER_TRUST_S3_BUCKET: developer-artifacts
+      DEVELOPER_TRUST_S3_ACCESS_KEY_ID_FILE: /run/openopc-secrets/s3-access-key-id
+      DEVELOPER_TRUST_S3_SECRET_ACCESS_KEY_FILE: /run/openopc-secrets/s3-secret-access-key
+      DEVELOPER_TRUST_S3_FORCE_PATH_STYLE: "true"
+      DEVELOPER_TRUST_WORKSPACE_ROOT: /tmp/openopc-developer-trust
+      DEVELOPER_TRUST_SEMGREP_RULES_FILE: /opt/openopc/policies/semgrep.yml
+      DEVELOPER_TRUST_ATTESTATION_PRIVATE_KEY_FILE: /run/openopc-secrets/attestation.pk8
+      DEVELOPER_TRUST_ATTESTATION_PUBLIC_KEY_FILE: /run/openopc-secrets/attestation.spki
+      DEVELOPER_TRUST_ATTESTATION_KEY_ID: openopc-attestation-staging-acceptance
+      DEVELOPER_TRUST_ATTESTATION_ISSUER: openopc-developer-trust-staging
+      DEVELOPER_TRUST_WASMTIME_EXECUTABLE: /opt/openopc/bin/wasmtime
+      DEVELOPER_TRUST_WASMTIME_VERSION: wasmtime 47.0.2 (90fed3c6a 2026-07-21)
+      DEVELOPER_TRUST_OCI_CONTROL_ENDPOINT: http://oci-control:8090
+      DEVELOPER_TRUST_OCI_CONTROL_TOKEN_FILE: /run/openopc-secrets/oci-control-token
+      DEVELOPER_TRUST_VERIFICATION_BROKER_URL: http://oci-control:8090
+      DEVELOPER_TRUST_ALLOWED_LICENSES_JSON: '["Apache-2.0","MIT"]'
+    volumes:
+      - trust-secrets:/run/openopc-secrets:ro
+    tmpfs:
+      - /tmp/openopc-developer-trust:uid=65532,gid=65532,mode=0700
+    healthcheck:
+      test: [CMD, bun, -e, "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+    networks: [trust-private]
+
+  trust-acceptance:
+    build:
+      context: ../..
+      dockerfile: apps/developer-trust-worker/Dockerfile
+      target: test
+    depends_on:
+      trust-worker:
+        condition: service_healthy
+    environment:
+      MODULE_BETA_TEST_DATABASE_URL: postgres://openopc:openopc-test@postgres:5432/openopc_trust_test
+      DEVELOPER_TRUST_S3_ENDPOINT: http://minio:9000
+      DEVELOPER_TRUST_S3_REGION: us-east-1
+      DEVELOPER_TRUST_S3_BUCKET: developer-artifacts
+      DEVELOPER_TRUST_S3_ACCESS_KEY_ID: openopc-test-access
+      DEVELOPER_TRUST_S3_SECRET_ACCESS_KEY: openopc-test-secret-change-me
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        bun test /app/apps/developer-trust-worker/src/storage/s3-artifacts.integration.test.ts /app/apps/developer-trust-worker/src/claims/postgres-claims.integration.test.ts
+        bun -e "const response=await fetch('http://trust-worker:8080/readyz');const body=await response.json();if(!response.ok||body.ready!==true||Object.keys(body.components||{}).length!==10)throw new Error('TRUST_READINESS_ACCEPTANCE_FAILED');console.log(JSON.stringify(body))"
+    networks: [trust-private]
+
+networks:
+  trust-private:
+    internal: true
+
+volumes:
+  trust-secrets:

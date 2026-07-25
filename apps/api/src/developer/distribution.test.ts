@@ -8,6 +8,7 @@ import {
 } from './distribution';
 import {
   createEd25519ModuleSigningPort,
+  createEd25519ModuleVerificationPort,
   verifyDeveloperModuleReleaseTrustSignature,
 } from './module-signing';
 import { DeveloperPublisherError } from './publishers';
@@ -815,6 +816,52 @@ test('fails publication when the persisted signature key is no longer available'
     status: 'signed',
     published_at: null,
   });
+});
+
+test('publishes with a retained verification-only key after signer rotation', async () => {
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [release()],
+    now: () => NOW,
+  });
+  const previous = generateKeyPairSync('ed25519');
+  const previousSigner = createEd25519ModuleSigningPort({
+    keyId: 'openopc-test-previous',
+    privateKey: previous.privateKey,
+    publicKey: previous.publicKey,
+  });
+  await new DeveloperModuleDistributionService({
+    repository,
+    signer: previousSigner,
+    trustGate: trustGate(),
+    now: () => NOW,
+  }).sign({
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'approved',
+    expectedRevision: 2,
+  });
+  const rotatedSigner = signingPort();
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    signer: rotatedSigner,
+    verifiers: [
+      rotatedSigner,
+      createEd25519ModuleVerificationPort({
+        keyId: previousSigner.keyId,
+        publicKey: previous.publicKey,
+      }),
+    ],
+    now: () => NOW,
+  });
+
+  await expect(
+    service.publish({
+      releaseId: RELEASE_ID,
+      actorUserId: ADMIN_ID,
+      expectedStatus: 'signed',
+      expectedRevision: 3,
+    }),
+  ).resolves.toMatchObject({ release: { status: 'published' } });
 });
 
 test('lists and reads only published module releases', async () => {

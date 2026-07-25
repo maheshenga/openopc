@@ -1,54 +1,54 @@
-export type DeveloperTrustScannerReadiness =
+export const DEVELOPER_TRUST_READINESS_COMPONENTS = [
+  'objectStorage',
+  'postgresClaims',
+  'policy',
+  'gitleaks',
+  'syft',
+  'osv',
+  'semgrep',
+  'licensePolicy',
+  'attestationSigner',
+  'sandboxControl',
+] as const;
+
+export type DeveloperTrustReadinessComponentName =
+  (typeof DEVELOPER_TRUST_READINESS_COMPONENTS)[number];
+export type DeveloperTrustReadinessReason =
   | 'ready'
+  | 'disabled'
   | 'unavailable'
+  | 'invalid'
   | 'identity_mismatch'
-  | 'disabled';
+  | 'not_configured';
+
+export interface DeveloperTrustReadinessComponent {
+  ready: boolean;
+  reason: DeveloperTrustReadinessReason;
+}
 
 export interface DeveloperTrustReadiness {
   enabled: boolean;
   ready: boolean;
-  artifactStore: 'ready' | 'unavailable' | 'disabled';
-  policy: 'ready' | 'invalid' | 'disabled';
-  scanners: Record<string, DeveloperTrustScannerReadiness>;
-  sandbox: 'ready' | 'unavailable' | 'disabled';
-  databaseClaims: 'ready' | 'unavailable' | 'disabled';
+  components: Record<DeveloperTrustReadinessComponentName, DeveloperTrustReadinessComponent>;
 }
 
-type AvailabilityProbe = () => Promise<void>;
-type ScannerProbe = () => Promise<'ready' | 'identity_mismatch' | void>;
+type ProbeResult = undefined | { ready: false; reason: DeveloperTrustReadinessReason };
+type ComponentProbe = {
+  probe(): Promise<ProbeResult>;
+  unavailableReason?: Exclude<DeveloperTrustReadinessReason, 'ready' | 'disabled'>;
+};
 
 export interface DeveloperTrustReadinessInput {
   enabled: boolean;
-  artifactStore: AvailabilityProbe;
-  policy: AvailabilityProbe;
-  scanners: Readonly<Record<string, ScannerProbe>>;
-  sandbox: AvailabilityProbe;
-  databaseClaims: AvailabilityProbe;
+  components: Record<DeveloperTrustReadinessComponentName, ComponentProbe>;
 }
 
-async function availability(probe: AvailabilityProbe): Promise<'ready' | 'unavailable'> {
+async function runProbe(input: ComponentProbe): Promise<DeveloperTrustReadinessComponent> {
   try {
-    await probe();
-    return 'ready';
+    const result = await input.probe();
+    return result?.ready === false ? result : { ready: true, reason: 'ready' };
   } catch {
-    return 'unavailable';
-  }
-}
-
-async function policyAvailability(probe: AvailabilityProbe): Promise<'ready' | 'invalid'> {
-  try {
-    await probe();
-    return 'ready';
-  } catch {
-    return 'invalid';
-  }
-}
-
-async function scannerAvailability(probe: ScannerProbe): Promise<DeveloperTrustScannerReadiness> {
-  try {
-    return (await probe()) === 'identity_mismatch' ? 'identity_mismatch' : 'ready';
-  } catch {
-    return 'unavailable';
+    return { ready: false, reason: input.unavailableReason ?? 'unavailable' };
   }
 }
 
@@ -57,37 +57,29 @@ export function createDeveloperTrustReadiness(input: DeveloperTrustReadinessInpu
 } {
   return {
     async check() {
-      const scannerNames = Object.keys(input.scanners);
       if (!input.enabled) {
         return {
           enabled: false,
           ready: false,
-          artifactStore: 'disabled',
-          policy: 'disabled',
-          scanners: Object.fromEntries(scannerNames.map((name) => [name, 'disabled'])),
-          sandbox: 'disabled',
-          databaseClaims: 'disabled',
+          components: Object.fromEntries(
+            DEVELOPER_TRUST_READINESS_COMPONENTS.map((name) => [
+              name,
+              { ready: false, reason: 'disabled' },
+            ]),
+          ) as DeveloperTrustReadiness['components'],
         };
       }
-
-      const [artifactStore, policy, scannerEntries, sandbox, databaseClaims] = await Promise.all([
-        availability(input.artifactStore),
-        policyAvailability(input.policy),
-        Promise.all(
-          scannerNames.map(async (name) => [name, await scannerAvailability(input.scanners[name])] as const),
+      const entries = await Promise.all(
+        DEVELOPER_TRUST_READINESS_COMPONENTS.map(
+          async (name) => [name, await runProbe(input.components[name])] as const,
         ),
-        availability(input.sandbox),
-        availability(input.databaseClaims),
-      ]);
-      const scanners = Object.fromEntries(scannerEntries);
-      const ready =
-        artifactStore === 'ready' &&
-        policy === 'ready' &&
-        Object.values(scanners).every((status) => status === 'ready') &&
-        sandbox === 'ready' &&
-        databaseClaims === 'ready';
-
-      return { enabled: true, ready, artifactStore, policy, scanners, sandbox, databaseClaims };
+      );
+      const components = Object.fromEntries(entries) as DeveloperTrustReadiness['components'];
+      return {
+        enabled: true,
+        ready: Object.values(components).every((component) => component.ready),
+        components,
+      };
     },
   };
 }

@@ -25,9 +25,12 @@ import { createDrizzleDeveloperModuleDistributionRepository } from './distributi
 import { ProjectModuleInstallationService } from './installations';
 import { createDrizzleProjectModuleInstallationRepository as createProjectInstallationRepository } from './installations.drizzle';
 import {
+  createConfiguredModuleSignerKeyring,
   createConfiguredModuleSigningPort,
+  createConfiguredModuleSigningPorts,
   resolveModuleSignerConfig,
 } from './module-signer-config';
+import type { ModuleVerificationPort } from './module-signing';
 import { DeveloperPublisherService } from './publishers';
 import { createDrizzleDeveloperPublisherRepository } from './publishers.drizzle';
 import {
@@ -52,9 +55,12 @@ export { createDrizzleDeveloperModuleDistributionRepository } from './distributi
 export * from './installations';
 export { createDrizzleProjectModuleInstallationRepository } from './installations.drizzle';
 export {
+  createConfiguredModuleSignerKeyring,
+  createConfiguredModuleSigningPorts,
   createConfiguredModuleSigningPort,
   resolveModuleSignerConfig,
 } from './module-signer-config';
+export * from './module-signer-keyring';
 export * from './releases';
 export { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzle';
 export * from './publishers';
@@ -140,21 +146,25 @@ const distributionRepository: DeveloperModuleDistributionRepository =
 const moduleSignerConfig = resolveModuleSignerConfig(config);
 export const developerModuleDistributionEnabled = moduleSignerConfig.enabled;
 let configuredSigner = null;
+let configuredVerifiers: readonly ModuleVerificationPort[] = [];
 try {
-  configuredSigner = createConfiguredModuleSigningPort(moduleSignerConfig);
+  const configuredPorts = createConfiguredModuleSigningPorts(moduleSignerConfig);
+  configuredSigner = configuredPorts.signer;
+  configuredVerifiers = configuredPorts.verifiers;
 } catch {
   // Keep unrelated Kortix routes available; distribution operations fail closed.
 }
 export const developerModuleDistributionService = new DeveloperModuleDistributionService({
   repository: distributionRepository,
   signer: configuredSigner,
+  verifiers: configuredVerifiers,
   trustGate: developerModuleTrustGate,
   permissions: developerPublisherService,
 });
 export const projectModuleInstallationService = new ProjectModuleInstallationService({
   repository: createProjectInstallationRepository(db),
   releaseService: developerModuleDistributionService,
-  verifiers: configuredSigner ? [configuredSigner] : [],
+  verifiers: configuredVerifiers,
   platformVersion: process.env.OPENOPC_PLATFORM_VERSION ?? '1.0.0',
   registryVersion: '1.0.0',
 });

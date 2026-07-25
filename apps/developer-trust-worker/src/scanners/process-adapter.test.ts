@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { executePinnedScannerProcess } from './process-adapter';
+import { createPinnedScannerCommandRunner, executePinnedScannerProcess } from './process-adapter';
 
 const digest = (character: string) => `sha256:${character.repeat(64)}` as const;
 const originalSecret = process.env.TEST_SCANNER_SECRET;
@@ -12,6 +17,47 @@ afterEach(() => {
 });
 
 describe('pinned scanner process adapter', () => {
+  test('verifies exact binary identity and copies only the artifact workspace', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'openopc-scanner-source-'));
+    try {
+      const executable = Bun.which('node') ?? process.execPath;
+      const version = spawnSync(executable, ['--version'], { encoding: 'utf8' }).stdout.trim();
+      await writeFile(join(workspace, 'fixture.txt'), 'artifact-only');
+      const executableDigest = `sha256:${createHash('sha256')
+        .update(await readFile(executable))
+        .digest('hex')}` as const;
+      const runner = createPinnedScannerCommandRunner();
+      const scanner = {
+        name: 'gitleaks' as const,
+        executable,
+        imageDigest: executableDigest,
+        version,
+        ruleDigest: digest('b'),
+        timeoutMs: 5_000,
+        maxOutputBytes: 4_096,
+      };
+      await expect(runner.verifyIdentity(scanner)).resolves.toBeUndefined();
+      await expect(
+        runner.run({
+          scanner,
+          args: ['-e', "process.stdout.write(require('fs').readFileSync('fixture.txt','utf8'))"],
+          scanInput: {
+            workspacePath: workspace,
+            moduleId: 'acme.clean',
+            moduleVersion: '1.0.0',
+            artifactDigest: digest('a'),
+            verificationProfile: 'desktop-package',
+            lockGraph: null,
+            dependencyLicenses: [],
+          },
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toMatchObject({ kind: 'completed', stdout: 'artifact-only' });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  }, 45_000);
+
   test('uses a temporary workspace, closed stdin, and an allow-listed environment', async () => {
     process.env.TEST_SCANNER_SECRET = 'must-not-reach-child';
     let workspace = '';
@@ -19,7 +65,7 @@ describe('pinned scanner process adapter', () => {
       executable: process.execPath,
       args: [
         '-e',
-        'process.stdout.write(JSON.stringify({cwd:process.cwd(),secret:process.env.TEST_SCANNER_SECRET,lang:process.env.LANG}))',
+        'process.stdout.write(JSON.stringify({cwd:process.cwd(),secret:process.env.TEST_SCANNER_SECRET,home:process.env.HOME,lang:process.env.LANG,path:process.env.PATH,semgrepMetrics:process.env.SEMGREP_SEND_METRICS,semgrepVersionCheck:process.env.SEMGREP_ENABLE_VERSION_CHECK}))',
       ],
       runtimeIdentityDigest: digest('a'),
       expectedIdentityDigest: digest('a'),
@@ -33,7 +79,14 @@ describe('pinned scanner process adapter', () => {
 
     expect(result.kind).toBe('completed');
     if (result.kind !== 'completed') throw new Error('expected completed process');
-    expect(JSON.parse(result.stdout)).toEqual({ cwd: workspace, lang: 'C' });
+    expect(JSON.parse(result.stdout)).toEqual({
+      cwd: workspace,
+      home: workspace,
+      lang: 'C',
+      path: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      semgrepMetrics: 'off',
+      semgrepVersionCheck: '0',
+    });
     expect(existsSync(workspace)).toBe(false);
   });
 

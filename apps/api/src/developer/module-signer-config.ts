@@ -1,13 +1,19 @@
 import { createPrivateKey, createPublicKey, timingSafeEqual } from 'node:crypto';
 
 import { DeveloperModuleDistributionError } from './distribution';
-import { type ModuleSigningPort, createEd25519ModuleSigningPort } from './module-signing';
+import { type ModuleSignerKeyring, loadModuleSignerKeyringFile } from './module-signer-keyring';
+import {
+  type ModuleSigningPort,
+  type ModuleVerificationPort,
+  createEd25519ModuleSigningPort,
+} from './module-signing';
 
 const MAX_ENCODED_KEY_BYTES = 8_192;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 export type ModuleSignerConfig = {
   enabled: boolean;
+  keyringFile?: string;
   keyId?: string;
   privateKeyBase64?: string;
   publicKeyBase64?: string;
@@ -18,6 +24,8 @@ export type ModuleSignerEnvironment = Readonly<{
   KORTIX_DEVELOPER_MODULE_DISTRIBUTION_ENABLED?: string;
   OPENOPC_DEVELOPER_MODULE_SIGNING_KEY_ID?: string;
   KORTIX_DEVELOPER_MODULE_SIGNING_KEY_ID?: string;
+  OPENOPC_DEVELOPER_MODULE_SIGNING_KEYRING_FILE?: string;
+  KORTIX_DEVELOPER_MODULE_SIGNING_KEYRING_FILE?: string;
   OPENOPC_DEVELOPER_MODULE_SIGNING_PRIVATE_KEY_BASE64?: string;
   KORTIX_DEVELOPER_MODULE_SIGNING_PRIVATE_KEY_BASE64?: string;
   OPENOPC_DEVELOPER_MODULE_SIGNING_PUBLIC_KEY_BASE64?: string;
@@ -42,6 +50,10 @@ export function resolveModuleSignerConfig(
     enabled: enabled(
       environment.OPENOPC_DEVELOPER_MODULE_DISTRIBUTION_ENABLED ??
         environment.KORTIX_DEVELOPER_MODULE_DISTRIBUTION_ENABLED,
+    ),
+    keyringFile: firstConfigured(
+      environment.OPENOPC_DEVELOPER_MODULE_SIGNING_KEYRING_FILE,
+      environment.KORTIX_DEVELOPER_MODULE_SIGNING_KEYRING_FILE,
     ),
     keyId: firstConfigured(
       environment.OPENOPC_DEVELOPER_MODULE_SIGNING_KEY_ID,
@@ -80,6 +92,8 @@ export function createConfiguredModuleSigningPort(
   config: ModuleSignerConfig,
 ): ModuleSigningPort | null {
   if (!config.enabled) return null;
+  if (config.keyringFile)
+    return createConfiguredModuleSignerKeyring(config)?.activeSigner() ?? null;
   try {
     const privateKey = createPrivateKey({
       key: decodeBase64(config.privateKeyBase64),
@@ -107,4 +121,28 @@ export function createConfiguredModuleSigningPort(
   } catch {
     unavailable();
   }
+}
+
+export function createConfiguredModuleSignerKeyring(
+  config: ModuleSignerConfig,
+): ModuleSignerKeyring | null {
+  if (!config.enabled || !config.keyringFile) return null;
+  try {
+    return loadModuleSignerKeyringFile(config.keyringFile);
+  } catch {
+    unavailable();
+  }
+}
+
+export function createConfiguredModuleSigningPorts(config: ModuleSignerConfig): {
+  signer: ModuleSigningPort | null;
+  verifiers: readonly ModuleVerificationPort[];
+} {
+  if (!config.enabled) return { signer: null, verifiers: [] };
+  const keyring = createConfiguredModuleSignerKeyring(config);
+  const signer = keyring?.activeSigner() ?? createConfiguredModuleSigningPort(config);
+  return {
+    signer,
+    verifiers: keyring?.verifiers() ?? (signer ? [signer] : []),
+  };
 }

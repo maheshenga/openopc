@@ -20,7 +20,10 @@ function severityOf(value: unknown): ScannerSeverity {
   }
 }
 
-export function createSemgrepScanner(runner: ScannerCommandRunner): DeveloperScannerAdapter {
+export function createSemgrepScanner(
+  runner: ScannerCommandRunner,
+  options?: { configPath?: string },
+): DeveloperScannerAdapter {
   const runtime = createScannerRuntime('semgrep', runner);
   return {
     name: 'semgrep',
@@ -31,6 +34,7 @@ export function createSemgrepScanner(runner: ScannerCommandRunner): DeveloperSca
         '--json',
         '--metrics=off',
         '--disable-version-check',
+        ...(options?.configPath ? [`--config=${options.configPath}`] : []),
         '.',
       ]);
       if (processResult.kind === 'inconclusive') {

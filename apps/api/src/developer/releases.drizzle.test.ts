@@ -32,6 +32,7 @@ const submission: DeveloperModuleReleaseInsert = {
   manifestDigest: `sha256:${'a'.repeat(64)}`,
   artifactId: '40000000-0000-4000-a000-000000000004',
   artifactDigest: `sha256:${'b'.repeat(64)}`,
+  runtimeDescriptor: null,
   verification: {
     policyDigest: `sha256:${'c'.repeat(64)}`,
     scannerSetDigest: `sha256:${'d'.repeat(64)}`,
@@ -63,6 +64,9 @@ const releaseRow = {
   sbomDigest: null,
   trustAttestationDigest: null,
   verificationPolicyDigest: null,
+  runtimeDescriptorDigest: null,
+  runtimeDescriptorPath: null,
+  runtimeKind: null,
   reviewRequirements: submission.reviewRequirements,
   status: 'validated' as const,
   reviewRevision: 0,
@@ -148,6 +152,72 @@ function conditionParams(condition: unknown): unknown[] {
 }
 
 describe('developer module release Drizzle repository', () => {
+  test('persists artifact-derived server runtime evidence on the release row', async () => {
+    const runtimeDescriptor = {
+      descriptor: {
+        descriptorVersion: 1 as const,
+        runtime: {
+          kind: 'oci-image' as const,
+          image: `sha256:${'f'.repeat(64)}` as const,
+          command: ['openopc-adapter'],
+          args: [],
+          profile: 'server-adapter',
+          limits: {
+            cpuMillis: 1000,
+            fuel: 1_000_000,
+            memoryMiB: 64,
+            outputBytes: 1_048_576,
+            pids: 8,
+            wallTimeMs: 5000,
+          },
+        },
+      },
+      descriptorDigest: `sha256:${'1'.repeat(64)}` as const,
+      entryPath: 'runtime/openopc.runtime.json',
+      runtimeKind: 'oci-image' as const,
+    };
+    const serverSubmission: DeveloperModuleReleaseInsert = {
+      ...submission,
+      manifest: {
+        ...submission.manifest,
+        execution: { mode: 'server-adapter', entry: runtimeDescriptor.entryPath },
+        verification: { profile: 'server-conformance' },
+      },
+      runtimeDescriptor,
+    };
+    const serverRow = {
+      ...releaseRow,
+      manifest: serverSubmission.manifest,
+      runtimeDescriptorDigest: runtimeDescriptor.descriptorDigest,
+      runtimeDescriptorPath: runtimeDescriptor.entryPath,
+      runtimeKind: runtimeDescriptor.runtimeKind,
+    };
+    const { database, insertedValues } = databaseFixture({
+      selects: [[{ publisherId: 'acme' }]],
+      releaseInserts: [[serverRow]],
+      runInserts: [[{ runId: '50000000-0000-4000-a000-000000000005' }]],
+    });
+
+    const result = await createDrizzleDeveloperModuleReleaseRepository(database).submit(
+      serverSubmission,
+    );
+
+    expect(
+      insertedValues.find((entry) => entry.table === developerModuleReleases)?.value,
+    ).toEqual(
+      expect.objectContaining({
+        runtimeDescriptorDigest: runtimeDescriptor.descriptorDigest,
+        runtimeDescriptorPath: runtimeDescriptor.entryPath,
+        runtimeKind: runtimeDescriptor.runtimeKind,
+      }),
+    );
+    expect(result.release).toMatchObject({
+      runtime_descriptor_digest: runtimeDescriptor.descriptorDigest,
+      runtime_descriptor_path: runtimeDescriptor.entryPath,
+      runtime_kind: runtimeDescriptor.runtimeKind,
+    });
+  });
+
   test('requires an existing Publisher and inserts one immutable release transactionally', async () => {
     const { database, insertedValues } = databaseFixture({
       selects: [[{ publisherId: 'acme' }]],

@@ -6091,7 +6091,10 @@ export const automationKillSwitchesRelations = relations(automationKillSwitches,
 export const developerModuleReleaseStatusEnum = kortixSchema.enum(
   'developer_module_release_status',
   [
+    'draft',
+    'uploaded',
     'validated',
+    'verifying',
     'review_pending',
     'changes_requested',
     'approved',
@@ -6689,6 +6692,9 @@ export const developerModuleReleases = kortixSchema.table(
     sbomDigest: varchar('sbom_digest', { length: 71 }),
     trustAttestationDigest: varchar('trust_attestation_digest', { length: 71 }),
     verificationPolicyDigest: varchar('verification_policy_digest', { length: 71 }),
+    runtimeDescriptorDigest: varchar('runtime_descriptor_digest', { length: 71 }),
+    runtimeDescriptorPath: varchar('runtime_descriptor_path', { length: 512 }),
+    runtimeKind: varchar('runtime_kind', { length: 32 }),
     signatureAlgorithm: varchar('signature_algorithm', { length: 16 }),
     signatureKeyId: varchar('signature_key_id', { length: 128 }),
     signature: varchar('signature', { length: 96 }),
@@ -6772,6 +6778,26 @@ export const developerModuleReleases = kortixSchema.table(
       ) OR (
         ${table.artifactId} IS NOT NULL
         AND ${table.artifactDigest} ~ '^sha256:[0-9a-f]{64}$'
+      )`,
+    ),
+    check(
+      'developer_module_releases_runtime_descriptor_check',
+      sql`(
+        ${table.manifest} #>> '{execution,mode}' = 'server-adapter'
+        AND ${table.runtimeDescriptorDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.runtimeDescriptorPath} = ${table.manifest} #>> '{execution,entry}'
+        AND ${table.runtimeDescriptorPath} ~ '(^|/)openopc[.]runtime[.]json$'
+        AND ${table.runtimeKind} IN ('wasi-component', 'oci-image')
+      ) OR (
+        ${table.manifest} #>> '{execution,mode}' IN (
+          'declarative',
+          'agent',
+          'sandboxed-web',
+          'desktop-native'
+        )
+        AND ${table.runtimeDescriptorDigest} IS NULL
+        AND ${table.runtimeDescriptorPath} IS NULL
+        AND ${table.runtimeKind} IS NULL
       )`,
     ),
     check(

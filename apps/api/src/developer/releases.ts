@@ -1,14 +1,29 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   type RegistryModuleManifest,
+  createRegistryModuleArtifactEnvelope,
   readRegistryModuleManifest,
   validateRegistryItem,
 } from '@kortix/registry';
-import { DeveloperModuleArtifactError, type DeveloperModuleArtifactRepository } from './artifacts';
+import {
+  type DeveloperArtifactStore,
+  DeveloperModuleArtifactError,
+  type DeveloperModuleArtifactRepository,
+  parseDeveloperModuleArtifactPackage,
+  readDeveloperArtifactBytes,
+} from './artifacts';
 import type { DeveloperPublisherPermissionPort } from './publishers';
+import {
+  type RuntimeDescriptorEvidence,
+  DeveloperRuntimeDescriptorError,
+  extractRuntimeDescriptor,
+} from './runtime-descriptors';
 
 export const DEVELOPER_MODULE_RELEASE_STATUSES = [
+  'draft',
+  'uploaded',
   'validated',
+  'verifying',
   'review_pending',
   'changes_requested',
   'approved',
@@ -46,6 +61,9 @@ export interface DeveloperModuleRelease {
   sbom_digest: `sha256:${string}` | null;
   trust_attestation_digest: `sha256:${string}` | null;
   verification_policy_digest: `sha256:${string}` | null;
+  runtime_descriptor_digest: `sha256:${string}` | null;
+  runtime_descriptor_path: string | null;
+  runtime_kind: RuntimeDescriptorEvidence['runtimeKind'] | null;
   review_requirements: DeveloperModuleReviewRequirement[];
   status: DeveloperModuleReleaseStatus;
   review_revision: number;
@@ -69,6 +87,7 @@ export interface DeveloperModuleReleaseInsert {
   manifestDigest: `sha256:${string}`;
   artifactId: string;
   artifactDigest: `sha256:${string}`;
+  runtimeDescriptor: RuntimeDescriptorEvidence | null;
   verification: DeveloperModuleVerificationQueueBinding;
   reviewRequirements: DeveloperModuleReviewRequirement[];
 }
@@ -94,11 +113,37 @@ export class DeveloperModuleReleaseError extends Error {
       | 'DEVELOPER_PUBLISHER_MISMATCH'
       | 'DEVELOPER_PUBLISHER_CONFLICT'
       | 'DEVELOPER_MODULE_VERSION_CONFLICT'
-      | 'DEVELOPER_RELEASE_NOT_FOUND',
+      | 'DEVELOPER_RELEASE_NOT_FOUND'
+      | 'DEVELOPER_RELEASE_TRANSITION_INVALID',
     readonly status: 400 | 404 | 409,
   ) {
     super(code);
     this.name = 'DeveloperModuleReleaseError';
+  }
+}
+
+const DEVELOPER_MODULE_RELEASE_TRANSITIONS: Readonly<
+  Record<DeveloperModuleReleaseStatus, readonly DeveloperModuleReleaseStatus[]>
+> = Object.freeze({
+  draft: ['uploaded'],
+  uploaded: ['validated'],
+  validated: ['verifying'],
+  verifying: ['review_pending'],
+  review_pending: ['changes_requested', 'approved'],
+  changes_requested: ['review_pending'],
+  approved: ['signed', 'revoked'],
+  signed: ['published', 'revoked'],
+  published: ['deprecated', 'revoked'],
+  deprecated: ['revoked'],
+  revoked: [],
+});
+
+export function assertDeveloperModuleReleaseTransition(
+  from: DeveloperModuleReleaseStatus,
+  to: DeveloperModuleReleaseStatus,
+): void {
+  if (!DEVELOPER_MODULE_RELEASE_TRANSITIONS[from]?.includes(to)) {
+    throw new DeveloperModuleReleaseError('DEVELOPER_RELEASE_TRANSITION_INVALID', 409);
   }
 }
 
@@ -164,6 +209,7 @@ export class DeveloperModuleReleaseService {
     private readonly input: {
       repository: DeveloperModuleReleaseRepository;
       artifacts: Pick<DeveloperModuleArtifactRepository, 'getArtifact'>;
+      artifactStore?: Pick<DeveloperArtifactStore, 'readCanonical'>;
       verification?: DeveloperModuleVerificationQueueBinding;
       permissions?: DeveloperPublisherPermissionPort;
     },
@@ -195,6 +241,36 @@ export class DeveloperModuleReleaseService {
       'release',
     );
 
+    let runtimeDescriptor: RuntimeDescriptorEvidence | null = null;
+    if (manifest.execution.mode === 'server-adapter') {
+      if (!this.input.artifactStore) {
+        throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_STORE_UNAVAILABLE', 503);
+      }
+      let artifactBytes: Uint8Array;
+      try {
+        artifactBytes = await readDeveloperArtifactBytes(
+          this.input.artifactStore.readCanonical(artifact.storage_key, {
+            maxBytes: artifact.size_bytes,
+          }),
+          artifact.size_bytes,
+        );
+      } catch {
+        throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_STORE_UNAVAILABLE', 503);
+      }
+      try {
+        const envelope = createRegistryModuleArtifactEnvelope(
+          parseDeveloperModuleArtifactPackage(artifactBytes),
+        );
+        if (envelope.artifactDigest !== artifact.artifact_digest) {
+          throw new DeveloperRuntimeDescriptorError('DEVELOPER_RUNTIME_ARTIFACT_INVALID');
+        }
+        runtimeDescriptor = await extractRuntimeDescriptor({ manifest, artifactBytes });
+      } catch (error) {
+        if (error instanceof DeveloperRuntimeDescriptorError) throw error;
+        throw new DeveloperRuntimeDescriptorError('DEVELOPER_RUNTIME_ARTIFACT_INVALID');
+      }
+    }
+
     return await this.input.repository.submit({
       accountId: input.accountId,
       actorUserId: input.actorUserId,
@@ -203,6 +279,7 @@ export class DeveloperModuleReleaseService {
       manifestDigest: canonicalDeveloperModuleManifestDigest(manifest),
       artifactId: artifact.artifact_id,
       artifactDigest: artifact.artifact_digest,
+      runtimeDescriptor,
       verification: this.input.verification ?? DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING,
       reviewRequirements: reviewRequirements(manifest),
     });
@@ -269,6 +346,9 @@ export function createMemoryDeveloperModuleReleaseRepository(input?: {
         sbom_digest: null,
         trust_attestation_digest: null,
         verification_policy_digest: null,
+        runtime_descriptor_digest: submission.runtimeDescriptor?.descriptorDigest ?? null,
+        runtime_descriptor_path: submission.runtimeDescriptor?.entryPath ?? null,
+        runtime_kind: submission.runtimeDescriptor?.runtimeKind ?? null,
         review_requirements: [...submission.reviewRequirements],
         status: 'validated',
         review_revision: 0,

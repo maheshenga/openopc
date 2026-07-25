@@ -6,7 +6,10 @@ import {
   DeveloperModuleDistributionService,
   createMemoryDeveloperModuleDistributionRepository,
 } from './distribution';
-import { createEd25519ModuleSigningPort } from './module-signing';
+import {
+  createEd25519ModuleSigningPort,
+  verifyDeveloperModuleReleaseTrustSignature,
+} from './module-signing';
 import { DeveloperPublisherError } from './publishers';
 import { type DeveloperModuleRelease, canonicalDeveloperModuleManifestDigest } from './releases';
 import { type DeveloperModuleReviewRepository, DeveloperModuleReviewService } from './reviews';
@@ -27,7 +30,7 @@ type TrustState =
 
 function trustGate(state: TrustState = 'passed') {
   return {
-    async evaluate() {
+    async evaluate(candidate: DeveloperModuleRelease) {
       if (state === 'passed') {
         return {
           ok: true as const,
@@ -37,6 +40,8 @@ function trustGate(state: TrustState = 'passed') {
             sbom_digest: `sha256:${'d'.repeat(64)}` as const,
             attestation_digest: `sha256:${'e'.repeat(64)}` as const,
             policy_digest: `sha256:${'f'.repeat(64)}` as const,
+            runtime_descriptor_digest: candidate.runtime_descriptor_digest,
+            runtime_kind: candidate.runtime_kind,
           },
         };
       }
@@ -80,6 +85,9 @@ function release(
     sbom_digest: `sha256:${'d'.repeat(64)}`,
     trust_attestation_digest: `sha256:${'e'.repeat(64)}`,
     verification_policy_digest: `sha256:${'f'.repeat(64)}`,
+    runtime_descriptor_digest: null,
+    runtime_descriptor_path: null,
+    runtime_kind: null,
     review_requirements: ['manifest_review', 'source_scan', 'human_review'],
     status,
     review_revision: reviewRevision,
@@ -138,6 +146,42 @@ test('signs approved declarative release and publishes only after verification',
   expect(published.release.status).toBe('published');
   expect(published.release.review_revision).toBe(4);
   expect(published.event.action).toBe('publish');
+});
+
+test('binds server runtime descriptor evidence into the release signature', async () => {
+  const executable = release();
+  executable.manifest.execution = {
+    mode: 'server-adapter',
+    entry: 'runtime/openopc.runtime.json',
+  };
+  executable.manifest.verification = { profile: 'server-conformance' };
+  executable.manifest_digest = canonicalDeveloperModuleManifestDigest(executable.manifest);
+  executable.runtime_descriptor_digest = `sha256:${'1'.repeat(64)}`;
+  executable.runtime_descriptor_path = 'runtime/openopc.runtime.json';
+  executable.runtime_kind = 'wasi-component';
+  const signer = signingPort();
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [executable],
+    now: () => NOW,
+  });
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    signer,
+    trustGate: trustGate(),
+    now: () => NOW,
+  });
+
+  const signed = await service.sign({
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'approved',
+    expectedRevision: 2,
+  });
+
+  expect(signed.release.runtime_descriptor_digest).toBe(executable.runtime_descriptor_digest);
+  const tampered = structuredClone(signed.release);
+  tampered.runtime_kind = 'oci-image';
+  await expect(verifyDeveloperModuleReleaseTrustSignature(tampered, signer)).resolves.toBe(false);
 });
 
 test('checks Publisher platform-review authority before signing or publishing', async () => {

@@ -108,6 +108,27 @@ export function createDeveloperModuleS3ArtifactStore(
       }
     },
 
+    async *readCanonical(key, limits) {
+      const stored = await objectStore.getObject({ key });
+      assertEncrypted(objectStore, stored);
+      if (stored.content_type !== DEVELOPER_MODULE_ARTIFACT_MEDIA_TYPE) {
+        throw new Error('Developer artifact content type mismatch');
+      }
+      const reader = stored.body.getReader();
+      let total = 0;
+      try {
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          total += next.value.byteLength;
+          if (total > limits.maxBytes) throw new Error('Developer canonical artifact too large');
+          yield next.value;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    },
+
     async commit(input) {
       const stored = await objectStore.getObject({ key: input.stagingKey });
       assertEncrypted(objectStore, stored);

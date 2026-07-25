@@ -250,6 +250,10 @@ test('developer module release transport preserves public signature metadata', a
       'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
     verification_policy_digest:
       'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+    runtime_descriptor_digest:
+      'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+    runtime_descriptor_path: 'runtime/openopc.runtime.json',
+    runtime_kind: 'wasi-component',
     review_requirements: ['manifest_review'],
     status: 'published',
     review_revision: 4,

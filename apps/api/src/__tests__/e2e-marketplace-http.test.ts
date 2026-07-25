@@ -4,8 +4,12 @@ import type { DeveloperModuleRelease } from '../developer/releases';
 
 let authCalls = 0;
 
+interface TestAuthContext {
+  set(name: 'user', value: { id: string; email: string }): void;
+}
+
 mock.module('../middleware/auth', () => ({
-  supabaseAuth: async (c: any, next: () => Promise<void>) => {
+  supabaseAuth: async (c: TestAuthContext, next: () => Promise<void>) => {
     authCalls += 1;
     c.set('user', {
       id: '00000000-0000-4000-a000-000000000001',
@@ -64,6 +68,9 @@ describe('marketplace HTTP contract', () => {
       sbom_digest: null,
       trust_attestation_digest: null,
       verification_policy_digest: null,
+      runtime_descriptor_digest: null,
+      runtime_descriptor_path: null,
+      runtime_kind: null,
       review_requirements: ['manifest_review'],
       status: 'published',
       review_revision: 4,

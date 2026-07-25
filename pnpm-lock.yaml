@@ -132,6 +132,9 @@ importers:
       '@logtail/node':
         specifier: ^0.5.8
         version: 0.5.8
+      '@openopc/module-runtime-contracts':
+        specifier: workspace:*
+        version: link:../../packages/module-runtime-contracts
       '@scalar/hono-api-reference':
         specifier: ^0.10.20
         version: 0.10.20(hono@4.12.25)

@@ -19,6 +19,8 @@ function signaturePayloadV2(): DeveloperModuleSignaturePayloadV2 {
     sbom_digest: `sha256:${'c'.repeat(64)}`,
     trust_attestation_digest: `sha256:${'d'.repeat(64)}`,
     verification_policy_digest: `sha256:${'e'.repeat(64)}`,
+    runtime_descriptor_digest: `sha256:${'f'.repeat(64)}`,
+    runtime_kind: 'wasi-component',
   };
 }
 
@@ -26,7 +28,7 @@ test('canonicalizes the exact schema-2 signed release payload', () => {
   const payload = canonicalDeveloperModuleSignaturePayloadV2(signaturePayloadV2());
 
   expect(new TextDecoder().decode(payload)).toBe(
-    `{"schema":2,"module_id":"acme.recruiting","module_version":"1.0.0","publisher_id":"acme","artifact_digest":"sha256:${'a'.repeat(64)}","manifest_digest":"sha256:${'b'.repeat(64)}","sbom_digest":"sha256:${'c'.repeat(64)}","trust_attestation_digest":"sha256:${'d'.repeat(64)}","verification_policy_digest":"sha256:${'e'.repeat(64)}"}`,
+    `{"schema":2,"module_id":"acme.recruiting","module_version":"1.0.0","publisher_id":"acme","artifact_digest":"sha256:${'a'.repeat(64)}","manifest_digest":"sha256:${'b'.repeat(64)}","sbom_digest":"sha256:${'c'.repeat(64)}","trust_attestation_digest":"sha256:${'d'.repeat(64)}","verification_policy_digest":"sha256:${'e'.repeat(64)}","runtime_descriptor_digest":"sha256:${'f'.repeat(64)}","runtime_kind":"wasi-component"}`,
   );
 });
 
@@ -39,14 +41,28 @@ test('schema-2 signature changes for every trust-bound digest', () => {
     'sbom_digest',
     'trust_attestation_digest',
     'verification_policy_digest',
+    'runtime_descriptor_digest',
   ] as const) {
     expect(
       canonicalDeveloperModuleSignaturePayloadV2({
         ...base,
-        [key]: `sha256:${'f'.repeat(64)}`,
+        [key]: `sha256:${'0'.repeat(64)}`,
       }),
     ).not.toEqual(bytes);
   }
+  expect(
+    canonicalDeveloperModuleSignaturePayloadV2({ ...base, runtime_kind: 'oci-image' }),
+  ).not.toEqual(bytes);
+});
+
+test('accepts a null runtime pair for non-server modules', () => {
+  expect(() =>
+    canonicalDeveloperModuleSignaturePayloadV2({
+      ...signaturePayloadV2(),
+      runtime_descriptor_digest: null,
+      runtime_kind: null,
+    }),
+  ).not.toThrow();
 });
 
 test.each([

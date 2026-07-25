@@ -12,6 +12,8 @@ export interface DeveloperModuleSignaturePayloadV2 {
   sbom_digest: `sha256:${string}`;
   trust_attestation_digest: `sha256:${string}`;
   verification_policy_digest: `sha256:${string}`;
+  runtime_descriptor_digest: `sha256:${string}` | null;
+  runtime_kind: 'wasi-component' | 'oci-image' | null;
 }
 
 export type DeveloperModuleDetachedSignature = `base64url:${string}`;
@@ -41,6 +43,8 @@ const SIGNATURE_PAYLOAD_V2_FIELDS = [
   'sbom_digest',
   'trust_attestation_digest',
   'verification_policy_digest',
+  'runtime_descriptor_digest',
+  'runtime_kind',
 ] as const;
 
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
@@ -63,7 +67,13 @@ function assertExactSignatureV2(payload: DeveloperModuleSignaturePayloadV2): voi
     !SHA256_DIGEST.test(payload.manifest_digest) ||
     !SHA256_DIGEST.test(payload.sbom_digest) ||
     !SHA256_DIGEST.test(payload.trust_attestation_digest) ||
-    !SHA256_DIGEST.test(payload.verification_policy_digest)
+    !SHA256_DIGEST.test(payload.verification_policy_digest) ||
+    !(
+      (payload.runtime_descriptor_digest === null && payload.runtime_kind === null) ||
+      (typeof payload.runtime_descriptor_digest === 'string' &&
+        SHA256_DIGEST.test(payload.runtime_descriptor_digest) &&
+        (payload.runtime_kind === 'wasi-component' || payload.runtime_kind === 'oci-image'))
+    )
   ) {
     throw new TypeError('Invalid developer module signature payload');
   }
@@ -149,6 +159,8 @@ export function developerModuleReleaseSignaturePayloadV2(
     sbom_digest: release.sbom_digest as `sha256:${string}`,
     trust_attestation_digest: release.trust_attestation_digest as `sha256:${string}`,
     verification_policy_digest: release.verification_policy_digest as `sha256:${string}`,
+    runtime_descriptor_digest: release.runtime_descriptor_digest,
+    runtime_kind: release.runtime_kind,
   };
 }
 

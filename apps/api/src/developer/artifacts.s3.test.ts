@@ -96,6 +96,11 @@ describe('developer module S3 artifact store', () => {
     expect((await objectStore.headObject({ key: finalKey })).metadata).toEqual(
       expect.objectContaining({ purpose: 'developer-module-artifact' }),
     );
+    const canonicalChunks: Uint8Array[] = [];
+    for await (const chunk of store.readCanonical(finalKey, { maxBytes: bytes.byteLength })) {
+      canonicalChunks.push(chunk);
+    }
+    expect(Buffer.concat(canonicalChunks).equals(Buffer.from(bytes))).toBe(true);
     await store.deleteStaging(upload.storageKey);
     await expect(objectStore.headObject({ key: upload.storageKey })).rejects.toMatchObject({
       code: 'NOT_FOUND',

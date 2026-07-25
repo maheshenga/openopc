@@ -270,7 +270,9 @@ export class DeveloperModuleDistributionService {
       trust.evidence.artifact_digest !== release.artifact_digest ||
       trust.evidence.sbom_digest !== release.sbom_digest ||
       trust.evidence.attestation_digest !== release.trust_attestation_digest ||
-      trust.evidence.policy_digest !== release.verification_policy_digest
+      trust.evidence.policy_digest !== release.verification_policy_digest ||
+      trust.evidence.runtime_descriptor_digest !== release.runtime_descriptor_digest ||
+      trust.evidence.runtime_kind !== release.runtime_kind
     ) {
       fail('DEVELOPER_TRUST_GATE_UNMET', 409);
     }

@@ -11,11 +11,17 @@ describe('Developer Center shared views', () => {
   test('renders stable status and requirement labels', () => {
     const html = renderToStaticMarkup(
       <>
+        <DeveloperModuleStatusBadge status="draft" />
+        <DeveloperModuleStatusBadge status="uploaded" />
+        <DeveloperModuleStatusBadge status="verifying" />
         <DeveloperModuleStatusBadge status="review_pending" />
         <DeveloperModuleRequirements requirements={['manifest_review', 'human_review']} />
       </>,
     );
 
+    expect(html).toContain('Draft');
+    expect(html).toContain('Uploaded');
+    expect(html).toContain('Verifying');
     expect(html).toContain('Review pending');
     expect(html).toContain('Manifest review');
     expect(html).toContain('Human review');

@@ -33,6 +33,9 @@ export function serializeDeveloperModuleReleaseRow(
     sbom_digest: row.sbomDigest as `sha256:${string}` | null,
     trust_attestation_digest: row.trustAttestationDigest as `sha256:${string}` | null,
     verification_policy_digest: row.verificationPolicyDigest as `sha256:${string}` | null,
+    runtime_descriptor_digest: row.runtimeDescriptorDigest as `sha256:${string}` | null,
+    runtime_descriptor_path: row.runtimeDescriptorPath,
+    runtime_kind: row.runtimeKind as 'wasi-component' | 'oci-image' | null,
     review_requirements: [...row.reviewRequirements] as DeveloperModuleReviewRequirement[],
     status: row.status,
     review_revision: row.reviewRevision,
@@ -81,6 +84,9 @@ export function createDrizzleDeveloperModuleReleaseRepository(
             manifestDigest: input.manifestDigest,
             artifactId: input.artifactId,
             artifactDigest: input.artifactDigest,
+            runtimeDescriptorDigest: input.runtimeDescriptor?.descriptorDigest ?? null,
+            runtimeDescriptorPath: input.runtimeDescriptor?.entryPath ?? null,
+            runtimeKind: input.runtimeDescriptor?.runtimeKind ?? null,
             reviewRequirements: [...input.reviewRequirements],
             status: 'validated',
             createdBy: input.actorUserId,
@@ -121,7 +127,11 @@ export function createDrizzleDeveloperModuleReleaseRepository(
           !existingRelease ||
           existingRelease.accountId !== input.accountId ||
           existingRelease.manifestDigest !== input.manifestDigest ||
-          existingRelease.artifactDigest !== input.artifactDigest
+          existingRelease.artifactDigest !== input.artifactDigest ||
+          existingRelease.runtimeDescriptorDigest !==
+            (input.runtimeDescriptor?.descriptorDigest ?? null) ||
+          existingRelease.runtimeDescriptorPath !== (input.runtimeDescriptor?.entryPath ?? null) ||
+          existingRelease.runtimeKind !== (input.runtimeDescriptor?.runtimeKind ?? null)
         ) {
           throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
         }

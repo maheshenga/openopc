@@ -12,7 +12,9 @@ export type DeveloperModuleTrustGateFailureCode =
   | 'DEVELOPER_TRUST_ARTIFACT_MISMATCH'
   | 'DEVELOPER_TRUST_EVIDENCE_MISMATCH'
   | 'DEVELOPER_TRUST_ATTESTATION_SUBJECT_MISMATCH'
-  | 'DEVELOPER_TRUST_BLOCKING_FINDINGS';
+  | 'DEVELOPER_TRUST_BLOCKING_FINDINGS'
+  | 'DEVELOPER_TRUST_RUNTIME_DESCRIPTOR_MISMATCH'
+  | 'DEVELOPER_TRUST_EXECUTION_MODE_UNSUPPORTED';
 
 export type DeveloperModuleTrustGateResult =
   | {
@@ -23,6 +25,8 @@ export type DeveloperModuleTrustGateResult =
         sbom_digest: `sha256:${string}`;
         attestation_digest: `sha256:${string}`;
         policy_digest: `sha256:${string}`;
+        runtime_descriptor_digest: `sha256:${string}` | null;
+        runtime_kind: 'wasi-component' | 'oci-image' | null;
       };
     }
   | { ok: false; code: DeveloperModuleTrustGateFailureCode };
@@ -40,6 +44,22 @@ export class DeveloperModuleTrustGate {
   ) {}
 
   async evaluate(release: DeveloperModuleRelease): Promise<DeveloperModuleTrustGateResult> {
+    if (release.manifest.execution.mode === 'desktop-native') {
+      return failed('DEVELOPER_TRUST_EXECUTION_MODE_UNSUPPORTED');
+    }
+    const hasRuntimeDescriptor =
+      release.runtime_descriptor_digest !== null ||
+      release.runtime_descriptor_path !== null ||
+      release.runtime_kind !== null;
+    if (
+      release.manifest.execution.mode === 'server-adapter'
+        ? !release.runtime_descriptor_digest ||
+          release.runtime_descriptor_path !== release.manifest.execution.entry ||
+          !release.runtime_kind
+        : hasRuntimeDescriptor
+    ) {
+      return failed('DEVELOPER_TRUST_RUNTIME_DESCRIPTOR_MISMATCH');
+    }
     const view: DeveloperModuleTrustView | null = await this.input.repository.getAdminView(
       release.release_id,
     );
@@ -97,6 +117,8 @@ export class DeveloperModuleTrustGate {
         sbom_digest: latest.sbom_digest,
         attestation_digest: latest.attestation_digest,
         policy_digest: latest.policy_digest,
+        runtime_descriptor_digest: release.runtime_descriptor_digest,
+        runtime_kind: release.runtime_kind,
       },
     };
   }

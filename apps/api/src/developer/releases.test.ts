@@ -7,6 +7,7 @@ import {
   DeveloperModuleArtifactService,
   createMemoryDeveloperArtifactStore,
   createMemoryDeveloperModuleArtifactRepository,
+  serializeDeveloperModuleArtifactPackage,
 } from './artifacts';
 import { DeveloperPublisherError } from './publishers';
 import {
@@ -40,6 +41,45 @@ function validModuleItem() {
       },
     },
   };
+}
+
+function serverAdapterPackageBytes(): Uint8Array {
+  const descriptor = new TextEncoder().encode(
+    `{"descriptorVersion":1,"runtime":{"args":[],"command":["openopc-adapter"],"image":"sha256:${'a'.repeat(64)}","kind":"oci-image","limits":{"cpuMillis":1000,"fuel":1000000,"memoryMiB":64,"outputBytes":1048576,"pids":8,"wallTimeMs":5000},"profile":"server-adapter"}}`,
+  );
+  return serializeDeveloperModuleArtifactPackage({
+    item: {
+      name: 'server-adapter',
+      type: 'registry:module',
+      files: [
+        {
+          path: 'runtime/openopc.runtime.json',
+          target: 'runtime/openopc.runtime.json',
+          type: 'registry:file',
+        },
+      ],
+      module: {
+        schemaVersion: 2,
+        id: 'acme.server-adapter',
+        version: '1.0.0',
+        publisher: { id: 'acme', displayName: 'Acme' },
+        category: 'automation',
+        locales: ['en'],
+        compatibility: { platform: '^1.0.0' },
+        execution: { mode: 'server-adapter', entry: 'runtime/openopc.runtime.json' },
+        verification: { profile: 'server-conformance' },
+      },
+    },
+    files: [
+      {
+        path: 'runtime/openopc.runtime.json',
+        target: 'runtime/openopc.runtime.json',
+        mediaType: 'application/json',
+        bytes: descriptor,
+      },
+    ],
+    lockGraph: { format: 'openopc-lock.v1', nodes: [] },
+  });
 }
 
 function fixture() {
@@ -91,6 +131,49 @@ async function submitItem(
 }
 
 describe('developer module release service', () => {
+  test('derives and persists server runtime evidence from canonical artifact bytes', async () => {
+    const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
+    const memoryStore = createMemoryDeveloperArtifactStore();
+    const artifactService = new DeveloperModuleArtifactService({
+      repository: artifacts,
+      store: memoryStore.store,
+      now: () => NOW,
+      codeModulesEnabled: true,
+      trustInfrastructureReady: () => true,
+    });
+    const bytes = serverAdapterPackageBytes();
+    const upload = await artifactService.createUpload({
+      accountId: ACCOUNT_ID,
+      publisherId: 'acme',
+      expectedSize: bytes.byteLength,
+      expectedDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+      actorUserId: USER_ID,
+    });
+    await memoryStore.upload(upload.upload_url, bytes, upload.headers);
+    const artifact = await artifactService.finalizeUpload({
+      accountId: ACCOUNT_ID,
+      uploadId: upload.upload_id,
+      actorUserId: USER_ID,
+    });
+    const service = new DeveloperModuleReleaseService({
+      repository: createMemoryDeveloperModuleReleaseRepository({ now: () => NOW }),
+      artifacts,
+      artifactStore: memoryStore.store,
+    });
+
+    const result = await service.submit({
+      accountId: ACCOUNT_ID,
+      actorUserId: USER_ID,
+      artifactId: artifact.artifact_id,
+    });
+
+    expect(result.release).toMatchObject({
+      runtime_descriptor_digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      runtime_descriptor_path: 'runtime/openopc.runtime.json',
+      runtime_kind: 'oci-image',
+    });
+  });
+
   test('checks Publisher release authority before creating a release', async () => {
     const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
     const artifact = await seedArtifact(artifacts, validModuleItem());

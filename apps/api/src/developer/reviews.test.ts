@@ -25,6 +25,8 @@ const TRUST_EVIDENCE = {
   sbom_digest: `sha256:${'d'.repeat(64)}`,
   attestation_digest: `sha256:${'e'.repeat(64)}`,
   policy_digest: `sha256:${'f'.repeat(64)}`,
+  runtime_descriptor_digest: null,
+  runtime_kind: null,
 } as const;
 
 type TrustState =
@@ -85,6 +87,9 @@ function release(
     sbom_digest: null,
     trust_attestation_digest: null,
     verification_policy_digest: null,
+    runtime_descriptor_digest: null,
+    runtime_descriptor_path: null,
+    runtime_kind: null,
     review_requirements: requirements,
     status,
     review_revision: reviewRevision,

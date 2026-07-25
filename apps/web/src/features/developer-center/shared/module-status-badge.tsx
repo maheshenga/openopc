@@ -4,7 +4,10 @@ import type { ComponentProps } from 'react';
 import { Badge } from '@/components/ui/badge';
 
 const STATUS_LABELS: Record<DeveloperModuleReleaseStatus, string> = {
+  draft: 'Draft',
+  uploaded: 'Uploaded',
   validated: 'Validated',
+  verifying: 'Verifying',
   review_pending: 'Review pending',
   changes_requested: 'Changes requested',
   approved: 'Approved',
@@ -18,7 +21,10 @@ const STATUS_VARIANTS: Record<
   DeveloperModuleReleaseStatus,
   ComponentProps<typeof Badge>['variant']
 > = {
+  draft: 'muted',
+  uploaded: 'info',
   validated: 'info',
+  verifying: 'warning',
   review_pending: 'warning',
   changes_requested: 'warning',
   approved: 'success',

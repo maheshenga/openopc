@@ -122,6 +122,7 @@ const releaseRepository: DeveloperModuleReleaseRepository =
 const releaseService = new DeveloperModuleReleaseService({
   repository: releaseRepository,
   artifacts: artifactRepository,
+  artifactStore,
   permissions: developerPublisherService,
 });
 export const developerModuleVerificationRepository =

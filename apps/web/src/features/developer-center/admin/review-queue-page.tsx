@@ -34,7 +34,10 @@ const QUEUE_STATUSES: readonly DeveloperModuleReleaseStatus[] = [
 ];
 
 const STATUS_LABELS: Record<DeveloperModuleReleaseStatus, string> = {
+  draft: 'Draft',
+  uploaded: 'Uploaded',
   validated: 'Validated',
+  verifying: 'Verifying',
   review_pending: 'Review pending',
   changes_requested: 'Changes requested',
   approved: 'Approved',

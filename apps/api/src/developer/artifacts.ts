@@ -83,6 +83,7 @@ export interface DeveloperArtifactStore {
   }): Promise<{ storageKey: string; uploadUrl: string; headers: Record<string, string> }>;
   headStaging(storageKey: string): Promise<{ size: number; digest: `sha256:${string}` }>;
   readStaging(storageKey: string, limits: ArtifactReadLimits): AsyncIterable<Uint8Array>;
+  readCanonical(storageKey: string, limits: ArtifactReadLimits): AsyncIterable<Uint8Array>;
   commit(input: {
     stagingKey: string;
     accountId: string;
@@ -105,6 +106,13 @@ export function createUnavailableDeveloperArtifactStore(): DeveloperArtifactStor
     createUpload: unavailable,
     headStaging: unavailable,
     readStaging() {
+      return {
+        [Symbol.asyncIterator]() {
+          return { next: unavailable };
+        },
+      };
+    },
+    readCanonical() {
       return {
         [Symbol.asyncIterator]() {
           return { next: unavailable };
@@ -245,7 +253,9 @@ export function serializeDeveloperModuleArtifactPackage(
   return canonicalBytes(payload);
 }
 
-function parsePackage(bytes: Uint8Array): DeveloperModuleArtifactPackageInput {
+export function parseDeveloperModuleArtifactPackage(
+  bytes: Uint8Array,
+): DeveloperModuleArtifactPackageInput {
   let value: unknown;
   try {
     value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
@@ -257,6 +267,7 @@ function parsePackage(bytes: Uint8Array): DeveloperModuleArtifactPackageInput {
   }
   const object = value as Record<string, unknown>;
   if (
+    !Buffer.from(canonicalBytes(value)).equals(Buffer.from(bytes)) ||
     !exactKeys(object, ['files', 'formatVersion', 'item', 'lockGraph', 'mediaType', 'source']) ||
     object.formatVersion !== 2 ||
     object.mediaType !== DEVELOPER_MODULE_ARTIFACT_MEDIA_TYPE ||
@@ -318,7 +329,7 @@ function parsePackage(bytes: Uint8Array): DeveloperModuleArtifactPackageInput {
   };
 }
 
-async function readAll(
+export async function readDeveloperArtifactBytes(
   source: AsyncIterable<Uint8Array>,
   expectedSize: number,
 ): Promise<Uint8Array> {
@@ -594,7 +605,7 @@ export class DeveloperModuleArtifactService {
 
     let bytes: Uint8Array;
     try {
-      bytes = await readAll(
+      bytes = await readDeveloperArtifactBytes(
         this.input.store.readStaging(upload.staging_storage_key, {
           maxBytes: upload.expected_size,
         }),
@@ -614,7 +625,7 @@ export class DeveloperModuleArtifactService {
     }
     let envelope: RegistryModuleArtifactEnvelope;
     try {
-      envelope = createRegistryModuleArtifactEnvelope(parsePackage(bytes));
+      envelope = createRegistryModuleArtifactEnvelope(parseDeveloperModuleArtifactPackage(bytes));
     } catch {
       return await this.rejectUpload(upload, 'DEVELOPER_ARTIFACT_INVALID', now);
     }
@@ -830,6 +841,13 @@ export function createMemoryDeveloperArtifactStore() {
         throw new Error('missing or oversized staging object');
       }
       yield entry.bytes.slice();
+    },
+    async *readCanonical(storageKey, limits) {
+      const bytes = artifacts.get(storageKey);
+      if (!bytes || bytes.byteLength > limits.maxBytes) {
+        throw new Error('missing or oversized canonical artifact');
+      }
+      yield bytes.slice();
     },
     async commit(input) {
       const url = storageKeys.get(input.stagingKey);

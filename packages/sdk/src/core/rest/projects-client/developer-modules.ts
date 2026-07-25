@@ -127,7 +127,10 @@ export interface DeveloperModuleTrustView {
 }
 
 export type DeveloperModuleReleaseStatus =
+  | 'draft'
+  | 'uploaded'
   | 'validated'
+  | 'verifying'
   | 'review_pending'
   | 'changes_requested'
   | 'approved'
@@ -158,6 +161,9 @@ export interface DeveloperModuleRelease {
   sbom_digest: DeveloperModuleDigest | null;
   trust_attestation_digest: DeveloperModuleDigest | null;
   verification_policy_digest: DeveloperModuleDigest | null;
+  runtime_descriptor_digest: DeveloperModuleDigest | null;
+  runtime_descriptor_path: string | null;
+  runtime_kind: 'wasi-component' | 'oci-image' | null;
   review_requirements: DeveloperModuleReviewRequirement[];
   status: DeveloperModuleReleaseStatus;
   review_revision: number;

@@ -47,7 +47,10 @@ function foreignKeys(table: PgTable) {
 describe('developer module release durable schema', () => {
   test('declares the complete additive release lifecycle', () => {
     expect(developerModuleReleaseStatusEnum.enumValues).toEqual([
+      'draft',
+      'uploaded',
       'validated',
+      'verifying',
       'review_pending',
       'changes_requested',
       'approved',
@@ -85,6 +88,9 @@ describe('developer module release durable schema', () => {
         'module_version',
         'manifest',
         'manifest_digest',
+        'runtime_descriptor_digest',
+        'runtime_descriptor_path',
+        'runtime_kind',
         'review_requirements',
         'status',
         'review_revision',
@@ -132,6 +138,12 @@ describe('developer module release durable schema', () => {
     expect(
       checkConstraintSql(developerModuleReleases, 'developer_module_releases_namespace_check'),
     ).toContain('publisher_id');
+    const runtimeConstraint = checkConstraintSql(
+      developerModuleReleases,
+      'developer_module_releases_runtime_descriptor_check',
+    );
+    expect(runtimeConstraint).toContain('openopc[.]runtime[.]json');
+    expect(runtimeConstraint).toContain('desktop-native');
   });
 });
 
@@ -148,6 +160,26 @@ describe('developer module release migration', () => {
     expect(migration).toContain('REVOKE ALL');
     expect(migration).toContain('TO service_role');
     expect(migration).not.toMatch(/GRANT .* TO (?:anon|authenticated)/i);
+    expect(migration).not.toMatch(/DROP\s+(?:TABLE|COLUMN)/i);
+  });
+});
+
+describe('developer module runtime release migration', () => {
+  test('adds lifecycle values and immutable runtime evidence without destructive changes', () => {
+    const migration = readFileSync(
+      join(import.meta.dir, '..', 'migrations', '20260726120000000_developer_release_lifecycle.sql'),
+      'utf8',
+    );
+
+    expect(migration).toContain("ADD VALUE IF NOT EXISTS 'draft'");
+    expect(migration).toContain("ADD VALUE IF NOT EXISTS 'uploaded'");
+    expect(migration).toContain("ADD VALUE IF NOT EXISTS 'verifying'");
+    expect(migration).toContain('runtime_descriptor_digest');
+    expect(migration).toContain('runtime_descriptor_path');
+    expect(migration).toContain('runtime_kind');
+    expect(migration).toContain('developer_module_releases_runtime_descriptor_check');
+    expect(migration).toContain("'desktop-native'");
+    expect(migration).toContain('protect_developer_module_release_content');
     expect(migration).not.toMatch(/DROP\s+(?:TABLE|COLUMN)/i);
   });
 });

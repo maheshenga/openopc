@@ -69,6 +69,9 @@ function baseRelease(
     sbom_digest: `sha256:${'d'.repeat(64)}`,
     trust_attestation_digest: `sha256:${'e'.repeat(64)}`,
     verification_policy_digest: `sha256:${'f'.repeat(64)}`,
+    runtime_descriptor_digest: null,
+    runtime_descriptor_path: null,
+    runtime_kind: null,
     review_requirements: ['manifest_review', 'source_scan', 'human_review'],
     status: 'approved',
     review_revision: 2,
@@ -139,6 +142,8 @@ async function setup(
             sbom_digest: candidate.sbom_digest,
             attestation_digest: candidate.trust_attestation_digest,
             policy_digest: candidate.verification_policy_digest,
+            runtime_descriptor_digest: candidate.runtime_descriptor_digest,
+            runtime_kind: candidate.runtime_kind,
           },
         };
       },

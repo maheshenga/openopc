@@ -41,6 +41,9 @@ function release(overrides: Partial<DeveloperModuleRelease> = {}): DeveloperModu
     sbom_digest: SBOM_DIGEST,
     trust_attestation_digest: ATTESTATION_DIGEST,
     verification_policy_digest: POLICY_DIGEST,
+    runtime_descriptor_digest: null,
+    runtime_descriptor_path: null,
+    runtime_kind: null,
     review_requirements: ['manifest_review', 'source_scan', 'human_review'],
     status: 'approved',
     review_revision: 2,
@@ -124,8 +127,57 @@ test('accepts only current passed evidence bound to the release artifact and dig
       sbom_digest: SBOM_DIGEST,
       attestation_digest: ATTESTATION_DIGEST,
       policy_digest: POLICY_DIGEST,
+      runtime_descriptor_digest: null,
+      runtime_kind: null,
     },
   });
+});
+
+test('returns server runtime evidence as release-signing trust inputs', async () => {
+  const descriptorDigest = `sha256:${'1'.repeat(64)}` as const;
+  const gate = new DeveloperModuleTrustGate({
+    repository: await passedRepository(),
+    currentPolicyDigest: POLICY_DIGEST,
+  });
+
+  await expect(
+    gate.evaluate(
+      release({
+        manifest: {
+          ...release().manifest,
+          execution: { mode: 'server-adapter', entry: 'runtime/openopc.runtime.json' },
+          verification: { profile: 'server-conformance' },
+        },
+        runtime_descriptor_digest: descriptorDigest,
+        runtime_descriptor_path: 'runtime/openopc.runtime.json',
+        runtime_kind: 'wasi-component',
+      }),
+    ),
+  ).resolves.toMatchObject({
+    ok: true,
+    evidence: {
+      runtime_descriptor_digest: descriptorDigest,
+      runtime_kind: 'wasi-component',
+    },
+  });
+});
+
+test('rejects third-party desktop-native execution at the trust boundary', async () => {
+  const gate = new DeveloperModuleTrustGate({
+    repository: await passedRepository(),
+    currentPolicyDigest: POLICY_DIGEST,
+  });
+  await expect(
+    gate.evaluate(
+      release({
+        manifest: {
+          ...release().manifest,
+          execution: { mode: 'desktop-native', entry: 'desktop/main.js' },
+          verification: { profile: 'desktop-package' },
+        },
+      }),
+    ),
+  ).resolves.toEqual({ ok: false, code: 'DEVELOPER_TRUST_EXECUTION_MODE_UNSUPPORTED' });
 });
 
 test.each([

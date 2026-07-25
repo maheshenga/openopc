@@ -2,6 +2,10 @@ import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 
 import {
+  DeveloperModuleTrustViewSchema,
+  DeveloperModuleVerificationRunSchema,
+} from '../developer/app';
+import {
   DeveloperModuleDistributionError,
   type DeveloperModuleDistributionService,
 } from '../developer/distribution';
@@ -13,6 +17,10 @@ import {
   DeveloperModuleReviewError,
   type DeveloperModuleReviewService,
 } from '../developer/reviews';
+import {
+  DeveloperModuleVerificationError,
+  type DeveloperModuleVerificationService,
+} from '../developer/verification';
 import { auth, errors, json } from '../openapi';
 import type { AuditEventInput } from '../shared/audit';
 import type { AppEnv } from '../types';
@@ -26,6 +34,11 @@ export const DeveloperModuleReleaseSchema = z.object({
   module_version: z.string(),
   manifest: z.record(z.unknown()),
   manifest_digest: z.string(),
+  artifact_id: z.string().uuid().nullable(),
+  artifact_digest: z.string().nullable(),
+  sbom_digest: z.string().nullable(),
+  trust_attestation_digest: z.string().nullable(),
+  verification_policy_digest: z.string().nullable(),
   review_requirements: z.array(z.enum(DEVELOPER_MODULE_REVIEW_REQUIREMENTS)),
   status: z.enum(DEVELOPER_MODULE_RELEASE_STATUSES),
   review_revision: z.number().int().min(0),
@@ -117,17 +130,24 @@ const DecisionBodySchema = z
   })
   .strict();
 
+const EmptyMutationBodySchema = z.object({}).strict();
+
 export type AdminDeveloperReviewRouteDependencies = Readonly<{
   reviewService: Pick<DeveloperModuleReviewService, 'adminList' | 'adminGet' | 'decide'>;
   distributionService: Pick<DeveloperModuleDistributionService, 'revoke'>;
   distributionEnabled: boolean;
+  verificationService: Pick<
+    DeveloperModuleVerificationService,
+    'getAdminTrustView' | 'retryAdmin' | 'cancelAdmin'
+  >;
   recordAuditEvent: (input: AuditEventInput) => Promise<unknown>;
 }>;
 
 function errorResponse(context: Context<AppEnv>, error: unknown) {
   if (
     !(error instanceof DeveloperModuleReviewError) &&
-    !(error instanceof DeveloperModuleDistributionError)
+    !(error instanceof DeveloperModuleDistributionError) &&
+    !(error instanceof DeveloperModuleVerificationError)
   ) {
     throw error;
   }
@@ -137,6 +157,22 @@ function errorResponse(context: Context<AppEnv>, error: unknown) {
   if (error.status === 404) return context.json(body, 404);
   if (error.status === 409) return context.json(body, 409);
   return context.json(body, 503);
+}
+
+function verificationErrorResponse(context: Context<AppEnv>, error: unknown) {
+  if (!(error instanceof DeveloperModuleVerificationError)) throw error;
+  const body = { error: error.code };
+  if (error.status === 400) return context.json(body, 400);
+  if (error.status === 404) return context.json(body, 404);
+  return context.json(body, 409);
+}
+
+function verificationReadErrorResponse(context: Context<AppEnv>, error: unknown) {
+  if (!(error instanceof DeveloperModuleVerificationError)) throw error;
+  const body = { error: error.code };
+  if (error.status === 400) return context.json(body, 400);
+  if (error.status === 404) return context.json(body, 404);
+  throw error;
 }
 
 function clientIp(context: { req: { header(name: string): string | undefined } }): string | null {
@@ -202,7 +238,7 @@ export function registerAdminDeveloperReviewRoutes(
       request: { params: z.object({ releaseId: z.string().uuid() }) },
       responses: {
         200: json(DetailSchema, 'Developer module review detail'),
-        ...errors(400, 401, 403, 404),
+        ...errors(400, 401, 403, 404, 409),
       },
     }),
     async (context) => {
@@ -216,6 +252,121 @@ export function registerAdminDeveloperReviewRoutes(
           return context.json({ error: error.code }, 404);
         }
         throw error;
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/developer/modules/releases/{releaseId}/trust',
+      tags: ['admin', 'developer'],
+      summary: 'Read safe developer module trust evidence',
+      ...auth,
+      request: { params: z.object({ releaseId: z.string().uuid() }) },
+      responses: {
+        200: json(DeveloperModuleTrustViewSchema, 'Developer module trust evidence'),
+        ...errors(400, 401, 403, 404),
+      },
+    }),
+    async (context) => {
+      try {
+        const view = await dependencies.verificationService.getAdminTrustView({
+          releaseId: context.req.valid('param').releaseId,
+        });
+        return context.json(view, 200);
+      } catch (error) {
+        return verificationReadErrorResponse(context, error);
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'post',
+      path: '/developer/modules/releases/{releaseId}/verification-retries',
+      tags: ['admin', 'developer'],
+      summary: 'Retry developer module verification',
+      ...auth,
+      request: {
+        params: z.object({ releaseId: z.string().uuid() }),
+        body: {
+          required: true,
+          content: { 'application/json': { schema: EmptyMutationBodySchema } },
+        },
+      },
+      responses: {
+        201: json(DeveloperModuleVerificationRunSchema, 'Verification retry queued'),
+        ...errors(400, 401, 403, 404, 409),
+      },
+    }),
+    async (context) => {
+      try {
+        const run = await dependencies.verificationService.retryAdmin({
+          releaseId: context.req.valid('param').releaseId,
+        });
+        context.set('accountId', run.account_id);
+        await dependencies
+          .recordAuditEvent({
+            accountId: run.account_id,
+            actorUserId: context.get('userId'),
+            action: 'developer.module.verification.retried',
+            resourceType: 'developer_module_verification_run',
+            resourceId: run.run_id,
+            before: null,
+            after: { state: run.state, attempt: run.attempt },
+            ip: clientIp(context),
+            userAgent: context.req.header('user-agent') ?? null,
+          })
+          .catch(() => undefined);
+        return context.json(run, 201);
+      } catch (error) {
+        return verificationErrorResponse(context, error);
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'post',
+      path: '/developer/modules/releases/{releaseId}/verification-cancellations',
+      tags: ['admin', 'developer'],
+      summary: 'Cancel active developer module verification',
+      ...auth,
+      request: {
+        params: z.object({ releaseId: z.string().uuid() }),
+        body: {
+          required: true,
+          content: { 'application/json': { schema: EmptyMutationBodySchema } },
+        },
+      },
+      responses: {
+        200: json(DeveloperModuleVerificationRunSchema, 'Verification cancelled'),
+        ...errors(400, 401, 403, 404, 409),
+      },
+    }),
+    async (context) => {
+      try {
+        const run = await dependencies.verificationService.cancelAdmin({
+          releaseId: context.req.valid('param').releaseId,
+        });
+        context.set('accountId', run.account_id);
+        await dependencies
+          .recordAuditEvent({
+            accountId: run.account_id,
+            actorUserId: context.get('userId'),
+            action: 'developer.module.verification.cancelled',
+            resourceType: 'developer_module_verification_run',
+            resourceId: run.run_id,
+            before: null,
+            after: { state: run.state, attempt: run.attempt },
+            ip: clientIp(context),
+            userAgent: context.req.header('user-agent') ?? null,
+          })
+          .catch(() => undefined);
+        return context.json(run, 200);
+      } catch (error) {
+        return verificationErrorResponse(context, error);
       }
     },
   );

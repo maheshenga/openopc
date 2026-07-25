@@ -19,6 +19,10 @@ import {
   DeveloperModuleReviewService,
   createMemoryDeveloperModuleReviewRepository,
 } from './reviews';
+import {
+  DeveloperModuleVerificationService,
+  createMemoryDeveloperModuleVerificationRepository,
+} from './verification';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000009';
@@ -51,12 +55,24 @@ const validModuleItem = (): ValidModuleItem => ({
   },
 });
 
+function emptyVerificationService() {
+  return new DeveloperModuleVerificationService({
+    repository: createMemoryDeveloperModuleVerificationRepository(),
+    currentPolicy: {
+      policyDigest: `sha256:${'b'.repeat(64)}`,
+      scannerSetDigest: `sha256:${'c'.repeat(64)}`,
+      sandboxProfileDigest: `sha256:${'d'.repeat(64)}`,
+    },
+  });
+}
+
 const authenticatedApp = (
   input: {
     accountId?: string;
     artifactService?: DeveloperAppDependencies['artifactService'];
     releaseService?: DeveloperAppDependencies['releaseService'];
     reviewService?: DeveloperAppDependencies['reviewService'];
+    verificationService?: DeveloperAppDependencies['verificationService'];
     resolvedSources?: Array<'body' | 'query'>;
     authorizeAccount?: DeveloperAppDependencies['authorizeAccount'];
   } = {},
@@ -89,6 +105,7 @@ const authenticatedApp = (
       new DeveloperModuleReviewService({
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
+    verificationService: input.verificationService ?? emptyVerificationService(),
     authorizeAccount: input.authorizeAccount ?? (async () => undefined),
   });
 };
@@ -163,6 +180,7 @@ describe('developer module validation API', () => {
       reviewService: new DeveloperModuleReviewService({
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
+      verificationService: emptyVerificationService(),
       authorizeAccount: async () => undefined,
     });
     const response = await app.request('/modules/validate', {
@@ -248,6 +266,7 @@ describe('developer module validation API', () => {
       reviewService: new DeveloperModuleReviewService({
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
+      verificationService: emptyVerificationService(),
       authorizeAccount: async () => undefined,
     });
 
@@ -351,6 +370,7 @@ describe('developer module validation API', () => {
       reviewService: new DeveloperModuleReviewService({
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
+      verificationService: emptyVerificationService(),
     });
 
     const response = await app.request('/modules/releases', {
@@ -650,5 +670,83 @@ describe('developer module artifact API', () => {
       ACCOUNT_ACTIONS.ACCOUNT_WRITE,
       ACCOUNT_ACTIONS.ACCOUNT_WRITE,
     ]);
+  });
+
+  test('reads and retries verification through the publisher account boundary', async () => {
+    const repository = createMemoryDeveloperModuleVerificationRepository({
+      releases: [
+        {
+          releaseId: '30000000-0000-4000-a000-000000000003',
+          accountId: ACCOUNT_ID,
+          artifactId: '40000000-0000-4000-a000-000000000004',
+          artifactDigest: `sha256:${'a'.repeat(64)}`,
+          mediaType: 'application/vnd.openopc.developer-module.v2+json',
+          sizeBytes: 256,
+          sourceProvenance: null,
+          createdAt: '2026-07-25T00:00:00.000Z',
+        },
+      ],
+    });
+    const policy = {
+      policyDigest: `sha256:${'b'.repeat(64)}` as const,
+      scannerSetDigest: `sha256:${'c'.repeat(64)}` as const,
+      sandboxProfileDigest: `sha256:${'d'.repeat(64)}` as const,
+    };
+    await repository.enqueue({
+      releaseId: '30000000-0000-4000-a000-000000000003',
+      accountId: ACCOUNT_ID,
+      artifactId: '40000000-0000-4000-a000-000000000004',
+      artifactDigest: `sha256:${'a'.repeat(64)}`,
+      ...policy,
+    });
+    const verificationService = new DeveloperModuleVerificationService({
+      repository,
+      currentPolicy: policy,
+    });
+    const actions: string[] = [];
+    const app = authenticatedApp({
+      verificationService,
+      authorizeAccount: async (_context, _accountId, action) => {
+        actions.push(action);
+      },
+    });
+    const path = '/modules/releases/30000000-0000-4000-a000-000000000003';
+
+    const trust = await app.request(`${path}/trust?account_id=${ACCOUNT_ID}`);
+    await repository.cancel({
+      releaseId: '30000000-0000-4000-a000-000000000003',
+      accountId: ACCOUNT_ID,
+      reason: 'cancelled for route test',
+    });
+    const retry = await app.request(`${path}/verification-retries`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account_id: ACCOUNT_ID }),
+    });
+    const otherAccount = authenticatedApp({
+      accountId: OTHER_ACCOUNT_ID,
+      verificationService,
+    });
+    const hidden = await otherAccount.request(`${path}/trust?account_id=${OTHER_ACCOUNT_ID}`);
+    const hiddenRetry = await otherAccount.request(`${path}/verification-retries`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account_id: OTHER_ACCOUNT_ID }),
+    });
+
+    expect(trust.status).toBe(200);
+    expect(await trust.json()).toEqual(
+      expect.objectContaining({
+        release_id: '30000000-0000-4000-a000-000000000003',
+        attempts: [expect.objectContaining({ state: 'queued', attempt: 1 })],
+      }),
+    );
+    expect(retry.status).toBe(201);
+    expect(await retry.json()).toEqual(expect.objectContaining({ state: 'queued', attempt: 2 }));
+    expect(hidden.status).toBe(404);
+    expect(await hidden.json()).toEqual({ error: 'DEVELOPER_RELEASE_NOT_FOUND' });
+    expect(hiddenRetry.status).toBe(404);
+    expect(await hiddenRetry.json()).toEqual({ error: 'DEVELOPER_RELEASE_NOT_FOUND' });
+    expect(actions).toEqual([ACCOUNT_ACTIONS.ACCOUNT_READ, ACCOUNT_ACTIONS.ACCOUNT_WRITE]);
   });
 });

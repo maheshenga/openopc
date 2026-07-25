@@ -13,6 +13,10 @@ import {
   type DeveloperModuleReleaseService,
 } from './releases';
 import { DeveloperModuleReviewError, type DeveloperModuleReviewService } from './reviews';
+import {
+  DeveloperModuleVerificationError,
+  type DeveloperModuleVerificationService,
+} from './verification';
 
 const RegistryValidationIssueSchema = z.object({
   severity: z.enum(['error', 'warning']),
@@ -176,6 +180,91 @@ const DeveloperModuleReviewHistoryQuerySchema = z
   .object({ account_id: z.string().uuid().optional() })
   .strict();
 
+const DeveloperModuleVerificationMutationSchema = z
+  .object({ account_id: z.string().uuid().optional() })
+  .strict();
+const DeveloperModuleTrustQuerySchema = z
+  .object({ account_id: z.string().uuid().optional() })
+  .strict();
+const DigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
+
+export const DeveloperModuleVerificationRunSchema = z.object({
+  run_id: z.string().uuid(),
+  release_id: z.string().uuid(),
+  artifact_id: z.string().uuid(),
+  account_id: z.string().uuid(),
+  policy_digest: DigestSchema,
+  scanner_set_digest: DigestSchema,
+  sandbox_profile_digest: DigestSchema,
+  attempt: z.number().int().positive(),
+  state: z.enum(['queued', 'running', 'passed', 'failed', 'inconclusive', 'cancelled']),
+  lease_owner: z.string().nullable(),
+  lease_expires_at: z.string().nullable(),
+  heartbeat_at: z.string().nullable(),
+  terminal_reason: z.string().nullable(),
+  sbom_digest: DigestSchema.nullable(),
+  attestation_digest: DigestSchema.nullable(),
+  started_at: z.string().nullable(),
+  finished_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const DeveloperModuleVerificationFindingSchema = z.object({
+  finding_id: z.string().uuid(),
+  fingerprint: DigestSchema,
+  scanner: z.string(),
+  rule_id: z.string(),
+  severity: z.enum(['info', 'low', 'medium', 'high', 'critical']),
+  path: z.string().nullable(),
+  location: z.record(z.unknown()).nullable(),
+  summary: z.string(),
+  disposition: z.enum(['blocking', 'observed']),
+  created_at: z.string(),
+});
+
+const DeveloperModuleTrustAttestationSchema = z.object({
+  attestation_digest: DigestSchema,
+  subject_artifact_digest: DigestSchema,
+  predicate_type: z.string(),
+  policy_digest: DigestSchema,
+  result: z.enum(['passed', 'failed', 'inconclusive', 'cancelled']),
+  sbom_digest: DigestSchema,
+  issuer: z.string(),
+  created_at: z.string(),
+});
+
+export const DeveloperModuleTrustViewSchema = z.object({
+  release_id: z.string().uuid(),
+  account_id: z.string().uuid(),
+  artifact: z.object({
+    artifact_id: z.string().uuid(),
+    artifact_digest: DigestSchema,
+    media_type: z.string(),
+    size_bytes: z.number().int().positive(),
+    source_provenance: z.record(z.unknown()).nullable(),
+    created_at: z.string(),
+  }),
+  attempts: z.array(
+    z.object({
+      run_id: z.string().uuid(),
+      attempt: z.number().int().positive(),
+      state: z.enum(['queued', 'running', 'passed', 'failed', 'inconclusive', 'cancelled']),
+      policy_digest: DigestSchema,
+      scanner_set_digest: DigestSchema,
+      sandbox_profile_digest: DigestSchema,
+      terminal_reason: z.string().nullable(),
+      sbom_digest: DigestSchema.nullable(),
+      attestation_digest: DigestSchema.nullable(),
+      started_at: z.string().nullable(),
+      finished_at: z.string().nullable(),
+      created_at: z.string(),
+      findings: z.array(DeveloperModuleVerificationFindingSchema),
+      attestation: DeveloperModuleTrustAttestationSchema.nullable(),
+    }),
+  ),
+});
+
 type DeveloperAccountAction =
   | typeof ACCOUNT_ACTIONS.ACCOUNT_READ
   | typeof ACCOUNT_ACTIONS.ACCOUNT_WRITE;
@@ -194,6 +283,7 @@ export type DeveloperAppDependencies = Readonly<{
   >;
   releaseService: Pick<DeveloperModuleReleaseService, 'submit' | 'list' | 'get'>;
   reviewService: Pick<DeveloperModuleReviewService, 'requestReview' | 'history'>;
+  verificationService: Pick<DeveloperModuleVerificationService, 'getTrustView' | 'retryPublisher'>;
 }>;
 
 function reviewErrorResponse(context: Context<AppEnv>, error: unknown) {
@@ -212,6 +302,14 @@ function artifactErrorResponse(context: Context<AppEnv>, error: unknown) {
   if (error.status === 404) return context.json(body, 404);
   if (error.status === 409) return context.json(body, 409);
   return context.json(body, 503);
+}
+
+function verificationErrorResponse(context: Context<AppEnv>, error: unknown) {
+  if (!(error instanceof DeveloperModuleVerificationError)) throw error;
+  const body = { error: error.code };
+  if (error.status === 400) return context.json(body, 400);
+  if (error.status === 404) return context.json(body, 404);
+  return context.json(body, 409);
 }
 
 export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
@@ -239,6 +337,73 @@ export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
       },
     }),
     (context) => context.json(validateRegistryItem(context.req.valid('json')), 200),
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/modules/releases/{releaseId}/trust',
+      tags: ['developer'],
+      summary: 'Read account-scoped developer module trust evidence',
+      ...auth,
+      request: {
+        params: z.object({ releaseId: z.string().uuid() }),
+        query: DeveloperModuleTrustQuerySchema,
+      },
+      responses: {
+        200: json(DeveloperModuleTrustViewSchema, 'Safe developer module trust view'),
+        ...errors(400, 401, 403, 404, 409),
+      },
+    }),
+    async (context) => {
+      const accountId = await dependencies.resolveAccountId(context, 'query');
+      context.set('accountId', accountId);
+      await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_READ);
+      try {
+        const view = await dependencies.verificationService.getTrustView({
+          accountId,
+          releaseId: context.req.valid('param').releaseId,
+        });
+        return context.json(view, 200);
+      } catch (error) {
+        return verificationErrorResponse(context, error);
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'post',
+      path: '/modules/releases/{releaseId}/verification-retries',
+      tags: ['developer'],
+      summary: 'Retry terminal developer module verification',
+      ...auth,
+      request: {
+        params: z.object({ releaseId: z.string().uuid() }),
+        body: {
+          required: true,
+          content: { 'application/json': { schema: DeveloperModuleVerificationMutationSchema } },
+        },
+      },
+      responses: {
+        201: json(DeveloperModuleVerificationRunSchema, 'Verification retry queued'),
+        ...errors(400, 401, 403, 404, 409),
+      },
+    }),
+    async (context) => {
+      const accountId = await dependencies.resolveAccountId(context, 'body');
+      context.set('accountId', accountId);
+      await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_WRITE);
+      try {
+        const run = await dependencies.verificationService.retryPublisher({
+          accountId,
+          releaseId: context.req.valid('param').releaseId,
+        });
+        return context.json(run, 201);
+      } catch (error) {
+        return verificationErrorResponse(context, error);
+      }
+    },
   );
 
   app.openapi(

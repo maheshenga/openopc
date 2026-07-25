@@ -16,6 +16,7 @@ import {
   developerModuleDistributionEnabled,
   developerModuleDistributionService,
   developerModuleReviewService,
+  developerModuleVerificationService,
 } from '../developer';
 import type { AppEnv } from '../types';
 import { supabaseAuth } from '../middleware/auth';
@@ -38,6 +39,7 @@ registerAdminDeveloperReviewRoutes(adminApp, {
   reviewService: developerModuleReviewService,
   distributionService: developerModuleDistributionService,
   distributionEnabled: developerModuleDistributionEnabled,
+  verificationService: developerModuleVerificationService,
   recordAuditEvent,
 });
 

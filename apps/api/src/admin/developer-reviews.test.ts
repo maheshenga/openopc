@@ -11,6 +11,10 @@ import {
   DeveloperModuleReviewService,
   createMemoryDeveloperModuleReviewRepository,
 } from '../developer/reviews';
+import {
+  DeveloperModuleVerificationService,
+  createMemoryDeveloperModuleVerificationRepository,
+} from '../developer/verification';
 import { makeOpenApiApp } from '../openapi';
 import type { AuditEventInput } from '../shared/audit';
 import type { AppEnv } from '../types';
@@ -104,6 +108,7 @@ function appHarness(input: {
   service: DeveloperModuleReviewService;
   distributionService?: DeveloperModuleDistributionService;
   recordAuditEvent?: (event: AuditEventInput) => Promise<unknown>;
+  verificationService?: DeveloperModuleVerificationService;
 }) {
   const app = makeOpenApiApp<AppEnv>();
   app.use('*', async (context, next) => {
@@ -128,6 +133,16 @@ function appHarness(input: {
         repository: createMemoryDeveloperModuleDistributionRepository(),
       }),
     distributionEnabled: true,
+    verificationService:
+      input.verificationService ??
+      new DeveloperModuleVerificationService({
+        repository: createMemoryDeveloperModuleVerificationRepository(),
+        currentPolicy: {
+          policyDigest: `sha256:${'b'.repeat(64)}`,
+          scannerSetDigest: `sha256:${'c'.repeat(64)}`,
+          sandboxProfileDigest: `sha256:${'d'.repeat(64)}`,
+        },
+      }),
     recordAuditEvent: input.recordAuditEvent ?? (async () => undefined),
   });
   return app;
@@ -421,5 +436,69 @@ describe('admin developer module review API', () => {
       release: expect.objectContaining({ status: 'revoked', review_revision: 3 }),
       event: expect.objectContaining({ action: 'revoke', sequence: 3 }),
     });
+  });
+
+  test('reads, cancels, and retries verification through the admin boundary', async () => {
+    const repository = createMemoryDeveloperModuleVerificationRepository({
+      releases: [
+        {
+          releaseId: RELEASE_ID,
+          accountId: ACCOUNT_ID,
+          artifactId: '50000000-0000-4000-a000-000000000005',
+          artifactDigest: `sha256:${'c'.repeat(64)}`,
+          mediaType: 'application/vnd.openopc.developer-module.v2+json',
+          sizeBytes: 512,
+          sourceProvenance: null,
+          createdAt: '2026-07-25T00:00:00.000Z',
+        },
+      ],
+    });
+    const currentPolicy = {
+      policyDigest: `sha256:${'b'.repeat(64)}` as const,
+      scannerSetDigest: `sha256:${'d'.repeat(64)}` as const,
+      sandboxProfileDigest: `sha256:${'e'.repeat(64)}` as const,
+    };
+    await repository.enqueue({
+      releaseId: RELEASE_ID,
+      accountId: ACCOUNT_ID,
+      artifactId: '50000000-0000-4000-a000-000000000005',
+      artifactDigest: `sha256:${'c'.repeat(64)}`,
+      ...currentPolicy,
+    });
+    const audits: AuditEventInput[] = [];
+    const app = appHarness({
+      service: await pendingService(),
+      verificationService: new DeveloperModuleVerificationService({
+        repository,
+        currentPolicy,
+      }),
+      recordAuditEvent: async (event) => audits.push(structuredClone(event)),
+    });
+    const path = `/developer/modules/releases/${RELEASE_ID}`;
+
+    const trust = await app.request(`${path}/trust`, { headers: adminHeaders });
+    const cancelled = await app.request(`${path}/verification-cancellations`, {
+      method: 'POST',
+      headers: { ...adminHeaders, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const retried = await app.request(`${path}/verification-retries`, {
+      method: 'POST',
+      headers: { ...adminHeaders, 'content-type': 'application/json' },
+      body: '{}',
+    });
+
+    expect(trust.status).toBe(200);
+    expect(JSON.stringify(await trust.json())).not.toMatch(
+      /lease_token|dsse_envelope|storage_key/i,
+    );
+    expect(cancelled.status).toBe(200);
+    expect(await cancelled.json()).toEqual(expect.objectContaining({ state: 'cancelled' }));
+    expect(retried.status).toBe(201);
+    expect(await retried.json()).toEqual(expect.objectContaining({ state: 'queued', attempt: 2 }));
+    expect(audits.map((event) => event.action)).toEqual([
+      'developer.module.verification.cancelled',
+      'developer.module.verification.retried',
+    ]);
   });
 });

@@ -28,10 +28,17 @@ import {
   createConfiguredModuleSigningPort,
   resolveModuleSignerConfig,
 } from './module-signer-config';
-import { type DeveloperModuleReleaseRepository, DeveloperModuleReleaseService } from './releases';
+import {
+  DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING,
+  type DeveloperModuleReleaseRepository,
+  DeveloperModuleReleaseService,
+} from './releases';
 import { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzle';
 import { type DeveloperModuleReviewRepository, DeveloperModuleReviewService } from './reviews';
 import { createDrizzleDeveloperModuleReviewRepository } from './reviews.drizzle';
+import { DeveloperModuleTrustGate } from './trust-gate';
+import { DeveloperModuleVerificationService } from './verification';
+import { createDrizzleDeveloperModuleVerificationRepository } from './verification.drizzle';
 
 export { createDeveloperApp, type DeveloperAppDependencies } from './app';
 export * from './artifacts';
@@ -49,6 +56,9 @@ export * from './releases';
 export { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzle';
 export * from './reviews';
 export { createDrizzleDeveloperModuleReviewRepository } from './reviews.drizzle';
+export * from './trust-gate';
+export * from './verification';
+export { createDrizzleDeveloperModuleVerificationRepository } from './verification.drizzle';
 
 async function requestedAccountId(context: Context<AppEnv>, source: 'body' | 'query') {
   if (source === 'query') return context.req.query('account_id');
@@ -128,6 +138,16 @@ export const developerModuleReviewService = new DeveloperModuleReviewService({
   repository: reviewRepository,
   distributionRepository,
 });
+export const developerModuleVerificationRepository =
+  createDrizzleDeveloperModuleVerificationRepository(db);
+export const developerModuleVerificationService = new DeveloperModuleVerificationService({
+  repository: developerModuleVerificationRepository,
+  currentPolicy: DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING,
+});
+export const developerModuleTrustGate = new DeveloperModuleTrustGate({
+  repository: developerModuleVerificationRepository,
+  currentPolicyDigest: DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING.policyDigest,
+});
 
 export const developerApp = createDeveloperApp({
   authenticate: supabaseAuth,
@@ -143,4 +163,5 @@ export const developerApp = createDeveloperApp({
   artifactService: developerModuleArtifactService,
   releaseService,
   reviewService: developerModuleReviewService,
+  verificationService: developerModuleVerificationService,
 });

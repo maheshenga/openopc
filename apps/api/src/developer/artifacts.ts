@@ -378,6 +378,7 @@ function storeUnavailable(): DeveloperModuleArtifactError {
 export class DeveloperModuleArtifactService {
   private readonly now: () => Date;
   private readonly codeModulesEnabled: boolean;
+  private readonly trustInfrastructureReady: () => boolean | Promise<boolean>;
 
   constructor(
     private readonly input: {
@@ -385,10 +386,24 @@ export class DeveloperModuleArtifactService {
       store: DeveloperArtifactStore;
       now?: () => Date;
       codeModulesEnabled?: boolean;
+      trustInfrastructureReady?: () => boolean | Promise<boolean>;
     },
   ) {
     this.now = input.now ?? (() => new Date());
     this.codeModulesEnabled = input.codeModulesEnabled ?? false;
+    this.trustInfrastructureReady = input.trustInfrastructureReady ?? (() => false);
+  }
+
+  private async assertCodeModuleSubmissionEnabled(): Promise<void> {
+    if (!this.codeModulesEnabled) {
+      throw new DeveloperModuleArtifactError('DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED', 503);
+    }
+    try {
+      if (await this.trustInfrastructureReady()) return;
+    } catch {
+      // Readiness failures are intentionally indistinguishable from disabled infrastructure.
+    }
+    throw new DeveloperModuleArtifactError('DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED', 503);
   }
 
   async createDeclarative(input: {
@@ -450,9 +465,7 @@ export class DeveloperModuleArtifactService {
     expectedDigest: `sha256:${string}`;
     actorUserId: string;
   }): Promise<DeveloperModuleArtifactUploadTicket> {
-    if (!this.codeModulesEnabled) {
-      throw new DeveloperModuleArtifactError('DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED', 503);
-    }
+    await this.assertCodeModuleSubmissionEnabled();
     if (
       !PUBLISHER_ID.test(input.publisherId) ||
       !DIGEST.test(input.expectedDigest) ||
@@ -526,9 +539,7 @@ export class DeveloperModuleArtifactService {
     uploadId: string;
     actorUserId: string;
   }): Promise<DeveloperModuleArtifactFinalization> {
-    if (!this.codeModulesEnabled) {
-      throw new DeveloperModuleArtifactError('DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED', 503);
-    }
+    await this.assertCodeModuleSubmissionEnabled();
     const upload = await this.input.repository.getUpload(input.accountId, input.uploadId);
     if (!upload) throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_UPLOAD_NOT_FOUND', 404);
     if (upload.state === 'finalized' && upload.artifact_id) {

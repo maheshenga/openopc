@@ -23,6 +23,10 @@ const RELEASE_A_VALIDATED = '22000000-0000-4000-a000-000000000003';
 const RELEASE_A_PENDING = '22000000-0000-4000-a000-000000000001';
 const RELEASE_A_APPROVED = '22000000-0000-4000-a000-000000000004';
 const RELEASE_A_CHANGES = '22000000-0000-4000-a000-000000000005';
+const RELEASE_TRUST_RUNNING = '22000000-0000-4000-a000-000000000006';
+const RELEASE_TRUST_FAILED = '22000000-0000-4000-a000-000000000007';
+const RELEASE_TRUST_STALE = '22000000-0000-4000-a000-000000000008';
+const RELEASE_TRUST_SIGNABLE = '22000000-0000-4000-a000-000000000009';
 const RELEASE_B_PENDING = '22000000-0000-4000-a000-000000000002';
 const PROJECT_ID = '24000000-0000-4000-a000-000000000001';
 const MODULE_ID = 'openopc.recruiting';
@@ -31,6 +35,12 @@ const MODULE_RELEASE_V2 = '25000000-0000-4000-a000-000000000002';
 
 const RELEASE_CREATED_AT = '2026-07-24T08:00:00.000Z';
 const RELEASE_UPDATED_AT = '2026-07-24T08:05:00.000Z';
+const ARTIFACT_DIGEST = `sha256:${'a'.repeat(64)}`;
+const POLICY_DIGEST = `sha256:${'b'.repeat(64)}`;
+const SCANNER_SET_DIGEST = `sha256:${'c'.repeat(64)}`;
+const SANDBOX_PROFILE_DIGEST = `sha256:${'d'.repeat(64)}`;
+const SBOM_DIGEST = `sha256:${'e'.repeat(64)}`;
+const ATTESTATION_DIGEST = `sha256:${'f'.repeat(64)}`;
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -38,6 +48,7 @@ function assert(condition: unknown, message: string): asserts condition {
 
 function statusFromBrowserError(message: string): number | null {
   if (message.includes('status of 409 (Conflict)')) return 409;
+  if (message.includes('status of 404 (Not Found)')) return 404;
   if (message.includes('status of 400 (Bad Request)')) return 400;
   return null;
 }
@@ -57,7 +68,7 @@ function release(
   releaseId: string,
   accountId: string,
   itemName: string,
-  status: 'validated' | 'review_pending' | 'approved',
+  status: 'validated' | 'review_pending' | 'approved' | 'signed',
   revision: number,
   requirements: string[],
 ): Record<string, unknown> {
@@ -78,12 +89,104 @@ function release(
       review_requirements: requirements,
     },
     manifest_digest: `sha256:${releaseId.slice(-12).padEnd(64, '0')}`,
+    artifact_id: `artifact-${releaseId}`,
+    artifact_digest: ARTIFACT_DIGEST,
+    sbom_digest: SBOM_DIGEST,
+    trust_attestation_digest: ATTESTATION_DIGEST,
+    verification_policy_digest: POLICY_DIGEST,
     review_requirements: requirements,
     status,
     review_revision: revision,
+    signature_algorithm: status === 'signed' ? 'ed25519' : null,
+    signature_key_id: status === 'signed' ? 'openopc-2026' : null,
+    signature: status === 'signed' ? `base64url:${'s'.repeat(86)}` : null,
+    signature_payload_digest: status === 'signed' ? `sha256:${'9'.repeat(64)}` : null,
+    signed_at: status === 'signed' ? RELEASE_UPDATED_AT : null,
+    published_at: null,
+    revoked_at: null,
     created_by: '31000000-0000-4000-a000-000000000001',
     created_at: RELEASE_CREATED_AT,
     updated_at: RELEASE_UPDATED_AT,
+  };
+}
+
+function finding(
+  releaseId: string,
+  severity: 'high' | 'low',
+  index: number,
+): Record<string, unknown> {
+  return {
+    finding_id: `${releaseId}-finding-${index}`,
+    fingerprint: `sha256:${String(index).repeat(64)}`,
+    scanner: severity === 'high' ? 'semgrep' : 'license-policy',
+    rule_id: severity === 'high' ? 'openopc.security.command-injection' : 'license.notice',
+    severity,
+    path: severity === 'high' ? 'agent/main.ts' : 'LICENSE',
+    location: severity === 'high' ? { line: 12 } : null,
+    summary:
+      severity === 'high'
+        ? 'Potential command injection requires remediation.'
+        : 'License notice should be retained.',
+    disposition: severity === 'high' ? 'blocking' : 'observed',
+    created_at: RELEASE_UPDATED_AT,
+  };
+}
+
+function trustAttempt(input: {
+  releaseId: string;
+  attempt?: number;
+  state: 'queued' | 'running' | 'passed' | 'failed';
+  policyDigest?: string;
+  artifactDigest?: string;
+  findings?: Record<string, unknown>[];
+}): Record<string, unknown> {
+  const terminal = input.state === 'passed' || input.state === 'failed';
+  return {
+    run_id: `${input.releaseId}-attempt-${input.attempt ?? 1}`,
+    attempt: input.attempt ?? 1,
+    state: input.state,
+    policy_digest: input.policyDigest ?? POLICY_DIGEST,
+    scanner_set_digest: SCANNER_SET_DIGEST,
+    sandbox_profile_digest: SANDBOX_PROFILE_DIGEST,
+    terminal_reason: input.state === 'failed' ? 'sandbox_failed' : null,
+    sbom_digest: input.state === 'passed' ? SBOM_DIGEST : null,
+    attestation_digest: input.state === 'passed' ? ATTESTATION_DIGEST : null,
+    started_at: input.state === 'queued' ? null : RELEASE_CREATED_AT,
+    finished_at: terminal ? RELEASE_UPDATED_AT : null,
+    created_at: RELEASE_CREATED_AT,
+    findings: input.findings ?? [],
+    attestation:
+      input.state === 'passed'
+        ? {
+            attestation_digest: ATTESTATION_DIGEST,
+            subject_artifact_digest: input.artifactDigest ?? ARTIFACT_DIGEST,
+            predicate_type: 'https://openopc.dev/attestations/developer-module-verification/v1',
+            policy_digest: input.policyDigest ?? POLICY_DIGEST,
+            result: 'passed',
+            sbom_digest: SBOM_DIGEST,
+            issuer: 'openopc-developer-trust-worker',
+            created_at: RELEASE_UPDATED_AT,
+          }
+        : null,
+  };
+}
+
+function trustView(
+  releaseValue: Record<string, unknown>,
+  attempts: Record<string, unknown>[],
+): Record<string, unknown> {
+  return {
+    release_id: releaseValue.release_id,
+    account_id: releaseValue.account_id,
+    artifact: {
+      artifact_id: releaseValue.artifact_id,
+      artifact_digest: releaseValue.artifact_digest,
+      media_type: 'application/vnd.openopc.developer-module.v2+json',
+      size_bytes: 4096,
+      source_provenance: { source: 'browser-acceptance-fixture' },
+      created_at: RELEASE_CREATED_AT,
+    },
+    attempts,
   };
 }
 
@@ -160,6 +263,8 @@ async function installRoutes(page: Page) {
       RELEASE_A_PENDING,
       release(RELEASE_A_PENDING, ACCOUNT_A, 'Recruiting review', 'review_pending', 1, [
         'manifest_review',
+        'source_scan',
+        'sandbox_test',
         'permission_review',
         'human_review',
       ]),
@@ -176,6 +281,38 @@ async function installRoutes(page: Page) {
       release(RELEASE_A_CHANGES, ACCOUNT_A, 'Recruiting changes', 'review_pending', 1, [
         'manifest_review',
         'human_review',
+      ]),
+    ],
+    [
+      RELEASE_TRUST_RUNNING,
+      release(RELEASE_TRUST_RUNNING, ACCOUNT_A, 'Running trust review', 'review_pending', 1, [
+        'manifest_review',
+        'source_scan',
+        'sandbox_test',
+      ]),
+    ],
+    [
+      RELEASE_TRUST_FAILED,
+      release(RELEASE_TRUST_FAILED, ACCOUNT_A, 'Failed trust review', 'review_pending', 1, [
+        'manifest_review',
+        'source_scan',
+        'sandbox_test',
+      ]),
+    ],
+    [
+      RELEASE_TRUST_STALE,
+      release(RELEASE_TRUST_STALE, ACCOUNT_A, 'Stale trust review', 'review_pending', 1, [
+        'manifest_review',
+        'source_scan',
+        'sandbox_test',
+      ]),
+    ],
+    [
+      RELEASE_TRUST_SIGNABLE,
+      release(RELEASE_TRUST_SIGNABLE, ACCOUNT_A, 'Passing trust signature', 'approved', 2, [
+        'manifest_review',
+        'source_scan',
+        'sandbox_test',
       ]),
     ],
     [
@@ -222,12 +359,19 @@ async function installRoutes(page: Page) {
   ];
   const installations = new Map<string, Record<string, unknown>>();
   const installationHistories = new Map<string, Record<string, unknown>[]>();
+  const artifacts = new Map<string, Record<string, unknown>>();
+  const pendingUploads = new Map<string, Record<string, unknown>>();
   let forceModuleConflict = true;
   const requests = {
     validation: 0,
     submissions: 0,
+    uploadTickets: [] as Record<string, unknown>[],
+    uploadPuts: [] as string[],
+    uploadFinalizations: [] as string[],
+    trustReads: [] as string[],
     reviewRequests: [] as Record<string, unknown>[],
     decisions: [] as Record<string, unknown>[],
+    distributions: [] as Record<string, unknown>[],
     accountIds: [] as string[],
     queueCursors: [] as (string | null)[],
     queueStatuses: [] as string[],
@@ -239,9 +383,45 @@ async function installRoutes(page: Page) {
     forceConflict: true,
   };
 
+  const trustFor = (releaseId: string, current: Record<string, unknown>) => {
+    const attempt = (state: 'queued' | 'running' | 'passed' | 'failed', input = {}) =>
+      trustAttempt({
+        releaseId,
+        state,
+        artifactDigest: String(current.artifact_digest),
+        ...input,
+      });
+    if (releaseId === RELEASE_TRUST_RUNNING) {
+      return trustView(current, [attempt('running')]);
+    }
+    if (releaseId === RELEASE_TRUST_FAILED) {
+      return trustView(current, [
+        attempt('failed', { attempt: 1 }),
+        attempt('failed', {
+          attempt: 2,
+          findings: [finding(releaseId, 'high', 1), finding(releaseId, 'low', 2)],
+        }),
+      ]);
+    }
+    if (releaseId === RELEASE_TRUST_STALE) {
+      return trustView(current, [
+        attempt('passed', { policyDigest: `sha256:${'0'.repeat(64)}` }),
+      ]);
+    }
+    if (releaseId.startsWith('23000000-')) {
+      return trustView(current, [attempt('queued')]);
+    }
+    return trustView(current, [attempt('passed')]);
+  };
+
   await page.route('**/*', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname.startsWith('/__developer-upload/') && request.method() === 'PUT') {
+      requests.uploadPuts.push(url.pathname);
+      await route.fulfill({ status: 200, body: '' });
+      return;
+    }
     const projectModulesPrefix = `/projects/${PROJECT_ID}/modules`;
     if (url.pathname.includes(projectModulesPrefix)) {
       assert(
@@ -385,6 +565,90 @@ async function installRoutes(page: Page) {
     const body = request.method() === 'POST' ? jsonBody(route) : {};
     const isAdmin = pathName.includes('/admin/developer/modules/');
 
+    if (
+      pathName.endsWith('/developer/modules/artifacts/declarative') &&
+      request.method() === 'POST'
+    ) {
+      const item = (body.item ?? {}) as Record<string, unknown>;
+      const artifactId = `artifact-declarative-${artifacts.size + 1}`;
+      const artifact = {
+        artifact_id: artifactId,
+        account_id: String(body.account_id ?? ACCOUNT_A),
+        publisher_id: String(item.publisher_id ?? 'openopc-labs'),
+        artifact_digest: ARTIFACT_DIGEST,
+        envelope_digest: `sha256:${'8'.repeat(64)}`,
+        media_type: 'application/vnd.openopc.developer-module.v2+json',
+        size_bytes: JSON.stringify(item).length,
+        item_snapshot: clone(item),
+        source_provenance: null,
+        created_by: '31000000-0000-4000-a000-000000000001',
+        created_at: RELEASE_CREATED_AT,
+      };
+      artifacts.set(artifactId, artifact);
+      await fulfill(route, 201, clone(artifact));
+      return;
+    }
+
+    if (
+      pathName.endsWith('/developer/modules/artifact-uploads') &&
+      request.method() === 'POST'
+    ) {
+      requests.uploadTickets.push(clone(body));
+      const uploadId = `upload-${requests.uploadTickets.length}`;
+      pendingUploads.set(uploadId, clone(body));
+      await fulfill(route, 201, {
+        upload_id: uploadId,
+        state: 'created',
+        expected_digest: body.expected_digest,
+        expected_size: body.expected_size,
+        upload_url: `${baseUrl}/__developer-upload/${uploadId}`,
+        headers: { 'x-openopc-upload-fixture': 'accepted' },
+        expires_at: '2026-07-25T10:00:00.000Z',
+      });
+      return;
+    }
+
+    const uploadMatch = pathName.match(
+      /\/developer\/modules\/artifact-uploads\/([^/]+)(?:\/(finalize))?$/,
+    );
+    if (uploadMatch) {
+      const uploadId = decodeURIComponent(uploadMatch[1]);
+      const pendingUpload = pendingUploads.get(uploadId);
+      if (!pendingUpload) {
+        await fulfill(route, 404, { error: 'DEVELOPER_ARTIFACT_UPLOAD_NOT_FOUND' });
+        return;
+      }
+      if (uploadMatch[2] === 'finalize' && request.method() === 'POST') {
+        requests.uploadFinalizations.push(uploadId);
+        const artifactId = `artifact-package-${uploadId}`;
+        const artifact = {
+          artifact_id: artifactId,
+          account_id: String(body.account_id ?? ACCOUNT_A),
+          publisher_id: String(pendingUpload.publisher_id ?? 'openopc-labs'),
+          artifact_digest: String(pendingUpload.expected_digest),
+          envelope_digest: `sha256:${'7'.repeat(64)}`,
+          media_type: 'application/vnd.openopc.developer-module.v2+json',
+          size_bytes: Number(pendingUpload.expected_size),
+          item_snapshot: {
+            type: 'registry:module',
+            item_name: 'Packaged module',
+            publisher_id: pendingUpload.publisher_id,
+          },
+          source_provenance: { source: 'browser-package-upload' },
+          created_by: '31000000-0000-4000-a000-000000000001',
+          created_at: RELEASE_CREATED_AT,
+        };
+        artifacts.set(artifactId, artifact);
+        await fulfill(route, 200, clone(artifact));
+        return;
+      }
+      if (request.method() === 'DELETE') {
+        pendingUploads.delete(uploadId);
+        await route.fulfill({ status: 204, body: '' });
+        return;
+      }
+    }
+
     if (pathName.endsWith('/developer/modules/validate') && request.method() === 'POST') {
       requests.validation += 1;
       await fulfill(route, 200, { valid: true, issues: [] });
@@ -412,21 +676,31 @@ async function installRoutes(page: Page) {
       requests.submissions += 1;
       const accountId = String(body.account_id ?? '');
       requests.accountIds.push(accountId);
-      const item = (body.item ?? {}) as Record<string, unknown>;
+      const artifact = artifacts.get(String(body.artifact_id ?? ''));
+      if (!artifact || artifact.account_id !== accountId) {
+        await fulfill(route, 404, { error: 'DEVELOPER_ARTIFACT_NOT_FOUND' });
+        return;
+      }
+      const item = (artifact.item_snapshot ?? {}) as Record<string, unknown>;
       const created = release(
-        '23000000-0000-4000-a000-000000000001',
+        `23000000-0000-4000-a000-${String(requests.submissions).padStart(12, '0')}`,
         accountId,
         String(item.item_name ?? 'Submitted module'),
         'validated',
         0,
-        Array.isArray(item.review_requirements)
+        artifact.source_provenance
+          ? ['manifest_review', 'source_scan', 'sandbox_test', 'human_review']
+          : Array.isArray(item.review_requirements)
           ? item.review_requirements.map(String)
           : ['manifest_review', 'human_review'],
       );
       created.manifest = item;
+      created.artifact_id = artifact.artifact_id;
+      created.artifact_digest = artifact.artifact_digest;
+      created.verification_policy_digest = POLICY_DIGEST;
       releases.set(String(created.release_id), created);
       histories.set(String(created.release_id), []);
-      await fulfill(route, 200, { created: true, release: clone(created) });
+      await fulfill(route, 201, { created: true, release: clone(created) });
       return;
     }
 
@@ -435,8 +709,15 @@ async function installRoutes(page: Page) {
       const releaseId = decodeURIComponent(publicMatch[1]);
       const suffix = publicMatch[2] ?? '';
       const current = releases.get(releaseId);
-      if (!current) {
+      const accountId = url.searchParams.get('account_id') ?? String(body.account_id ?? '');
+      if (accountId) requests.accountIds.push(accountId);
+      if (!current || (accountId && current.account_id !== accountId)) {
         await fulfill(route, 404, { error: 'DEVELOPER_RELEASE_NOT_FOUND' });
+        return;
+      }
+      if (suffix === 'trust' && request.method() === 'GET') {
+        requests.trustReads.push(releaseId);
+        await fulfill(route, 200, clone(trustFor(releaseId, current)));
         return;
       }
       if (suffix === 'review-history' && request.method() === 'GET') {
@@ -484,6 +765,65 @@ async function installRoutes(page: Page) {
         releases: clone(pageRows),
         next_cursor: cursor ? null : rows.length > 1 ? 'cursor-1' : null,
       });
+      return;
+    }
+
+    const adminTrustMatch = pathName.match(
+      /\/admin\/developer\/modules\/releases\/([^/]+)\/trust$/,
+    );
+    if (isAdmin && adminTrustMatch && request.method() === 'GET') {
+      const releaseId = decodeURIComponent(adminTrustMatch[1]);
+      const current = releases.get(releaseId);
+      if (!current) {
+        await fulfill(route, 404, { error: 'DEVELOPER_RELEASE_NOT_FOUND' });
+        return;
+      }
+      requests.trustReads.push(releaseId);
+      await fulfill(route, 200, clone(trustFor(releaseId, current)));
+      return;
+    }
+
+    const distributionMatch = pathName.match(
+      /\/admin\/developer\/modules\/releases\/([^/]+)\/(sign|publish)$/,
+    );
+    if (isAdmin && distributionMatch && request.method() === 'POST') {
+      const releaseId = decodeURIComponent(distributionMatch[1]);
+      const action = distributionMatch[2];
+      const current = releases.get(releaseId);
+      if (!current) {
+        await fulfill(route, 404, { error: 'DEVELOPER_RELEASE_NOT_FOUND' });
+        return;
+      }
+      requests.distributions.push({ release_id: releaseId, action, ...clone(body) });
+      const expectedStatus = action === 'sign' ? 'approved' : 'signed';
+      if (
+        current.status !== expectedStatus ||
+        Number(current.review_revision) !== Number(body.expected_revision)
+      ) {
+        await fulfill(route, 409, { error: 'DEVELOPER_DISTRIBUTION_CONFLICT' });
+        return;
+      }
+      const fromStatus = String(current.status);
+      current.status = action === 'sign' ? 'signed' : 'published';
+      current.review_revision = Number(current.review_revision) + 1;
+      if (action === 'sign') {
+        current.signature_algorithm = 'ed25519';
+        current.signature_key_id = 'openopc-2026';
+        current.signature = `base64url:${'s'.repeat(86)}`;
+        current.signature_payload_digest = `sha256:${'9'.repeat(64)}`;
+        current.signed_at = RELEASE_UPDATED_AT;
+      } else {
+        current.published_at = RELEASE_UPDATED_AT;
+      }
+      const nextEvent = event(
+        current,
+        Number(current.review_revision),
+        action,
+        fromStatus,
+        String(current.status),
+      );
+      histories.get(releaseId)?.push(nextEvent);
+      await fulfill(route, 200, { release: clone(current), event: clone(nextEvent) });
       return;
     }
 
@@ -645,13 +985,13 @@ async function main() {
   const browser = await chromium.launch();
   const consoleErrors: string[] = [];
   const expectedDeveloperHttpStatuses: number[] = [];
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.on('response', (response) => {
     const pathname = new URL(response.url()).pathname;
     if (
       (pathname.includes('/developer/modules/') ||
         pathname.includes(`/projects/${PROJECT_ID}/modules`)) &&
-      (response.status() === 400 || response.status() === 409)
+      (response.status() === 400 || response.status() === 404 || response.status() === 409)
     ) {
       expectedDeveloperHttpStatuses.push(response.status());
     }
@@ -680,6 +1020,27 @@ async function main() {
     await search.fill('');
 
     await page.getByTestId('debug-publisher-submit').click();
+    await page.getByRole('tab', { name: /^package upload$/i }).click();
+    await page.locator('#developer-module-package').setInputFiles({
+      name: 'recruiting.openopc',
+      mimeType: 'application/vnd.openopc.developer-module.v2+json',
+      buffer: Buffer.from('{"fixture":"developer-package"}'),
+    });
+    await page.locator('#developer-module-publisher').fill('openopc-labs');
+    await page.getByRole('button', { name: /^upload package$/i }).click();
+    await visibleText(page, 'Packaged module');
+    await visibleText(page, 'Sandbox verification is queued.');
+    assert(requests.uploadTickets.length === 1, 'package upload must request one upload ticket');
+    assert(requests.uploadPuts.length === 1, 'package bytes must be uploaded exactly once');
+    assert(
+      requests.uploadFinalizations.length === 1,
+      'package upload must finalize exactly one server artifact',
+    );
+    assert(requests.submissions === 1, 'package artifact must submit one immutable release');
+    await visibleText(page, 'Immutable attempts');
+    await visibleText(page, 'Attempt 1');
+
+    await page.getByTestId('debug-publisher-submit').click();
     const manifest = page.locator('#developer-module-json');
     await manifest.fill('{');
     await page.getByRole('button', { name: /^validate$/i }).click();
@@ -701,7 +1062,10 @@ async function main() {
     assert(Number(requests.validation) === 1, 'valid manifest should call validation exactly once');
     await page.getByRole('button', { name: /^submit release$/i }).click();
     await visibleText(page, 'Submitted module');
-    assert(requests.submissions === 1, 'confirmed submission should post exactly once');
+    assert(
+      Number(requests.submissions) === 2,
+      'both package and declarative submissions should post once',
+    );
 
     await page.getByTestId('debug-project-modules').click();
     await visibleText(page, 'No modules installed');
@@ -788,7 +1152,66 @@ async function main() {
       `unexpected Developer Center requests: ${requests.unknown.join(', ')}`,
     );
 
-    await page.getByTestId('debug-admin-detail').click();
+    for (const trustCase of [
+      {
+        releaseId: RELEASE_TRUST_RUNNING,
+        title: 'Running trust review',
+        message: 'Sandbox verification is still running.',
+      },
+      {
+        releaseId: RELEASE_TRUST_FAILED,
+        title: 'Failed trust review',
+        message: 'Sandbox verification did not pass.',
+      },
+      {
+        releaseId: RELEASE_TRUST_STALE,
+        title: 'Stale trust review',
+        message: 'Automatic verification uses a stale policy and must be retried.',
+      },
+    ]) {
+      await page.goto(
+        `${baseUrl}/debug/developer-center?mode=admin-detail&releaseId=${trustCase.releaseId}`,
+        { waitUntil: 'domcontentloaded' },
+      );
+      await visibleText(page, trustCase.title);
+      await visibleText(page, trustCase.message);
+      await fillApprovalEvidence(page);
+      assert(
+        await page.getByTestId('approve-decision').isDisabled(),
+        `approval must stay disabled for ${trustCase.title}`,
+      );
+      if (trustCase.releaseId === RELEASE_TRUST_FAILED) {
+        await visibleText(page, 'Immutable attempts');
+        await visibleText(page, 'Attempt 1');
+        await visibleText(page, 'Attempt 2');
+        await visibleText(page, 'High findings');
+        await visibleText(page, 'Low findings');
+      }
+    }
+
+    await page.goto(
+      `${baseUrl}/debug/developer-center?mode=admin-detail&releaseId=${RELEASE_TRUST_SIGNABLE}`,
+      { waitUntil: 'domcontentloaded' },
+    );
+    await visibleText(page, 'Passing trust signature');
+    await visibleText(page, 'Automatic trust checks passed.');
+    const signRelease = page.getByTestId('sign-release');
+    assert(!(await signRelease.isDisabled()), 'passing trust must enable release signing');
+    await signRelease.click();
+    await page.getByLabel('Status: Signed').waitFor({ state: 'visible' });
+    await visibleText(page, 'Signature verified');
+    assert(
+      requests.distributions.some(
+        (request) =>
+          request.release_id === RELEASE_TRUST_SIGNABLE && request.action === 'sign',
+      ),
+      'passing release must call the sign endpoint once',
+    );
+
+    await page.goto(
+      `${baseUrl}/debug/developer-center?mode=admin-detail&releaseId=${RELEASE_A_PENDING}`,
+      { waitUntil: 'domcontentloaded' },
+    );
     await visibleText(page, 'Review decisions');
     const approve = page.getByTestId('approve-decision');
     assert(await approve.isDisabled(), 'Approve must remain disabled with incomplete evidence');
@@ -883,6 +1306,12 @@ async function main() {
     assert(
       (await page.getByTestId('debug-selected-account').textContent()) === ACCOUNT_B,
       'team switch must update the shared account store',
+    );
+    await page.getByTestId('debug-publisher-detail').click();
+    await visibleText(page, 'DEVELOPER_RELEASE_NOT_FOUND');
+    assert(
+      requests.accountIds.includes(ACCOUNT_B),
+      'account substitution must reach the tenant-scoped publisher boundary',
     );
     await page.getByTestId('debug-account-a').click();
     await visibleText(page, 'Recruiting module');

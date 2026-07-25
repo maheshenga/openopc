@@ -37,6 +37,7 @@ import { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzl
 import { type DeveloperModuleReviewRepository, DeveloperModuleReviewService } from './reviews';
 import { createDrizzleDeveloperModuleReviewRepository } from './reviews.drizzle';
 import { DeveloperModuleTrustGate } from './trust-gate';
+import { createDeveloperTrustReadinessClient } from './trust-readiness';
 import { DeveloperModuleVerificationService } from './verification';
 import { createDrizzleDeveloperModuleVerificationRepository } from './verification.drizzle';
 
@@ -57,6 +58,7 @@ export { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzl
 export * from './reviews';
 export { createDrizzleDeveloperModuleReviewRepository } from './reviews.drizzle';
 export * from './trust-gate';
+export * from './trust-readiness';
 export * from './verification';
 export { createDrizzleDeveloperModuleVerificationRepository } from './verification.drizzle';
 
@@ -97,10 +99,15 @@ const artifactStore = (() => {
     return createUnavailableDeveloperArtifactStore();
   }
 })();
+const developerTrustReadiness = createDeveloperTrustReadinessClient({
+  enabled: process.env.DEVELOPER_TRUST_ENABLED === 'true',
+  url: process.env.DEVELOPER_TRUST_READINESS_URL,
+});
 export const developerModuleArtifactService = new DeveloperModuleArtifactService({
   repository: artifactRepository,
   store: artifactStore,
   codeModulesEnabled: process.env.DEVELOPER_CODE_MODULES_ENABLED === 'true',
+  trustInfrastructureReady: () => developerTrustReadiness.isReady(),
 });
 const releaseRepository: DeveloperModuleReleaseRepository =
   createDrizzleDeveloperModuleReleaseRepository(db);

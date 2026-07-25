@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { loadDeveloperTrustWorkerConfig } from './config';
+import * as developerTrustWorkerModule from './index';
 import { createDeveloperTrustWorker } from './index';
 import type { DeveloperTrustPipelineResult, DeveloperTrustWorkItem } from './pipeline';
 
@@ -60,6 +61,135 @@ function pipelineResult(): DeveloperTrustPipelineResult {
 }
 
 describe('developer trust worker assembly', () => {
+  test('reports every component disabled without probing when the worker is disabled', async () => {
+    const createReadiness = (
+      developerTrustWorkerModule as unknown as {
+        createDeveloperTrustReadiness?: (input: unknown) => { check(): Promise<unknown> };
+      }
+    ).createDeveloperTrustReadiness;
+    expect(createReadiness).toBeFunction();
+    if (!createReadiness) return;
+    let probes = 0;
+
+    const readiness = createReadiness({
+      enabled: false,
+      artifactStore: async () => {
+        probes += 1;
+      },
+      policy: async () => {
+        probes += 1;
+      },
+      scanners: {
+        gitleaks: async () => {
+          probes += 1;
+          return 'ready';
+        },
+      },
+      sandbox: async () => {
+        probes += 1;
+      },
+      databaseClaims: async () => {
+        probes += 1;
+      },
+    });
+
+    await expect(readiness.check()).resolves.toEqual({
+      enabled: false,
+      ready: false,
+      artifactStore: 'disabled',
+      policy: 'disabled',
+      scanners: { gitleaks: 'disabled' },
+      sandbox: 'disabled',
+      databaseClaims: 'disabled',
+    });
+    expect(probes).toBe(0);
+  });
+
+  test('reports component failures separately and only becomes ready when all probes pass', async () => {
+    const createReadiness = (
+      developerTrustWorkerModule as unknown as {
+        createDeveloperTrustReadiness?: (input: unknown) => { check(): Promise<unknown> };
+      }
+    ).createDeveloperTrustReadiness;
+    expect(createReadiness).toBeFunction();
+    if (!createReadiness) return;
+
+    const degraded = createReadiness({
+      enabled: true,
+      artifactStore: async () => undefined,
+      policy: async () => {
+        throw new Error('invalid policy fixture');
+      },
+      scanners: {
+        gitleaks: async () => 'ready',
+        syft: async () => 'identity_mismatch',
+        semgrep: async () => {
+          throw new Error('scanner unavailable fixture');
+        },
+      },
+      sandbox: async () => {
+        throw new Error('sandbox unavailable fixture');
+      },
+      databaseClaims: async () => undefined,
+    });
+
+    await expect(degraded.check()).resolves.toEqual({
+      enabled: true,
+      ready: false,
+      artifactStore: 'ready',
+      policy: 'invalid',
+      scanners: {
+        gitleaks: 'ready',
+        syft: 'identity_mismatch',
+        semgrep: 'unavailable',
+      },
+      sandbox: 'unavailable',
+      databaseClaims: 'ready',
+    });
+
+    const ready = createReadiness({
+      enabled: true,
+      artifactStore: async () => undefined,
+      policy: async () => undefined,
+      scanners: {
+        gitleaks: async () => 'ready',
+        syft: async () => 'ready',
+      },
+      sandbox: async () => undefined,
+      databaseClaims: async () => undefined,
+    });
+    await expect(ready.check()).resolves.toEqual(
+      expect.objectContaining({ enabled: true, ready: true }),
+    );
+  });
+
+  test('serves liveness separately from internal readiness without exposing other routes', async () => {
+    const createHealthHandler = (
+      developerTrustWorkerModule as unknown as {
+        createDeveloperTrustHealthHandler?: (input: {
+          check(): Promise<Record<string, unknown>>;
+        }) => (request: Request) => Promise<Response>;
+      }
+    ).createDeveloperTrustHealthHandler;
+    expect(createHealthHandler).toBeFunction();
+    if (!createHealthHandler) return;
+    const handler = createHealthHandler({
+      check: async () => ({ enabled: true, ready: false, artifactStore: 'unavailable' }),
+    });
+
+    const health = await handler(new Request('http://worker.internal/healthz'));
+    const readiness = await handler(new Request('http://worker.internal/readyz'));
+    const hidden = await handler(new Request('http://worker.internal/scanners'));
+
+    expect(health.status).toBe(200);
+    expect(await health.json()).toEqual({ status: 'ok' });
+    expect(readiness.status).toBe(503);
+    expect(await readiness.json()).toEqual(
+      expect.objectContaining({ enabled: true, ready: false, artifactStore: 'unavailable' }),
+    );
+    expect(hidden.status).toBe(404);
+  });
+
   test('claims, heartbeats, runs, and finalizes through injected control ports', async () => {
     const item = workItem();
     const finalized: unknown[] = [];

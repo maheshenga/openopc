@@ -27,7 +27,57 @@ services:
     env_file:
       - path: apps/api/.env
         required: false
+    environment:
+      DEVELOPER_CODE_MODULES_ENABLED: ${DEVELOPER_CODE_MODULES_ENABLED:-false}
+      DEVELOPER_TRUST_ENABLED: ${DEVELOPER_TRUST_ENABLED:-false}
+      DEVELOPER_TRUST_READINESS_URL: ${DEVELOPER_TRUST_READINESS_URL:-http://developer-trust-worker:8080/readyz}
+    networks:
+      - default
+      - developer-trust-sandbox-control
     profiles: [backend, all]
+    restart: unless-stopped
+
+  developer-trust-worker:
+    build:
+      context: ../..
+      dockerfile: apps/developer-trust-worker/Dockerfile
+    environment:
+      DEVELOPER_TRUST_ENABLED: ${DEVELOPER_TRUST_ENABLED:-false}
+      DEVELOPER_TRUST_PORT: "8080"
+    profiles: [developer-trust]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - >-
+          fetch('http://127.0.0.1:8080/healthz')
+          .then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+          pids: 256
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    networks:
+      - developer-trust-artifacts
+      - developer-trust-db
+      - developer-trust-sandbox-control
     restart: unless-stopped
 
   studio-minio:
@@ -102,3 +152,11 @@ services:
         condition: service_completed_successfully
     profiles: [studio, all]
     restart: on-failure
+
+networks:
+  developer-trust-artifacts:
+    internal: true
+  developer-trust-db:
+    internal: true
+  developer-trust-sandbox-control:
+    internal: true

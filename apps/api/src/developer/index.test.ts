@@ -82,6 +82,7 @@ const authenticatedApp = (
     repository: artifacts,
     store: createMemoryDeveloperArtifactStore().store,
     codeModulesEnabled: true,
+    trustInfrastructureReady: async () => true,
   });
   return createDeveloperApp({
     authenticate: async (context, next) => {
@@ -596,6 +597,7 @@ describe('developer module artifact API', () => {
       repository: artifacts,
       store: memoryStore.store,
       codeModulesEnabled: true,
+      trustInfrastructureReady: async () => true,
     });
     const actions: string[] = [];
     const app = authenticatedApp({

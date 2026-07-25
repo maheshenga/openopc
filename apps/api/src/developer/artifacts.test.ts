@@ -87,6 +87,7 @@ function fixture() {
     store: memoryStore.store,
     now: () => NOW,
     codeModulesEnabled: true,
+    trustInfrastructureReady: async () => true,
   });
   return { repository, memoryStore, service };
 }
@@ -244,6 +245,7 @@ describe('developer module artifact service', () => {
       },
       now: () => NOW,
       codeModulesEnabled: true,
+      trustInfrastructureReady: async () => true,
     });
     const upload = await service.createUpload({
       accountId: ACCOUNT_ID,
@@ -291,6 +293,7 @@ describe('developer module artifact service', () => {
       },
       now: () => NOW,
       codeModulesEnabled: true,
+      trustInfrastructureReady: async () => true,
     });
     const upload = await service.createUpload({
       accountId: ACCOUNT_ID,
@@ -322,6 +325,7 @@ describe('developer module artifact service', () => {
       store: memoryStore.store,
       now: () => currentTime,
       codeModulesEnabled: true,
+      trustInfrastructureReady: async () => true,
     });
     const bytes = agentPackageBytes();
     const upload = await service.createUpload({
@@ -357,6 +361,7 @@ describe('developer module artifact service', () => {
       store: createUnavailableDeveloperArtifactStore(),
       now: () => NOW,
       codeModulesEnabled: true,
+      trustInfrastructureReady: async () => true,
     });
 
     await expect(
@@ -408,6 +413,7 @@ describe('developer module artifact service', () => {
       store: memoryStore.store,
       now: () => NOW,
       codeModulesEnabled: true,
+      trustInfrastructureReady: async () => true,
     });
     const upload = await enabled.createUpload({
       accountId: ACCOUNT_ID,
@@ -427,6 +433,37 @@ describe('developer module artifact service', () => {
       expect.objectContaining({ code: 'DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED', status: 503 }),
     );
     expect(memoryStore.hasUpload(upload.upload_url)).toBe(true);
+  });
+
+  test('requires a ready trust worker even when code-bearing modules are enabled', async () => {
+    const repository = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
+    const memoryStore = createMemoryDeveloperArtifactStore();
+    let trustWorkerReady = false;
+    const service = new DeveloperModuleArtifactService({
+      repository,
+      store: memoryStore.store,
+      now: () => NOW,
+      codeModulesEnabled: true,
+      trustInfrastructureReady: async () => trustWorkerReady,
+    });
+    const bytes = agentPackageBytes();
+    const createUpload = () =>
+      service.createUpload({
+        accountId: ACCOUNT_ID,
+        publisherId: 'acme',
+        expectedSize: bytes.byteLength,
+        expectedDigest: digest(bytes),
+        actorUserId: USER_ID,
+      });
+
+    await expect(createUpload()).rejects.toEqual(
+      expect.objectContaining({ code: 'DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED', status: 503 }),
+    );
+
+    trustWorkerReady = true;
+    await expect(createUpload()).resolves.toEqual(
+      expect.objectContaining({ state: 'created', expected_digest: digest(bytes) }),
+    );
   });
 
   test('claims a publisher before persistence and rejects cross-account namespace reuse', async () => {

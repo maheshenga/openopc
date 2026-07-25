@@ -5,12 +5,14 @@ import {
   type DeveloperModuleRelease,
   type DeveloperModuleReleaseStatus,
   type DeveloperModuleReviewEvent,
+  type DeveloperModuleTrustView,
   type ProjectModuleInstallation,
   type ProjectModuleInstallationEvent,
   type ProjectModuleInstallationTransition,
   createDeclarativeDeveloperModuleArtifact,
   getDeveloperModuleRelease,
   getDeveloperModuleReviewHistory,
+  getDeveloperModuleTrust,
   listDeveloperModuleReleases,
   requestDeveloperModuleReview,
   submitDeveloperModuleRelease,
@@ -28,7 +30,10 @@ import {
   adminDeveloperReviewErrorCode,
   decideAdminDeveloperReview,
   getAdminDeveloperReview,
+  getAdminDeveloperModuleTrust,
   listAdminDeveloperReviews,
+  publishAdminDeveloperModuleRelease,
+  signAdminDeveloperModuleRelease,
 } from '@/features/developer-center/admin/client';
 import {
   buildAdminDecisionBody,
@@ -43,6 +48,11 @@ import {
   type AdminReviewQueueState,
 } from '@/features/developer-center/admin/review-queue-page';
 import {
+  type DeveloperModuleArtifactUploadState,
+  createDeveloperModuleArtifactUploadController,
+  defaultDeveloperModuleArtifactUploadDependencies,
+} from '@/features/developer-center/publisher/artifact-upload-controller';
+import {
   type ReleaseStatusFilter,
   developerCenterErrorCode,
   filterRecentReleases,
@@ -56,7 +66,10 @@ import {
   type PublisherReleaseListViewProps,
 } from '@/features/developer-center/publisher/release-list-page';
 import { createDeveloperModuleSubmitController } from '@/features/developer-center/publisher/submit-controller';
-import { DeveloperModuleSubmitView } from '@/features/developer-center/publisher/submit-page';
+import {
+  type DeveloperModuleSubmitMode,
+  DeveloperModuleSubmitView,
+} from '@/features/developer-center/publisher/submit-page';
 import {
   installPublishedProjectModule,
   listInstalledProjectModules,
@@ -134,6 +147,25 @@ function PublisherSubmitHarness({
   const [pending, setPending] = useState(false);
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [submitMode, setSubmitMode] = useState<DeveloperModuleSubmitMode>('declarative');
+  const [packageFile, setPackageFile] = useState<File | null>(null);
+  const [packagePublisherId, setPackagePublisherId] = useState('');
+  const [packageState, setPackageState] = useState<DeveloperModuleArtifactUploadState>({
+    stage: 'idle',
+    fileName: null,
+    fileSize: 0,
+    progress: 0,
+    digest: null,
+    uploadId: null,
+    artifact: null,
+    submission: null,
+  });
+  const [packageController] = useState(() =>
+    createDeveloperModuleArtifactUploadController(
+      defaultDeveloperModuleArtifactUploadDependencies,
+      setPackageState,
+    ),
+  );
 
   const updateText = (text: string) => {
     setError(null);
@@ -163,9 +195,34 @@ function PublisherSubmitHarness({
       setPending(false);
     }
   };
+  const selectPackage = (file: File) => {
+    setError(null);
+    if (packageState.stage !== 'idle' && packageState.stage !== 'submitted') {
+      try {
+        packageController.reset();
+      } catch {
+        return;
+      }
+    }
+    setPackageFile(file);
+  };
+  const submitPackage = async () => {
+    if (!packageFile || !packagePublisherId.trim()) return;
+    setError(null);
+    try {
+      const result = await packageController.start(packageFile, {
+        accountId,
+        publisherId: packagePublisherId.trim(),
+      });
+      if (result) onSubmitted(result.release.release_id);
+    } catch (reason) {
+      setError(developerCenterErrorCode(reason));
+    }
+  };
 
   return (
     <DeveloperModuleSubmitView
+      mode={submitMode}
       stage={state.stage}
       text={state.text}
       item={state.parsedItem}
@@ -175,9 +232,17 @@ function PublisherSubmitHarness({
       pending={pending}
       validating={validating}
       errorCode={error}
+      packageFileName={packageFile?.name ?? null}
+      packagePublisherId={packagePublisherId}
+      packageState={packageState}
+      onModeChange={setSubmitMode}
       onTextChange={updateText}
       onValidate={validate}
       onConfirm={confirm}
+      onPackagePublisherIdChange={setPackagePublisherId}
+      onPackageFile={selectPackage}
+      onStartPackage={submitPackage}
+      onCancelPackage={() => packageController.cancel()}
     />
   );
 }
@@ -312,7 +377,9 @@ function DebugDeveloperCenterHarness() {
   const [publisherReleases, setPublisherReleases] = useState<DeveloperModuleRelease[]>([]);
   const [publisherDetail, setPublisherDetail] = useState<DeveloperModuleRelease | null>(null);
   const [publisherHistory, setPublisherHistory] = useState<DeveloperModuleReviewEvent[]>([]);
+  const [publisherTrust, setPublisherTrust] = useState<DeveloperModuleTrustView | null>(null);
   const [adminDetail, setAdminDetail] = useState<AdminDeveloperReviewDetail | null>(null);
+  const [adminTrust, setAdminTrust] = useState<DeveloperModuleTrustView | null>(null);
   const [adminReleases, setAdminReleases] = useState<DeveloperModuleRelease[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [publisherSearch, setPublisherSearch] = useState('');
@@ -327,6 +394,7 @@ function DebugDeveloperCenterHarness() {
   const [adminReason, setAdminReason] = useState('');
   const [adminEvidence, setAdminEvidence] = useState<DeveloperModuleHumanReviewEvidence[]>([]);
   const [adminPending, setAdminPending] = useState(false);
+  const [distributionPending, setDistributionPending] = useState(false);
   const [revokeOpen, setRevokeOpen] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
@@ -349,13 +417,15 @@ function DebugDeveloperCenterHarness() {
           });
           if (!cancelled) setPublisherReleases(result.releases);
         } else if (mode === 'publisher-detail') {
-          const [release, history] = await Promise.all([
+          const [release, history, trust] = await Promise.all([
             getDeveloperModuleRelease(detailId, { accountId }),
             getDeveloperModuleReviewHistory(detailId, { accountId }),
+            getDeveloperModuleTrust(detailId, { accountId }),
           ]);
           if (!cancelled) {
             setPublisherDetail(release);
             setPublisherHistory(history.history);
+            setPublisherTrust(trust);
           }
         } else if (mode === 'admin-queue') {
           const result = await listAdminDeveloperReviews({ status, cursor });
@@ -364,8 +434,14 @@ function DebugDeveloperCenterHarness() {
             setNextCursor(result.next_cursor);
           }
         } else if (mode === 'admin-detail') {
-          const result = await getAdminDeveloperReview(detailId);
-          if (!cancelled) setAdminDetail(result);
+          const [result, trust] = await Promise.all([
+            getAdminDeveloperReview(detailId),
+            getAdminDeveloperModuleTrust(detailId),
+          ]);
+          if (!cancelled) {
+            setAdminDetail(result);
+            setAdminTrust(trust);
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -457,6 +533,30 @@ function DebugDeveloperCenterHarness() {
       setAdminConflict(code === 'DEVELOPER_REVIEW_CONFLICT');
     } finally {
       setAdminPending(false);
+    }
+  };
+
+  const distribute = async (action: 'sign' | 'publish') => {
+    if (!adminDetail || distributionPending) return;
+    setDistributionPending(true);
+    setRequestError(null);
+    try {
+      if (action === 'sign') {
+        await signAdminDeveloperModuleRelease(adminDetail.release.release_id, {
+          expected_status: 'approved',
+          expected_revision: adminDetail.release.review_revision,
+        });
+      } else {
+        await publishAdminDeveloperModuleRelease(adminDetail.release.release_id, {
+          expected_status: 'signed',
+          expected_revision: adminDetail.release.review_revision,
+        });
+      }
+      setRefreshNonce((value) => value + 1);
+    } catch (error) {
+      setRequestError(adminDeveloperReviewErrorCode(error));
+    } finally {
+      setDistributionPending(false);
     }
   };
 
@@ -618,6 +718,7 @@ function DebugDeveloperCenterHarness() {
           state={publisherDetailState}
           release={publisherDetail}
           history={publisherHistory}
+          trust={publisherTrust}
           canWrite={canWrite}
           pending={publisherPending}
           errorCode={requestError}
@@ -651,9 +752,11 @@ function DebugDeveloperCenterHarness() {
           state={adminDetailState}
           release={adminDetail?.release ?? null}
           history={adminDetail?.history ?? []}
+          trust={adminTrust}
           evidence={adminEvidence}
           reason={adminReason}
           pending={adminPending}
+          distributionPending={distributionPending}
           conflict={adminConflict}
           revokeOpen={revokeOpen}
           errorCode={requestError}
@@ -666,6 +769,7 @@ function DebugDeveloperCenterHarness() {
             )
           }
           onDecision={(decision, input) => void decide(decision, input)}
+          onDistributionAction={(action) => void distribute(action)}
           onReload={async () => {
             setAdminConflict(false);
             setRequestError(null);

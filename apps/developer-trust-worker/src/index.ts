@@ -4,6 +4,15 @@ import type {
   DeveloperTrustWorkItem,
 } from './pipeline';
 
+export { createDeveloperTrustHealthHandler } from './health';
+export { startDeveloperTrustWorkerServer } from './main';
+export {
+  createDeveloperTrustReadiness,
+  type DeveloperTrustReadiness,
+  type DeveloperTrustReadinessInput,
+  type DeveloperTrustScannerReadiness,
+} from './readiness';
+
 export interface DeveloperTrustWorkerControlPort {
   claim(input: { workerId: string; leaseMs: number }): Promise<DeveloperTrustWorkItem | null>;
   heartbeat(input: {

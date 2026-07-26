@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createPinnedScannerCommandRunner, executePinnedScannerProcess } from './process-adapter';
+import { DEVELOPER_TRUST_SCANNER_FAULT } from './types';
 
 const digest = (character: string) => `sha256:${character.repeat(64)}` as const;
 const originalSecret = process.env.TEST_SCANNER_SECRET;
@@ -89,6 +90,45 @@ describe('pinned scanner process adapter', () => {
     });
     expect(existsSync(workspace)).toBe(false);
   });
+
+  test('acceptance fault starts and terminates the pinned scanner process', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'openopc-scanner-source-'));
+    try {
+      const executable = Bun.which('node') ?? process.execPath;
+      const executableDigest = `sha256:${createHash('sha256')
+        .update(await readFile(executable))
+        .digest('hex')}` as const;
+      const runner = createPinnedScannerCommandRunner();
+
+      await expect(
+        runner.run({
+          scanner: {
+            name: 'semgrep',
+            executable,
+            imageDigest: executableDigest,
+            version: spawnSync(executable, ['--version'], { encoding: 'utf8' }).stdout.trim(),
+            ruleDigest: digest('b'),
+            timeoutMs: 250,
+            maxOutputBytes: 4_096,
+          },
+          args: ['-e', 'setInterval(() => undefined, 1_000)'],
+          scanInput: {
+            workspacePath: workspace,
+            moduleId: 'acme.crash-probe',
+            moduleVersion: '1.0.0',
+            artifactDigest: digest('a'),
+            verificationProfile: 'desktop-package',
+            lockGraph: null,
+            dependencyLicenses: [],
+            [DEVELOPER_TRUST_SCANNER_FAULT]: 'terminate-process',
+          },
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toEqual({ kind: 'inconclusive', reason: 'process_terminated' });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  }, 45_000);
 
   test('fails closed for identity mismatch, timeout, output overflow, and cancellation', async () => {
     const identityMismatch = await executePinnedScannerProcess({

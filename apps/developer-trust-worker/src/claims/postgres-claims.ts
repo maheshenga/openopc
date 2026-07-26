@@ -153,13 +153,17 @@ export function createPostgresVerificationClaims(input: {
       validateFinalizeRequest(request);
       const leaseGeneration = request.leaseGeneration as number;
       await input.sql.begin(async (transaction) => {
-        const rows = await transaction.unsafe<Array<{ account_id: string }>>(
+        const rows = await transaction.unsafe<
+          Array<{ account_id: string; artifact_id: string; release_id: string }>
+        >(
           `UPDATE ${table('developer_module_verification_runs')}
            SET state = $6,
                terminal_reason = $7,
                sbom_digest = $8,
-               attestation_digest = $9,
-               resource_summary = $10::jsonb,
+               sbom_storage_key = $9,
+               sbom_size_bytes = $10,
+               attestation_digest = $11,
+               resource_summary = $12::jsonb,
                lease_owner = NULL,
                lease_token_hash = NULL,
                lease_expires_at = NULL,
@@ -176,7 +180,9 @@ export function createPostgresVerificationClaims(input: {
                SELECT artifact_id FROM ${table('developer_module_artifacts')}
                WHERE artifact_digest = $5
              )
-           RETURNING account_id`,
+             AND policy_digest = $13
+             AND scanner_set_digest = $14
+           RETURNING account_id, artifact_id, release_id`,
           [
             request.runId,
             request.workerId,
@@ -186,12 +192,17 @@ export function createPostgresVerificationClaims(input: {
             request.state,
             request.terminalReason,
             request.sbomDigest,
+            request.sbomStorageKey,
+            request.sbomSizeBytes,
             request.attestation.attestationDigest,
             JSON.stringify(request.resourceSummary),
+            request.policyDigest,
+            request.scannerSetDigest,
           ],
         );
-        const accountId = rows[0]?.account_id;
-        if (!accountId) staleLease();
+        const finalizedRun = rows[0];
+        if (!finalizedRun) staleLease();
+        const accountId = finalizedRun.account_id;
         for (const finding of request.findings) {
           await transaction.unsafe(
             `INSERT INTO ${table('developer_module_verification_findings')}
@@ -233,6 +244,27 @@ export function createPostgresVerificationClaims(input: {
             request.attestation.issuer,
           ],
         );
+        if (request.state === 'passed') {
+          const releases = await transaction.unsafe<Array<{ release_id: string }>>(
+            `UPDATE ${table('developer_module_releases')}
+             SET sbom_digest = $1,
+                 trust_attestation_digest = $2,
+                 verification_policy_digest = $3
+             WHERE release_id = $4
+               AND account_id = $5
+               AND artifact_id = $6
+             RETURNING release_id`,
+            [
+              request.sbomDigest,
+              request.attestation.attestationDigest,
+              request.policyDigest,
+              finalizedRun.release_id,
+              finalizedRun.account_id,
+              finalizedRun.artifact_id,
+            ],
+          );
+          if (releases.length !== 1) fail('DEVELOPER_TRUST_RELEASE_BINDING_FAILED');
+        }
       });
     },
   };
@@ -338,6 +370,11 @@ function validateFinalizeRequest(
     !DIGEST.test(input.policyDigest) ||
     !DIGEST.test(input.scannerSetDigest) ||
     !DIGEST.test(input.sbomDigest) ||
+    !safeStorageKey(input.sbomStorageKey) ||
+    !Number.isSafeInteger(input.sbomSizeBytes) ||
+    input.sbomSizeBytes < 1 ||
+    input.sbomSizeBytes > 16 * 1024 * 1024 ||
+    !DIGEST.test(input.attestation.attestationDigest) ||
     input.attestation.subjectArtifactDigest !== input.artifactDigest ||
     input.attestation.policyDigest !== input.policyDigest ||
     input.attestation.sbomDigest !== input.sbomDigest ||
@@ -345,6 +382,24 @@ function validateFinalizeRequest(
   ) {
     fail('POSTGRES_CLAIMS_FINALIZE_INVALID');
   }
+}
+
+function safeStorageKey(value: string): boolean {
+  return (
+    Buffer.byteLength(value, 'utf8') >= 1 &&
+    Buffer.byteLength(value, 'utf8') <= 2_048 &&
+    !value.startsWith('/') &&
+    !value.includes('\\') &&
+    !hasControlCharacter(value) &&
+    !value.split('/').includes('..')
+  );
+}
+
+function hasControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint < 0x20 || codePoint === 0x7f;
+  });
 }
 
 function sha256(value: string): `sha256:${string}` {

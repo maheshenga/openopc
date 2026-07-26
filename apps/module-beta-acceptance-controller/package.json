@@ -1,0 +1,22 @@
+{
+  "name": "@openopc/module-beta-acceptance-controller",
+  "version": "1.0.0",
+  "description": "Private staging administration plane for OpenOPC module beta evidence.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.883.0",
+    "@aws-sdk/s3-request-presigner": "^3.883.0",
+    "@openopc/module-runtime-contracts": "workspace:*",
+    "postgres": "^3.4.7"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.12",
+    "typescript": "^5.4.0"
+  }
+}

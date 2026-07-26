@@ -57,6 +57,10 @@ import { startTmpReaper, stopTmpReaper } from './snapshots/tmp-reaper';
 import { startLeaderElection, stopLeaderElection, isLeader, runsSingletonWorkers } from './shared/leader-election';
 import { marketplaceApp } from './marketplace';
 import { developerApp } from './developer';
+import {
+  startDeveloperArtifactRetentionWorker,
+  stopDeveloperArtifactRetentionWorker,
+} from './developer/artifact-retention-bootstrap';
 import { oauthApp } from './oauth';
 import {
   projectWebhooksApp,
@@ -987,10 +991,14 @@ async function startSingletonWorkers() {
   const { startGrantExpirySweeper } = await import('./iam/expiry-sweeper');
   startGrantExpirySweeper();
   startDefaultIntelligenceWorkflowRuntime();
+  startDeveloperArtifactRetentionWorker();
 }
 async function stopSingletonWorkers() {
   if (!singletonWorkersRunning) return;
   singletonWorkersRunning = false;
+  // Await retention stop so in-flight S3 deletions finish their consistency
+  // markers before this replica releases the leader lease.
+  await stopDeveloperArtifactRetentionWorker();
   await stopDefaultIntelligenceWorkflowRuntime();
   stopProjectTriggerScheduler();
   stopProjectMaintenance();

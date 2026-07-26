@@ -87,6 +87,7 @@ jobs:
         run: cd tests && bun install --frozen-lockfile
       - name: Install workspace dependencies
         run: corepack enable pnpm && pnpm install --frozen-lockfile
+
       # ── Opt-in FAST-TRACK ──────────────────────────────────────────────────
       # Set repo variable RELEASE_FAST_TRACK=true to skip the slow live lanes
       # (Playwright/browser e2e, the ~278-flow API suite, migration+infra,
@@ -192,3 +193,78 @@ jobs:
           path: |
             tests/test-results/**
           retention-days: 90
+
+  trust-staging-acceptance:
+    name: protected trust staging acceptance
+    needs: full-suite
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref_protected == true &&
+      vars.QA_RUN_MODULE_BETA_GATES == 'true'
+    environment: staging-trust-acceptance
+    runs-on: [self-hosted, linux, x64, staging-trust]
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Trust pipeline staging acceptance
+        env:
+          MODULE_BETA_API_URL: ${{ vars.QA_MODULE_BETA_API_URL || vars.QA_API_BASE_URL || vars.QA_TARGET_URL }}
+          MODULE_BETA_WEB_URL: ${{ vars.QA_MODULE_BETA_WEB_URL || vars.QA_WEB_BASE_URL || vars.E2E_BASE_URL }}
+          MODULE_BETA_RUNNER_URL: ${{ vars.QA_MODULE_BETA_RUNNER_URL || vars.QA_MODULE_RUNNER_URL }}
+          MODULE_BETA_TRUST_ACCEPTANCE_URL: ${{ vars.QA_MODULE_BETA_TRUST_ACCEPTANCE_URL }}
+          MODULE_BETA_TRUST_WORKER_URL: ${{ vars.QA_MODULE_BETA_TRUST_WORKER_URL }}
+          MODULE_BETA_PRIMARY_TOKEN: ${{ secrets.QA_MODULE_BETA_PRIMARY_TOKEN }}
+          MODULE_BETA_PRIMARY_ACCOUNT_ID: ${{ vars.QA_MODULE_BETA_PRIMARY_ACCOUNT_ID }}
+          MODULE_BETA_SECONDARY_TOKEN: ${{ secrets.QA_MODULE_BETA_SECONDARY_TOKEN }}
+          MODULE_BETA_SECONDARY_ACCOUNT_ID: ${{ vars.QA_MODULE_BETA_SECONDARY_ACCOUNT_ID }}
+          MODULE_BETA_PUBLISHER_ID: ${{ vars.QA_MODULE_BETA_PUBLISHER_ID }}
+          MODULE_BETA_TRUST_CONTROL_TOKEN: ${{ secrets.QA_MODULE_BETA_TRUST_CONTROL_TOKEN }}
+          MODULE_BETA_TRUST_CONTROL_IDENTITY: ${{ vars.QA_MODULE_BETA_TRUST_CONTROL_IDENTITY }}
+          MODULE_BETA_DEPENDENCY_IDENTITIES_JSON: ${{ vars.QA_MODULE_BETA_DEPENDENCY_IDENTITIES_JSON }}
+          MODULE_BETA_EXPECTED_FINDINGS_JSON: ${{ vars.QA_MODULE_BETA_EXPECTED_FINDINGS_JSON }}
+          MODULE_BETA_MINIO_HOSTS_JSON: ${{ vars.QA_MODULE_BETA_MINIO_HOSTS_JSON }}
+          MODULE_BETA_ATTESTATION_KEYRING_JSON: ${{ vars.QA_MODULE_BETA_ATTESTATION_KEYRING_JSON }}
+          MODULE_BETA_EVIDENCE_PRIVATE_KEY_DER_B64: ${{ secrets.QA_MODULE_BETA_EVIDENCE_PRIVATE_KEY_DER_B64 }}
+          MODULE_BETA_EVIDENCE_PUBLIC_KEY_DER_B64: ${{ vars.QA_MODULE_BETA_EVIDENCE_PUBLIC_KEY_DER_B64 }}
+          MODULE_BETA_EVIDENCE_KEY_ID: ${{ vars.QA_MODULE_BETA_EVIDENCE_KEY_ID }}
+          MODULE_BETA_COMMIT: ${{ github.sha }}
+          MODULE_BETA_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p tests/module-beta/diagnostics
+          bun tests/module-beta/trust/run.ts \
+            > >(tee tests/module-beta/diagnostics/stdout.log) \
+            2> >(tee tests/module-beta/diagnostics/stderr.log >&2)
+
+      - name: Validate authoritative trust evidence ledger
+        if: success()
+        run: bun scripts/release/module-beta-targets.ts --check-fixture tests/module-beta/evidence.json
+
+      - name: Upload authoritative signed trust evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-beta-trust-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tests/module-beta/out/G2-artifacts.json
+            tests/module-beta/out/G3-trust.json
+            tests/module-beta/out/G4-malicious.json
+            tests/module-beta/evidence.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload failed trust acceptance diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-beta-trust-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tests/module-beta/diagnostics/**
+          if-no-files-found: error
+          retention-days: 30

@@ -207,7 +207,7 @@ export function validateEvidenceLedger(value: unknown): ModuleBetaEvidenceLedger
     throw new Error('EVIDENCE_RECORD_INVALID');
   }
 
-  const ledger = value as ModuleBetaEvidenceLedger;
+  const ledger = value as unknown as ModuleBetaEvidenceLedger;
   const expectedGates = Array.from({ length: 12 }, (_, index) => `G${index + 1}`);
   const actualGates = new Set(ledger.records.map((record) => record.gate));
   if (

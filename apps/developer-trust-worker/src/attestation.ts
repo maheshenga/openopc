@@ -1,8 +1,22 @@
-import { type KeyObject, createHash, createPrivateKey, sign as cryptoSign } from 'node:crypto';
+import {
+  type KeyObject,
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  sign as cryptoSign,
+  verify as cryptoVerify,
+} from 'node:crypto';
+import type { ModuleBetaTrustScenario } from '@openopc/module-runtime-contracts';
 
 export const IN_TOTO_PAYLOAD_TYPE = 'application/vnd.in-toto+json' as const;
 export const OPENOPC_TRUST_PREDICATE_TYPE =
   'https://openopc.dev/attestations/developer-module-verification/v1' as const;
+
+export interface DeveloperTrustAcceptanceContextV1 {
+  acceptanceRunId: string;
+  registrationId: string;
+  scenario: ModuleBetaTrustScenario;
+}
 
 export interface OpenOpcDeveloperTrustPredicateV1 {
   artifactDigest: `sha256:${string}`;
@@ -13,9 +27,12 @@ export interface OpenOpcDeveloperTrustPredicateV1 {
   runId: string;
   attempt: number;
   result: 'passed' | 'failed' | 'inconclusive' | 'cancelled';
+  scannerIdentities: readonly string[];
+  scannerIdentityVerified: boolean;
   evidenceDigests: readonly `sha256:${string}`[];
   startedAt: string;
   finishedAt: string;
+  acceptance?: DeveloperTrustAcceptanceContextV1;
 }
 
 export interface DsseEnvelope {
@@ -28,6 +45,7 @@ export interface EvidenceSigner {
   keyId: string;
   issuer: string;
   sign(payload: Buffer): Promise<Buffer>;
+  verify(payload: Buffer, signature: Buffer): Promise<boolean>;
 }
 
 export class DeveloperTrustAttestationError extends Error {
@@ -38,6 +56,18 @@ export class DeveloperTrustAttestationError extends Error {
 }
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
+const SCANNER_IDENTITY =
+  /^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,127}#sha256:[0-9a-f]{64}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ACCEPTANCE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const ACCEPTANCE_SCENARIOS = new Set<ModuleBetaTrustScenario>([
+  'clean-wasi',
+  'secret-leak',
+  'vulnerable-lockfile',
+  'invalid-signature',
+  'stale-policy',
+  'scanner-crash',
+]);
 
 function fail(code: string): never {
   throw new DeveloperTrustAttestationError(code);
@@ -77,6 +107,16 @@ function validIdentifier(value: string): boolean {
 function validatePredicate(predicate: OpenOpcDeveloperTrustPredicateV1): void {
   if (
     !['passed', 'failed', 'inconclusive', 'cancelled'].includes(predicate.result) ||
+    !Array.isArray(predicate.scannerIdentities) ||
+    predicate.scannerIdentities.length < 1 ||
+    predicate.scannerIdentities.length > 32 ||
+    predicate.scannerIdentities.some((identity) => !SCANNER_IDENTITY.test(identity)) ||
+    new Set(predicate.scannerIdentities).size !== predicate.scannerIdentities.length ||
+    predicate.scannerIdentities.some(
+      (identity, index) =>
+        index > 0 && compareText(predicate.scannerIdentities[index - 1], identity) >= 0,
+    ) ||
+    typeof predicate.scannerIdentityVerified !== 'boolean' ||
     !Array.isArray(predicate.evidenceDigests) ||
     predicate.evidenceDigests.length > 100
   ) {
@@ -99,11 +139,33 @@ function validatePredicate(predicate: OpenOpcDeveloperTrustPredicateV1): void {
   ) {
     fail('DEVELOPER_TRUST_ATTESTATION_COORDINATE_INVALID');
   }
+  const acceptance = predicate.acceptance;
+  if (acceptance !== undefined && !validAcceptanceContext(acceptance)) {
+    fail('DEVELOPER_TRUST_ATTESTATION_ACCEPTANCE_CONTEXT_INVALID');
+  }
   const startedAt = Date.parse(predicate.startedAt);
   const finishedAt = Date.parse(predicate.finishedAt);
   if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt) || finishedAt < startedAt) {
     fail('DEVELOPER_TRUST_ATTESTATION_TIME_INVALID');
   }
+}
+
+function validAcceptanceContext(value: unknown): value is DeveloperTrustAcceptanceContextV1 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const context = value as Record<string, unknown>;
+  const keys = Object.keys(context).sort();
+  return (
+    keys.length === 3 &&
+    keys[0] === 'acceptanceRunId' &&
+    keys[1] === 'registrationId' &&
+    keys[2] === 'scenario' &&
+    typeof context.acceptanceRunId === 'string' &&
+    ACCEPTANCE_RUN_ID.test(context.acceptanceRunId) &&
+    typeof context.registrationId === 'string' &&
+    UUID.test(context.registrationId) &&
+    typeof context.scenario === 'string' &&
+    ACCEPTANCE_SCENARIOS.has(context.scenario as ModuleBetaTrustScenario)
+  );
 }
 
 export function dssePreAuthEncoding(payloadType: string, payload: Buffer): Buffer {
@@ -135,6 +197,7 @@ export function createEd25519EvidenceSigner(input: {
   if (privateKey.type !== 'private' || privateKey.asymmetricKeyType !== 'ed25519') {
     fail('DEVELOPER_TRUST_EVIDENCE_PRIVATE_KEY_INVALID');
   }
+  const publicKey = createPublicKey(privateKey);
   return Object.freeze({
     keyId: input.keyId,
     issuer: input.issuer,
@@ -143,6 +206,13 @@ export function createEd25519EvidenceSigner(input: {
         return cryptoSign(null, payload, privateKey);
       } catch {
         fail('DEVELOPER_TRUST_EVIDENCE_SIGNING_FAILED');
+      }
+    },
+    async verify(payload: Buffer, signature: Buffer): Promise<boolean> {
+      try {
+        return cryptoVerify(null, payload, publicKey, signature);
+      } catch {
+        return false;
       }
     },
   });
@@ -185,6 +255,46 @@ export async function createDeveloperTrustAttestation(input: {
     envelope,
     attestationDigest: sha256(canonicalJson(envelope)),
   };
+}
+
+export async function verifyDeveloperTrustAttestation(input: {
+  envelope: DsseEnvelope;
+  signer: Pick<EvidenceSigner, 'keyId' | 'verify'>;
+}): Promise<boolean> {
+  const { envelope, signer } = input;
+  if (
+    !envelope ||
+    typeof envelope !== 'object' ||
+    envelope.payloadType !== IN_TOTO_PAYLOAD_TYPE ||
+    !Array.isArray(envelope.signatures) ||
+    envelope.signatures.length !== 1 ||
+    envelope.signatures[0]?.keyid !== signer.keyId
+  ) {
+    return false;
+  }
+  const payload = strictBase64(envelope.payload, 1024 * 1024);
+  const signature = strictBase64(envelope.signatures[0].sig, 512);
+  if (!payload || !signature) return false;
+  try {
+    return await signer.verify(dssePreAuthEncoding(envelope.payloadType, payload), signature);
+  } catch {
+    return false;
+  }
+}
+
+function strictBase64(value: unknown, maximumBytes: number): Buffer | null {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  ) {
+    return null;
+  }
+  const decoded = Buffer.from(value, 'base64');
+  return decoded.byteLength <= maximumBytes && decoded.toString('base64') === value
+    ? decoded
+    : null;
 }
 
 export async function validateOptionalSigstoreBundle(input: {

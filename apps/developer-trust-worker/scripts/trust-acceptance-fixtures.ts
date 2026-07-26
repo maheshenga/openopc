@@ -34,10 +34,20 @@ if (mode === '--init-secrets') {
   writeText(join(directory, 's3-secret-access-key'), 'openopc-test-secret-change-me');
   const tokenPath = join(directory, 'oci-control-token');
   if (!existsSync(tokenPath)) writeText(tokenPath, randomBytes(32).toString('base64url'));
+  const acceptanceHmacPath = join(directory, 'acceptance-hmac');
+  if (!existsSync(acceptanceHmacPath)) {
+    writeFileSync(acceptanceHmacPath, randomBytes(32), { mode: 0o400 });
+  }
+  const acceptanceTokenPath = join(directory, 'acceptance-token');
+  if (!existsSync(acceptanceTokenPath)) {
+    writeText(acceptanceTokenPath, randomBytes(32).toString('base64url'));
+  }
   for (const path of [
     privateKeyPath,
     publicKeyPath,
     tokenPath,
+    acceptanceHmacPath,
+    acceptanceTokenPath,
     join(directory, 'database-url'),
     join(directory, 's3-access-key-id'),
     join(directory, 's3-secret-access-key'),

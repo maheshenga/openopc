@@ -80,16 +80,20 @@ export function shouldDemote(
  * DEAD-WEIGHT leader — holding it, renewing it, running nothing — silently
  * starving the cron scheduler fleet-wide with no error and no churn. That is what
  * left an EKS API-only pod able to freeze every cron in the 2026-06-21 outage. A
- * pod is an owner unless ALL four worker flags are explicitly "false"; default
- * (unset) = owner, so single-node / self-host is unaffected.
+ * pod is an owner unless all legacy worker flags are explicitly "false" and
+ * OpenOPC retention is not explicitly enabled; default (unset) remains an owner
+ * through the legacy flags, so single-node / self-host is unaffected.
  */
 export function runsSingletonWorkers(env: NodeJS.ProcessEnv = process.env): boolean {
   const on = (v: string | undefined) => v !== 'false';
+  const explicitlyEnabled = (v: string | undefined) =>
+    v !== undefined && ['true', '1', 'yes', 'on'].includes(v.trim().toLowerCase());
   return (
     on(env.KORTIX_TRIGGER_SCHEDULER_ENABLED) ||
     on(env.KORTIX_PROJECT_MAINTENANCE_ENABLED) ||
     on(env.KORTIX_LEGACY_MIGRATION_WORKER_ENABLED) ||
-    on(env.KORTIX_SUNA_MIGRATION_WORKER_ENABLED)
+    on(env.KORTIX_SUNA_MIGRATION_WORKER_ENABLED) ||
+    explicitlyEnabled(env.OPENOPC_DEVELOPER_ARTIFACT_RETENTION_ENABLED)
   );
 }
 

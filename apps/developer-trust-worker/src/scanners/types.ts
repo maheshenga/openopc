@@ -9,6 +9,9 @@ import type {
 
 export type ScannerState = 'passed' | 'failed' | 'inconclusive';
 export type ScannerSeverity = 'info' | 'low' | 'medium' | 'high' | 'critical';
+export const DEVELOPER_TRUST_SCANNER_FAULT: unique symbol = Symbol(
+  'openopc.developer-trust.scanner-fault',
+);
 
 export interface ScannerFinding {
   fingerprint: `sha256:${string}`;
@@ -29,6 +32,7 @@ export interface ScannerInput {
   verificationProfile: RegistryModuleVerificationProfile;
   lockGraph: RegistryModuleLockGraph | null;
   dependencyLicenses: ReadonlyArray<{ name: string; version: string; license: string }>;
+  readonly [DEVELOPER_TRUST_SCANNER_FAULT]?: 'terminate-process';
 }
 
 export interface CycloneDxBom {

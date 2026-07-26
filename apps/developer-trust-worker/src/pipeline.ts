@@ -1,10 +1,14 @@
+import { createHash } from 'node:crypto';
 import type { RegistryModuleVerificationProfile } from '@kortix/registry';
+import type { ModuleBetaTrustScenario } from '@openopc/module-runtime-contracts';
 
 import {
+  type DeveloperTrustAcceptanceContextV1,
   type DsseEnvelope,
   type EvidenceSigner,
   OPENOPC_TRUST_PREDICATE_TYPE,
   createDeveloperTrustAttestation,
+  verifyDeveloperTrustAttestation,
 } from './attestation';
 import { type DeveloperTrustPolicyV1, assertDeveloperTrustPolicyClaim } from './policy';
 import type {
@@ -13,12 +17,30 @@ import type {
   DeveloperModuleSandboxResult,
 } from './sandbox/types';
 import type {
+  CycloneDxBom,
   DeveloperScannerAdapter,
   ScannerFinding,
   ScannerInput,
   ScannerResult,
 } from './scanners/types';
-import { compareText, evidenceDigest } from './scanners/types';
+import {
+  DEVELOPER_TRUST_SCANNER_FAULT,
+  canonicalJson,
+  compareText,
+  evidenceDigest,
+} from './scanners/types';
+
+export interface UnavailableSbomDocument {
+  bomFormat: 'CycloneDX';
+  specVersion: '1.6';
+  unavailable: true;
+}
+
+export interface CanonicalSbomEvidence {
+  document: CycloneDxBom | UnavailableSbomDocument;
+  bytes: Uint8Array;
+  digest: `sha256:${string}`;
+}
 
 export interface DeveloperTrustWorkItem extends ScannerInput {
   runId: string;
@@ -38,11 +60,15 @@ export interface DeveloperTrustWorkItem extends ScannerInput {
   leaseGeneration?: number;
   leaseExpiresAt: string;
   verificationProfile: RegistryModuleVerificationProfile;
+  acceptanceRunId?: string;
+  scenario?: ModuleBetaTrustScenario;
+  registrationId?: string;
 }
 
 export interface DeveloperTrustPipelineResult {
   state: 'passed' | 'failed' | 'inconclusive';
   terminalReason: string;
+  sbom: CanonicalSbomEvidence;
   sbomDigest: `sha256:${string}`;
   attestationDigest: `sha256:${string}`;
   resourceSummary: Record<string, unknown>;
@@ -95,9 +121,15 @@ export class DeveloperTrustPipeline {
   }
 
   async run(item: DeveloperTrustWorkItem): Promise<DeveloperTrustPipelineResult> {
+    const acceptance = acceptanceContext(item);
     const startedAt = this.#now().toISOString();
     try {
-      assertDeveloperTrustPolicyClaim(this.#policy, item);
+      assertDeveloperTrustPolicyClaim(
+        this.#policy,
+        acceptance?.scenario === 'stale-policy'
+          ? { ...item, policyDigest: mismatchedPolicyDigest(item.policyDigest) }
+          : item,
+      );
     } catch {
       return this.#finalize(item, {
         state: 'inconclusive',
@@ -140,7 +172,13 @@ export class DeveloperTrustPipeline {
 
     const controller = new AbortController();
     const settled = await Promise.allSettled(
-      this.#scanners.map((scanner) => scanner.scan(item, controller.signal)),
+      this.#scanners.map((scanner) => {
+        const scannerInput: ScannerInput =
+          acceptance?.scenario === 'scanner-crash' && scanner.name === 'semgrep'
+            ? { ...item, [DEVELOPER_TRUST_SCANNER_FAULT]: 'terminate-process' }
+            : item;
+        return scanner.scan(scannerInput, controller.signal);
+      }),
     );
     const results: ScannerResult[] = [];
     let invalidResult = false;
@@ -234,6 +272,7 @@ export class DeveloperTrustPipeline {
       evidenceDigests,
       sbom,
       startedAt,
+      scannerIdentityVerified: true,
       scannerResults: results,
       sandboxResult,
     });
@@ -248,32 +287,64 @@ export class DeveloperTrustPipeline {
       evidenceDigests: `sha256:${string}`[];
       sbom: ScannerResult['sbom'] | null;
       startedAt: string;
+      scannerIdentityVerified?: boolean;
       scannerResults?: ScannerResult[];
       sandboxResult?: DeveloperModuleSandboxResult | null;
     },
   ): Promise<DeveloperTrustPipelineResult> {
-    const sbomDigest = evidenceDigest(
-      input.sbom ?? { bomFormat: 'CycloneDX', specVersion: '1.6', unavailable: true },
-    );
+    const acceptance = acceptanceContext(item);
+    const scannerIdentities = this.#policy.scanners
+      .map((scanner) => `${scanner.name}@${scanner.version}#${scanner.imageDigest}`)
+      .sort(compareText);
+    const scannerIdentityVerified = input.scannerIdentityVerified ?? false;
+    const sbom = canonicalSbom(input.sbom);
+    const sbomDigest = sbom.digest;
     const finishedAt = this.#now().toISOString();
-    const attestation = await createDeveloperTrustAttestation({
-      moduleId: item.moduleId,
-      moduleVersion: item.moduleVersion,
-      predicate: {
-        artifactDigest: item.artifactDigest,
-        policyDigest: item.policyDigest,
-        scannerSetDigest: item.scannerSetDigest,
-        sandboxProfileDigest: item.sandboxProfileDigest,
-        sbomDigest,
-        runId: item.runId,
-        attempt: item.attempt,
-        result: input.state,
-        evidenceDigests: input.evidenceDigests,
-        startedAt: input.startedAt,
-        finishedAt,
-      },
-      signer: this.#signer,
-    });
+    let state = input.state;
+    let terminalReason = input.terminalReason;
+    const evidenceDigests = [...input.evidenceDigests];
+    const createAttestation = () =>
+      createDeveloperTrustAttestation({
+        moduleId: item.moduleId,
+        moduleVersion: item.moduleVersion,
+        predicate: {
+          artifactDigest: item.artifactDigest,
+          policyDigest: item.policyDigest,
+          scannerSetDigest: item.scannerSetDigest,
+          sandboxProfileDigest: item.sandboxProfileDigest,
+          sbomDigest,
+          runId: item.runId,
+          attempt: item.attempt,
+          result: state,
+          scannerIdentities,
+          scannerIdentityVerified,
+          evidenceDigests,
+          startedAt: input.startedAt,
+          finishedAt,
+          ...(acceptance ? { acceptance } : {}),
+        },
+        signer: this.#signer,
+      });
+    let attestation = await createAttestation();
+    if (acceptance?.scenario === 'invalid-signature') {
+      const validBeforeCorruption = await verifyDeveloperTrustAttestation({
+        envelope: attestation.envelope,
+        signer: this.#signer,
+      });
+      const corrupted = corruptDsseSignature(attestation.envelope);
+      const validAfterCorruption = await verifyDeveloperTrustAttestation({
+        envelope: corrupted,
+        signer: this.#signer,
+      });
+      if (!validBeforeCorruption || validAfterCorruption) {
+        throw new Error('DEVELOPER_TRUST_INVALID_SIGNATURE_SCENARIO_FAILED');
+      }
+      evidenceDigests.push(evidenceDigest(corrupted));
+      evidenceDigests.sort(compareText);
+      state = 'inconclusive';
+      terminalReason = 'attestation_signature_invalid';
+      attestation = await createAttestation();
+    }
     const scannerResults = input.scannerResults ?? [];
     const resourceSummary = {
       scanner_count: scannerResults.length,
@@ -281,31 +352,99 @@ export class DeveloperTrustPipeline {
       failed_scanners: scannerResults.filter((result) => result.state === 'failed').length,
       inconclusive_scanners: scannerResults.filter((result) => result.state === 'inconclusive')
         .length,
+      scanner_identities: scannerIdentities,
+      scanner_identity_verified: scannerIdentityVerified,
       sbom_available: Boolean(input.sbom),
       sandbox_state: input.sandboxResult?.state ?? null,
       sandbox_resource_usage: input.sandboxResult ? { ...input.sandboxResult.resourceUsage } : null,
+      ...(acceptance ? { acceptance: { ...acceptance } } : {}),
     };
     return {
-      state: input.state,
-      terminalReason: input.terminalReason,
+      state,
+      terminalReason,
+      sbom,
       sbomDigest,
       attestationDigest: attestation.attestationDigest,
       resourceSummary,
       findings: input.findings,
-      evidenceDigests: input.evidenceDigests,
+      evidenceDigests,
       attestation: attestation.envelope,
       attestationRecord: {
         attestationDigest: attestation.attestationDigest,
         subjectArtifactDigest: item.artifactDigest,
         predicateType: OPENOPC_TRUST_PREDICATE_TYPE,
         policyDigest: item.policyDigest,
-        result: input.state,
+        result: state,
         sbomDigest,
         dsseEnvelope: attestation.envelope,
         issuer: this.#signer.issuer,
       },
     };
   }
+}
+
+function corruptDsseSignature(envelope: DsseEnvelope): DsseEnvelope {
+  const corrupted = structuredClone(envelope);
+  const signature = Buffer.from(corrupted.signatures[0]?.sig ?? '', 'base64');
+  if (signature.byteLength === 0) {
+    throw new Error('DEVELOPER_TRUST_INVALID_SIGNATURE_SCENARIO_FAILED');
+  }
+  signature[0] ^= 1;
+  corrupted.signatures[0].sig = signature.toString('base64');
+  return corrupted;
+}
+
+const ACCEPTANCE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const ACCEPTANCE_REGISTRATION_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ACCEPTANCE_SCENARIOS = new Set<ModuleBetaTrustScenario>([
+  'clean-wasi',
+  'secret-leak',
+  'vulnerable-lockfile',
+  'invalid-signature',
+  'stale-policy',
+  'scanner-crash',
+]);
+
+function acceptanceContext(
+  item: DeveloperTrustWorkItem,
+): DeveloperTrustAcceptanceContextV1 | undefined {
+  const values = [item.acceptanceRunId, item.registrationId, item.scenario];
+  const present = values.filter((value) => value !== undefined).length;
+  if (present === 0) return undefined;
+  if (
+    present !== values.length ||
+    typeof item.acceptanceRunId !== 'string' ||
+    !ACCEPTANCE_RUN_ID.test(item.acceptanceRunId) ||
+    typeof item.registrationId !== 'string' ||
+    !ACCEPTANCE_REGISTRATION_ID.test(item.registrationId) ||
+    typeof item.scenario !== 'string' ||
+    !ACCEPTANCE_SCENARIOS.has(item.scenario)
+  ) {
+    throw new Error('DEVELOPER_TRUST_ACCEPTANCE_CONTEXT_INVALID');
+  }
+  return {
+    acceptanceRunId: item.acceptanceRunId,
+    registrationId: item.registrationId,
+    scenario: item.scenario,
+  };
+}
+
+function mismatchedPolicyDigest(value: `sha256:${string}`): `sha256:${string}` {
+  const first = value['sha256:'.length];
+  return `sha256:${first === '0' ? '1' : '0'}${value.slice('sha256:'.length + 1)}`;
+}
+
+function canonicalSbom(sbom: ScannerResult['sbom'] | null): CanonicalSbomEvidence {
+  const serialized = canonicalJson(
+    sbom ?? { bomFormat: 'CycloneDX', specVersion: '1.6', unavailable: true },
+  );
+  const bytes = new TextEncoder().encode(serialized);
+  return {
+    document: JSON.parse(serialized) as CycloneDxBom | UnavailableSbomDocument,
+    bytes,
+    digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+  };
 }
 
 function validPreparedSandbox(

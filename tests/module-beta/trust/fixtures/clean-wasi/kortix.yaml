@@ -1,0 +1,37 @@
+{
+  "name": "openopc-trust-__SCENARIO__",
+  "type": "registry:module",
+  "files": [
+    {
+      "path": "runtime/openopc.runtime.json",
+      "target": "runtime/openopc.runtime.json",
+      "type": "registry:file"
+    },
+    {
+      "path": "runtime/echo.component.wasm",
+      "target": "runtime/echo.component.wasm",
+      "type": "registry:file"
+    }
+  ],
+  "module": {
+    "schemaVersion": 2,
+    "id": "__PUBLISHER_ID__.trust-__SCENARIO__-__SEED__",
+    "version": "1.0.0-beta.__SEED__",
+    "publisher": {
+      "id": "__PUBLISHER_ID__",
+      "displayName": "OpenOPC trust acceptance"
+    },
+    "category": "automation",
+    "locales": ["en"],
+    "compatibility": {
+      "platform": "^1.0.0"
+    },
+    "execution": {
+      "mode": "server-adapter",
+      "entry": "runtime/openopc.runtime.json"
+    },
+    "verification": {
+      "profile": "server-conformance"
+    }
+  }
+}

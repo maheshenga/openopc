@@ -33,7 +33,12 @@ import { createPinnedScannerCommandRunner } from './scanners/process-adapter';
 import { createSemgrepScanner } from './scanners/semgrep';
 import { createSyftScanner } from './scanners/syft';
 import { type DeveloperScannerAdapter, evidenceDigest } from './scanners/types';
+import {
+  type S3AcceptancePlanConsumer,
+  createS3AcceptancePlanConsumer,
+} from './storage/s3-acceptance-plan';
 import { createS3ArtifactReader } from './storage/s3-artifacts';
+import { type S3EvidenceStore, createS3EvidenceStore } from './storage/s3-evidence';
 
 interface AdapterState<T> {
   value: T | null;
@@ -96,6 +101,23 @@ export function buildDeveloperTrustRuntime(
       maxArtifactBytes: config.maxArtifactBytes,
     }),
   );
+  const evidenceStore = capture(() =>
+    createS3EvidenceStore({
+      client: requireAdapter(s3Client),
+      bucket: config.s3.bucket,
+    }),
+  );
+  const acceptanceConfig = config.acceptance;
+  const acceptancePlanConsumer: AdapterState<S3AcceptancePlanConsumer> = acceptanceConfig.enabled
+    ? capture(() =>
+        createS3AcceptancePlanConsumer({
+          client: requireAdapter(s3Client),
+          bucket: config.s3.bucket,
+          key: readDeveloperTrustBinarySecret(acceptanceConfig.keyFile, 32, 128),
+          controllerIdentity: acceptanceConfig.controllerIdentity,
+        }),
+      )
+    : { value: null };
   const database = capture(() => {
     const databaseUrl = readSecret(config.databaseUrlFile, 4_096);
     const target = new URL(databaseUrl);
@@ -187,7 +209,11 @@ export function buildDeveloperTrustRuntime(
     components: {
       objectStorage: {
         probe: async () => {
-          await requireAdapter(artifactReader).assertReady();
+          await Promise.all([
+            requireAdapter(artifactReader).assertReady(),
+            requireAdapter(evidenceStore).assertReady(),
+          ]);
+          if (acceptanceConfig.enabled) requireAdapter(acceptancePlanConsumer);
           return undefined;
         },
       },
@@ -233,6 +259,10 @@ export function buildDeveloperTrustRuntime(
       signer: requireAdapter(signer),
       claims: requireAdapter(claims),
       artifactReader: requireAdapter(artifactReader),
+      evidenceStore: requireAdapter(evidenceStore),
+      acceptancePlanConsumer: acceptanceConfig.enabled
+        ? requireAdapter(acceptancePlanConsumer)
+        : undefined,
       sandboxControl: requireAdapter(sandboxControl).port,
     }),
   ).value;
@@ -319,6 +349,8 @@ function createConcreteWorker(input: {
   signer: EvidenceSigner;
   claims: ReturnType<typeof createPostgresVerificationClaims>;
   artifactReader: ReturnType<typeof createS3ArtifactReader>;
+  evidenceStore: S3EvidenceStore;
+  acceptancePlanConsumer?: S3AcceptancePlanConsumer;
   sandboxControl: DeveloperModuleSandboxPort;
 }) {
   const pipeline = new DeveloperTrustPipeline({
@@ -351,6 +383,8 @@ function createConcreteWorker(input: {
       },
     },
     pipeline,
+    evidenceStore: input.evidenceStore,
+    acceptancePlanConsumer: input.acceptancePlanConsumer,
   });
 }
 
@@ -445,6 +479,25 @@ function readSecret(path: string, maxBytes: number): string {
   const value = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trim();
   if (!value || /[\0\r\n]/.test(value)) throw new Error('DEVELOPER_TRUST_SECRET_INVALID');
   return value;
+}
+
+export function readDeveloperTrustBinarySecret(
+  path: string,
+  minimumBytes: number,
+  maximumBytes: number,
+): Uint8Array {
+  const bytes = readFileSync(path);
+  if (
+    !Number.isSafeInteger(minimumBytes) ||
+    !Number.isSafeInteger(maximumBytes) ||
+    minimumBytes < 1 ||
+    maximumBytes < minimumBytes ||
+    bytes.byteLength < minimumBytes ||
+    bytes.byteLength > maximumBytes
+  ) {
+    throw new Error('DEVELOPER_TRUST_SECRET_INVALID');
+  }
+  return new Uint8Array(bytes);
 }
 
 async function readBoundedJson(response: Response, maxBytes: number): Promise<unknown> {

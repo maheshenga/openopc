@@ -50,6 +50,7 @@ test('enabled config is complete, secret-file based, and non-production only', (
     s3: { bucket: 'developer-artifacts', forcePathStyle: true },
     attestation: { keyId: 'openopc-attestation-staging-2026-07' },
     wasmtime: { expectedVersion: 'wasmtime 47.0.2 (90fed3c6a 2026-07-21)' },
+    acceptance: { enabled: false },
     allowedLicenses: ['Apache-2.0', 'MIT'],
   });
   expect(config.s3).not.toHaveProperty('secretAccessKey');
@@ -57,4 +58,36 @@ test('enabled config is complete, secret-file based, and non-production only', (
   expect(() => loadDeveloperTrustWorkerConfig(enabledEnvironment('production'))).toThrow(
     'DEVELOPER_TRUST_CONFIG_INVALID',
   );
+});
+
+test('acceptance plans require an explicit non-development secret-file composition', () => {
+  const root = process.platform === 'win32' ? 'C:/openopc/secrets' : '/run/secrets';
+  const identity = `module-beta-controller@1.0.0#sha256:${'1'.repeat(64)}`;
+  const environment = {
+    ...enabledEnvironment(),
+    MODULE_BETA_ACCEPTANCE_WORKER_ENABLED: 'true',
+    MODULE_BETA_ACCEPTANCE_FAULT_KEY_FILE: `${root}/module-beta-acceptance-hmac`,
+    MODULE_BETA_ACCEPTANCE_CONTROLLER_IDENTITY: identity,
+  };
+
+  const config = loadDeveloperTrustWorkerConfig(environment);
+  if (!config.enabled) throw new Error('expected enabled config');
+  expect(config.acceptance).toEqual({
+    enabled: true,
+    keyFile: `${root}/module-beta-acceptance-hmac`,
+    controllerIdentity: identity,
+  });
+  expect(() =>
+    loadDeveloperTrustWorkerConfig({
+      ...environment,
+      DEVELOPER_TRUST_ENVIRONMENT: 'development',
+      DEVELOPER_TRUST_ATTESTATION_KEY_ID: 'openopc-attestation-development-2026-07',
+    }),
+  ).toThrow('DEVELOPER_TRUST_CONFIG_INVALID');
+  expect(() =>
+    loadDeveloperTrustWorkerConfig({
+      ...environment,
+      MODULE_BETA_ACCEPTANCE_WORKER_ENABLED: 'yes',
+    }),
+  ).toThrow('DEVELOPER_TRUST_CONFIG_INVALID');
 });

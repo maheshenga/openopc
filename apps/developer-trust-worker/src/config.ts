@@ -44,6 +44,13 @@ export interface DeveloperTrustWorkerEnabledConfig {
     controlTokenFile: string;
     verificationBrokerUrl: string;
   };
+  acceptance:
+    | { enabled: false }
+    | {
+        enabled: true;
+        keyFile: string;
+        controllerIdentity: string;
+      };
   allowedLicenses: readonly string[];
 }
 
@@ -118,6 +125,26 @@ export function loadDeveloperTrustWorkerConfig(
     const controlEndpoint = serviceUrl(environment.DEVELOPER_TRUST_OCI_CONTROL_ENDPOINT);
     const controlTokenFile = secretPath(environment.DEVELOPER_TRUST_OCI_CONTROL_TOKEN_FILE);
     const verificationBrokerUrl = serviceUrl(environment.DEVELOPER_TRUST_VERIFICATION_BROKER_URL);
+    const acceptanceEnabled = environment.MODULE_BETA_ACCEPTANCE_WORKER_ENABLED;
+    if (
+      acceptanceEnabled !== undefined &&
+      acceptanceEnabled !== 'true' &&
+      acceptanceEnabled !== 'false'
+    ) {
+      invalid();
+    }
+    const acceptance =
+      acceptanceEnabled === 'true'
+        ? {
+            enabled: true as const,
+            keyFile: secretPath(environment.MODULE_BETA_ACCEPTANCE_FAULT_KEY_FILE),
+            controllerIdentity: requiredMatch(
+              environment.MODULE_BETA_ACCEPTANCE_CONTROLLER_IDENTITY,
+              /^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,127}#sha256:[0-9a-f]{64}$/,
+            ),
+          }
+        : { enabled: false as const };
+    if (acceptance.enabled && deploymentEnvironment === 'development') invalid();
     const allowedLicensesValue = JSON.parse(
       requiredBounded(environment.DEVELOPER_TRUST_ALLOWED_LICENSES_JSON, 16 * 1024),
     ) as unknown;
@@ -157,6 +184,7 @@ export function loadDeveloperTrustWorkerConfig(
       attestation: { privateKeyFile, publicKeyFile, keyId, issuer },
       wasmtime: { executable, expectedDigest, expectedVersion },
       oci: { controlEndpoint, controlTokenFile, verificationBrokerUrl },
+      acceptance,
       allowedLicenses,
     };
   } catch {

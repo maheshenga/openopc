@@ -76,6 +76,18 @@ describe('runsSingletonWorkers (dead-weight-leader guard)', () => {
     ).toBe(true);
   });
 
+  test('only OpenOPC developer artifact retention enabled → owner', () => {
+    expect(
+      runsSingletonWorkers({
+        KORTIX_TRIGGER_SCHEDULER_ENABLED: 'false',
+        KORTIX_PROJECT_MAINTENANCE_ENABLED: 'false',
+        KORTIX_LEGACY_MIGRATION_WORKER_ENABLED: 'false',
+        KORTIX_SUNA_MIGRATION_WORKER_ENABLED: 'false',
+        OPENOPC_DEVELOPER_ARTIFACT_RETENTION_ENABLED: 'true',
+      }),
+    ).toBe(true);
+  });
+
   test('only literal "false" disables a flag — "0"/"no"/"" still count as on', () => {
     expect(runsSingletonWorkers({ KORTIX_TRIGGER_SCHEDULER_ENABLED: '0' })).toBe(true);
   });

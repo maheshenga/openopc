@@ -1,11 +1,21 @@
 import { describe, expect, test } from 'bun:test';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 
-import { createEd25519EvidenceSigner } from './attestation';
+import {
+  type EvidenceSigner,
+  createEd25519EvidenceSigner,
+  verifyDeveloperTrustAttestation,
+} from './attestation';
 import { DeveloperTrustPipeline } from './pipeline';
 import { defineDeveloperTrustPolicy } from './policy';
 import type { DeveloperModuleSandboxInput, DeveloperModuleSandboxResult } from './sandbox/types';
-import type { DeveloperScannerAdapter, ScannerResult } from './scanners/types';
+import {
+  DEVELOPER_TRUST_SCANNER_FAULT,
+  type DeveloperScannerAdapter,
+  type ScannerInput,
+  type ScannerResult,
+  inconclusiveScannerResult,
+} from './scanners/types';
 import { policyInput } from './test-fixtures';
 
 const digest = (character: string) => `sha256:${character.repeat(64)}` as const;
@@ -36,13 +46,16 @@ function claim() {
 function scanner(
   name: DeveloperScannerAdapter['name'],
   result: ScannerResult | Error,
-  onScan?: () => void,
+  onScan?: (name: DeveloperScannerAdapter['name'], input: ScannerInput) => void,
 ): DeveloperScannerAdapter {
   return {
     name,
     async verifyIdentity() {},
-    async scan() {
-      onScan?.();
+    async scan(input) {
+      onScan?.(name, input);
+      if (input[DEVELOPER_TRUST_SCANNER_FAULT] === 'terminate-process') {
+        return inconclusiveScannerResult(name, 'process_terminated');
+      }
       if (result instanceof Error) throw result;
       return structuredClone(result);
     },
@@ -127,22 +140,27 @@ function preparedSandboxInput(item: ReturnType<typeof claim>): DeveloperModuleSa
   };
 }
 
+function evidenceSigner(): EvidenceSigner {
+  const { privateKey } = generateKeyPairSync('ed25519');
+  return createEd25519EvidenceSigner({
+    privateKey,
+    keyId: 'openopc-worker-test',
+    issuer: 'openopc-developer-trust-worker',
+  });
+}
+
 function pipelineWith(
   replacements: Partial<Record<DeveloperScannerAdapter['name'], ScannerResult | Error>> = {},
-  onScan?: () => void,
+  onScan?: (name: DeveloperScannerAdapter['name'], input: ScannerInput) => void,
   sandboxOutcome: DeveloperModuleSandboxResult | Error | null = sandboxEvidence(),
+  signer: EvidenceSigner = evidenceSigner(),
 ) {
   const policy = defineDeveloperTrustPolicy(policyInput());
-  const { privateKey } = generateKeyPairSync('ed25519');
   const names = ['gitleaks', 'syft', 'osv-scanner', 'semgrep', 'license-policy'] as const;
   return new DeveloperTrustPipeline({
     policy,
     scanners: names.map((name) => scanner(name, replacements[name] ?? evidence(name), onScan)),
-    signer: createEd25519EvidenceSigner({
-      privateKey,
-      keyId: 'openopc-worker-test',
-      issuer: 'openopc-developer-trust-worker',
-    }),
+    signer,
     now: () => new Date('2026-07-25T00:00:00.000Z'),
     ...(sandboxOutcome === null
       ? {}
@@ -166,6 +184,53 @@ function pipelineWith(
 }
 
 describe('developer trust pipeline', () => {
+  test('records verified scanner identities in immutable and signed evidence', async () => {
+    const result = await pipelineWith().run(claim());
+    const scannerIdentities = policyInput()
+      .scanners.map((scanner) => `${scanner.name}@${scanner.version}#${scanner.imageDigest}`)
+      .sort();
+    const statement = JSON.parse(
+      Buffer.from(result.attestation.payload, 'base64').toString('utf8'),
+    );
+
+    expect(result.resourceSummary).toMatchObject({
+      scanner_identities: scannerIdentities,
+      scanner_identity_verified: true,
+    });
+    expect(statement.predicate).toMatchObject({
+      scannerIdentities,
+      scannerIdentityVerified: true,
+    });
+  });
+
+  test('returns canonical SBOM bytes whose digest matches the exact document', async () => {
+    const result = await pipelineWith().run(claim());
+    expect(result.terminalReason).toBe('verification_completed');
+    const serialized = new TextDecoder().decode(result.sbom.bytes);
+
+    expect(serialized).toBe(
+      '{"bomFormat":"CycloneDX","components":[],"specVersion":"1.6","version":1}',
+    );
+    expect(result.sbom.document).toEqual(JSON.parse(serialized));
+    expect(result.sbom.digest).toBe(result.sbomDigest);
+    expect(`sha256:${createHash('sha256').update(result.sbom.bytes).digest('hex')}`).toBe(
+      result.sbomDigest,
+    );
+  });
+
+  test('returns a canonical digest-bound unavailable SBOM document', async () => {
+    const mismatched = { ...claim(), policyDigest: digest('0') };
+    const result = await pipelineWith().run(mismatched);
+    const serialized = new TextDecoder().decode(result.sbom.bytes);
+
+    expect(result).toMatchObject({ state: 'inconclusive', terminalReason: 'policy_mismatch' });
+    expect(serialized).toBe('{"bomFormat":"CycloneDX","specVersion":"1.6","unavailable":true}');
+    expect(result.sbom.document).toEqual(JSON.parse(serialized));
+    expect(`sha256:${createHash('sha256').update(result.sbom.bytes).digest('hex')}`).toBe(
+      result.sbomDigest,
+    );
+  });
+
   test('clean fixture creates deterministic CycloneDX and DSSE evidence', async () => {
     const pipeline = pipelineWith();
     const first = await pipeline.run(claim());
@@ -175,6 +240,118 @@ describe('developer trust pipeline', () => {
     expect(first.sbomDigest).toBe(second.sbomDigest);
     expect(first.attestationDigest).toBe(second.attestationDigest);
     expect(first.attestation.payloadType).toBe('application/vnd.in-toto+json');
+    const statement = JSON.parse(Buffer.from(first.attestation.payload, 'base64').toString('utf8'));
+    expect(Object.hasOwn(statement.predicate, 'acceptance')).toBe(false);
+    expect(Object.hasOwn(first.resourceSummary, 'acceptance')).toBe(false);
+  });
+
+  test('binds acceptance context into the signed predicate and resource summary', async () => {
+    const acceptance = {
+      acceptanceRunId: 'module-beta-run-1',
+      registrationId: '60000000-0000-4000-a000-000000000006',
+      scenario: 'clean-wasi' as const,
+    };
+    const result = await pipelineWith().run({
+      ...claim(),
+      ...acceptance,
+    });
+    const statement = JSON.parse(
+      Buffer.from(result.attestation.payload, 'base64').toString('utf8'),
+    );
+
+    expect(statement.predicate.acceptance).toEqual(acceptance);
+    expect(result.resourceSummary.acceptance).toEqual(acceptance);
+  });
+
+  test('stale-policy acceptance produces a valid signed policy mismatch without scanning', async () => {
+    let scans = 0;
+    const signer = evidenceSigner();
+    const pipeline = pipelineWith(
+      {},
+      () => {
+        scans += 1;
+      },
+      sandboxEvidence(),
+      signer,
+    );
+    const result = await pipeline.run({
+      ...claim(),
+      acceptanceRunId: 'module-beta-run-1',
+      registrationId: '60000000-0000-4000-a000-000000000006',
+      scenario: 'stale-policy',
+    });
+
+    expect(result).toMatchObject({ state: 'inconclusive', terminalReason: 'policy_mismatch' });
+    expect(scans).toBe(0);
+    await expect(
+      verifyDeveloperTrustAttestation({ envelope: result.attestation, signer }),
+    ).resolves.toBe(true);
+  });
+
+  test('scanner-crash acceptance delegates a process termination fault to semgrep', async () => {
+    let scans = 0;
+    let faultedScans = 0;
+    const result = await pipelineWith(
+      { semgrep: new Error('fixture-sensitive-value-must-not-leak') },
+      (name, input) => {
+        scans += 1;
+        if (input[DEVELOPER_TRUST_SCANNER_FAULT] === 'terminate-process') {
+          expect(name).toBe('semgrep');
+          faultedScans += 1;
+        }
+      },
+    ).run({
+      ...claim(),
+      acceptanceRunId: 'module-beta-run-1',
+      registrationId: '60000000-0000-4000-a000-000000000006',
+      scenario: 'scanner-crash',
+    });
+
+    expect(result).toMatchObject({
+      state: 'inconclusive',
+      terminalReason: 'scanner_inconclusive',
+      findings: [],
+      resourceSummary: { scanner_count: 5, inconclusive_scanners: 1 },
+    });
+    expect(scans).toBe(5);
+    expect(faultedScans).toBe(1);
+    expect(JSON.stringify(result)).not.toContain('fixture-sensitive-value-must-not-leak');
+  });
+
+  test('invalid-signature acceptance detects a corrupted DSSE and emits valid fail-closed evidence', async () => {
+    const baseSigner = evidenceSigner();
+    const verificationResults: boolean[] = [];
+    const observingSigner: EvidenceSigner = {
+      ...baseSigner,
+      async verify(payload, signature) {
+        const verified = await baseSigner.verify(payload, signature);
+        verificationResults.push(verified);
+        return verified;
+      },
+    };
+    const result = await pipelineWith({}, undefined, sandboxEvidence(), observingSigner).run({
+      ...claim(),
+      acceptanceRunId: 'module-beta-run-1',
+      registrationId: '60000000-0000-4000-a000-000000000006',
+      scenario: 'invalid-signature',
+    });
+
+    expect(result).toMatchObject({
+      state: 'inconclusive',
+      terminalReason: 'attestation_signature_invalid',
+      attestationRecord: { result: 'inconclusive' },
+    });
+    expect(verificationResults).toEqual([true, false]);
+    await expect(
+      verifyDeveloperTrustAttestation({ envelope: result.attestation, signer: baseSigner }),
+    ).resolves.toBe(true);
+    const statement = JSON.parse(
+      Buffer.from(result.attestation.payload, 'base64').toString('utf8'),
+    );
+    expect(statement.predicate).toMatchObject({
+      result: 'inconclusive',
+      acceptance: { scenario: 'invalid-signature' },
+    });
   });
 
   test.each([

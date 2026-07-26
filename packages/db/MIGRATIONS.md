@@ -43,9 +43,29 @@ The baseline assumes these already exist (they do on every Supabase env):
   (rewritten by `20260706120000000_retire_basejump` right after). No data, no
   triggers; dropped entirely by the follow-up drop-schema migration.
 - Roles: `anon`, `authenticated`, `service_role`
+- Retention worker membership: migration
+  `20260726150000000_developer_artifact_retention.sql` creates the NOLOGIN
+  `developer_artifact_retention_worker` role and its column-level grants; do not
+  pre-create it. After migrations, a DBA must grant the runtime API login
+  membership once:
+  `GRANT developer_artifact_retention_worker TO <api_login_role>;`
 
 On a truly bare Postgres run `scripts/test-prereqs.sql` first (the self-host
 bootstrap does the equivalent automatically).
+
+For optional migration-time automation, set the exact runtime login in the
+target database before running migrations, for example:
+`ALTER DATABASE <db> SET kortix.retention_runtime_role = '<api_login_role>';`
+A new migration connection will see the setting, and migration
+`20260727120000000_developer_artifact_retention_role_membership.sql` will attempt
+only that membership grant. This is a convenience; the DBA grant above remains
+authoritative.
+
+Do not infer the runtime login from the migration login: migrations and the API
+use separate database secrets and may authenticate as different roles. Without
+membership, retention connections fail with FATAL `42501 permission denied to
+set role "developer_artifact_retention_worker"`; the API remains available, but
+retention does not run and API logs emit the exact DBA `GRANT` instruction.
 
 ---
 

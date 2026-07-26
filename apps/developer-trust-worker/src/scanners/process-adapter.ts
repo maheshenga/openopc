@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
 import type { DeveloperTrustScannerPolicy } from '../policy';
-import type { ScannerCommandRunner } from './types';
+import { DEVELOPER_TRUST_SCANNER_FAULT, type ScannerCommandRunner } from './types';
 
 const SCANNER_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 const SCANNER_IDENTITY_TIMEOUT_MS = 30_000;
@@ -35,6 +35,7 @@ export interface ExecutePinnedScannerProcessInput {
   maxOutputBytes: number;
   prepareWorkspace(directory: string): Promise<void>;
   signal?: AbortSignal;
+  terminateAfterSpawn?: boolean;
 }
 
 export function createPinnedScannerCommandRunner(): ScannerCommandRunner {
@@ -60,6 +61,7 @@ export function createPinnedScannerCommandRunner(): ScannerCommandRunner {
         timeoutMs: input.scanner.timeoutMs,
         maxOutputBytes: input.scanner.maxOutputBytes,
         signal: input.signal,
+        terminateAfterSpawn: input.scanInput[DEVELOPER_TRUST_SCANNER_FAULT] === 'terminate-process',
         prepareWorkspace: async (directory) => {
           await assertSafeWorkspace(input.scanInput.workspacePath);
           await cp(input.scanInput.workspacePath, directory, {
@@ -153,7 +155,8 @@ export async function executePinnedScannerProcess(
     !Number.isSafeInteger(input.timeoutMs) ||
     input.timeoutMs < 1 ||
     !Number.isSafeInteger(input.maxOutputBytes) ||
-    input.maxOutputBytes < 1
+    input.maxOutputBytes < 1 ||
+    (input.terminateAfterSpawn !== undefined && typeof input.terminateAfterSpawn !== 'boolean')
   ) {
     return { kind: 'inconclusive', reason: 'invalid_configuration' };
   }
@@ -250,5 +253,6 @@ function runChildProcess(
     });
     input.signal?.addEventListener('abort', cancel, { once: true });
     if (input.signal?.aborted) cancel();
+    if (input.terminateAfterSpawn) queueMicrotask(() => stop('process_terminated'));
   });
 }

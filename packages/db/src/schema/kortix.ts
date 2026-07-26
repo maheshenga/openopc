@@ -6149,6 +6149,11 @@ export const developerArtifactUploadStateEnum = kortixSchema.enum(
   ['created', 'uploaded', 'finalized', 'cancelled', 'expired'],
 );
 
+export const developerArtifactRetentionRunStateEnum = kortixSchema.enum(
+  'developer_artifact_retention_run_state',
+  ['queued', 'running', 'succeeded', 'failed'],
+);
+
 export const developerVerificationStateEnum = kortixSchema.enum('developer_verification_state', [
   'queued',
   'running',
@@ -6542,6 +6547,13 @@ export const developerModuleArtifactUploads = kortixSchema.table(
     stagingStorageKey: text('staging_storage_key').notNull(),
     artifactId: uuid('artifact_id'),
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    stagingDeletedAt: timestamp('staging_deleted_at', { withTimezone: true, mode: 'string' }),
+    cleanupAttempts: integer('cleanup_attempts').default(0).notNull(),
+    cleanupNextAttemptAt: timestamp('cleanup_next_attempt_at', {
+      withTimezone: true,
+      mode: 'string',
+    }),
+    cleanupLastError: varchar('cleanup_last_error', { length: 1024 }),
     createdBy: uuid('created_by').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
       .defaultNow()
@@ -6570,6 +6582,9 @@ export const developerModuleArtifactUploads = kortixSchema.table(
       table.state,
       table.expiresAt,
     ),
+    index('idx_developer_module_artifact_uploads_cleanup_due')
+      .on(table.cleanupNextAttemptAt, table.expiresAt, table.uploadId)
+      .where(sql`${table.stagingDeletedAt} IS NULL`),
     check(
       'developer_module_artifact_uploads_digest_check',
       sql`${table.expectedDigest} ~ '^sha256:[0-9a-f]{64}$'`,
@@ -6594,6 +6609,124 @@ export const developerModuleArtifactUploads = kortixSchema.table(
       ) OR (
         ${table.state} <> 'finalized'
         AND ${table.artifactId} IS NULL
+      )`,
+    ),
+    check(
+      'developer_module_artifact_uploads_cleanup_attempts_check',
+      sql`${table.cleanupAttempts} >= 0`,
+    ),
+    check(
+      'developer_module_artifact_uploads_cleanup_error_check',
+      sql`${table.cleanupLastError} IS NULL OR (
+        length(BTRIM(${table.cleanupLastError})) BETWEEN 1 AND 1024
+        AND ${table.cleanupLastError} !~ '[[:cntrl:]]'
+      )`,
+    ),
+    check(
+      'developer_module_artifact_uploads_cleanup_state_check',
+      sql`${table.stagingDeletedAt} IS NULL OR (
+        ${table.cleanupNextAttemptAt} IS NULL
+        AND ${table.cleanupLastError} IS NULL
+      )`,
+    ),
+  ],
+);
+
+export const developerArtifactRetentionRuns = kortixSchema.table(
+  'developer_artifact_retention_runs',
+  {
+    runId: uuid('run_id').defaultRandom().primaryKey(),
+    acceptanceRunId: varchar('acceptance_run_id', { length: 128 }),
+    state: developerArtifactRetentionRunStateEnum('state').default('queued').notNull(),
+    attempts: integer('attempts').default(0).notNull(),
+    availableAt: timestamp('available_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    leaseOwner: varchar('lease_owner', { length: 128 }),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true, mode: 'string' }),
+    cursor: varchar('cursor', { length: 2048 }),
+    lastError: varchar('last_error', { length: 1024 }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    finishedAt: timestamp('finished_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    uniqueIndex('developer_artifact_retention_runs_acceptance_unique')
+      .on(table.acceptanceRunId)
+      .where(sql`${table.acceptanceRunId} IS NOT NULL`),
+    uniqueIndex('developer_artifact_retention_runs_scheduled_active_unique')
+      .on(sql`((1))`)
+      .where(
+        sql`${table.acceptanceRunId} IS NULL AND ${table.state} IN ('queued', 'running')`,
+      ),
+    index('idx_developer_artifact_retention_runs_claim').on(
+      table.state,
+      table.availableAt,
+      table.leaseExpiresAt,
+      table.createdAt,
+      table.runId,
+    ),
+    check(
+      'developer_artifact_retention_runs_acceptance_run_id_check',
+      sql`${table.acceptanceRunId} IS NULL OR ${table.acceptanceRunId} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'`,
+    ),
+    check(
+      'developer_artifact_retention_runs_attempts_check',
+      sql`${table.attempts} >= 0`,
+    ),
+    check(
+      'developer_artifact_retention_runs_cursor_check',
+      sql`${table.cursor} IS NULL OR (
+        octet_length(${table.cursor}) BETWEEN 1 AND 2048
+        AND BTRIM(${table.cursor}) = ${table.cursor}
+        AND ${table.cursor} !~ '[[:cntrl:]]'
+      )`,
+    ),
+    check(
+      'developer_artifact_retention_runs_error_check',
+      sql`${table.lastError} IS NULL OR (
+        length(BTRIM(${table.lastError})) BETWEEN 1 AND 1024
+        AND ${table.lastError} !~ '[[:cntrl:]]'
+      )`,
+    ),
+    check(
+      'developer_artifact_retention_runs_lease_owner_check',
+      sql`${table.leaseOwner} IS NULL OR (
+        length(BTRIM(${table.leaseOwner})) BETWEEN 1 AND 128
+        AND BTRIM(${table.leaseOwner}) = ${table.leaseOwner}
+        AND ${table.leaseOwner} !~ '[[:cntrl:]]'
+      )`,
+    ),
+    check(
+      'developer_artifact_retention_runs_state_check',
+      sql`(
+        (
+          ${table.state} = 'queued'
+          AND ${table.leaseOwner} IS NULL
+          AND ${table.leaseExpiresAt} IS NULL
+          AND ${table.finishedAt} IS NULL
+        ) OR (
+          ${table.state} = 'running'
+          AND ${table.leaseOwner} IS NOT NULL
+          AND ${table.leaseExpiresAt} IS NOT NULL
+          AND ${table.finishedAt} IS NULL
+        ) OR (
+          ${table.state} = 'succeeded'
+          AND ${table.leaseOwner} IS NULL
+          AND ${table.leaseExpiresAt} IS NULL
+          AND ${table.finishedAt} IS NOT NULL
+          AND ${table.lastError} IS NULL
+        ) OR (
+          ${table.state} = 'failed'
+          AND ${table.leaseOwner} IS NULL
+          AND ${table.leaseExpiresAt} IS NULL
+          AND ${table.finishedAt} IS NOT NULL
+          AND ${table.lastError} IS NOT NULL
+        )
       )`,
     ),
   ],
@@ -6876,6 +7009,8 @@ export const developerModuleVerificationRuns = kortixSchema.table(
     heartbeatAt: timestamp('heartbeat_at', { withTimezone: true, mode: 'string' }),
     terminalReason: varchar('terminal_reason', { length: 256 }),
     sbomDigest: varchar('sbom_digest', { length: 71 }),
+    sbomStorageKey: text('sbom_storage_key'),
+    sbomSizeBytes: bigint('sbom_size_bytes', { mode: 'number' }),
     attestationDigest: varchar('attestation_digest', { length: 71 }),
     resourceSummary: jsonb('resource_summary')
       .default({})
@@ -6946,6 +7081,22 @@ export const developerModuleVerificationRuns = kortixSchema.table(
     ),
     check('developer_module_verification_runs_attempt_check', sql`${table.attempt} > 0`),
     check(
+      'developer_module_verification_runs_sbom_reference_check',
+      sql`(
+        ${table.sbomStorageKey} IS NULL
+        AND ${table.sbomSizeBytes} IS NULL
+      ) OR (
+        ${table.sbomStorageKey} IS NOT NULL
+        AND ${table.sbomSizeBytes} IS NOT NULL
+        AND octet_length(${table.sbomStorageKey}) BETWEEN 1 AND 2048
+        AND ${table.sbomStorageKey} !~ '[[:cntrl:]]'
+        AND ${table.sbomStorageKey} NOT LIKE '/%'
+        AND position(E'\\' in ${table.sbomStorageKey}) = 0
+        AND NOT ('..' = ANY(string_to_array(${table.sbomStorageKey}, '/')))
+        AND ${table.sbomSizeBytes} BETWEEN 1 AND 16777216
+      )`,
+    ),
+    check(
       'developer_module_verification_runs_lease_check',
       sql`(
         ${table.state} = 'running'
@@ -6968,7 +7119,12 @@ export const developerModuleVerificationRuns = kortixSchema.table(
       'developer_module_verification_runs_passed_evidence_check',
       sql`${table.state} <> 'passed'
         OR (
-          ${table.sbomDigest} ~ '^sha256:[0-9a-f]{64}$'
+          ${table.sbomDigest} IS NOT NULL
+          AND ${table.sbomDigest} ~ '^sha256:[0-9a-f]{64}$'
+          AND ${table.sbomStorageKey} IS NOT NULL
+          AND ${table.sbomSizeBytes} IS NOT NULL
+          AND ${table.sbomSizeBytes} BETWEEN 1 AND 16777216
+          AND ${table.attestationDigest} IS NOT NULL
           AND ${table.attestationDigest} ~ '^sha256:[0-9a-f]{64}$'
         )`,
     ),

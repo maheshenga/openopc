@@ -27,8 +27,33 @@ services:
       - /bin/sh
       - -ec
       - |
-        psql -h postgres -U openopc -d openopc_trust_test <<'SQL'
+        psql -h postgres -U openopc -d openopc_trust_test -v ON_ERROR_STOP=1 <<'SQL'
         CREATE SCHEMA IF NOT EXISTS kortix;
+        DO $openopc_acceptance_roles$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+            CREATE ROLE anon NOLOGIN;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+            CREATE ROLE authenticated NOLOGIN;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+            CREATE ROLE service_role NOLOGIN;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'developer_trust_worker') THEN
+            CREATE ROLE developer_trust_worker NOLOGIN;
+          END IF;
+        END
+        $openopc_acceptance_roles$;
+        DO $$developer_artifact_upload_state$$
+        BEGIN
+          CREATE TYPE kortix.developer_artifact_upload_state AS ENUM (
+            'created', 'uploaded', 'finalized', 'cancelled', 'expired'
+          );
+        EXCEPTION
+          WHEN duplicate_object THEN NULL;
+        END
+        $$developer_artifact_upload_state$$;
         CREATE TABLE IF NOT EXISTS kortix.developer_module_artifacts (
           artifact_id uuid PRIMARY KEY,
           account_id uuid NOT NULL,
@@ -36,6 +61,37 @@ services:
           storage_key text NOT NULL,
           size_bytes bigint NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS kortix.developer_module_artifact_uploads (
+          upload_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          account_id uuid NOT NULL,
+          publisher_id varchar(63) NOT NULL,
+          state kortix.developer_artifact_upload_state NOT NULL DEFAULT 'created',
+          expected_digest varchar(71) NOT NULL,
+          expected_size bigint NOT NULL,
+          staging_storage_key text NOT NULL,
+          artifact_id uuid,
+          expires_at timestamptz NOT NULL,
+          created_by uuid NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now(),
+          CONSTRAINT developer_module_artifact_uploads_upload_account_unique
+            UNIQUE (upload_id, account_id),
+          CONSTRAINT developer_module_artifact_uploads_digest_check
+            CHECK (expected_digest ~ '^sha256:[0-9a-f]{64}$'),
+          CONSTRAINT developer_module_artifact_uploads_size_check
+            CHECK (expected_size BETWEEN 1 AND 536870912),
+          CONSTRAINT developer_module_artifact_uploads_storage_key_check
+            CHECK (octet_length(staging_storage_key) BETWEEN 1 AND 2048),
+          CONSTRAINT developer_module_artifact_uploads_expiry_check
+            CHECK (expires_at > created_at),
+          CONSTRAINT developer_module_artifact_uploads_finalized_artifact_check
+            CHECK (
+              (state = 'finalized' AND artifact_id IS NOT NULL)
+              OR (state <> 'finalized' AND artifact_id IS NULL)
+            )
+        );
+        CREATE INDEX IF NOT EXISTS idx_developer_module_artifact_uploads_account_state_expiry
+          ON kortix.developer_module_artifact_uploads(account_id, state, expires_at);
         CREATE TABLE IF NOT EXISTS kortix.developer_module_releases (
           release_id uuid PRIMARY KEY,
           account_id uuid NOT NULL,
@@ -62,6 +118,8 @@ services:
           heartbeat_at timestamptz,
           terminal_reason varchar(256),
           sbom_digest varchar(71),
+          sbom_storage_key text,
+          sbom_size_bytes bigint,
           attestation_digest varchar(71),
           resource_summary jsonb NOT NULL DEFAULT '{}'::jsonb,
           started_at timestamptz,
@@ -69,6 +127,42 @@ services:
           created_at timestamptz NOT NULL DEFAULT now(),
           updated_at timestamptz NOT NULL DEFAULT now()
         );
+        ALTER TABLE kortix.developer_module_verification_runs
+          ADD COLUMN IF NOT EXISTS sbom_storage_key text,
+          ADD COLUMN IF NOT EXISTS sbom_size_bytes bigint;
+        ALTER TABLE kortix.developer_module_verification_runs
+          DROP CONSTRAINT IF EXISTS developer_module_verification_runs_sbom_reference_check;
+        ALTER TABLE kortix.developer_module_verification_runs
+          ADD CONSTRAINT developer_module_verification_runs_sbom_reference_check
+          CHECK (
+            (sbom_storage_key IS NULL AND sbom_size_bytes IS NULL)
+            OR (
+              sbom_storage_key IS NOT NULL
+              AND sbom_size_bytes IS NOT NULL
+              AND octet_length(sbom_storage_key) BETWEEN 1 AND 2048
+              AND sbom_storage_key !~ '[[:cntrl:]]'
+              AND sbom_storage_key NOT LIKE '/%'
+              AND position(E'\\' in sbom_storage_key) = 0
+              AND NOT ('..' = ANY(string_to_array(sbom_storage_key, '/')))
+              AND sbom_size_bytes BETWEEN 1 AND 16777216
+            )
+          );
+        ALTER TABLE kortix.developer_module_verification_runs
+          DROP CONSTRAINT IF EXISTS developer_module_verification_runs_passed_evidence_check;
+        ALTER TABLE kortix.developer_module_verification_runs
+          ADD CONSTRAINT developer_module_verification_runs_passed_evidence_check
+          CHECK (
+            state <> 'passed'
+            OR (
+              sbom_digest IS NOT NULL
+              AND sbom_digest ~ '^sha256:[0-9a-f]{64}$'
+              AND sbom_storage_key IS NOT NULL
+              AND sbom_size_bytes IS NOT NULL
+              AND sbom_size_bytes BETWEEN 1 AND 16777216
+              AND attestation_digest IS NOT NULL
+              AND attestation_digest ~ '^sha256:[0-9a-f]{64}$'
+            )
+          );
         CREATE TABLE IF NOT EXISTS kortix.developer_module_verification_findings (
           finding_id uuid PRIMARY KEY,
           run_id uuid NOT NULL,
@@ -96,6 +190,9 @@ services:
           issuer varchar(256) NOT NULL
         );
         SQL
+        psql -h postgres -U openopc -d openopc_trust_test -v ON_ERROR_STOP=1 -f /migrations/20260726150000000_developer_artifact_retention.sql
+    volumes:
+      - ../../packages/db/migrations/20260726150000000_developer_artifact_retention.sql:/migrations/20260726150000000_developer_artifact_retention.sql:ro
     networks: [trust-private]
 
   minio:
@@ -182,12 +279,12 @@ services:
       DEVELOPER_TRUST_LEASE_MS: "30000"
       DEVELOPER_TRUST_POLL_MS: "1000"
       DEVELOPER_TRUST_DATABASE_URL_FILE: /run/openopc-secrets/database-url
-      DEVELOPER_TRUST_S3_ENDPOINT: http://minio:9000
-      DEVELOPER_TRUST_S3_REGION: us-east-1
-      DEVELOPER_TRUST_S3_BUCKET: developer-artifacts
+      DEVELOPER_TRUST_S3_ENDPOINT: "${MODULE_BETA_ACCEPTANCE_S3_ENDPOINT:-http://minio:9000}"
+      DEVELOPER_TRUST_S3_REGION: "${MODULE_BETA_ACCEPTANCE_S3_REGION:-us-east-1}"
+      DEVELOPER_TRUST_S3_BUCKET: "${MODULE_BETA_ACCEPTANCE_S3_BUCKET:-developer-artifacts}"
       DEVELOPER_TRUST_S3_ACCESS_KEY_ID_FILE: /run/openopc-secrets/s3-access-key-id
       DEVELOPER_TRUST_S3_SECRET_ACCESS_KEY_FILE: /run/openopc-secrets/s3-secret-access-key
-      DEVELOPER_TRUST_S3_FORCE_PATH_STYLE: "true"
+      DEVELOPER_TRUST_S3_FORCE_PATH_STYLE: "${MODULE_BETA_ACCEPTANCE_S3_FORCE_PATH_STYLE:-true}"
       DEVELOPER_TRUST_WORKSPACE_ROOT: /tmp/openopc-developer-trust
       DEVELOPER_TRUST_SEMGREP_RULES_FILE: /opt/openopc/policies/semgrep.yml
       DEVELOPER_TRUST_ATTESTATION_PRIVATE_KEY_FILE: /run/openopc-secrets/attestation.pk8
@@ -200,6 +297,9 @@ services:
       DEVELOPER_TRUST_OCI_CONTROL_TOKEN_FILE: /run/openopc-secrets/oci-control-token
       DEVELOPER_TRUST_VERIFICATION_BROKER_URL: http://oci-control:8090
       DEVELOPER_TRUST_ALLOWED_LICENSES_JSON: '["Apache-2.0","MIT"]'
+      MODULE_BETA_ACCEPTANCE_WORKER_ENABLED: "${MODULE_BETA_ACCEPTANCE_WORKER_ENABLED:-false}"
+      MODULE_BETA_ACCEPTANCE_FAULT_KEY_FILE: /run/openopc-secrets/acceptance-hmac
+      MODULE_BETA_ACCEPTANCE_CONTROLLER_IDENTITY: "${MODULE_BETA_ACCEPTANCE_CONTROLLER_IDENTITY:-}"
     volumes:
       - trust-secrets:/run/openopc-secrets:ro
     tmpfs:
@@ -212,6 +312,46 @@ services:
       start_period: 20s
     networks: [trust-private]
 
+  module-beta-acceptance-controller:
+    build:
+      context: ../..
+      dockerfile: apps/module-beta-acceptance-controller/Dockerfile
+      target: runtime
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+      trust-secrets:
+        condition: service_completed_successfully
+    user: "65532:65532"
+    environment:
+      MODULE_BETA_ACCEPTANCE_ENABLED: "${MODULE_BETA_ACCEPTANCE_ENABLED:-false}"
+      MODULE_BETA_ACCEPTANCE_ENVIRONMENT: "${MODULE_BETA_ACCEPTANCE_ENVIRONMENT:-staging}"
+      MODULE_BETA_ACCEPTANCE_IDENTITY: "${MODULE_BETA_ACCEPTANCE_CONTROLLER_IDENTITY:-}"
+      MODULE_BETA_ACCEPTANCE_TOKEN_FILE: /run/openopc-secrets/acceptance-token
+      MODULE_BETA_ACCEPTANCE_FAULT_KEY_FILE: /run/openopc-secrets/acceptance-hmac
+      MODULE_BETA_ACCEPTANCE_DATABASE_URL_FILE: /run/openopc-secrets/database-url
+      MODULE_BETA_ACCEPTANCE_S3_ENDPOINT: "${MODULE_BETA_ACCEPTANCE_S3_ENDPOINT:-}"
+      MODULE_BETA_ACCEPTANCE_S3_REGION: "${MODULE_BETA_ACCEPTANCE_S3_REGION:-us-east-1}"
+      MODULE_BETA_ACCEPTANCE_S3_BUCKET: "${MODULE_BETA_ACCEPTANCE_S3_BUCKET:-developer-artifacts}"
+      MODULE_BETA_ACCEPTANCE_S3_ACCESS_KEY_ID_FILE: /run/openopc-secrets/s3-access-key-id
+      MODULE_BETA_ACCEPTANCE_S3_SECRET_ACCESS_KEY_FILE: /run/openopc-secrets/s3-secret-access-key
+      MODULE_BETA_ACCEPTANCE_S3_FORCE_PATH_STYLE: "${MODULE_BETA_ACCEPTANCE_S3_FORCE_PATH_STYLE:-true}"
+      MODULE_BETA_ACCEPTANCE_S3_SERVER_SIDE_ENCRYPTION: "AES256"
+      MODULE_BETA_ACCEPTANCE_PLAN_TTL_SECONDS: "${MODULE_BETA_ACCEPTANCE_PLAN_TTL_SECONDS:-600}"
+      MODULE_BETA_ACCEPTANCE_PRESIGN_TTL_SECONDS: "${MODULE_BETA_ACCEPTANCE_PRESIGN_TTL_SECONDS:-300}"
+      MODULE_BETA_ACCEPTANCE_PRESIGN_ALLOWED_HOSTS_JSON: "${MODULE_BETA_ACCEPTANCE_PRESIGN_ALLOWED_HOSTS_JSON:-[]}"
+      MODULE_BETA_ACCEPTANCE_RETENTION_PROBE_GRACE_MS: "${OPENOPC_DEVELOPER_ARTIFACT_RETENTION_ORPHAN_GRACE_MS:-5000}"
+      MODULE_BETA_ACCEPTANCE_PORT: "8081"
+    volumes:
+      - trust-secrets:/run/openopc-secrets:ro
+    tmpfs:
+      - /tmp/openopc-controller:uid=65532,gid=65532,mode=0700
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks: [trust-private]
+
   trust-acceptance:
     build:
       context: ../..
@@ -222,9 +362,10 @@ services:
         condition: service_healthy
     environment:
       MODULE_BETA_TEST_DATABASE_URL: postgres://openopc:openopc-test@postgres:5432/openopc_trust_test
-      DEVELOPER_TRUST_S3_ENDPOINT: http://minio:9000
-      DEVELOPER_TRUST_S3_REGION: us-east-1
-      DEVELOPER_TRUST_S3_BUCKET: developer-artifacts
+      DEVELOPER_TRUST_S3_ENDPOINT: "${MODULE_BETA_ACCEPTANCE_S3_ENDPOINT:-http://minio:9000}"
+      DEVELOPER_TRUST_S3_REGION: "${MODULE_BETA_ACCEPTANCE_S3_REGION:-us-east-1}"
+      DEVELOPER_TRUST_S3_BUCKET: "${MODULE_BETA_ACCEPTANCE_S3_BUCKET:-developer-artifacts}"
+      DEVELOPER_TRUST_S3_FORCE_PATH_STYLE: "${MODULE_BETA_ACCEPTANCE_S3_FORCE_PATH_STYLE:-true}"
       DEVELOPER_TRUST_S3_ACCESS_KEY_ID: openopc-test-access
       DEVELOPER_TRUST_S3_SECRET_ACCESS_KEY: openopc-test-secret-change-me
     command:

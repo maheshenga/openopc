@@ -378,7 +378,7 @@ Read the descriptor from canonical artifact bytes after traversal, symlink, file
 
 Run: `pnpm --filter kortix-api test -- artifacts runtime-descriptors releases trust-gate && pnpm --filter @kortix/registry test && pnpm --filter @kortix/db test -- developer-module-release-schema.test.ts && pnpm --filter @kortix/db migrate:lint && pnpm --filter kortix-api typecheck`
 
-Expected: PASS; traversal, duplicate-entry, decompression-bomb, OCI-tag, host-path, and unknown-field fixtures fail closed before review.
+Expected: PASS; traversal, duplicate-entry, oversized-file, OCI-tag, host-path, and unknown-field fixtures fail closed before review. The canonical JSON artifact format never decompresses uploaded entries, so the size fixture must not be described as a decompression-bomb defense.
 
 - [ ] **Step 5: Commit**
 
@@ -499,7 +499,7 @@ Expected: FAIL because the staging harness and signed evidence output do not exi
 
 - [ ] **Step 3: Implement the harness**
 
-The harness uses `fixtures.ts` to deterministically generate secret-leak, traversal, decompression-bomb, invalid-signature, stale-policy, and scanner-crash archives in a temporary output directory; generated attack archives are never committed. It uploads each fixture through the real API, waits for immutable verification attempts, checks the exact terminal state/finding code, verifies artifact and SBOM digests from MinIO, verifies DSSE signature/key IDs, tests cross-account denial, runs retention/orphan cleanup, and records scanner binary/image identities. It must refuse mocked URLs and never set `DEVELOPER_TRUST_ENABLED` itself.
+The harness uses `fixtures.ts` to deterministically generate secret-leak, traversal, oversized-file, invalid-signature, stale-policy, and scanner-crash artifacts in a temporary output directory; generated attack artifacts are never committed. The format is canonical JSON with base64 file bytes and performs no archive decompression. It uploads each fixture through the real API, waits for immutable verification attempts, checks the exact terminal state/finding code, verifies artifact and SBOM digests from MinIO, verifies DSSE signature/key IDs, tests cross-account denial, runs retention/orphan cleanup, and records scanner binary/image identities. It must refuse mocked URLs and never set `DEVELOPER_TRUST_ENABLED` itself.
 
 - [ ] **Step 4: Run GREEN against staging**
 

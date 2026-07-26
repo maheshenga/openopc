@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { ModuleBetaAcceptancePlanV1 } from '@openopc/module-runtime-contracts';
 
 import { loadDeveloperTrustWorkerConfig } from './config';
 import * as developerTrustWorkerModule from './index';
@@ -34,10 +35,16 @@ function workItem(): DeveloperTrustWorkItem {
 }
 
 function pipelineResult(): DeveloperTrustPipelineResult {
+  const sbomBytes = new TextEncoder().encode('{"bomFormat":"CycloneDX","specVersion":"1.6"}');
   return {
     state: 'passed',
     terminalReason: 'verification completed',
     sbomDigest: digest('e'),
+    sbom: {
+      document: { bomFormat: 'CycloneDX', specVersion: '1.6', version: 1, components: [] },
+      bytes: sbomBytes,
+      digest: digest('e'),
+    },
     attestationDigest: digest('f'),
     resourceSummary: { scanner_count: 5 },
     findings: [],
@@ -61,6 +68,42 @@ function pipelineResult(): DeveloperTrustPipelineResult {
       },
       issuer: 'openopc-developer-trust-worker',
     },
+  };
+}
+
+function evidenceStore(events?: string[]) {
+  return {
+    async putSbom(input: {
+      accountId: string;
+      runId: string;
+      digest: `sha256:${string}`;
+      bytes: Uint8Array;
+    }) {
+      events?.push('persist');
+      return {
+        kind: 'sbom' as const,
+        bucket: 'developer-trust',
+        storageKey: `developer-trust/evidence/accounts/${input.accountId}/runs/${input.runId}/sbom/sha256/${input.digest.slice(7)}.cdx.json`,
+        digest: input.digest,
+        sizeBytes: input.bytes.byteLength,
+        mediaType: 'application/vnd.cyclonedx+json' as const,
+      };
+    },
+  };
+}
+
+function acceptancePlan(item: DeveloperTrustWorkItem): ModuleBetaAcceptancePlanV1 {
+  return {
+    schemaVersion: 1,
+    registrationId: '60000000-0000-4000-a000-000000000006',
+    acceptanceRunId: 'module-beta-run-1',
+    scenario: 'clean-wasi',
+    accountId: item.accountId,
+    artifactId: item.artifactId,
+    artifactDigest: item.artifactDigest,
+    issuedAt: '2026-07-25T00:00:00.000Z',
+    expiresAt: '2026-07-25T00:15:00.000Z',
+    controllerIdentity: `acceptance-controller@1.0.0#${digest('9')}`,
   };
 }
 
@@ -200,6 +243,7 @@ describe('developer trust worker assembly', () => {
   test('claims, heartbeats, runs, and finalizes through injected control ports', async () => {
     const item = workItem();
     const finalized: unknown[] = [];
+    const events: string[] = [];
     let heartbeats = 0;
     const worker = createDeveloperTrustWorker({
       workerId: 'worker-a',
@@ -210,15 +254,18 @@ describe('developer trust worker assembly', () => {
           heartbeats += 1;
         },
         finalize: async (input) => {
+          events.push('finalize');
           finalized.push(input);
         },
       },
       artifactProvider: { prepare: async () => item },
       pipeline: { run: async () => pipelineResult() },
+      evidenceStore: evidenceStore(events),
     });
 
     await expect(worker.runOnce()).resolves.toEqual({ kind: 'processed', runId: item.runId });
     expect(heartbeats).toBeGreaterThanOrEqual(1);
+    expect(events).toEqual(['persist', 'finalize']);
     expect(finalized).toEqual([
       expect.objectContaining({
         runId: item.runId,
@@ -226,8 +273,210 @@ describe('developer trust worker assembly', () => {
         leaseToken: item.leaseToken,
         artifactDigest: item.artifactDigest,
         state: 'passed',
+        sbomStorageKey: `developer-trust/evidence/accounts/${item.accountId}/runs/${item.runId}/sbom/sha256/${digest('e').slice(7)}.cdx.json`,
+        sbomSizeBytes: pipelineResult().sbom.bytes.byteLength,
       }),
     ]);
+  });
+
+  test('consumes an optional acceptance plan after preparation and enriches the pipeline item', async () => {
+    const item = workItem();
+    const events: string[] = [];
+    const pipelineItems: DeveloperTrustWorkItem[] = [];
+    const consumeInputs: unknown[] = [];
+    const worker = createDeveloperTrustWorker({
+      workerId: 'worker-a',
+      leaseMs: 30_000,
+      control: {
+        claim: async () => item,
+        heartbeat: async () => undefined,
+        finalize: async () => {
+          events.push('finalize');
+        },
+      },
+      artifactProvider: {
+        prepare: async () => {
+          events.push('prepare');
+          return item;
+        },
+        release: async () => {
+          events.push('release');
+        },
+      },
+      acceptancePlanConsumer: {
+        consume: async (input) => {
+          events.push('consume');
+          consumeInputs.push(input);
+          return acceptancePlan(item);
+        },
+      },
+      pipeline: {
+        run: async (pipelineItem) => {
+          events.push('pipeline');
+          pipelineItems.push(pipelineItem);
+          return pipelineResult();
+        },
+      },
+      evidenceStore: evidenceStore(events),
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({ kind: 'processed', runId: item.runId });
+    expect(consumeInputs).toEqual([
+      {
+        accountId: item.accountId,
+        artifactId: item.artifactId,
+        artifactDigest: item.artifactDigest,
+        runId: item.runId,
+      },
+    ]);
+    expect(pipelineItems).toEqual([
+      {
+        ...item,
+        acceptanceRunId: 'module-beta-run-1',
+        registrationId: '60000000-0000-4000-a000-000000000006',
+        scenario: 'clean-wasi',
+      },
+    ]);
+    expect(events).toEqual(['prepare', 'consume', 'pipeline', 'persist', 'finalize', 'release']);
+  });
+
+  test('fails closed when acceptance plan consumption fails', async () => {
+    const item = workItem();
+    const events: string[] = [];
+    let pipelineRuns = 0;
+    let evidenceWrites = 0;
+    let finalizations = 0;
+    const worker = createDeveloperTrustWorker({
+      workerId: 'worker-a',
+      leaseMs: 30_000,
+      control: {
+        claim: async () => item,
+        heartbeat: async () => undefined,
+        finalize: async () => {
+          finalizations += 1;
+        },
+      },
+      artifactProvider: {
+        prepare: async () => {
+          events.push('prepare');
+          return item;
+        },
+        release: async () => {
+          events.push('release');
+        },
+      },
+      acceptancePlanConsumer: {
+        consume: async () => {
+          events.push('consume');
+          throw new Error('fixture acceptance credential must not leak');
+        },
+      },
+      pipeline: {
+        run: async () => {
+          pipelineRuns += 1;
+          return pipelineResult();
+        },
+      },
+      evidenceStore: {
+        putSbom: async () => {
+          evidenceWrites += 1;
+          return { storageKey: 'unreachable', sizeBytes: 1 };
+        },
+      },
+    });
+
+    await expect(worker.runOnce()).rejects.toMatchObject({
+      code: 'DEVELOPER_TRUST_WORKER_OPERATION_FAILED',
+      message: 'DEVELOPER_TRUST_WORKER_OPERATION_FAILED',
+    });
+    expect(events).toEqual(['prepare', 'consume', 'release']);
+    expect(pipelineRuns).toBe(0);
+    expect(evidenceWrites).toBe(0);
+    expect(finalizations).toBe(0);
+  });
+
+  test.each(['claim', 'prepared'] as const)(
+    'rejects acceptance context injected by the %s without a consumer',
+    async (source) => {
+      const item = workItem();
+      const injected = {
+        ...item,
+        acceptanceRunId: 'module-beta-run-1',
+        registrationId: '60000000-0000-4000-a000-000000000006',
+        scenario: 'clean-wasi' as const,
+      };
+      let pipelineRuns = 0;
+      let evidenceWrites = 0;
+      let finalizations = 0;
+      const worker = createDeveloperTrustWorker({
+        workerId: 'worker-a',
+        leaseMs: 30_000,
+        control: {
+          claim: async () => (source === 'claim' ? injected : item),
+          heartbeat: async () => undefined,
+          finalize: async () => {
+            finalizations += 1;
+          },
+        },
+        artifactProvider: {
+          prepare: async () => (source === 'prepared' ? injected : item),
+        },
+        pipeline: {
+          run: async () => {
+            pipelineRuns += 1;
+            return pipelineResult();
+          },
+        },
+        evidenceStore: {
+          putSbom: async () => {
+            evidenceWrites += 1;
+            return { storageKey: 'unreachable', sizeBytes: 1 };
+          },
+        },
+      });
+
+      await expect(worker.runOnce()).rejects.toMatchObject({
+        code: 'DEVELOPER_TRUST_WORK_ITEM_ACCEPTANCE_CONTEXT_FORBIDDEN',
+      });
+      expect(pipelineRuns).toBe(0);
+      expect(evidenceWrites).toBe(0);
+      expect(finalizations).toBe(0);
+    },
+  );
+
+  test('does not finalize when persisting the SBOM fails', async () => {
+    const item = workItem();
+    let finalizations = 0;
+    let releases = 0;
+    const worker = createDeveloperTrustWorker({
+      workerId: 'worker-a',
+      leaseMs: 30_000,
+      control: {
+        claim: async () => item,
+        heartbeat: async () => undefined,
+        finalize: async () => {
+          finalizations += 1;
+        },
+      },
+      artifactProvider: {
+        prepare: async () => item,
+        release: async () => {
+          releases += 1;
+        },
+      },
+      pipeline: { run: async () => pipelineResult() },
+      evidenceStore: {
+        putSbom: async () => {
+          throw new Error('object storage unavailable');
+        },
+      },
+    });
+
+    await expect(worker.runOnce()).rejects.toMatchObject({
+      code: 'DEVELOPER_TRUST_WORKER_OPERATION_FAILED',
+    });
+    expect(finalizations).toBe(0);
+    expect(releases).toBe(1);
   });
 
   test.each([
@@ -264,6 +513,7 @@ describe('developer trust worker assembly', () => {
             return pipelineResult();
           },
         },
+        evidenceStore: evidenceStore(),
       });
 
       await expect(worker.runOnce()).rejects.toMatchObject({

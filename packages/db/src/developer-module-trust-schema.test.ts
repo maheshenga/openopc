@@ -29,9 +29,29 @@ const migrationPath = join(
   'migrations',
   '20260725120000000_developer_module_trust.sql',
 );
+const evidenceMigrationPath = join(
+  import.meta.dir,
+  '..',
+  'migrations',
+  '20260726130000000_developer_trust_evidence.sql',
+);
+const retentionMigrationPath = join(
+  import.meta.dir,
+  '..',
+  'migrations',
+  '20260726150000000_developer_artifact_retention.sql',
+);
 
 function migrationSql(): string {
   return existsSync(migrationPath) ? readFileSync(migrationPath, 'utf8') : '';
+}
+
+function evidenceMigrationSql(): string {
+  return existsSync(evidenceMigrationPath) ? readFileSync(evidenceMigrationPath, 'utf8') : '';
+}
+
+function retentionMigrationSql(): string {
+  return existsSync(retentionMigrationPath) ? readFileSync(retentionMigrationPath, 'utf8') : '';
 }
 
 function table(value: unknown): PgTable {
@@ -127,6 +147,50 @@ describe('developer module trust migration', () => {
       expect(guard?.[1]).toContain(`NEW.${column}`);
     }
   });
+
+  test('adds bounded durable SBOM references and keeps terminal runs immutable', () => {
+    const migration = evidenceMigrationSql();
+
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS sbom_storage_key text');
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS sbom_size_bytes bigint');
+    expect(migration).toContain('developer_module_verification_runs_sbom_reference_check');
+    expect(migration).toContain('sbom_size_bytes BETWEEN 1 AND 16777216');
+    expect(migration).toMatch(/sbom_storage_key IS NOT NULL[\s\S]*sbom_size_bytes IS NOT NULL/);
+    expect(migration).toMatch(/sbom_digest IS NOT NULL[\s\S]*attestation_digest IS NOT NULL/);
+    expect(migration).toContain('terminal developer module verification runs are immutable');
+    expect(migration).toMatch(/OLD\.state IN \('passed', 'failed', 'inconclusive', 'cancelled'\)/);
+  });
+
+  test('gives the trust worker only the release trust-binding update columns', () => {
+    const migration = evidenceMigrationSql();
+    expect(migration).toMatch(
+      /GRANT UPDATE \(\s*sbom_digest,\s*trust_attestation_digest,\s*verification_policy_digest\s*\)\s+ON TABLE kortix\.developer_module_releases\s+TO developer_trust_worker;/,
+    );
+  });
+
+  test('adds retryable staging cleanup metadata and a durable retention queue', () => {
+    const migration = retentionMigrationSql();
+
+    expect(migration).toContain('ALTER TABLE kortix.developer_module_artifact_uploads');
+    for (const column of [
+      'staging_deleted_at timestamptz',
+      'cleanup_attempts integer',
+      'cleanup_next_attempt_at timestamptz',
+      'cleanup_last_error varchar(1024)',
+    ]) {
+      expect(migration).toContain(`ADD COLUMN IF NOT EXISTS ${column}`);
+    }
+    expect(migration).toContain(
+      'CREATE TABLE IF NOT EXISTS kortix.developer_artifact_retention_runs',
+    );
+    expect(migration).toContain('developer_artifact_retention_run_state');
+    expect(migration).toContain('developer_artifact_retention_runs_acceptance_unique');
+    expect(migration).toContain('idx_developer_artifact_retention_runs_claim');
+    expect(migration).toContain('idx_developer_module_artifact_uploads_cleanup_due');
+    expect(migration).toMatch(/acceptance_run_id[\s\S]*\^\[A-Za-z0-9\]/);
+    expect(migration).toMatch(/REVOKE ALL[\s\S]*developer_artifact_retention_runs[\s\S]*PUBLIC/);
+    expect(migration).not.toMatch(/GRANT .*developer_artifact_retention_runs.*(?:anon|authenticated)/i);
+  });
 });
 
 describe('developer module trust Drizzle schema', () => {
@@ -159,6 +223,12 @@ describe('developer module trust Drizzle schema', () => {
       'high',
       'critical',
     ]);
+    expect(schema.developerArtifactRetentionRunStateEnum?.enumValues).toEqual([
+      'queued',
+      'running',
+      'succeeded',
+      'failed',
+    ]);
   });
 
   test('stores artifact uploads and immutable finalized artifacts', async () => {
@@ -179,6 +249,10 @@ describe('developer module trust Drizzle schema', () => {
         'staging_storage_key',
         'artifact_id',
         'expires_at',
+        'staging_deleted_at',
+        'cleanup_attempts',
+        'cleanup_next_attempt_at',
+        'cleanup_last_error',
         'created_by',
         'created_at',
         'updated_at',
@@ -208,6 +282,42 @@ describe('developer module trust Drizzle schema', () => {
     );
   });
 
+  test('stores lease-reclaimable artifact retention runs with bounded state', async () => {
+    const schema = await import('./schema/kortix');
+    const runs = schema.developerArtifactRetentionRuns;
+
+    expect(runs).toBeDefined();
+    expect(columnNames(runs)).toEqual(
+      expect.arrayContaining([
+        'run_id',
+        'acceptance_run_id',
+        'state',
+        'attempts',
+        'available_at',
+        'lease_owner',
+        'lease_expires_at',
+        'cursor',
+        'last_error',
+        'created_at',
+        'updated_at',
+        'finished_at',
+      ]),
+    );
+    expect(indexNames(runs)).toEqual(
+      expect.arrayContaining([
+        'developer_artifact_retention_runs_acceptance_unique',
+        'developer_artifact_retention_runs_scheduled_active_unique',
+        'idx_developer_artifact_retention_runs_claim',
+      ]),
+    );
+    expect(indexNames(schema.developerModuleArtifactUploads)).toContain(
+      'idx_developer_module_artifact_uploads_cleanup_due',
+    );
+    expect(
+      checkConstraintSql(runs, 'developer_artifact_retention_runs_state_check'),
+    ).toMatch(/queued[\s\S]*running[\s\S]*succeeded[\s\S]*failed/);
+  });
+
   test('stores leased runs, sanitized findings, attestations, and hashed capabilities', async () => {
     const schema = await import('./schema/kortix');
 
@@ -228,6 +338,8 @@ describe('developer module trust Drizzle schema', () => {
         'heartbeat_at',
         'terminal_reason',
         'sbom_digest',
+        'sbom_storage_key',
+        'sbom_size_bytes',
         'attestation_digest',
         'resource_summary',
         'started_at',
@@ -290,6 +402,22 @@ describe('developer module trust Drizzle schema', () => {
     );
     expect(indexNames(schema.developerModuleVerificationRuns)).toContain(
       'idx_developer_module_verification_runs_active_unique',
+    );
+    expect(
+      checkConstraintSql(
+        schema.developerModuleVerificationRuns,
+        'developer_module_verification_runs_sbom_reference_check',
+      ),
+    ).toMatch(
+      /sbom_storage_key"? IS NOT NULL[\s\S]*sbom_size_bytes"? IS NOT NULL[\s\S]*16777216/,
+    );
+    expect(
+      checkConstraintSql(
+        schema.developerModuleVerificationRuns,
+        'developer_module_verification_runs_passed_evidence_check',
+      ),
+    ).toMatch(
+      /sbom_digest"? IS NOT NULL[\s\S]*sbom_storage_key"? IS NOT NULL[\s\S]*sbom_size_bytes"? IS NOT NULL[\s\S]*attestation_digest"? IS NOT NULL/,
     );
   });
 
@@ -375,9 +503,11 @@ describe('developer module trust Drizzle schema', () => {
 
     for (const name of [
       'developerArtifactUploadStateEnum',
+      'developerArtifactRetentionRunStateEnum',
       'developerVerificationStateEnum',
       'developerFindingSeverityEnum',
       'developerModuleArtifactUploads',
+      'developerArtifactRetentionRuns',
       'developerModuleArtifacts',
       'developerModuleVerificationRuns',
       'developerModuleVerificationFindings',

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openopc.dev/schemas/claim-bundle.v1.schema.json",
+  "title": "OpenOPC Runner claim bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "signedEnvelope",
+    "capabilityTokens",
+    "runtimeDescriptor",
+    "inputBase64",
+    "runtimeArtifact"
+  ],
+  "properties": {
+    "signedEnvelope": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 1048576,
+      "pattern": "^[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+[.][A-Za-z0-9_-]+$"
+    },
+    "capabilityTokens": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["grantId", "audience", "token"],
+        "properties": {
+          "grantId": { "$ref": "#/$defs/uuid" },
+          "audience": { "enum": ["secret", "egress", "model", "desktop", "paid-call"] },
+          "token": { "type": "string", "minLength": 1, "maxLength": 16384 }
+        }
+      }
+    },
+    "runtimeDescriptor": {
+      "$ref": "https://openopc.dev/schemas/openopc.runtime.v1.schema.json"
+    },
+    "inputBase64": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 349526,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "runtimeArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fetchPath", "digest", "bytes"],
+      "properties": {
+        "fetchPath": { "const": "module-runtime/artifacts/fetch" },
+        "digest": { "$ref": "#/$defs/sha256Digest" },
+        "bytes": { "type": "integer", "minimum": 1, "maximum": 33554432 }
+      }
+    }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

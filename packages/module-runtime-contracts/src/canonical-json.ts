@@ -5,7 +5,9 @@ function assertValidUnicode(value: string): void {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) throw new Error('CANONICAL_JSON_INVALID');
+      if (!Number.isFinite(next) || next < 0xdc00 || next > 0xdfff) {
+        throw new Error('CANONICAL_JSON_INVALID');
+      }
       index += 1;
     } else if (code >= 0xdc00 && code <= 0xdfff) {
       throw new Error('CANONICAL_JSON_INVALID');
@@ -55,11 +57,18 @@ function encodeCanonicalJson(value: unknown, ancestors: WeakSet<object>): string
   }
 }
 
-export async function canonicalDigest(value: unknown): Promise<Sha256Digest> {
-  const bytes = new TextEncoder().encode(encodeCanonicalJson(value, new WeakSet()));
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+export function canonicalJsonBytes(value: unknown): Uint8Array {
+  return new TextEncoder().encode(encodeCanonicalJson(value, new WeakSet()));
+}
+
+export async function sha256Digest(bytes: Uint8Array): Promise<Sha256Digest> {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', new Uint8Array(bytes));
   const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join(
     '',
   );
   return `sha256:${hex}`;
+}
+
+export function canonicalDigest(value: unknown): Promise<Sha256Digest> {
+  return sha256Digest(canonicalJsonBytes(value));
 }

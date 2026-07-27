@@ -10,9 +10,21 @@
     "accountId",
     "projectId",
     "installationId",
+    "idempotencyKey",
+    "installRevision",
+    "releaseId",
     "releaseDigest",
+    "consentRevisionId",
+    "permissionDigest",
+    "runtimeDescriptorId",
     "runtimeDescriptorDigest",
+    "runtimeKind",
+    "runtimeProfile",
     "policyDigest",
+    "killSwitchGeneration",
+    "executionDeadline",
+    "bindingDigest",
+    "resourceCeilings",
     "lease",
     "grants"
   ],
@@ -22,9 +34,45 @@
     "accountId": { "$ref": "#/$defs/uuid" },
     "projectId": { "$ref": "#/$defs/uuid" },
     "installationId": { "$ref": "#/$defs/uuid" },
+    "idempotencyKey": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,254}$"
+    },
+    "installRevision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+    "releaseId": { "$ref": "#/$defs/uuid" },
     "releaseDigest": { "$ref": "#/$defs/sha256Digest" },
+    "consentRevisionId": { "$ref": "#/$defs/uuid" },
+    "permissionDigest": { "$ref": "#/$defs/sha256Digest" },
+    "runtimeDescriptorId": { "$ref": "#/$defs/uuid" },
     "runtimeDescriptorDigest": { "$ref": "#/$defs/sha256Digest" },
+    "runtimeKind": { "enum": ["wasi-component", "oci-image"] },
+    "runtimeProfile": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
     "policyDigest": { "$ref": "#/$defs/sha256Digest" },
+    "killSwitchGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "executionDeadline": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "bindingDigest": { "$ref": "#/$defs/sha256Digest" },
+    "resourceCeilings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpuMillis", "memoryMiB", "wallTimeMs", "costMicro"],
+      "properties": {
+        "cpuMillis": { "type": "integer", "minimum": 1, "maximum": 900000 },
+        "memoryMiB": { "type": "integer", "minimum": 16, "maximum": 4096 },
+        "wallTimeMs": { "type": "integer", "minimum": 1, "maximum": 900000 },
+        "costMicro": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+      }
+    },
     "lease": {
       "type": "object",
       "additionalProperties": false,

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openopc.dev/schema/capability-token.v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capabilityVersion",
+    "iss",
+    "aud",
+    "sub",
+    "jti",
+    "iat",
+    "exp",
+    "grantId",
+    "accountId",
+    "projectId",
+    "installationId",
+    "releaseDigest",
+    "actor",
+    "action",
+    "runtimeKind",
+    "lease",
+    "killSwitchGeneration",
+    "cnf",
+    "ceilings"
+  ],
+  "properties": {
+    "capabilityVersion": { "const": 1 },
+    "iss": { "const": "openopc-control-plane" },
+    "aud": {
+      "enum": [
+        "openopc:capability/secret",
+        "openopc:capability/egress",
+        "openopc:capability/model",
+        "openopc:capability/desktop",
+        "openopc:capability/paid-call"
+      ]
+    },
+    "sub": { "$ref": "#/$defs/uuid" },
+    "jti": { "$ref": "#/$defs/uuid" },
+    "iat": { "type": "string", "format": "date-time" },
+    "exp": { "type": "string", "format": "date-time" },
+    "grantId": { "$ref": "#/$defs/uuid" },
+    "accountId": { "$ref": "#/$defs/uuid" },
+    "projectId": { "$ref": "#/$defs/uuid" },
+    "installationId": { "$ref": "#/$defs/uuid" },
+    "releaseDigest": { "$ref": "#/$defs/sha256" },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "enum": ["runner", "user", "system"] },
+        "id": { "$ref": "#/$defs/uuid" }
+      }
+    },
+    "action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9._:-]*$"
+    },
+    "runtimeKind": { "enum": ["wasi-component", "oci-image"] },
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "generation", "deadline"],
+      "properties": {
+        "id": { "$ref": "#/$defs/uuid" },
+        "generation": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "deadline": { "type": "string", "format": "date-time" }
+      }
+    },
+    "killSwitchGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "cnf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["certificateSha256"],
+      "properties": {
+        "certificateSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "ceilings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxCalls",
+        "maxRequestBytes",
+        "maxResponseBytes",
+        "cpuMillis",
+        "wallTimeMs",
+        "costMicro"
+      ],
+      "properties": {
+        "maxCalls": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "maxRequestBytes": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+        "maxResponseBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 },
+        "cpuMillis": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+        "wallTimeMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+        "costMicro": { "type": "integer", "minimum": 0, "maximum": 1000000000000 }
+      }
+    },
+    "egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origins", "methods"],
+      "properties": {
+        "origins": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 9, "maxLength": 512 }
+        },
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "enum": ["DELETE", "GET", "HEAD", "PATCH", "POST", "PUT"] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "uuid": { "type": "string", "format": "uuid" },
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

@@ -32,6 +32,7 @@ export * from './setup-links';
 export * from './marketplace-catalog';
 export * from './developer-modules';
 export * from './project-modules';
+export * from './module-executions';
 export * from './templates';
 export * from './intelligence';
 export * from './intelligence-studio';

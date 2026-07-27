@@ -1,0 +1,59 @@
+package openopc:module@1.0.0;
+
+interface input {
+  len: func() -> u64;
+  read-byte: func(offset: u64) -> u32;
+}
+
+interface output {
+  write-byte: func(value: u8) -> u32;
+}
+
+interface http {
+  record http-response {
+    status: u16,
+    body: list<u8>,
+  }
+
+  request: func(
+    capability: u32,
+    method: string,
+    url: string,
+    body: list<u8>,
+  ) -> result<http-response, u32>;
+}
+
+interface secret-use {
+  invoke: func(capability: u32, action: string, payload: list<u8>) -> result<list<u8>, u32>;
+}
+
+interface model {
+  invoke: func(capability: u32, operation: string, payload: list<u8>) -> result<list<u8>, u32>;
+}
+
+interface usage {
+  record-usage: func(kind: string, units: u64) -> u32;
+}
+
+interface log {
+  enum log-level {
+    debug,
+    info,
+    warn,
+    error,
+  }
+
+  emit: func(level: log-level, message: string) -> u32;
+}
+
+world module {
+  import input;
+  import output;
+  import http;
+  import secret-use;
+  import model;
+  import usage;
+  import log;
+
+  export run: func() -> u32;
+}

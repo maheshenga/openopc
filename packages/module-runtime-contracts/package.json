@@ -9,6 +9,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./schema/capability-token.v1.schema.json": "./schema/capability-token.v1.schema.json",
+    "./schema/claim-bundle.v1.schema.json": "./schema/claim-bundle.v1.schema.json",
     "./schema/openopc.runtime.v1.schema.json": "./schema/openopc.runtime.v1.schema.json",
     "./schema/work-envelope.v1.schema.json": "./schema/work-envelope.v1.schema.json"
   },

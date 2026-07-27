@@ -1,0 +1,17 @@
+**
+
+!apps/
+apps/*
+!apps/module-runner/
+!apps/module-runner/Cargo.toml
+!apps/module-runner/Cargo.lock
+!apps/module-runner/rust-toolchain.toml
+!apps/module-runner/src/
+!apps/module-runner/src/**
+
+!packages/
+packages/*
+!packages/module-runtime-contracts/
+packages/module-runtime-contracts/*
+!packages/module-runtime-contracts/schema/
+!packages/module-runtime-contracts/schema/**

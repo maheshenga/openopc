@@ -35,9 +35,25 @@ import type {
   gatewayRequestLogs,
   kortixApiKeys,
   legacySandboxMigrations,
+  moduleCapabilityGrants,
+  moduleCapabilityUses,
+  moduleExecutionEvents,
+  moduleExecutionEvidence,
+  moduleExecutionHeartbeats,
+  moduleExecutionInputs,
+  moduleExecutionLeases,
+  moduleExecutionOutbox,
+  moduleExecutionOutputs,
+  moduleExecutions,
+  moduleKillSwitchGenerations,
+  moduleRunnerProfiles,
+  moduleRunners,
+  moduleRuntimeArtifacts,
+  moduleRuntimeDescriptors,
   projectGitConnections,
   projectGitCredentials,
   projectMembers,
+  projectModuleConsentRevisions,
   projectModuleInstallationEvents,
   projectModuleInstallations,
   projectSecrets,
@@ -179,6 +195,38 @@ export type ProjectModuleInstallation = typeof projectModuleInstallations.$infer
 export type NewProjectModuleInstallation = typeof projectModuleInstallations.$inferInsert;
 export type ProjectModuleInstallationEvent = typeof projectModuleInstallationEvents.$inferSelect;
 export type NewProjectModuleInstallationEvent = typeof projectModuleInstallationEvents.$inferInsert;
+export type ModuleRuntimeDescriptor = typeof moduleRuntimeDescriptors.$inferSelect;
+export type NewModuleRuntimeDescriptor = typeof moduleRuntimeDescriptors.$inferInsert;
+export type ModuleRuntimeArtifact = typeof moduleRuntimeArtifacts.$inferSelect;
+export type NewModuleRuntimeArtifact = typeof moduleRuntimeArtifacts.$inferInsert;
+export type ProjectModuleConsentRevision = typeof projectModuleConsentRevisions.$inferSelect;
+export type NewProjectModuleConsentRevision = typeof projectModuleConsentRevisions.$inferInsert;
+export type ModuleRunner = typeof moduleRunners.$inferSelect;
+export type NewModuleRunner = typeof moduleRunners.$inferInsert;
+export type ModuleRunnerProfile = typeof moduleRunnerProfiles.$inferSelect;
+export type NewModuleRunnerProfile = typeof moduleRunnerProfiles.$inferInsert;
+export type ModuleExecution = typeof moduleExecutions.$inferSelect;
+export type NewModuleExecution = typeof moduleExecutions.$inferInsert;
+export type ModuleExecutionInput = typeof moduleExecutionInputs.$inferSelect;
+export type NewModuleExecutionInput = typeof moduleExecutionInputs.$inferInsert;
+export type ModuleExecutionLease = typeof moduleExecutionLeases.$inferSelect;
+export type NewModuleExecutionLease = typeof moduleExecutionLeases.$inferInsert;
+export type ModuleExecutionHeartbeat = typeof moduleExecutionHeartbeats.$inferSelect;
+export type NewModuleExecutionHeartbeat = typeof moduleExecutionHeartbeats.$inferInsert;
+export type ModuleCapabilityGrant = typeof moduleCapabilityGrants.$inferSelect;
+export type NewModuleCapabilityGrant = typeof moduleCapabilityGrants.$inferInsert;
+export type ModuleCapabilityUse = typeof moduleCapabilityUses.$inferSelect;
+export type NewModuleCapabilityUse = typeof moduleCapabilityUses.$inferInsert;
+export type ModuleExecutionEvent = typeof moduleExecutionEvents.$inferSelect;
+export type NewModuleExecutionEvent = typeof moduleExecutionEvents.$inferInsert;
+export type ModuleExecutionOutput = typeof moduleExecutionOutputs.$inferSelect;
+export type NewModuleExecutionOutput = typeof moduleExecutionOutputs.$inferInsert;
+export type ModuleExecutionEvidence = typeof moduleExecutionEvidence.$inferSelect;
+export type NewModuleExecutionEvidence = typeof moduleExecutionEvidence.$inferInsert;
+export type ModuleKillSwitchGeneration = typeof moduleKillSwitchGenerations.$inferSelect;
+export type NewModuleKillSwitchGeneration = typeof moduleKillSwitchGenerations.$inferInsert;
+export type ModuleExecutionOutbox = typeof moduleExecutionOutbox.$inferSelect;
+export type NewModuleExecutionOutbox = typeof moduleExecutionOutbox.$inferInsert;
 
 // Aliases
 export type SandboxSelect = Sandbox;

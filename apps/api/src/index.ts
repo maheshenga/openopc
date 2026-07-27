@@ -57,6 +57,7 @@ import { startTmpReaper, stopTmpReaper } from './snapshots/tmp-reaper';
 import { startLeaderElection, stopLeaderElection, isLeader, runsSingletonWorkers } from './shared/leader-election';
 import { marketplaceApp } from './marketplace';
 import { developerApp } from './developer';
+import { moduleRuntimeApp } from './module-runtime';
 import {
   startDeveloperArtifactRetentionWorker,
   stopDeveloperArtifactRetentionWorker,
@@ -699,6 +700,7 @@ app.route('/v1/router', router);        // /v1/router/chat/completions, /v1/rout
 app.route('/v1/billing', billingApp);   // /v1/billing/account-state, /v1/billing/webhooks/*
 app.route('/v1/account', accountDeletionApp); // account deletion status/request/cancel/immediate
 app.route('/v1/platform', platformApp); // /v1/platform, /v1/platform/sandbox/version
+app.route('/v1', moduleRuntimeApp); // Project module executions + private mTLS Runner protocol
 registerSunaMigrationRoutes(projectsApp); // /v1/projects/suna-migration/* (OG Suna → opencode, user-triggered)
 app.route('/v1/projects', projectsApp); // /v1/projects — Git-backed Kortix projects
 app.route('/v1/marketplace', marketplaceApp); // /v1/marketplace — browse the registry catalog

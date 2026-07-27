@@ -168,6 +168,9 @@ importers:
       jose:
         specifier: ^5.9.6
         version: 5.10.0
+      paseto-ts:
+        specifier: 2.0.6
+        version: 2.0.6
       postgres:
         specifier: ^3.4.8
         version: 3.4.9
@@ -773,6 +776,28 @@ importers:
       postgres:
         specifier: ^3.4.7
         version: 3.4.9
+    devDependencies:
+      '@types/bun':
+        specifier: ^1.3.12
+        version: 1.3.14
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
+  apps/module-egress-proxy:
+    dependencies:
+      '@kortix/db':
+        specifier: workspace:^
+        version: link:../../packages/db
+      '@openopc/module-runtime-contracts':
+        specifier: workspace:*
+        version: link:../../packages/module-runtime-contracts
+      drizzle-orm:
+        specifier: 0.45.2
+        version: 0.45.2(@opentelemetry/api@1.9.0)(bun-types@1.3.14)(pg@8.22.0)(postgres@3.4.9)
+      paseto-ts:
+        specifier: 2.0.6
+        version: 2.0.6
     devDependencies:
       '@types/bun':
         specifier: ^1.3.12
@@ -10362,6 +10387,70 @@ packages:
     engines: {node: '>=18.0.0'}
     dependencies:
       tslib: 2.8.1
+    dev: false
+
+  /@stablelib/binary@2.0.1:
+    resolution: {integrity: sha512-U9iAO8lXgEDONsA0zPPSgcf3HUBNAqHiJmSHgZz62OvC3Hi2Bhc5kTnQ3S1/L+sthDTHtCMhcEiklmIly6uQ3w==}
+    dependencies:
+      '@stablelib/int': 2.0.1
+    dev: false
+
+  /@stablelib/blake2b@2.0.1:
+    resolution: {integrity: sha512-kBN4i9FHpkTEVrHwKtb1ZjI6QwyoK8emY9TaLcHHFSZkw2FN9Td8Js9mU2U10q+EZ3Mp6z78QgdPDwJXbc3Dtw==}
+    dependencies:
+      '@stablelib/binary': 2.0.1
+      '@stablelib/hash': 2.0.0
+      '@stablelib/wipe': 2.0.1
+    dev: false
+
+  /@stablelib/chacha@2.0.1:
+    resolution: {integrity: sha512-lS1FqtNqofxe2vLkRsLli2m3x/XanUyAYRphLhdHumKeIsLbjbCXdCq3Pf/eWiO7G3QlSG5ViqnoVjktzfLWMg==}
+    dependencies:
+      '@stablelib/binary': 2.0.1
+      '@stablelib/wipe': 2.0.1
+    dev: false
+
+  /@stablelib/ed25519@2.1.0:
+    resolution: {integrity: sha512-8GLWoJur9nJiErABKHs5MjceSiYJJ2n8QP9k8Q5x6GWU2y5oAQ6qzPh8kCgQy5aHlUxcmRA1frQ5Gu2bHoIDPw==}
+    dependencies:
+      '@stablelib/random': 2.0.1
+      '@stablelib/sha512': 2.0.1
+      '@stablelib/wipe': 2.0.1
+    dev: false
+
+  /@stablelib/hash@2.0.0:
+    resolution: {integrity: sha512-u3WPSqGido8lwJuMcrBgM5K54LrPGhkWAdtsyccf7dGsLixAZUds77zOAbu7bvKPwQlmoByH0txBi5rTmEKuHg==}
+    dev: false
+
+  /@stablelib/int@2.0.1:
+    resolution: {integrity: sha512-Ht63fQp3wz/F8U4AlXEPb7hfJOIILs8Lq55jgtD7KueWtyjhVuzcsGLSTAWtZs3XJDZYdF1WcSKn+kBtbzupww==}
+    dev: false
+
+  /@stablelib/random@2.0.1:
+    resolution: {integrity: sha512-W6GAtXEEs7r+dSbuBsvoFmlyL3gLxle41tQkjKu17dDWtDdjhVUbtRfRCQcCUeczwkgjQxMPopgwYEvxXtHXGw==}
+    dependencies:
+      '@stablelib/binary': 2.0.1
+      '@stablelib/wipe': 2.0.1
+    dev: false
+
+  /@stablelib/sha512@2.0.1:
+    resolution: {integrity: sha512-DUNe5cbnoH3sSIN+MG04RvTCLXtkbyy/SnQxiNO+GgF/KSXkkUSlF6mUVvCUdZBZ2X3NgogR+tAvaRSn8wxnLw==}
+    dependencies:
+      '@stablelib/binary': 2.0.1
+      '@stablelib/hash': 2.0.0
+      '@stablelib/wipe': 2.0.1
+    dev: false
+
+  /@stablelib/wipe@2.0.1:
+    resolution: {integrity: sha512-1eU2K9EgOcV4qc9jcP6G72xxZxEm5PfeI5H55l08W95b4oRJaqhmlWRc4xZAm6IVSKhVNxMi66V67hCzzuMTAg==}
+    dev: false
+
+  /@stablelib/xchacha20@2.0.1:
+    resolution: {integrity: sha512-k55pNv7gIM4mUPU00+nJYTxKiUVNwAtsgrridC0aIU5cVbw9u6qP99x8ENu5eiwOEhZUNg+p3tTOLooCeAOJQA==}
+    dependencies:
+      '@stablelib/binary': 2.0.1
+      '@stablelib/chacha': 2.0.1
+      '@stablelib/wipe': 2.0.1
     dev: false
 
   /@standard-schema/spec@1.1.0:
@@ -21778,6 +21867,14 @@ packages:
   /parseurl@1.3.3:
     resolution: {integrity: sha512-CiyeOxFT/JZyN5m0z9PfXw4SCBJ6Sygz1Dpl0wqjlhDEGGBP1GnsUVEL0p63hoG1fcj3fHynXi9NYO4nWOL+qQ==}
     engines: {node: '>= 0.8'}
+
+  /paseto-ts@2.0.6:
+    resolution: {integrity: sha512-Ul3AzoCcS4uA6jF+GW2zYUxZY78xsqCbfxdv2Khk/30hDxAzcvsWQjp4uW1XcbkrO9zNrPbdBv4HiXgJigWLVA==}
+    dependencies:
+      '@stablelib/blake2b': 2.0.1
+      '@stablelib/ed25519': 2.1.0
+      '@stablelib/xchacha20': 2.0.1
+    dev: false
 
   /patch-package@8.0.1:
     resolution: {integrity: sha512-VsKRIA8f5uqHQ7NGhwIna6Bx6D9s/1iXlA1hthBVBEbkq+t4kXD0HHt+rJhf/Z+Ci0F/HCB2hvn0qLdLG+Qxlw==}

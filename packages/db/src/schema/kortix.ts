@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   check,
+  customType,
   foreignKey,
   index,
   integer,
@@ -19,6 +20,12 @@ import {
 } from 'drizzle-orm/pg-core';
 
 export const kortixSchema = pgSchema('kortix');
+
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType() {
+    return 'bytea';
+  },
+});
 
 export const sandboxStatusEnum = kortixSchema.enum('sandbox_status', [
   'provisioning',
@@ -7835,4 +7842,866 @@ export const projectModuleInstallationEventsRelations = relations(
       references: [developerModuleReleases.releaseId],
     }),
   }),
+);
+
+// ─── OpenOPC module runtime control plane ───
+
+export const moduleExecutionStateEnum = kortixSchema.enum('module_execution_state', [
+  'pending',
+  'awaiting_confirmation',
+  'dispatchable',
+  'leased',
+  'running',
+  'succeeded',
+  'failed',
+  'cancelled',
+  'unknown',
+]);
+
+export const moduleRuntimeKindEnum = kortixSchema.enum('module_runtime_kind', [
+  'wasi-component',
+  'oci-image',
+]);
+
+export const moduleRunnerStatusEnum = kortixSchema.enum('module_runner_status', [
+  'active',
+  'draining',
+  'quarantined',
+  'revoked',
+]);
+
+export const moduleCapabilityAudienceEnum = kortixSchema.enum('module_capability_audience', [
+  'secret',
+  'egress',
+  'model',
+  'desktop',
+  'paid-call',
+]);
+
+export const moduleKillSwitchScopeEnum = kortixSchema.enum('module_kill_switch_scope', [
+  'account',
+  'project',
+  'runner',
+]);
+
+export const moduleOutboxStatusEnum = kortixSchema.enum('module_outbox_status', [
+  'pending',
+  'processing',
+  'completed',
+  'failed',
+]);
+
+export const moduleRuntimeDescriptors = kortixSchema.table(
+  'module_runtime_descriptors',
+  {
+    descriptorId: uuid('descriptor_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    releaseId: uuid('release_id').notNull(),
+    runtimeKind: moduleRuntimeKindEnum('runtime_kind').notNull(),
+    descriptorDigest: varchar('descriptor_digest', { length: 71 }).notNull(),
+    descriptor: jsonb('descriptor').notNull().$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'module_runtime_descriptors_release_account_fk',
+    }).onDelete('restrict'),
+    unique('module_runtime_descriptors_release_account_unique').on(
+      table.descriptorId,
+      table.accountId,
+    ),
+    unique('module_runtime_descriptors_account_digest_unique').on(
+      table.accountId,
+      table.descriptorDigest,
+    ),
+    index('idx_module_runtime_descriptors_account_release').on(
+      table.accountId,
+      table.releaseId,
+      table.createdAt,
+    ),
+    check(
+      'module_runtime_descriptors_digest_check',
+      sql`${table.descriptorDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'module_runtime_descriptors_descriptor_check',
+      sql`jsonb_typeof(${table.descriptor}) = 'object'
+        AND pg_column_size(${table.descriptor}) <= 262144`,
+    ),
+  ],
+);
+
+export const moduleRuntimeArtifacts = kortixSchema.table(
+  'module_runtime_artifacts',
+  {
+    runtimeArtifactId: uuid('runtime_artifact_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    releaseId: uuid('release_id').notNull(),
+    runtimeDescriptorId: uuid('runtime_descriptor_id').notNull(),
+    artifactDigest: varchar('artifact_digest', { length: 71 }).notNull(),
+    artifactBytes: bigint('artifact_bytes', { mode: 'number' }).notNull(),
+    mediaType: varchar('media_type', { length: 128 }).notNull(),
+    storageKey: text('storage_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'module_runtime_artifacts_release_account_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.runtimeDescriptorId, table.accountId],
+      foreignColumns: [moduleRuntimeDescriptors.descriptorId, moduleRuntimeDescriptors.accountId],
+      name: 'module_runtime_artifacts_descriptor_account_fk',
+    }).onDelete('restrict'),
+    unique('module_runtime_artifacts_identity_unique').on(
+      table.runtimeArtifactId,
+      table.accountId,
+    ),
+    unique('module_runtime_artifacts_release_account_unique').on(
+      table.releaseId,
+      table.accountId,
+    ),
+    unique('module_runtime_artifacts_descriptor_account_unique').on(
+      table.runtimeDescriptorId,
+      table.accountId,
+    ),
+    check(
+      'module_runtime_artifacts_digest_check',
+      sql`${table.artifactDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'module_runtime_artifacts_bytes_check',
+      sql`${table.artifactBytes} BETWEEN 1 AND 33554432`,
+    ),
+    check(
+      'module_runtime_artifacts_media_type_check',
+      sql`${table.mediaType} = 'application/wasm'`,
+    ),
+  ],
+);
+
+export const projectModuleConsentRevisions = kortixSchema.table(
+  'project_module_consent_revisions',
+  {
+    consentRevisionId: uuid('consent_revision_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    installRevision: integer('install_revision').notNull(),
+    releaseId: uuid('release_id').notNull(),
+    permissionDigest: varchar('permission_digest', { length: 71 }).notNull(),
+    permissionSnapshot: jsonb('permission_snapshot').notNull().$type<Record<string, unknown>>(),
+    resourceCpuMillisCeiling: integer('resource_cpu_millis_ceiling').notNull(),
+    resourceMemoryMibCeiling: integer('resource_memory_mib_ceiling').notNull(),
+    resourceWallTimeMsCeiling: integer('resource_wall_time_ms_ceiling').notNull(),
+    costCeilingMicro: integer('cost_ceiling_micro').notNull(),
+    acceptedBy: uuid('accepted_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'project_module_consent_revisions_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'project_module_consent_revisions_installation_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'project_module_consent_revisions_release_account_fk',
+    }).onDelete('restrict'),
+    unique('project_module_consent_revisions_identity_unique').on(
+      table.consentRevisionId,
+      table.accountId,
+      table.projectId,
+    ),
+    unique('project_module_consent_revisions_install_revision_unique').on(
+      table.installationId,
+      table.installRevision,
+    ),
+    index('idx_project_module_consent_revisions_project').on(
+      table.accountId,
+      table.projectId,
+      table.createdAt,
+    ),
+    check(
+      'project_module_consent_revisions_permission_digest_check',
+      sql`${table.permissionDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'project_module_consent_revisions_snapshot_check',
+      sql`jsonb_typeof(${table.permissionSnapshot}) = 'object'
+        AND pg_column_size(${table.permissionSnapshot}) <= 262144`,
+    ),
+    check(
+      'project_module_consent_revisions_ceilings_check',
+      sql`${table.installRevision} >= 0
+        AND ${table.resourceCpuMillisCeiling} > 0
+        AND ${table.resourceMemoryMibCeiling} > 0
+        AND ${table.resourceWallTimeMsCeiling} > 0
+        AND ${table.costCeilingMicro} >= 0`,
+    ),
+  ],
+);
+
+export const moduleRunners = kortixSchema.table(
+  'module_runners',
+  {
+    runnerId: uuid('runner_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    nodeIdentity: varchar('node_identity', { length: 255 }).notNull(),
+    status: moduleRunnerStatusEnum('status').default('active').notNull(),
+    softwareVersion: varchar('software_version', { length: 128 }).notNull(),
+    attestationDigest: varchar('attestation_digest', { length: 71 }).notNull(),
+    certificateThumbprint: varchar('certificate_thumbprint', { length: 64 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('module_runners_runner_account_unique').on(table.runnerId, table.accountId),
+    unique('module_runners_node_identity_unique').on(table.nodeIdentity),
+    unique('module_runners_certificate_thumbprint_unique').on(table.certificateThumbprint),
+    index('idx_module_runners_account_status').on(table.accountId, table.status, table.updatedAt),
+    check(
+      'module_runners_node_identity_check',
+      sql`length(BTRIM(${table.nodeIdentity})) BETWEEN 1 AND 255
+        AND BTRIM(${table.nodeIdentity}) = ${table.nodeIdentity}
+        AND ${table.nodeIdentity} !~ '[[:cntrl:]]'`,
+    ),
+    check(
+      'module_runners_software_version_check',
+      sql`length(BTRIM(${table.softwareVersion})) BETWEEN 1 AND 128`,
+    ),
+    check(
+      'module_runners_attestation_digest_check',
+      sql`${table.attestationDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'module_runners_certificate_thumbprint_check',
+      sql`${table.certificateThumbprint} ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
+export const moduleRunnerProfiles = kortixSchema.table(
+  'module_runner_profiles',
+  {
+    profileId: uuid('profile_id').defaultRandom().primaryKey(),
+    runnerId: uuid('runner_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    profileName: varchar('profile_name', { length: 128 }).notNull(),
+    runtimeKind: moduleRuntimeKindEnum('runtime_kind').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.runnerId, table.accountId],
+      foreignColumns: [moduleRunners.runnerId, moduleRunners.accountId],
+      name: 'module_runner_profiles_runner_account_fk',
+    }).onDelete('cascade'),
+    unique('module_runner_profiles_runner_name_unique').on(table.runnerId, table.profileName),
+    index('idx_module_runner_profiles_account_kind').on(
+      table.accountId,
+      table.runtimeKind,
+      table.runnerId,
+    ),
+    check(
+      'module_runner_profiles_name_check',
+      sql`length(BTRIM(${table.profileName})) BETWEEN 1 AND 128
+        AND BTRIM(${table.profileName}) = ${table.profileName}
+        AND ${table.profileName} !~ '[[:cntrl:]]'`,
+    ),
+  ],
+);
+
+export const moduleExecutions = kortixSchema.table(
+  'module_executions',
+  {
+    executionId: uuid('execution_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    releaseId: uuid('release_id').notNull(),
+    consentRevisionId: uuid('consent_revision_id').notNull(),
+    runtimeDescriptorId: uuid('runtime_descriptor_id').notNull(),
+    runtimeKind: moduleRuntimeKindEnum('runtime_kind').notNull(),
+    runtimeProfile: varchar('runtime_profile', { length: 128 }).notNull(),
+    state: moduleExecutionStateEnum('state').default('pending').notNull(),
+    idempotencyKey: varchar('idempotency_key', { length: 255 }).notNull(),
+    workEnvelopeDigest: varchar('work_envelope_digest', { length: 71 }).notNull(),
+    killSwitchGeneration: integer('kill_switch_generation').default(0).notNull(),
+    deadlineAt: timestamp('deadline_at', { withTimezone: true, mode: 'string' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    terminalAt: timestamp('terminal_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'module_executions_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'module_executions_installation_identity_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'module_executions_release_account_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.consentRevisionId, table.accountId, table.projectId],
+      foreignColumns: [
+        projectModuleConsentRevisions.consentRevisionId,
+        projectModuleConsentRevisions.accountId,
+        projectModuleConsentRevisions.projectId,
+      ],
+      name: 'module_executions_consent_identity_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.runtimeDescriptorId, table.accountId],
+      foreignColumns: [moduleRuntimeDescriptors.descriptorId, moduleRuntimeDescriptors.accountId],
+      name: 'module_executions_descriptor_account_fk',
+    }).onDelete('restrict'),
+    unique('module_executions_identity_unique').on(
+      table.executionId,
+      table.accountId,
+      table.projectId,
+    ),
+    unique('module_executions_project_idempotency_unique').on(
+      table.projectId,
+      table.idempotencyKey,
+    ),
+    index('idx_module_executions_account_project_created').on(
+      table.accountId,
+      table.projectId,
+      table.createdAt,
+    ),
+    index('idx_module_executions_dispatchable_profile')
+      .on(
+        table.accountId,
+        table.state,
+        table.runtimeKind,
+        table.runtimeProfile,
+        table.deadlineAt,
+        table.createdAt,
+        table.executionId,
+      )
+      .where(sql`${table.state} = 'dispatchable'`),
+    check(
+      'module_executions_idempotency_key_check',
+      sql`length(BTRIM(${table.idempotencyKey})) BETWEEN 8 AND 255`,
+    ),
+    check(
+      'module_executions_work_envelope_digest_check',
+      sql`${table.workEnvelopeDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'module_executions_kill_switch_generation_check',
+      sql`${table.killSwitchGeneration} >= 0`,
+    ),
+    check(
+      'module_executions_terminal_check',
+      sql`(
+        (
+          ${table.state} IN ('succeeded', 'failed', 'cancelled', 'unknown')
+          AND ${table.terminalAt} IS NOT NULL
+        ) OR (
+          ${table.state} NOT IN ('succeeded', 'failed', 'cancelled', 'unknown')
+          AND ${table.terminalAt} IS NULL
+        )
+      )`,
+    ),
+  ],
+);
+
+export const moduleExecutionInputs = kortixSchema.table(
+  'module_execution_inputs',
+  {
+    executionId: uuid('execution_id').primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    inputPayload: bytea('input_payload').notNull(),
+    inputDigest: varchar('input_digest', { length: 71 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutions.executionId,
+        moduleExecutions.accountId,
+        moduleExecutions.projectId,
+      ],
+      name: 'module_execution_inputs_execution_identity_fk',
+    }).onDelete('cascade'),
+    check(
+      'module_execution_inputs_payload_size_check',
+      sql`octet_length(${table.inputPayload}) <= 262144`,
+    ),
+    check(
+      'module_execution_inputs_digest_check',
+      sql`${table.inputDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
+export const moduleExecutionLeases = kortixSchema.table(
+  'module_execution_leases',
+  {
+    leaseId: uuid('lease_id').defaultRandom().primaryKey(),
+    executionId: uuid('execution_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    runnerId: uuid('runner_id').notNull(),
+    generation: integer('generation').notNull(),
+    deadlineAt: timestamp('deadline_at', { withTimezone: true, mode: 'string' }).notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    releasedAt: timestamp('released_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutions.executionId,
+        moduleExecutions.accountId,
+        moduleExecutions.projectId,
+      ],
+      name: 'module_execution_leases_execution_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.runnerId, table.accountId],
+      foreignColumns: [moduleRunners.runnerId, moduleRunners.accountId],
+      name: 'module_execution_leases_runner_account_fk',
+    }).onDelete('restrict'),
+    unique('module_execution_leases_lease_identity_unique').on(
+      table.leaseId,
+      table.executionId,
+      table.accountId,
+      table.projectId,
+    ),
+    uniqueIndex('module_execution_leases_live_execution_unique')
+      .on(table.executionId)
+      .where(sql`${table.releasedAt} IS NULL`),
+    index('idx_module_execution_leases_runner_live')
+      .on(table.runnerId, table.deadlineAt)
+      .where(sql`${table.releasedAt} IS NULL`),
+    check('module_execution_leases_generation_check', sql`${table.generation} >= 1`),
+    check(
+      'module_execution_leases_release_order_check',
+      sql`${table.releasedAt} IS NULL OR ${table.releasedAt} >= ${table.claimedAt}`,
+    ),
+  ],
+);
+
+export const moduleExecutionHeartbeats = kortixSchema.table(
+  'module_execution_heartbeats',
+  {
+    heartbeatId: uuid('heartbeat_id').defaultRandom().primaryKey(),
+    leaseId: uuid('lease_id').notNull(),
+    executionId: uuid('execution_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    runnerId: uuid('runner_id').notNull(),
+    generation: integer('generation').notNull(),
+    observedAt: timestamp('observed_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.leaseId, table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutionLeases.leaseId,
+        moduleExecutionLeases.executionId,
+        moduleExecutionLeases.accountId,
+        moduleExecutionLeases.projectId,
+      ],
+      name: 'module_execution_heartbeats_lease_identity_fk',
+    }).onDelete('cascade'),
+    index('idx_module_execution_heartbeats_lease_observed').on(table.leaseId, table.observedAt),
+    check('module_execution_heartbeats_generation_check', sql`${table.generation} >= 1`),
+  ],
+);
+
+export const moduleCapabilityGrants = kortixSchema.table(
+  'module_capability_grants',
+  {
+    grantId: uuid('grant_id').defaultRandom().primaryKey(),
+    executionId: uuid('execution_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    leaseId: uuid('lease_id').notNull(),
+    audience: moduleCapabilityAudienceEnum('audience').notNull(),
+    tokenHash: varchar('token_hash', { length: 71 }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutions.executionId,
+        moduleExecutions.accountId,
+        moduleExecutions.projectId,
+      ],
+      name: 'module_capability_grants_execution_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.leaseId, table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutionLeases.leaseId,
+        moduleExecutionLeases.executionId,
+        moduleExecutionLeases.accountId,
+        moduleExecutionLeases.projectId,
+      ],
+      name: 'module_capability_grants_lease_identity_fk',
+    }).onDelete('cascade'),
+    unique('module_capability_grants_token_hash_unique').on(table.tokenHash),
+    index('idx_module_capability_grants_execution').on(
+      table.accountId,
+      table.projectId,
+      table.executionId,
+      table.createdAt,
+    ),
+    check(
+      'module_capability_grants_token_hash_check',
+      sql`${table.tokenHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'module_capability_grants_revoke_order_check',
+      sql`${table.revokedAt} IS NULL OR ${table.revokedAt} >= ${table.createdAt}`,
+    ),
+  ],
+);
+
+export const moduleCapabilityUses = kortixSchema.table(
+  'module_capability_uses',
+  {
+    useId: uuid('use_id').defaultRandom().primaryKey(),
+    grantId: uuid('grant_id')
+      .notNull()
+      .references(() => moduleCapabilityGrants.grantId, { onDelete: 'cascade' }),
+    executionId: uuid('execution_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    observedAt: timestamp('observed_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutions.executionId,
+        moduleExecutions.accountId,
+        moduleExecutions.projectId,
+      ],
+      name: 'module_capability_uses_execution_identity_fk',
+    }).onDelete('cascade'),
+    index('idx_module_capability_uses_grant_observed').on(table.grantId, table.observedAt),
+  ],
+);
+
+export const moduleExecutionEvents = kortixSchema.table(
+  'module_execution_events',
+  {
+    eventId: uuid('event_id').defaultRandom().primaryKey(),
+    executionId: uuid('execution_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    sequence: integer('sequence').notNull(),
+    eventType: varchar('event_type', { length: 64 }).notNull(),
+    payload: jsonb('payload').default({}).notNull().$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutions.executionId,
+        moduleExecutions.accountId,
+        moduleExecutions.projectId,
+      ],
+      name: 'module_execution_events_execution_identity_fk',
+    }).onDelete('cascade'),
+    unique('module_execution_events_execution_sequence_unique').on(
+      table.executionId,
+      table.sequence,
+    ),
+    index('idx_module_execution_events_execution_created').on(
+      table.accountId,
+      table.projectId,
+      table.executionId,
+      table.sequence,
+    ),
+    check('module_execution_events_sequence_check', sql`${table.sequence} > 0`),
+    check(
+      'module_execution_events_type_check',
+      sql`length(BTRIM(${table.eventType})) BETWEEN 1 AND 64
+        AND ${table.eventType} ~ '^[a-z][a-z0-9_]*$'`,
+    ),
+    check(
+      'module_execution_events_payload_check',
+      sql`jsonb_typeof(${table.payload}) = 'object'
+        AND pg_column_size(${table.payload}) <= 262144`,
+    ),
+  ],
+);
+
+export const moduleExecutionOutputs = kortixSchema.table(
+  'module_execution_outputs',
+  {
+    outputId: uuid('output_id').defaultRandom().primaryKey(),
+    executionId: uuid('execution_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    outputDigest: varchar('output_digest', { length: 71 }).notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutions.executionId,
+        moduleExecutions.accountId,
+        moduleExecutions.projectId,
+      ],
+      name: 'module_execution_outputs_execution_identity_fk',
+    }).onDelete('cascade'),
+    unique('module_execution_outputs_execution_digest_unique').on(
+      table.executionId,
+      table.outputDigest,
+    ),
+    check(
+      'module_execution_outputs_digest_check',
+      sql`${table.outputDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'module_execution_outputs_size_check',
+      sql`${table.sizeBytes} >= 0 AND ${table.sizeBytes} <= 104857600`,
+    ),
+  ],
+);
+
+export const moduleExecutionEvidence = kortixSchema.table(
+  'module_execution_evidence',
+  {
+    evidenceId: uuid('evidence_id').defaultRandom().primaryKey(),
+    executionId: uuid('execution_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    leaseId: uuid('lease_id').notNull(),
+    generation: integer('generation').notNull(),
+    runnerId: uuid('runner_id').notNull(),
+    outcome: moduleExecutionStateEnum('outcome').notNull(),
+    evidenceDigest: varchar('evidence_digest', { length: 71 }).notNull(),
+    evidence: jsonb('evidence').notNull().$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutions.executionId,
+        moduleExecutions.accountId,
+        moduleExecutions.projectId,
+      ],
+      name: 'module_execution_evidence_execution_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.leaseId, table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutionLeases.leaseId,
+        moduleExecutionLeases.executionId,
+        moduleExecutionLeases.accountId,
+        moduleExecutionLeases.projectId,
+      ],
+      name: 'module_execution_evidence_lease_identity_fk',
+    }).onDelete('restrict'),
+    unique('module_execution_evidence_execution_unique').on(table.executionId),
+    check(
+      'module_execution_evidence_outcome_check',
+      sql`${table.outcome} IN ('succeeded', 'failed', 'cancelled', 'unknown')`,
+    ),
+    check('module_execution_evidence_generation_check', sql`${table.generation} >= 1`),
+    check(
+      'module_execution_evidence_digest_check',
+      sql`${table.evidenceDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'module_execution_evidence_payload_check',
+      sql`jsonb_typeof(${table.evidence}) = 'object'
+        AND pg_column_size(${table.evidence}) <= 1048576`,
+    ),
+  ],
+);
+
+export const moduleKillSwitchGenerations = kortixSchema.table(
+  'module_kill_switch_generations',
+  {
+    killSwitchId: uuid('kill_switch_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: 'cascade' }),
+    projectId: uuid('project_id'),
+    runnerId: uuid('runner_id'),
+    scope: moduleKillSwitchScopeEnum('scope').notNull(),
+    generation: integer('generation').notNull(),
+    active: boolean('active').default(true).notNull(),
+    activatedAt: timestamp('activated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    releasedAt: timestamp('released_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'module_kill_switch_generations_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.runnerId, table.accountId],
+      foreignColumns: [moduleRunners.runnerId, moduleRunners.accountId],
+      name: 'module_kill_switch_generations_runner_account_fk',
+    }).onDelete('cascade'),
+    uniqueIndex('module_kill_switch_generations_account_active_unique')
+      .on(table.accountId)
+      .where(sql`${table.scope} = 'account' AND ${table.active}`),
+    uniqueIndex('module_kill_switch_generations_project_active_unique')
+      .on(table.projectId)
+      .where(sql`${table.scope} = 'project' AND ${table.active}`),
+    uniqueIndex('module_kill_switch_generations_runner_active_unique')
+      .on(table.runnerId)
+      .where(sql`${table.scope} = 'runner' AND ${table.active}`),
+    check('module_kill_switch_generations_generation_check', sql`${table.generation} >= 0`),
+    check(
+      'module_kill_switch_generations_scope_check',
+      sql`(
+        (${table.scope} = 'account' AND ${table.projectId} IS NULL AND ${table.runnerId} IS NULL)
+        OR (${table.scope} = 'project' AND ${table.projectId} IS NOT NULL AND ${table.runnerId} IS NULL)
+        OR (${table.scope} = 'runner' AND ${table.projectId} IS NULL AND ${table.runnerId} IS NOT NULL)
+      )`,
+    ),
+    check(
+      'module_kill_switch_generations_release_check',
+      sql`${table.active} = (${table.releasedAt} IS NULL)`,
+    ),
+  ],
+);
+
+export const moduleExecutionOutbox = kortixSchema.table(
+  'module_execution_outbox',
+  {
+    outboxId: uuid('outbox_id').defaultRandom().primaryKey(),
+    executionId: uuid('execution_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    idempotencyKey: varchar('idempotency_key', { length: 255 }).notNull(),
+    payload: jsonb('payload').notNull().$type<Record<string, unknown>>(),
+    status: moduleOutboxStatusEnum('status').default('pending').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.executionId, table.accountId, table.projectId],
+      foreignColumns: [
+        moduleExecutions.executionId,
+        moduleExecutions.accountId,
+        moduleExecutions.projectId,
+      ],
+      name: 'module_execution_outbox_execution_identity_fk',
+    }).onDelete('cascade'),
+    unique('module_execution_outbox_idempotency_unique').on(table.idempotencyKey),
+    unique('module_execution_outbox_execution_unique').on(table.executionId),
+    index('idx_module_execution_outbox_status_created').on(
+      table.status,
+      table.createdAt,
+      table.outboxId,
+    ),
+    check(
+      'module_execution_outbox_idempotency_key_check',
+      sql`length(BTRIM(${table.idempotencyKey})) BETWEEN 8 AND 255`,
+    ),
+    check(
+      'module_execution_outbox_payload_check',
+      sql`jsonb_typeof(${table.payload}) = 'object'
+        AND pg_column_size(${table.payload}) <= 262144`,
+    ),
+  ],
 );

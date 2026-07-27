@@ -1,0 +1,17 @@
+**
+
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!.npmrc
+
+!apps/
+apps/*
+!apps/module-egress-proxy/
+!apps/module-egress-proxy/**
+
+!packages/
+packages/*
+!packages/db/
+!packages/db/**
+!packages/module-runtime-contracts/
+!packages/module-runtime-contracts/**

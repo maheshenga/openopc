@@ -3,7 +3,13 @@ import { expect, test } from 'bun:test';
 import ociTagFixture from '../fixtures/invalid/oci-tag.json';
 import ociFixture from '../fixtures/valid/oci.json';
 import wasiFixture from '../fixtures/valid/wasi.json';
-import { canonicalDigest, parseRuntimeDescriptor, parseWorkEnvelope } from './index';
+import {
+  canonicalDigest,
+  canonicalJsonBytes,
+  parseRuntimeDescriptor,
+  parseWorkEnvelope,
+  sha256Digest,
+} from './index';
 
 const workEnvelopeFixture = {
   envelopeVersion: 1,
@@ -11,9 +17,26 @@ const workEnvelopeFixture = {
   accountId: '10000000-0000-4000-8000-000000000002',
   projectId: '10000000-0000-4000-8000-000000000003',
   installationId: '10000000-0000-4000-8000-000000000004',
+  idempotencyKey: 'module-execution-op-1',
+  installRevision: 3,
+  releaseId: '10000000-0000-4000-8000-000000000007',
   releaseDigest: `sha256:${'1'.repeat(64)}`,
+  consentRevisionId: '10000000-0000-4000-8000-000000000008',
+  permissionDigest: `sha256:${'4'.repeat(64)}`,
+  runtimeDescriptorId: '10000000-0000-4000-8000-000000000009',
   runtimeDescriptorDigest: `sha256:${'2'.repeat(64)}`,
+  runtimeKind: 'oci-image',
+  runtimeProfile: 'openopc-oci-v1',
   policyDigest: `sha256:${'3'.repeat(64)}`,
+  killSwitchGeneration: 7,
+  executionDeadline: '2026-07-25T10:30:00.000Z',
+  bindingDigest: `sha256:${'6'.repeat(64)}`,
+  resourceCeilings: {
+    cpuMillis: 60_000,
+    memoryMiB: 512,
+    wallTimeMs: 120_000,
+    costMicro: 50_000,
+  },
   lease: {
     id: '10000000-0000-4000-8000-000000000005',
     generation: 1,
@@ -118,6 +141,24 @@ test('produces a key-order-independent canonical work-envelope digest', async ()
   const digest = await canonicalDigest({ b: 2, a: 1 });
   expect(digest).toBe(await canonicalDigest({ a: 1, b: 2 }));
   expect(digest).toBe('sha256:43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777');
+});
+
+test('exposes the exact canonical bytes that are hashed', async () => {
+  const bytes = canonicalJsonBytes({ z: [3, { b: true, a: 'x' }], a: null });
+
+  expect(new TextDecoder().decode(bytes)).toBe('{"a":null,"z":[3,{"a":"x","b":true}]}');
+  expect(await sha256Digest(bytes)).toBe(
+    'sha256:f39f20b5b275a590ffdbf04446b233ed928b40757f744e70a5e1c0a385aa83f9',
+  );
+});
+
+test('rejects values that cannot have one canonical JSON byte representation', () => {
+  const sparse: unknown[] = [];
+  sparse[1] = 'value';
+
+  for (const value of [sparse, Number.POSITIVE_INFINITY, '\ud800', new Date(0)]) {
+    expect(() => canonicalJsonBytes(value)).toThrow('CANONICAL_JSON_INVALID');
+  }
 });
 
 test('binds every runtime descriptor field into the canonical digest', async () => {

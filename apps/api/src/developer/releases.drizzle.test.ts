@@ -4,6 +4,8 @@ import {
   developerModuleReleases,
   developerModuleVerificationRuns,
   developerPublishers,
+  moduleRuntimeArtifacts,
+  moduleRuntimeDescriptors,
 } from '@kortix/db';
 import { PgDialect } from 'drizzle-orm/pg-core';
 
@@ -13,6 +15,8 @@ import { createDrizzleDeveloperModuleReleaseRepository } from './releases.drizzl
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const USER_ID = '20000000-0000-4000-a000-000000000002';
 const RELEASE_ID = '30000000-0000-4000-a000-000000000003';
+const DESCRIPTOR_ID = '50000000-0000-4000-a000-000000000005';
+const RUNTIME_ARTIFACT_ID = '60000000-0000-4000-a000-000000000006';
 const CREATED_AT = '2026-07-24T12:00:00.000Z';
 
 const submission: DeveloperModuleReleaseInsert = {
@@ -33,6 +37,7 @@ const submission: DeveloperModuleReleaseInsert = {
   artifactId: '40000000-0000-4000-a000-000000000004',
   artifactDigest: `sha256:${'b'.repeat(64)}`,
   runtimeDescriptor: null,
+  runtimeArtifact: null,
   verification: {
     policyDigest: `sha256:${'c'.repeat(64)}`,
     scannerSetDigest: `sha256:${'d'.repeat(64)}`,
@@ -75,14 +80,91 @@ const releaseRow = {
   updatedAt: CREATED_AT,
 };
 
+const wasiRuntimeDescriptor = {
+  descriptor: {
+    descriptorVersion: 1 as const,
+    runtime: {
+      kind: 'wasi-component' as const,
+      component: 'runtime/adapter.wasm',
+      world: 'openopc:adapter/runtime@1.0.0',
+      operation: 'run',
+      imports: ['openopc:module/input', 'openopc:module/output'],
+      limits: {
+        cpuMillis: 1000,
+        fuel: 1_000_000,
+        memoryMiB: 64,
+        outputBytes: 1_048_576,
+        pids: 8,
+        wallTimeMs: 5000,
+      },
+    },
+  },
+  descriptorDigest:
+    'sha256:48c5ceaedc0107897ab95f38d92c6be879fdb89dc6df86a46619010c2185fb30' as const,
+  entryPath: 'runtime/openopc.runtime.json',
+  runtimeKind: 'wasi-component' as const,
+};
+
+const storedRuntimeArtifact = {
+  digest: `sha256:${'2'.repeat(64)}` as const,
+  bytes: 4,
+  mediaType: 'application/wasm' as const,
+  storageKey: 'module-runtime/artifacts/internal/component.wasm',
+};
+
+const wasiSubmission: DeveloperModuleReleaseInsert = {
+  ...submission,
+  manifest: {
+    ...submission.manifest,
+    execution: { mode: 'server-adapter', entry: wasiRuntimeDescriptor.entryPath },
+    verification: { profile: 'server-conformance' },
+  },
+  runtimeDescriptor: wasiRuntimeDescriptor,
+  runtimeArtifact: storedRuntimeArtifact,
+};
+
+const wasiReleaseRow = {
+  ...releaseRow,
+  manifest: wasiSubmission.manifest,
+  runtimeDescriptorDigest: wasiRuntimeDescriptor.descriptorDigest,
+  runtimeDescriptorPath: wasiRuntimeDescriptor.entryPath,
+  runtimeKind: wasiRuntimeDescriptor.runtimeKind,
+};
+
+const runtimeDescriptorRow = {
+  descriptorId: DESCRIPTOR_ID,
+  accountId: ACCOUNT_ID,
+  releaseId: RELEASE_ID,
+  runtimeKind: wasiRuntimeDescriptor.runtimeKind,
+  descriptorDigest: wasiRuntimeDescriptor.descriptorDigest,
+  descriptor: wasiRuntimeDescriptor.descriptor,
+  createdAt: CREATED_AT,
+};
+
+const runtimeArtifactRow = {
+  runtimeArtifactId: RUNTIME_ARTIFACT_ID,
+  accountId: ACCOUNT_ID,
+  releaseId: RELEASE_ID,
+  runtimeDescriptorId: DESCRIPTOR_ID,
+  artifactDigest: storedRuntimeArtifact.digest,
+  artifactBytes: storedRuntimeArtifact.bytes,
+  mediaType: storedRuntimeArtifact.mediaType,
+  storageKey: storedRuntimeArtifact.storageKey,
+  createdAt: CREATED_AT,
+};
+
 type FixtureInput = {
   releaseInserts?: unknown[][];
+  descriptorInserts?: unknown[][];
+  runtimeArtifactInserts?: unknown[][];
   runInserts?: unknown[][];
   selects?: unknown[][];
 };
 
 function databaseFixture(input: FixtureInput = {}) {
   const releaseInserts = [...(input.releaseInserts ?? [])];
+  const descriptorInserts = [...(input.descriptorInserts ?? [])];
+  const runtimeArtifactInserts = [...(input.runtimeArtifactInserts ?? [])];
   const runInserts = [...(input.runInserts ?? [])];
   const selects = [...(input.selects ?? [])];
   const whereClauses: unknown[] = [];
@@ -96,7 +178,11 @@ function databaseFixture(input: FixtureInput = {}) {
           const rows = () =>
             table === developerModuleReleases
               ? (releaseInserts.shift() ?? [])
-              : (runInserts.shift() ?? []);
+              : table === moduleRuntimeDescriptors
+                ? (descriptorInserts.shift() ?? [])
+                : table === moduleRuntimeArtifacts
+                  ? (runtimeArtifactInserts.shift() ?? [])
+                  : (runInserts.shift() ?? []);
           return {
             onConflictDoNothing() {
               return {
@@ -151,7 +237,88 @@ function conditionParams(condition: unknown): unknown[] {
   return new PgDialect().sqlToQuery(condition as never).params;
 }
 
+function insertedTableName(table: unknown): string {
+  if (table === developerModuleReleases) return 'release';
+  if (table === moduleRuntimeDescriptors) return 'descriptor';
+  if (table === moduleRuntimeArtifacts) return 'runtime-artifact';
+  if (table === developerModuleVerificationRuns) return 'verification-run';
+  return 'unknown';
+}
+
 describe('developer module release Drizzle repository', () => {
+  test('persists release, descriptor, runtime artifact, and verification in one ordered transaction', async () => {
+    const { database, insertedValues } = databaseFixture({
+      selects: [[{ publisherId: 'acme' }]],
+      releaseInserts: [[wasiReleaseRow]],
+      descriptorInserts: [[runtimeDescriptorRow]],
+      runtimeArtifactInserts: [[runtimeArtifactRow]],
+      runInserts: [[{ runId: '70000000-0000-4000-a000-000000000007' }]],
+    });
+
+    const result =
+      await createDrizzleDeveloperModuleReleaseRepository(database).submit(wasiSubmission);
+
+    expect(insertedValues.map((entry) => insertedTableName(entry.table))).toEqual([
+      'release',
+      'descriptor',
+      'runtime-artifact',
+      'verification-run',
+    ]);
+    expect(insertedValues[1]?.value).toEqual({
+      accountId: ACCOUNT_ID,
+      releaseId: RELEASE_ID,
+      runtimeKind: 'wasi-component',
+      descriptorDigest: wasiRuntimeDescriptor.descriptorDigest,
+      descriptor: wasiRuntimeDescriptor.descriptor,
+    });
+    expect(insertedValues[2]?.value).toEqual({
+      accountId: ACCOUNT_ID,
+      releaseId: RELEASE_ID,
+      runtimeDescriptorId: DESCRIPTOR_ID,
+      artifactDigest: storedRuntimeArtifact.digest,
+      artifactBytes: 4,
+      mediaType: 'application/wasm',
+      storageKey: storedRuntimeArtifact.storageKey,
+    });
+    expect(result.release).not.toHaveProperty('storage_key');
+    expect(JSON.stringify(result.release)).not.toContain(storedRuntimeArtifact.storageKey);
+  });
+
+  test('accepts only an exact idempotent WASI metadata replay', async () => {
+    const exact = databaseFixture({
+      releaseInserts: [[]],
+      selects: [
+        [{ publisherId: 'acme' }],
+        [wasiReleaseRow],
+        [runtimeDescriptorRow],
+        [runtimeArtifactRow],
+      ],
+    });
+    await expect(
+      createDrizzleDeveloperModuleReleaseRepository(exact.database).submit(wasiSubmission),
+    ).resolves.toMatchObject({ created: false });
+
+    for (const artifactRows of [
+      [],
+      [{ ...runtimeArtifactRow, artifactDigest: `sha256:${'9'.repeat(64)}` }],
+      [{ ...runtimeArtifactRow, artifactBytes: 5 }],
+      [{ ...runtimeArtifactRow, mediaType: 'application/octet-stream' }],
+    ]) {
+      const mismatch = databaseFixture({
+        releaseInserts: [[]],
+        selects: [
+          [{ publisherId: 'acme' }],
+          [wasiReleaseRow],
+          [runtimeDescriptorRow],
+          artifactRows,
+        ],
+      });
+      await expect(
+        createDrizzleDeveloperModuleReleaseRepository(mismatch.database).submit(wasiSubmission),
+      ).rejects.toMatchObject({ code: 'DEVELOPER_MODULE_VERSION_CONFLICT', status: 409 });
+    }
+  });
+
   test('persists artifact-derived server runtime evidence on the release row', async () => {
     const runtimeDescriptor = {
       descriptor: {
@@ -184,6 +351,7 @@ describe('developer module release Drizzle repository', () => {
         verification: { profile: 'server-conformance' },
       },
       runtimeDescriptor,
+      runtimeArtifact: null,
     };
     const serverRow = {
       ...releaseRow,
@@ -195,16 +363,26 @@ describe('developer module release Drizzle repository', () => {
     const { database, insertedValues } = databaseFixture({
       selects: [[{ publisherId: 'acme' }]],
       releaseInserts: [[serverRow]],
-      runInserts: [[{ runId: '50000000-0000-4000-a000-000000000005' }]],
+      descriptorInserts: [
+        [
+          {
+            descriptorId: DESCRIPTOR_ID,
+            accountId: ACCOUNT_ID,
+            releaseId: RELEASE_ID,
+            runtimeKind: runtimeDescriptor.runtimeKind,
+            descriptorDigest: runtimeDescriptor.descriptorDigest,
+            descriptor: runtimeDescriptor.descriptor,
+            createdAt: CREATED_AT,
+          },
+        ],
+      ],
+      runInserts: [[{ runId: '70000000-0000-4000-a000-000000000007' }]],
     });
 
-    const result = await createDrizzleDeveloperModuleReleaseRepository(database).submit(
-      serverSubmission,
-    );
+    const result =
+      await createDrizzleDeveloperModuleReleaseRepository(database).submit(serverSubmission);
 
-    expect(
-      insertedValues.find((entry) => entry.table === developerModuleReleases)?.value,
-    ).toEqual(
+    expect(insertedValues.find((entry) => entry.table === developerModuleReleases)?.value).toEqual(
       expect.objectContaining({
         runtimeDescriptorDigest: runtimeDescriptor.descriptorDigest,
         runtimeDescriptorPath: runtimeDescriptor.entryPath,

@@ -1,15 +1,21 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
+  RUNTIME_ARTIFACT_FETCH_PATH,
+  type RunnerClaimBundleV1,
   type Sha256Digest,
   type WorkEnvelopeV1,
+  canonicalDigest,
+  parseRunnerClaimBundle,
+  parseRuntimeDescriptor,
   parseWorkEnvelope,
+  sha256Digest,
 } from '@openopc/module-runtime-contracts';
 
+import type { ExecutionInputStore } from './execution-inputs';
 import {
   type FinalizeModuleExecutionResult,
   type HeartbeatModuleExecutionLeaseResult,
-  MODULE_EXECUTION_LEASE_DURATION_MS,
   type ModuleCapabilityAudience,
   type ModuleExecution,
   type ModuleExecutionBinding,
@@ -82,9 +88,7 @@ export interface RunnerClaimBindingResolver {
   resolveForClaim(executionId: string): Promise<ModuleExecutionBinding | null>;
 }
 
-export interface RunnerClaimCommand {
-  executionId: string;
-}
+export interface RunnerClaimNextCommand {}
 
 export interface RunnerLeaseHeartbeatCommand {
   projectId: string;
@@ -111,11 +115,6 @@ export interface RunnerFinalizeCommand {
   evidenceDigest: Sha256Digest;
   evidence: Record<string, unknown>;
   usage: Record<string, unknown>;
-}
-
-export interface RunnerClaimResponseV1 {
-  signedEnvelope: string;
-  capabilityTokens: readonly RunnerCapabilityTokenV1[];
 }
 
 export interface RunnerCapabilityTokenV1 {
@@ -209,6 +208,7 @@ export class ModuleRunnerProtocol {
   constructor(
     private readonly input: {
       executionRepository: ModuleExecutionRepository;
+      executionInputStore: ExecutionInputStore;
       runnerRepository: ModuleRunnerRepository;
       bindingResolver: RunnerClaimBindingResolver;
       registrationVerifier?: RunnerRegistrationVerifier;
@@ -216,7 +216,6 @@ export class ModuleRunnerProtocol {
       envelopeSigner?: WorkEnvelopeSigner;
       now?: () => Date;
       createId?: () => string;
-      leaseDurationMs?: number;
     },
   ) {}
 
@@ -225,8 +224,7 @@ export class ModuleRunnerProtocol {
     if (
       !runner ||
       runner.accountId !== identity.accountId ||
-      runner.certificateThumbprint !== identity.certificateThumbprint ||
-      runner.status !== 'active'
+      runner.certificateThumbprint !== identity.certificateThumbprint
     ) {
       throw new ModuleRunnerProtocolError('RUNNER_AUTHENTICATION_FAILED', 401);
     }
@@ -291,62 +289,65 @@ export class ModuleRunnerProtocol {
     });
   }
 
-  async claim(
+  async claimNext(
     identity: ModuleRunnerIdentity,
-    command: RunnerClaimCommand,
-  ): Promise<RunnerClaimResponseV1> {
+    _command: RunnerClaimNextCommand,
+  ): Promise<RunnerClaimBundleV1 | null> {
     const runner = await this.authenticate(identity);
-    const execution = await this.input.executionRepository.findDispatchable(command.executionId);
-    if (!execution || execution.accountId !== runner.accountId) {
-      throw new ModuleRunnerProtocolError('RUNNER_EXECUTION_UNAVAILABLE', 404);
-    }
-    const binding = await this.input.bindingResolver.resolveForClaim(execution.executionId);
     if (
-      !binding ||
-      binding.accountId !== execution.accountId ||
-      binding.projectId !== execution.projectId ||
-      binding.installationId !== execution.installationId ||
-      binding.releaseId !== execution.releaseId ||
-      binding.consentRevisionId !== execution.consentRevisionId ||
-      binding.runtimeDescriptorId !== execution.runtimeDescriptorId ||
-      binding.killSwitchGeneration !== execution.killSwitchGeneration
+      runner.status !== 'active' ||
+      !runner.profiles.some((profile) => profile.runtimeKind === 'wasi-component')
     ) {
-      throw new ModuleRunnerProtocolError('RUNNER_EXECUTION_UNAVAILABLE', 404);
-    }
-    const supportsProfile = runner.profiles.some(
-      (profile) =>
-        profile.runtimeKind === binding.runtimeKind &&
-        profile.profileName === binding.runtimeProfile,
-    );
-    if (!supportsProfile) {
       throw new ModuleRunnerProtocolError('RUNNER_PROFILE_UNAVAILABLE', 409);
     }
-    if (
-      (await computeModuleExecutionBindingDigest(binding, execution.deadlineAt)) !==
-      execution.workEnvelopeDigest
-    ) {
-      throw new ModuleRunnerProtocolError('RUNNER_EXECUTION_UNAVAILABLE', 404);
-    }
-    if (!this.input.capabilityIssuer || !this.input.envelopeSigner) {
-      throw new ModuleRunnerProtocolError('RUNNER_CLAIM_UNAVAILABLE', 503);
-    }
-
-    const now = (this.input.now ?? (() => new Date()))();
-    const deadlineAt = new Date(
-      Math.min(
-        Date.parse(execution.deadlineAt),
-        now.valueOf() + (this.input.leaseDurationMs ?? MODULE_EXECUTION_LEASE_DURATION_MS),
-      ),
-    ).toISOString();
-    const claim = await this.input.executionRepository.claim({
-      accountId: execution.accountId,
-      projectId: execution.projectId,
-      executionId: execution.executionId,
+    const claim = await this.input.executionRepository.claimNext({
+      accountId: runner.accountId,
       runnerId: runner.runnerId,
-      leaseId: (this.input.createId ?? randomUUID)(),
-      deadlineAt,
     });
+    if (!claim) return null;
+    const { execution } = claim;
     try {
+      const binding = await this.input.bindingResolver.resolveForClaim(execution.executionId);
+      const executionInput = await this.input.executionInputStore.get(
+        execution.accountId,
+        execution.projectId,
+        execution.executionId,
+      );
+      if (
+        !binding ||
+        !executionInput ||
+        binding.accountId !== execution.accountId ||
+        binding.projectId !== execution.projectId ||
+        binding.installationId !== execution.installationId ||
+        binding.releaseId !== execution.releaseId ||
+        binding.consentRevisionId !== execution.consentRevisionId ||
+        binding.runtimeDescriptorId !== execution.runtimeDescriptorId ||
+        binding.killSwitchGeneration !== execution.killSwitchGeneration ||
+        binding.runtimeKind !== execution.runtimeKind ||
+        binding.runtimeProfile !== execution.runtimeProfile ||
+        binding.runtimeKind !== 'wasi-component' ||
+        !binding.runtimeArtifactDigest ||
+        !binding.runtimeArtifactBytes ||
+        (await canonicalDigest(binding.runtimeDescriptor)) !== binding.runtimeDescriptorDigest ||
+        (await sha256Digest(executionInput.payload)) !== executionInput.digest ||
+        (await computeModuleExecutionBindingDigest(
+          binding,
+          execution.deadlineAt,
+          executionInput.digest,
+        )) !== execution.workEnvelopeDigest
+      ) {
+        throw new ModuleRunnerProtocolError('RUNNER_EXECUTION_UNAVAILABLE', 404);
+      }
+      if (!this.input.capabilityIssuer || !this.input.envelopeSigner) {
+        throw new ModuleRunnerProtocolError('RUNNER_CLAIM_UNAVAILABLE', 503);
+      }
+      const runtimeDescriptor = parseRuntimeDescriptor(structuredClone(binding.runtimeDescriptor));
+      const inputBase64 = Buffer.from(executionInput.payload).toString('base64url');
+      const runtimeArtifact = {
+        fetchPath: RUNTIME_ARTIFACT_FETCH_PATH,
+        digest: binding.runtimeArtifactDigest,
+        bytes: binding.runtimeArtifactBytes,
+      } as const;
       const issued = await this.input.capabilityIssuer.issueForClaim({
         runner,
         execution: claim.execution,
@@ -387,6 +388,9 @@ export class ModuleRunnerProtocol {
         permissionDigest: binding.permissionDigest,
         runtimeDescriptorId: execution.runtimeDescriptorId,
         runtimeDescriptorDigest: binding.runtimeDescriptorDigest,
+        inputDigest: executionInput.digest,
+        runtimeArtifactDigest: binding.runtimeArtifactDigest,
+        runtimeArtifactBytes: binding.runtimeArtifactBytes,
         runtimeKind: binding.runtimeKind,
         runtimeProfile: binding.runtimeProfile,
         policyDigest: binding.policyDigest,
@@ -406,12 +410,37 @@ export class ModuleRunnerProtocol {
         })),
       };
       assertCapabilityTokenBindings(envelope, tokens);
-      return {
-        signedEnvelope: await this.input.envelopeSigner.sign(envelope, {
+      const signedEnvelope = await this.input.envelopeSigner.sign(envelope, {
           traceparent: workEnvelopeTraceparent(execution.executionId, claim.lease.leaseId),
-        }),
+        });
+      const currentBinding = await this.input.bindingResolver.resolveForClaim(execution.executionId);
+      const currentInput = await this.input.executionInputStore.get(
+        execution.accountId,
+        execution.projectId,
+        execution.executionId,
+      );
+      if (
+        !currentBinding ||
+        !currentInput ||
+        (await canonicalDigest(currentBinding.runtimeDescriptor)) !== envelope.runtimeDescriptorDigest ||
+        (await sha256Digest(currentInput.payload)) !== envelope.inputDigest ||
+        currentBinding.runtimeArtifactDigest !== envelope.runtimeArtifactDigest ||
+        currentBinding.runtimeArtifactBytes !== envelope.runtimeArtifactBytes ||
+        (await computeModuleExecutionBindingDigest(
+          currentBinding,
+          execution.deadlineAt,
+          currentInput.digest,
+        )) !== envelope.bindingDigest
+      ) {
+        throw new ModuleRunnerProtocolError('RUNNER_CAPABILITY_BINDING_INVALID', 409);
+      }
+      return parseRunnerClaimBundle({
+        signedEnvelope,
         capabilityTokens: tokens,
-      };
+        runtimeDescriptor,
+        inputBase64,
+        runtimeArtifact,
+      });
     } catch (error) {
       await this.input.executionRepository
         .abandonClaim({

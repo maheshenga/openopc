@@ -1,6 +1,20 @@
 import { randomUUID } from 'node:crypto';
 
-import { type Sha256Digest, canonicalDigest } from '@openopc/module-runtime-contracts';
+import {
+  MODULE_EXECUTION_INPUT_MAX_BYTES,
+  type RuntimeDescriptorV1,
+  type Sha256Digest,
+  canonicalDigest,
+  canonicalJsonBytes,
+  sha256Digest,
+} from '@openopc/module-runtime-contracts';
+
+import {
+  type ExecutionInputStore,
+  type ModuleExecutionInput,
+  type MutableExecutionInputStore,
+  createMemoryExecutionInputStore,
+} from './execution-inputs';
 
 export const MODULE_EXECUTION_LEASE_DURATION_MS = 30_000;
 
@@ -67,18 +81,22 @@ export interface ModuleCapabilityGrant {
   createdAt: string;
 }
 
-export interface ClaimModuleExecutionCommand {
+export interface ClaimNextModuleExecutionCommand {
   accountId: string;
-  projectId: string;
-  executionId: string;
   runnerId: string;
-  leaseId: string;
-  deadlineAt: string;
 }
 
 export interface ClaimModuleExecutionResult {
   execution: ModuleExecution;
   lease: ModuleExecutionLease;
+}
+
+export interface ModuleRunnerProfileSnapshot {
+  runnerId: string;
+  accountId: string;
+  status: 'active' | 'draining' | 'quarantined' | 'revoked';
+  runtimeKind: ModuleExecutionBinding['runtimeKind'];
+  profileName: string;
 }
 
 export interface AbandonModuleExecutionClaimCommand {
@@ -140,6 +158,9 @@ export interface ModuleExecutionBinding {
   policyDigest: Sha256Digest;
   runtimeDescriptorId: string;
   runtimeDescriptorDigest: Sha256Digest;
+  runtimeDescriptor: RuntimeDescriptorV1;
+  runtimeArtifactDigest: Sha256Digest | null;
+  runtimeArtifactBytes: number | null;
   runtimeKind: 'wasi-component' | 'oci-image';
   runtimeProfile: string;
   killSwitchGeneration: number;
@@ -166,6 +187,7 @@ export interface ModuleExecutionBindingResolver {
 export interface CreateModuleExecutionCommand extends ResolveModuleExecutionBindingInput {
   idempotencyKey: string;
   deadlineAt: string;
+  input: unknown;
 }
 
 export interface ModuleExecutionEstimate {
@@ -183,6 +205,7 @@ export interface ModuleExecutionEstimate {
 
 export interface CreateModuleExecutionPersistenceInput {
   execution: ModuleExecution;
+  input: ModuleExecutionInput;
 }
 
 export interface ConfirmModuleExecutionCommand {
@@ -298,7 +321,9 @@ export interface ModuleExecutionRepository {
     projectId: string,
     executionId: string,
   ): Promise<readonly ModuleExecutionEvent[]>;
-  claim(command: ClaimModuleExecutionCommand): Promise<ClaimModuleExecutionResult>;
+  claimNext(
+    command: ClaimNextModuleExecutionCommand,
+  ): Promise<ClaimModuleExecutionResult | null>;
   abandonClaim(command: AbandonModuleExecutionClaimCommand): Promise<ModuleExecution>;
   storeCapabilityGrants(
     command: StoreModuleCapabilityGrantsCommand,
@@ -307,7 +332,6 @@ export interface ModuleExecutionRepository {
     command: HeartbeatModuleExecutionLeaseCommand,
   ): Promise<HeartbeatModuleExecutionLeaseResult>;
   appendEvidence(command: AppendModuleExecutionEvidenceCommand): Promise<ModuleExecutionEvent>;
-  findDispatchable(executionId: string): Promise<ModuleExecution | null>;
   cancel(command: CancelModuleExecutionCommand): Promise<ModuleExecution>;
   finalize(command: FinalizeModuleExecutionCommand): Promise<FinalizeModuleExecutionResult>;
 }
@@ -319,6 +343,7 @@ function clone<T>(value: T): T {
 export function computeModuleExecutionBindingDigest(
   binding: ModuleExecutionBinding,
   deadlineAt: string,
+  inputDigest: Sha256Digest,
 ): Promise<Sha256Digest> {
   return canonicalDigest({
     accountId: binding.accountId,
@@ -334,9 +359,12 @@ export function computeModuleExecutionBindingDigest(
     runtimeDescriptorDigest: binding.runtimeDescriptorDigest,
     runtimeKind: binding.runtimeKind,
     runtimeProfile: binding.runtimeProfile,
+    runtimeArtifactDigest: binding.runtimeArtifactDigest,
+    runtimeArtifactBytes: binding.runtimeArtifactBytes,
     killSwitchGeneration: binding.killSwitchGeneration,
     resourceCeilings: binding.resourceCeilings,
     deadlineAt,
+    inputDigest,
   });
 }
 
@@ -344,6 +372,7 @@ export class ModuleExecutionService {
   constructor(
     private readonly input: {
       repository: ModuleExecutionRepository;
+      executionInputStore?: ExecutionInputStore;
       bindingResolver?: ModuleExecutionBindingResolver;
       now?: () => Date;
       createId?: () => string;
@@ -382,6 +411,16 @@ export class ModuleExecutionService {
     ) {
       throw new ModuleExecutionError('MODULE_EXECUTION_INPUT_INVALID', 400);
     }
+    let payload: Uint8Array;
+    try {
+      payload = canonicalJsonBytes(command.input);
+    } catch {
+      throw new ModuleExecutionError('MODULE_EXECUTION_INPUT_INVALID', 400);
+    }
+    if (payload.byteLength > MODULE_EXECUTION_INPUT_MAX_BYTES) {
+      throw new ModuleExecutionError('MODULE_EXECUTION_INPUT_INVALID', 400);
+    }
+    const inputDigest = await sha256Digest(payload);
     const binding = await this.input.bindingResolver?.resolve(command);
     if (
       !binding ||
@@ -396,10 +435,12 @@ export class ModuleExecutionService {
     const workEnvelopeDigest = await computeModuleExecutionBindingDigest(
       binding,
       command.deadlineAt,
+      inputDigest,
     );
+    const executionId = (this.input.createId ?? randomUUID)();
     return this.input.repository.create({
       execution: {
-        executionId: (this.input.createId ?? randomUUID)(),
+        executionId,
         accountId: command.accountId,
         projectId: command.projectId,
         installationId: command.installationId,
@@ -417,6 +458,14 @@ export class ModuleExecutionService {
         updatedAt: createdAt,
         terminalAt: null,
       },
+      input: {
+        executionId,
+        accountId: command.accountId,
+        projectId: command.projectId,
+        payload,
+        digest: inputDigest,
+        createdAt,
+      },
     });
   }
 
@@ -429,6 +478,14 @@ export class ModuleExecutionService {
     if (!execution) throw new ModuleExecutionError('MODULE_EXECUTION_NOT_FOUND', 404);
     if (execution.state !== 'awaiting_confirmation') {
       throw new ModuleExecutionError('MODULE_EXECUTION_STATE_CONFLICT', 409);
+    }
+    const executionInput = await this.input.executionInputStore?.get(
+      command.accountId,
+      command.projectId,
+      command.executionId,
+    );
+    if (!executionInput) {
+      throw new ModuleExecutionError('MODULE_EXECUTION_BINDING_STALE', 409);
     }
     const binding = await this.input.bindingResolver?.resolve({
       accountId: command.accountId,
@@ -445,8 +502,11 @@ export class ModuleExecutionService {
       binding.consentRevisionId !== execution.consentRevisionId ||
       binding.runtimeDescriptorId !== execution.runtimeDescriptorId ||
       binding.killSwitchGeneration !== execution.killSwitchGeneration ||
-      (await computeModuleExecutionBindingDigest(binding, execution.deadlineAt)) !==
-        execution.workEnvelopeDigest
+      (await computeModuleExecutionBindingDigest(
+        binding,
+        execution.deadlineAt,
+        executionInput.digest,
+      )) !== execution.workEnvelopeDigest
     ) {
       throw new ModuleExecutionError('MODULE_EXECUTION_BINDING_STALE', 409);
     }
@@ -493,6 +553,8 @@ export function createMemoryModuleExecutionRepository(input?: {
   events?: readonly ModuleExecutionEvent[];
   now?: () => Date;
   createId?: () => string;
+  executionInputStore?: MutableExecutionInputStore;
+  runnerProfiles?: readonly ModuleRunnerProfileSnapshot[];
 }): ModuleExecutionRepository {
   const executions = new Map(
     (input?.executions ?? []).map((execution) => [execution.executionId, clone(execution)]),
@@ -505,6 +567,8 @@ export function createMemoryModuleExecutionRepository(input?: {
   const idempotency = new Map<string, string>();
   const now = input?.now ?? (() => new Date());
   const createId = input?.createId ?? randomUUID;
+  const executionInputStore = input?.executionInputStore ?? createMemoryExecutionInputStore();
+  const runnerProfiles = input?.runnerProfiles?.map(clone) ?? null;
   const idempotencyCoordinate = (projectId: string, idempotencyKey: string) =>
     `${projectId}\0${idempotencyKey}`;
   for (const execution of executions.values()) {
@@ -541,7 +605,7 @@ export function createMemoryModuleExecutionRepository(input?: {
   };
 
   return {
-    async create({ execution }) {
+    async create({ execution, input: executionInput }) {
       const coordinate = idempotencyCoordinate(execution.projectId, execution.idempotencyKey);
       const priorId = idempotency.get(coordinate);
       if (priorId) {
@@ -556,12 +620,20 @@ export function createMemoryModuleExecutionRepository(input?: {
           prior.runtimeKind !== execution.runtimeKind ||
           prior.runtimeProfile !== execution.runtimeProfile ||
           prior.workEnvelopeDigest !== execution.workEnvelopeDigest ||
-          prior.deadlineAt !== execution.deadlineAt
+          prior.deadlineAt !== execution.deadlineAt ||
+          (
+            await executionInputStore.get(
+              execution.accountId,
+              execution.projectId,
+              prior.executionId,
+            )
+          )?.digest !== executionInput.digest
         ) {
           throw new ModuleExecutionError('MODULE_EXECUTION_STATE_CONFLICT', 409);
         }
         return clone(prior);
       }
+      await executionInputStore.store(executionInput);
       executions.set(execution.executionId, clone(execution));
       idempotency.set(coordinate, execution.executionId);
       appendEvent(execution, 'execution_created', { state: execution.state }, execution.createdAt);
@@ -641,38 +713,59 @@ export function createMemoryModuleExecutionRepository(input?: {
         .map(clone);
     },
 
-    async claim(command) {
-      const execution = executions.get(command.executionId);
-      if (
-        !execution ||
-        execution.accountId !== command.accountId ||
-        execution.projectId !== command.projectId ||
-        execution.state !== 'dispatchable' ||
-        Date.parse(execution.deadlineAt) <= now().valueOf() ||
-        Date.parse(command.deadlineAt) <= now().valueOf() ||
-        Date.parse(command.deadlineAt) > Date.parse(execution.deadlineAt) ||
-        [...leases.values()].some(
-          (lease) => lease.executionId === command.executionId && lease.releasedAt === null,
+    async claimNext(command) {
+      const observedAt = now();
+      const compatibleProfiles = runnerProfiles?.filter(
+        (profile) =>
+          profile.runnerId === command.runnerId &&
+          profile.accountId === command.accountId &&
+          profile.status === 'active',
+      );
+      if (compatibleProfiles && compatibleProfiles.length === 0) return null;
+      const execution = [...executions.values()]
+        .filter(
+          (candidate) =>
+            candidate.accountId === command.accountId &&
+            candidate.state === 'dispatchable' &&
+            Date.parse(candidate.deadlineAt) > observedAt.valueOf() &&
+            ![...leases.values()].some(
+              (lease) => lease.executionId === candidate.executionId && lease.releasedAt === null,
+            ) &&
+            (!compatibleProfiles ||
+              compatibleProfiles.some(
+                (profile) =>
+                  profile.runtimeKind === candidate.runtimeKind &&
+                  profile.profileName === candidate.runtimeProfile,
+              )),
         )
-      ) {
-        throw new ModuleExecutionError('MODULE_EXECUTION_STATE_CONFLICT', 409);
-      }
+        .sort(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) ||
+            left.executionId.localeCompare(right.executionId),
+        )[0];
+      if (!execution) return null;
       const generation =
         Math.max(
           0,
           ...[...leases.values()]
-            .filter((lease) => lease.executionId === command.executionId)
+            .filter((lease) => lease.executionId === execution.executionId)
             .map((lease) => lease.generation),
         ) + 1;
-      const claimedAt = now().toISOString();
+      const claimedAt = observedAt.toISOString();
+      const deadlineAt = new Date(
+        Math.min(
+          observedAt.valueOf() + MODULE_EXECUTION_LEASE_DURATION_MS,
+          Date.parse(execution.deadlineAt),
+        ),
+      ).toISOString();
       const lease: ModuleExecutionLease = {
-        leaseId: command.leaseId,
-        executionId: command.executionId,
-        accountId: command.accountId,
-        projectId: command.projectId,
+        leaseId: createId(),
+        executionId: execution.executionId,
+        accountId: execution.accountId,
+        projectId: execution.projectId,
         runnerId: command.runnerId,
         generation,
-        deadlineAt: command.deadlineAt,
+        deadlineAt,
         claimedAt,
         releasedAt: null,
       };
@@ -845,18 +938,6 @@ export function createMemoryModuleExecutionRepository(input?: {
         throw new ModuleExecutionError('MODULE_EXECUTION_LEASE_STALE', 409);
       }
       return appendEvent(execution, command.eventType, command.evidence, now().toISOString());
-    },
-
-    async findDispatchable(executionId) {
-      const execution = executions.get(executionId);
-      if (
-        !execution ||
-        execution.state !== 'dispatchable' ||
-        Date.parse(execution.deadlineAt) <= now().valueOf()
-      ) {
-        return null;
-      }
-      return clone(execution);
     },
 
     async cancel(command) {

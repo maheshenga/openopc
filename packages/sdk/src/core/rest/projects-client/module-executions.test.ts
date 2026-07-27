@@ -2,6 +2,7 @@ import { beforeEach, expect, mock, test } from 'bun:test';
 
 import { configureKortix } from '../../http/config';
 import {
+  type CreateProjectModuleExecutionInput,
   cancelProjectModuleExecution,
   confirmProjectModuleExecution,
   createProjectModuleExecution,
@@ -36,12 +37,15 @@ beforeEach(() => {
 configureKortix({ backendUrl: 'http://test.local', getToken: async () => 'tok' });
 
 test('project module execution SDK forwards exact paths, bodies, and idempotency', async () => {
+  const executionInput: CreateProjectModuleExecutionInput = {
+    installation_id: 'installation-1',
+    deadline_at: '2026-07-27T09:00:00.000Z',
+    input: { prompt: 'bounded user value', count: 2 },
+  };
   await estimateProjectModuleExecution('project/one', { installation_id: 'installation-1' });
-  await createProjectModuleExecution(
-    'project/one',
-    { installation_id: 'installation-1', deadline_at: '2026-07-27T09:00:00.000Z' },
-    { idempotencyKey: 'execution-op-1' },
-  );
+  await createProjectModuleExecution('project/one', executionInput, {
+    idempotencyKey: 'execution-op-1',
+  });
   await confirmProjectModuleExecution('project/one', 'execution/one');
   await cancelProjectModuleExecution('project/one', 'execution/one');
   await getProjectModuleExecution('project/one', 'execution/one');
@@ -59,6 +63,7 @@ test('project module execution SDK forwards exact paths, bodies, and idempotency
       body: {
         installation_id: 'installation-1',
         deadline_at: '2026-07-27T09:00:00.000Z',
+        input: { prompt: 'bounded user value', count: 2 },
       },
     },
     {

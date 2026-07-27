@@ -6,17 +6,27 @@ import {
 } from '@kortix/registry';
 import {
   type RuntimeDescriptorV1,
+  type Sha256Digest,
+  WASI_RUNTIME_ARTIFACT_MAX_BYTES,
   canonicalDigest,
   parseRuntimeDescriptor,
 } from '@openopc/module-runtime-contracts';
 
 import { parseDeveloperModuleArtifactPackage } from './artifacts';
 
+export interface ExtractedRuntimeArtifact {
+  componentPath: string;
+  mediaType: 'application/wasm';
+  digest: Sha256Digest;
+  bytes: Uint8Array;
+}
+
 export interface RuntimeDescriptorEvidence {
   descriptor: RuntimeDescriptorV1;
-  descriptorDigest: `sha256:${string}`;
+  descriptorDigest: Sha256Digest;
   entryPath: string;
   runtimeKind: 'wasi-component' | 'oci-image';
+  runtimeArtifact: ExtractedRuntimeArtifact | null;
 }
 
 export class DeveloperRuntimeDescriptorError extends Error {
@@ -104,6 +114,7 @@ export async function extractRuntimeDescriptor(input: {
     throw invalid('DEVELOPER_RUNTIME_DESCRIPTOR_INVALID');
   }
 
+  let runtimeArtifact: ExtractedRuntimeArtifact | null = null;
   if (descriptor.runtime.kind === 'wasi-component') {
     const componentPath = descriptor.runtime.component;
     const components = (artifact.files ?? []).filter((file) => file.target === componentPath);
@@ -111,10 +122,19 @@ export async function extractRuntimeDescriptor(input: {
     if (
       components.length !== 1 ||
       !componentFile ||
-      (componentFile.kind !== undefined && componentFile.kind !== 'file')
+      (componentFile.kind !== undefined && componentFile.kind !== 'file') ||
+      componentFile.mediaType !== 'application/wasm' ||
+      componentFile.bytes.byteLength < 1 ||
+      componentFile.bytes.byteLength > WASI_RUNTIME_ARTIFACT_MAX_BYTES
     ) {
       throw invalid('DEVELOPER_RUNTIME_DESCRIPTOR_INVALID');
     }
+    runtimeArtifact = {
+      componentPath,
+      mediaType: 'application/wasm',
+      digest: digest(componentFile.bytes),
+      bytes: new Uint8Array(componentFile.bytes),
+    };
   }
 
   return {
@@ -122,5 +142,6 @@ export async function extractRuntimeDescriptor(input: {
     descriptorDigest: digest(descriptorBytes),
     entryPath,
     runtimeKind: descriptor.runtime.kind,
+    runtimeArtifact,
   };
 }

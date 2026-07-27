@@ -816,18 +816,20 @@ CREATE TRIGGER module_execution_outbox_protected
 BEFORE UPDATE OR DELETE ON kortix.module_execution_outbox
 FOR EACH ROW EXECUTE FUNCTION kortix.protect_module_execution_outbox();
 
-CREATE OR REPLACE FUNCTION kortix.claim_module_execution(
+DROP FUNCTION IF EXISTS kortix.claim_module_execution(
+  uuid, uuid, uuid, uuid, uuid, integer, timestamptz
+);
+
+CREATE OR REPLACE FUNCTION kortix.claim_next_module_execution(
   p_account_id uuid,
-  p_project_id uuid,
-  p_execution_id uuid,
-  p_runner_id uuid,
-  p_lease_id uuid,
-  p_generation integer,
-  p_deadline_at timestamptz
+  p_runner_id uuid
 )
 RETURNS TABLE (
   lease_id uuid,
   execution_id uuid,
+  account_id uuid,
+  project_id uuid,
+  runner_id uuid,
   generation integer,
   deadline_at timestamptz,
   state kortix.module_execution_state
@@ -839,38 +841,10 @@ DECLARE
   v_runner kortix.module_runners%ROWTYPE;
   v_kill_switch_generation integer;
   v_kill_switch_active boolean;
+  v_lease_id uuid;
+  v_generation integer;
+  v_deadline_at timestamptz;
 BEGIN
-  IF p_generation IS NULL OR p_generation < 1 THEN
-    RAISE EXCEPTION 'module execution lease generation is invalid';
-  END IF;
-  IF p_deadline_at IS NULL OR p_deadline_at <= now() THEN
-    RAISE EXCEPTION 'module execution lease deadline is invalid';
-  END IF;
-
-  SELECT *
-  INTO v_execution
-  FROM kortix.module_executions AS execution
-  WHERE execution.execution_id = p_execution_id
-    AND execution.account_id = p_account_id
-    AND execution.project_id = p_project_id
-  FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'module execution not found';
-  END IF;
-
-  IF v_execution.state <> 'dispatchable' THEN
-    RAISE EXCEPTION 'module execution not found';
-  END IF;
-
-  IF v_execution.deadline_at <= now() THEN
-    RAISE EXCEPTION 'module execution not found';
-  END IF;
-
-  IF p_deadline_at > v_execution.deadline_at THEN
-    RAISE EXCEPTION 'module execution lease deadline exceeds execution deadline';
-  END IF;
-
   SELECT *
   INTO v_runner
   FROM kortix.module_runners AS runner
@@ -880,7 +854,29 @@ BEGIN
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'module execution not found';
+    RETURN;
+  END IF;
+
+  SELECT execution.*
+  INTO v_execution
+  FROM kortix.module_executions AS execution
+  WHERE execution.account_id = p_account_id
+    AND execution.state = 'dispatchable'
+    AND execution.deadline_at > clock_timestamp()
+    AND EXISTS (
+      SELECT 1
+      FROM kortix.module_runner_profiles AS profile
+      WHERE profile.runner_id = p_runner_id
+        AND profile.account_id = p_account_id
+        AND profile.runtime_kind = execution.runtime_kind
+        AND profile.profile_name = execution.runtime_profile
+    )
+  ORDER BY execution.created_at, execution.execution_id
+  FOR UPDATE OF execution SKIP LOCKED
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN;
   END IF;
 
   PERFORM 1
@@ -902,7 +898,7 @@ BEGIN
    AND descriptor.descriptor_digest = module_release.runtime_descriptor_digest
   WHERE installation.installation_id = v_execution.installation_id
     AND installation.account_id = p_account_id
-    AND installation.project_id = p_project_id
+    AND installation.project_id = v_execution.project_id
     AND installation.active_release_id = v_execution.release_id
     AND installation.status = 'active'
     AND module_release.status = 'published'
@@ -926,7 +922,7 @@ BEGIN
       kill_switch.scope = 'account'
       OR (
         kill_switch.scope = 'project'
-        AND kill_switch.project_id = p_project_id
+        AND kill_switch.project_id = v_execution.project_id
       )
     );
 
@@ -944,6 +940,17 @@ BEGIN
     RAISE EXCEPTION 'module execution not found';
   END IF;
 
+  SELECT COALESCE(MAX(lease_row.generation), 0) + 1
+  INTO v_generation
+  FROM kortix.module_execution_leases AS lease_row
+  WHERE lease_row.execution_id = v_execution.execution_id;
+
+  v_lease_id := gen_random_uuid();
+  v_deadline_at := LEAST(
+    clock_timestamp() + interval '30 seconds',
+    v_execution.deadline_at
+  );
+
   INSERT INTO kortix.module_execution_leases (
     lease_id,
     execution_id,
@@ -953,27 +960,50 @@ BEGIN
     generation,
     deadline_at
   ) VALUES (
-    p_lease_id,
-    p_execution_id,
+    v_lease_id,
+    v_execution.execution_id,
     p_account_id,
-    p_project_id,
+    v_execution.project_id,
     p_runner_id,
-    p_generation,
-    p_deadline_at
+    v_generation,
+    v_deadline_at
   );
 
   UPDATE kortix.module_executions AS execution
   SET state = 'leased'
-  WHERE execution.execution_id = p_execution_id
+  WHERE execution.execution_id = v_execution.execution_id
     AND execution.account_id = p_account_id
-    AND execution.project_id = p_project_id;
+    AND execution.project_id = v_execution.project_id;
+
+  INSERT INTO kortix.module_execution_events (
+    execution_id,
+    account_id,
+    project_id,
+    sequence,
+    event_type,
+    payload
+  ) VALUES (
+    v_execution.execution_id,
+    p_account_id,
+    v_execution.project_id,
+    (
+      SELECT COALESCE(MAX(event.sequence), 0) + 1
+      FROM kortix.module_execution_events AS event
+      WHERE event.execution_id = v_execution.execution_id
+    ),
+    'execution_claimed',
+    jsonb_build_object('lease_id', v_lease_id, 'generation', v_generation)
+  );
 
   RETURN QUERY
   SELECT
-    p_lease_id,
-    p_execution_id,
-    p_generation,
-    p_deadline_at,
+    v_lease_id,
+    v_execution.execution_id,
+    p_account_id,
+    v_execution.project_id,
+    p_runner_id,
+    v_generation,
+    v_deadline_at,
     'leased'::kortix.module_execution_state;
 END;
 $$;
@@ -1280,7 +1310,7 @@ REVOKE ALL
 
 REVOKE ALL
   ON FUNCTION
-    kortix.claim_module_execution(uuid, uuid, uuid, uuid, uuid, integer, timestamptz),
+    kortix.claim_next_module_execution(uuid, uuid),
     kortix.heartbeat_module_execution(uuid, uuid, uuid, uuid, integer, uuid),
     kortix.finalize_module_execution(
       uuid, uuid, uuid, uuid, integer, uuid,

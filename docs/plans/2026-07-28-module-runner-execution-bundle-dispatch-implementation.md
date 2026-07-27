@@ -18,8 +18,14 @@ while the signed execution authority remains live.
 **Tech Stack:** TypeScript, Hono, Zod, Ajv 2020, Bun test, Drizzle ORM, PostgreSQL 16, Docker,
 `pnpm.cmd`, Rust 1.97.1, Tokio 1.48, Reqwest 0.13, Wasmtime 47.0.2, Ed25519, SHA-256.
 
-**Plan Status:** Task 1 implemented. Contract package: 42 pass, 0 fail; Runner crate: 25 pass,
-0 fail; contract/API typechecks, Rustfmt, Clippy, and targeted Biome passed. Tasks 2-8 remain.
+**Plan Status:** Tasks 1-6 implemented; focused verification passed. Task 1 contract and Runner
+gates passed; Task 2 schema, real PostgreSQL, migration lint, and DB typecheck gates passed. Task 3
+passed 30 API tests, 8 Runner protocol tests, 14 contract tests, 1 SDK targeted test, the full
+1,166-test SDK suite, API/SDK typechecks, SDK packed-install, and targeted Biome. Task 4 passed 57
+focused tests, 38 supplemental tests, API typecheck, and targeted Biome. Task 5 passed 55 API tests,
+12 contract tests, 22 real PostgreSQL tests, the production artifact-store tests, both typechecks,
+and migration lint. Task 6 passed 25 focused Runner tests, Rustfmt, and Clippy with warnings denied.
+Tasks 7-8 remain.
 
 ## Global Constraints
 
@@ -382,10 +388,10 @@ export interface CreateModuleExecutionPersistenceInput {
 
 - Changes `CreateProjectModuleExecutionInput` to require `input: unknown`.
 - Uses the immutable `runtimeKind` and `runtimeProfile` snapshots introduced in Task 2.
-- `ModuleExecutionBinding` gains the parsed `runtimeDescriptor`, `runtimeArtifactDigest`, and
-  `runtimeArtifactBytes` supplied by the trusted binding resolver.
+- Task 4 Step 7, not Task 3, adds the parsed `runtimeDescriptor`, `runtimeArtifactDigest`, and
+  `runtimeArtifactBytes` after trusted artifact metadata exists.
 
-- [ ] **Step 1: Add service RED tests for canonical input**
+- [x] **Step 1: Add service RED tests for canonical input**
 
 Create with `{ z: 1, a: ['x'] }` and assert the repository receives these exact bytes and digest:
 
@@ -398,7 +404,7 @@ Assert 262,144 bytes is accepted, 262,145 bytes is rejected with
 `MODULE_EXECUTION_INPUT_INVALID`, unsupported values are rejected, and an idempotency replay with a
 different input fails with `MODULE_EXECUTION_STATE_CONFLICT`.
 
-- [ ] **Step 2: Add route and SDK RED tests**
+- [x] **Step 2: Add route and SDK RED tests**
 
 Require this request body:
 
@@ -415,13 +421,13 @@ or unknown top-level field, and never accepts `input_base64`, capability tokens,
 signed URLs as alternate transport fields. Update the SDK request assertion to include the `input`
 property unchanged.
 
-- [ ] **Step 3: Add Drizzle RED tests for one transaction**
+- [x] **Step 3: Add Drizzle RED tests for one transaction**
 
 Assert `create(...)` inserts `module_executions` and `module_execution_inputs` in the same Drizzle
 transaction before `execution_created` is appended. The idempotent read must compare account,
 installation, release, descriptor, snapshots, work-envelope digest, deadline, and input digest.
 
-- [ ] **Step 4: Run the focused API and SDK tests for RED**
+- [x] **Step 4: Run the focused API and SDK tests for RED**
 
 ```powershell
 cd apps/api
@@ -432,7 +438,7 @@ bun test src/core/rest/projects-client/module-executions.test.ts
 
 Expected: input fields/stores are missing and the API still accepts the old two-field create body.
 
-- [ ] **Step 5: Implement canonical creation and immutable persistence**
+- [x] **Step 5: Implement canonical creation and immutable persistence**
 
 In `ModuleExecutionService.create`, canonicalize before any database write:
 
@@ -452,13 +458,13 @@ Store `runtimeKind` and `runtimeProfile` from the binding in the execution row. 
 must load the persisted input and recompute the binding digest with its digest; absence is a stale
 binding failure.
 
-- [ ] **Step 6: Implement the route, SDK, and index exports**
+- [x] **Step 6: Implement the route, SDK, and index exports**
 
 Use `z.object({ installation_id, deadline_at, input: z.unknown() }).strict()`; do not stringify or
 reorder input in the route. Add the SDK type and body, export the new symbols, and regenerate only
 the two existing SDK public surface snapshots with the package's existing snapshot command.
 
-- [ ] **Step 7: Run focused GREEN tests and typechecks**
+- [x] **Step 7: Run focused GREEN tests and typechecks**
 
 ```powershell
 cd apps/api
@@ -471,6 +477,18 @@ pnpm.cmd --filter @kortix/sdk typecheck
 ```
 
 Expected: every command exits 0 and no public execution response contains raw canonical input.
+
+Task 3 final verification on 2026-07-28:
+
+- API focused suite: 30 pass, 0 fail.
+- Runner protocol suite: 8 pass, 0 fail.
+- Module runtime contract suite: 14 pass, 0 fail.
+- SDK targeted suite: 1 pass, 0 fail.
+- Full SDK suite: 1,166 pass, 0 fail; 5,461 expectations across 88 files.
+- `kortix-api` and `@kortix/sdk` typechecks: exit 0.
+- SDK packed-install: passed from packed tarballs in Node ESM.
+- Targeted Biome: 15 files checked, no fixes required.
+- SDK runtime and type snapshot files: unchanged; both snapshot tests passed.
 
 ---
 
@@ -536,13 +554,13 @@ export interface RuntimeArtifactStore {
 - The Drizzle release submission transaction creates one `module_runtime_descriptors` row and, for
   WASI, one `module_runtime_artifacts` row linked to that descriptor.
 
-- [ ] **Step 1: Add extraction RED tests**
+- [x] **Step 1: Add extraction RED tests**
 
 For a WASI descriptor, assert the selected component's exact bytes, path, digest, media type, and
 length are returned. Add failures for a missing component, duplicate component target, symlink,
 zero bytes, and 33,554,433 bytes. For OCI, assert `runtimeArtifact` is `null`.
 
-- [ ] **Step 2: Add store and repository RED tests**
+- [x] **Step 2: Add store and repository RED tests**
 
 Assert the S3 adapter writes to a partitioned content-addressed key under
 `module-runtime/artifacts/`, uses `application/wasm`, checksum SHA-256, server-side encryption, and
@@ -553,7 +571,7 @@ Assert the Drizzle release transaction inserts descriptor JSON first, then runti
 with the generated descriptor ID. An idempotent release replay must reject mismatched runtime
 artifact digest, byte length, media type, or missing metadata.
 
-- [ ] **Step 3: Run focused developer/runtime artifact tests for RED**
+- [x] **Step 3: Run focused developer/runtime artifact tests for RED**
 
 ```powershell
 cd apps/api
@@ -563,13 +581,13 @@ bun test src/developer/runtime-descriptors.test.ts src/developer/releases.test.t
 Expected: the extractor currently validates component presence but does not return/store the
 component derivative and production code does not populate the runtime descriptor table.
 
-- [ ] **Step 4: Return bounded component bytes from descriptor extraction**
+- [x] **Step 4: Return bounded component bytes from descriptor extraction**
 
 For `wasi-component`, validate the selected file exactly once, enforce `1..=33_554_432`, compute
 SHA-256 over its exact bytes, and return a cloned `Uint8Array`. Never infer the component path from
 the package filename; use only `descriptor.runtime.component` after descriptor validation.
 
-- [ ] **Step 5: Store the derivative before the database transaction**
+- [x] **Step 5: Store the derivative before the database transaction**
 
 `DeveloperModuleReleaseService.submit` writes the extracted component through the injected
 `RuntimeArtifactStore` before calling `repository.submit`. It passes only the returned digest,
@@ -577,14 +595,14 @@ length, media type, and internal storage key to the repository. A storage failur
 `DEVELOPER_ARTIFACT_STORE_UNAVAILABLE` with status 503. A content-addressed orphan after a database
 race is acceptable and contains no tenant-readable key.
 
-- [ ] **Step 6: Persist descriptor and runtime artifact metadata atomically**
+- [x] **Step 6: Persist descriptor and runtime artifact metadata atomically**
 
 Inside `DeveloperModuleReleaseRepository.submit`, insert the release, then the parsed descriptor,
 then runtime artifact metadata, then the verification run in one transaction. For non-server
 modules create neither descriptor nor runtime artifact. For OCI create the descriptor only. Keep
 the storage key out of every release serializer and API response.
 
-- [ ] **Step 7: Extend the binding resolver with trusted executable metadata**
+- [x] **Step 7: Extend the binding resolver with trusted executable metadata**
 
 Join `module_runtime_artifacts` for WASI bindings and return:
 
@@ -598,7 +616,7 @@ Return `null` if WASI metadata is missing, exceeds 33,554,432, has a different d
 or is not `application/wasm`. OCI remains unavailable to this phase's Runner execution path but its
 descriptor contract remains valid.
 
-- [ ] **Step 8: Run focused GREEN tests and API typecheck**
+- [x] **Step 8: Run focused GREEN tests and API typecheck**
 
 Run the command from Step 3, then:
 
@@ -608,6 +626,19 @@ pnpm.cmd --filter kortix-api typecheck
 
 Expected: all focused tests pass, typecheck exits 0, and no serialized object includes
 `storage_key`.
+
+Task 4 final verification on 2026-07-28:
+
+- Binding resolver RED on resume: 10 pass, 3 fail; failures covered missing trusted fields,
+  malformed or mismatched artifact metadata, and OCI availability.
+- Task 4 focused suite: 57 pass, 0 fail; 147 expectations across 7 files.
+- Supplemental execution, Runner protocol, and Developer API suites: 38 pass, 0 fail; 127
+  expectations across 3 files.
+- `kortix-api` typecheck: exit 0.
+- Targeted Biome: 19 files checked, no fixes required after scoped formatting.
+- `git diff --check`: exit 0; the three protected audit files remained unchanged.
+- Storage-key review: runtime artifact keys remain internal to the store/repository boundary and no
+  release serializer or API response gained `storage_key`.
 
 ---
 
@@ -695,7 +726,7 @@ export function computeModuleExecutionBindingDigest(
 The TypeScript binding JSON includes `inputDigest`, `runtimeArtifactDigest`, and
 `runtimeArtifactBytes` using those exact camel-case names.
 
-- [ ] **Step 1: Add protocol and route RED tests**
+- [x] **Step 1: Add protocol and route RED tests**
 
 Assert `POST /module-runtime/claims/next` accepts only `{}`, returns 204 with no JSON body when the
 protocol returns `null`, returns the strict bundle on 200, maps an inactive/draining/quarantined/
@@ -711,7 +742,7 @@ Extend the TypeScript work-envelope fixture with all three required fields. Asse
 rejection for missing/invalid fields and calculate four binding digests to prove that changing only
 input digest, artifact digest, or artifact byte length changes the binding digest.
 
-- [ ] **Step 2: Add atomic scheduling RED tests**
+- [x] **Step 2: Add atomic scheduling RED tests**
 
 In memory tests, seed three dispatchable executions and assert selection is restricted by account,
 active server-owned Runner profiles, future deadline, runtime kind/profile snapshot, and creation
@@ -722,7 +753,7 @@ and assert one row plus one empty result, one live lease, generation 1, state `l
 one `execution_claimed` event. Add profile and tenant mismatch cases that return zero rows without
 revealing the execution ID.
 
-- [ ] **Step 3: Add artifact route RED tests**
+- [x] **Step 3: Add artifact route RED tests**
 
 Assert `POST /module-runtime/artifacts/fetch` rejects a `Range` header, unknown fields, wrong tenant,
 wrong Runner, stale generation, released/expired lease, terminal execution, mismatched descriptor,
@@ -730,7 +761,7 @@ and a stored stream longer than metadata. A valid request returns status 200 wit
 `content-length`, `x-openopc-artifact-sha256`, `content-type: application/wasm`, and no redirect,
 storage key, or alternate artifact selector.
 
-- [ ] **Step 4: Run API and PostgreSQL tests for RED**
+- [x] **Step 4: Run API and PostgreSQL tests for RED**
 
 ```powershell
 cd apps/api
@@ -742,7 +773,7 @@ bun test scripts/module-runtime-migration.integration.test.ts
 Expected: claim-next and artifact routes are absent and the database still requires a known
 execution ID.
 
-- [ ] **Step 5: Implement the database-owned claim-next transaction**
+- [x] **Step 5: Implement the database-owned claim-next transaction**
 
 The function first locks and validates the Runner row. It then selects one compatible execution:
 
@@ -772,7 +803,7 @@ derive `generation` from prior leases, generate the lease ID with `gen_random_uu
 lease, transition the execution, and append `execution_claimed` before returning. If no candidate
 exists, return no row. Do not throw an execution-specific error for a mismatch.
 
-- [ ] **Step 6: Build and sign the complete bundle**
+- [x] **Step 6: Build and sign the complete bundle**
 
 Split identity authentication from claimability: certificate/account/Runner mismatches remain 401;
 non-active status or zero profiles is 409 for claim-next. After `claimNext`, load the immutable
@@ -780,7 +811,7 @@ input and current trusted binding, recompute `workEnvelopeDigest`, issue/store c
 envelope, build `RunnerClaimBundleV1`, call `parseRunnerClaimBundle` as a final server-side assertion,
 and return it. Any post-claim failure calls the existing lease abandonment fence.
 
-- [ ] **Step 7: Implement lease-bound artifact streaming**
+- [x] **Step 7: Implement lease-bound artifact streaming**
 
 `RuntimeArtifactService.openForLease(identity)` performs one tenant-qualified query joining
 execution, live lease, descriptor, runtime artifact, Runner, and release. It then wraps the store's
@@ -788,7 +819,7 @@ async iterable in a `ReadableStream`, counts every emitted byte, errors before b
 `artifact.bytes + 1`, and requires the final count to equal metadata. The route creates a fresh
 `Response` with the three trusted headers and never buffers the component in the API process.
 
-- [ ] **Step 8: Run API, PostgreSQL, lint, and typecheck gates for GREEN**
+- [x] **Step 8: Run API, PostgreSQL, lint, and typecheck gates for GREEN**
 
 Run the commands from Step 4, followed by:
 
@@ -802,6 +833,17 @@ pnpm.cmd --filter @kortix/db typecheck
 Expected: every focused test passes, both typechecks pass, migration lint passes, and the disposable
 container list is empty.
 
+Task 5 final verification on 2026-07-28:
+
+- Initial API RED: 37 pass, 18 fail; initial PostgreSQL RED: 21 pass, 1 fail.
+- Task 5 API suite: 55 pass, 0 fail; 228 expectations across 6 files.
+- Contract suite: 12 pass, 0 fail; production runtime artifact S3 store: 2 pass, 0 fail.
+- Real PostgreSQL migration suite: 22 pass, 0 fail; 104 expectations across 1 file.
+- `kortix-api` and `@kortix/db` typechecks: exit 0.
+- Migration lint: 81 migration files passed with 7 pre-existing destructive-operation warnings.
+- Review follow-up added a RED/GREEN assertion that rejects even an empty `Range` header.
+- `git diff --check`: exit 0; protected audit files unchanged; disposable container lists empty.
+
 ---
 
 ### Task 6: Verify bundles, stream artifacts, and make finalize retryable in Rust
@@ -812,10 +854,10 @@ container list is empty.
 - Modify: `apps/module-runner/Cargo.lock`
 - Modify: `apps/module-runner/src/protocol.rs`
 - Modify: `apps/module-runner/src/client.rs`
-- Modify: `apps/module-runner/src/lib.rs`
 - Create: `apps/module-runner/tests/claim_bundle.rs`
 - Create: `apps/module-runner/tests/runtime_artifact.rs`
 - Modify: `apps/module-runner/tests/contracts.rs`
+- Modify: `apps/module-runner/tests/wasi_execution.rs`
 
 **Interfaces:**
 
@@ -853,7 +895,7 @@ pub enum FinalizeFenceState {
 - `RuntimeArtifactClient::fetch(...)` returns a private temporary artifact handle that deletes its
   file on drop.
 
-- [ ] **Step 1: Add bundle verification RED tests**
+- [x] **Step 1: Add bundle verification RED tests**
 
 Using a valid signed fixture, assert successful verification of signature, capabilities, descriptor,
 canonical input, and artifact metadata. Mutate one property at a time and require stable errors:
@@ -873,7 +915,7 @@ Extend Rust `WorkEnvelopeV1` with `input_digest`, `runtime_artifact_digest`, and
 `runtime_artifact_bytes`. Reproduce the TypeScript binding vector exactly and prove each new field
 changes `compute_binding_digest(...)` independently.
 
-- [ ] **Step 2: Add streaming artifact RED tests**
+- [x] **Step 2: Add streaming artifact RED tests**
 
 Use an injected recording transport that writes chunks into the provided destination. Assert a
 valid 32 MiB stream succeeds without using `MAX_CONTROL_PLANE_RESPONSE_BYTES`; byte 33,554,433,
@@ -881,14 +923,14 @@ short body, long body, missing/changed headers, redirect, 404, and transport int
 bounded stable errors. Assert the private temporary file is absent after success scope exit, failure,
 cancellation, and panic containment.
 
-- [ ] **Step 3: Add finalize-fence RED tests**
+- [x] **Step 3: Add finalize-fence RED tests**
 
 Drive responses `503`, transport error, `200`, then a duplicate local call. Assert the first two
 failures restore `Available`, the 200 moves to `Acknowledged`, concurrent calls see `InFlight`, and a
 409 permanent rejection cannot be retried. The transport must record three network attempts before
 acknowledgement and zero after acknowledgement.
 
-- [ ] **Step 4: Run Rust tests for RED**
+- [x] **Step 4: Run Rust tests for RED**
 
 ```powershell
 cd apps/module-runner
@@ -898,7 +940,7 @@ cargo +1.97.1 test --test contracts --test claim_bundle --test runtime_artifact
 Expected: claim-next, typed heartbeat, artifact streaming, and stateful finalize behavior are not yet
 implemented.
 
-- [ ] **Step 5: Implement fail-closed bundle verification**
+- [x] **Step 5: Implement fail-closed bundle verification**
 
 Deserialize with `deny_unknown_fields`, verify the signed envelope and capabilities first, then:
 
@@ -910,7 +952,7 @@ Deserialize with `deny_unknown_fields`, verify the signed envelope and capabilit
 An invalid signature or capability binding remains `ProtocolError` and is not converted into
 lease-follow-up evidence.
 
-- [ ] **Step 6: Add bounded streaming transport and temporary storage**
+- [x] **Step 6: Add bounded streaming transport and temporary storage**
 
 Extend the injected transport with a separate `fetch_to` operation that accepts lease coordinates,
 an expected maximum, and a destination path. The Reqwest implementation uses `Response::chunk()`
@@ -918,14 +960,14 @@ and `tokio::fs::File`, disables redirects through the existing client builder, a
 writing a byte beyond the signed length or 33,554,432. Move `tempfile` to normal dependencies and
 enable Tokio `fs` plus `io-util` features.
 
-- [ ] **Step 7: Replace the finalize HashSet with a three-state map**
+- [x] **Step 7: Replace the finalize HashSet with a three-state map**
 
 Validate/sanitize the payload before acquiring the fence. Atomically transition
 `Available -> InFlight`. On transport or 5xx, restore `Available`; on 2xx, set `Acknowledged`; on
 404/409 or another non-retryable status, keep the fence closed and return the permanent status.
 Never hold the mutex across `.await`.
 
-- [ ] **Step 8: Run Rustfmt, focused tests, and Clippy for GREEN**
+- [x] **Step 8: Run Rustfmt, focused tests, and Clippy for GREEN**
 
 ```powershell
 cargo +1.97.1 fmt --all -- --check
@@ -934,6 +976,19 @@ cargo +1.97.1 clippy --all-targets --all-features -- -D warnings
 ```
 
 Expected: all commands exit 0 with no warnings.
+
+Task 6 final verification on 2026-07-28:
+
+- Initial Rust RED failed on the missing verified bundle, claim-next, typed heartbeat, artifact
+  transport/client, finalize fence state, and Tokio file features.
+- Review follow-up reproduced two cross-language canonical JSON defects: Rust accepted `1.0` where
+  TypeScript emits `1`, and Rust scalar key order rejected TypeScript UTF-16 ordering. Both RED
+  cases pass after using `ryu-js` ECMAScript number formatting and UTF-16 code-unit key ordering.
+- Focused Runner suite: 25 pass, 0 fail across `claim_bundle`, `contracts`, and `runtime_artifact`.
+- `cargo +1.97.1 fmt --all -- --check`: exit 0.
+- `cargo +1.97.1 clippy --all-targets --all-features -- -D warnings`: exit 0.
+- The focused test command exits 0 but Rust 1.97.1 reports localized MSVC library-creation stdout as
+  the environmental `linker_messages` warning; Clippy remains clean with warnings denied.
 
 ---
 

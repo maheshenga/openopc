@@ -25,6 +25,9 @@ const workEnvelopeFixture = {
   permissionDigest: `sha256:${'4'.repeat(64)}`,
   runtimeDescriptorId: '10000000-0000-4000-8000-000000000009',
   runtimeDescriptorDigest: `sha256:${'2'.repeat(64)}`,
+  inputDigest: `sha256:${'7'.repeat(64)}`,
+  runtimeArtifactDigest: `sha256:${'8'.repeat(64)}`,
+  runtimeArtifactBytes: 4096,
   runtimeKind: 'oci-image',
   runtimeProfile: 'openopc-oci-v1',
   policyDigest: `sha256:${'3'.repeat(64)}`,
@@ -122,10 +125,22 @@ test('rejects a work-envelope deadline without an RFC3339 T separator', () => {
 });
 
 test('rejects unknown work-envelope fields, malformed UUIDs, and non-canonical digests', () => {
+  const { inputDigest: _inputDigest, ...withoutInputDigest } = workEnvelopeFixture;
+  const { runtimeArtifactDigest: _runtimeArtifactDigest, ...withoutArtifactDigest } =
+    workEnvelopeFixture;
+  const { runtimeArtifactBytes: _runtimeArtifactBytes, ...withoutArtifactBytes } =
+    workEnvelopeFixture;
   const invalidEnvelopes = [
     { ...workEnvelopeFixture, unexpected: true },
     { ...workEnvelopeFixture, executionId: 'not-a-uuid' },
     { ...workEnvelopeFixture, policyDigest: `sha256:${'A'.repeat(64)}` },
+    withoutInputDigest,
+    withoutArtifactDigest,
+    withoutArtifactBytes,
+    { ...workEnvelopeFixture, inputDigest: `sha256:${'A'.repeat(64)}` },
+    { ...workEnvelopeFixture, runtimeArtifactDigest: `sha256:${'A'.repeat(64)}` },
+    { ...workEnvelopeFixture, runtimeArtifactBytes: 0 },
+    { ...workEnvelopeFixture, runtimeArtifactBytes: 33_554_433 },
     {
       ...workEnvelopeFixture,
       lease: { ...workEnvelopeFixture.lease, unexpected: true },

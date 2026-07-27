@@ -43,6 +43,7 @@ test('rejects bundle substitution, ambiguous input encoding, and artifact limit 
   const invalidBundles = [
     { ...validBundle, unexpected: true },
     { ...validBundle, inputBase64: `${validBundle.inputBase64}=` },
+    { ...validBundle, inputBase64: 'Zh' },
     {
       ...validBundle,
       inputBase64: Buffer.alloc(MODULE_EXECUTION_INPUT_MAX_BYTES + 1).toString('base64url'),

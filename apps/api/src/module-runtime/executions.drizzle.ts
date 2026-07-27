@@ -4,22 +4,29 @@ import {
   moduleCapabilityGrants,
   moduleExecutionEvents,
   moduleExecutionEvidence,
+  moduleExecutionInputs,
   moduleExecutionLeases,
   moduleExecutionOutbox,
   moduleExecutions,
   moduleKillSwitchGenerations,
   moduleRunnerProfiles,
   moduleRunners,
+  moduleRuntimeArtifacts,
   moduleRuntimeDescriptors,
   projectModuleConsentRevisions,
   projectModuleInstallations,
 } from '@kortix/db';
-import { type Sha256Digest, parseRuntimeDescriptor } from '@openopc/module-runtime-contracts';
+import {
+  type Sha256Digest,
+  WASI_RUNTIME_ARTIFACT_MAX_BYTES,
+  parseRuntimeDescriptor,
+} from '@openopc/module-runtime-contracts';
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lte, max, or, sql } from 'drizzle-orm';
 
+import type { ExecutionInputStore, ModuleExecutionInput } from './execution-inputs';
 import {
   type AppendModuleExecutionEvidenceCommand,
-  type ClaimModuleExecutionCommand,
+  type ClaimNextModuleExecutionCommand,
   type FinalizeModuleExecutionCommand,
   type ModuleCapabilityGrant,
   type ModuleExecution,
@@ -39,12 +46,14 @@ import type {
 
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 type ExecutionRow = typeof moduleExecutions.$inferSelect;
+type ExecutionInputRow = typeof moduleExecutionInputs.$inferSelect;
 type LeaseRow = typeof moduleExecutionLeases.$inferSelect;
 type EventRow = typeof moduleExecutionEvents.$inferSelect;
 type EvidenceRow = typeof moduleExecutionEvidence.$inferSelect;
 type OutboxRow = typeof moduleExecutionOutbox.$inferSelect;
 type GrantRow = typeof moduleCapabilityGrants.$inferSelect;
 type RunnerRow = typeof moduleRunners.$inferSelect;
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 function execution(row: ExecutionRow): ModuleExecution {
   return {
@@ -65,6 +74,17 @@ function execution(row: ExecutionRow): ModuleExecution {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     terminalAt: row.terminalAt,
+  };
+}
+
+function executionInput(row: ExecutionInputRow): ModuleExecutionInput {
+  return {
+    executionId: row.executionId,
+    accountId: row.accountId,
+    projectId: row.projectId,
+    payload: new Uint8Array(row.inputPayload),
+    digest: row.inputDigest as Sha256Digest,
+    createdAt: row.createdAt,
   };
 }
 
@@ -221,6 +241,35 @@ async function getExecution(
   return row ?? null;
 }
 
+async function getExecutionInput(
+  source: Database | Transaction,
+  accountId: string,
+  projectId: string,
+  executionId: string,
+): Promise<ExecutionInputRow | null> {
+  const [row] = await source
+    .select()
+    .from(moduleExecutionInputs)
+    .where(
+      and(
+        eq(moduleExecutionInputs.accountId, accountId),
+        eq(moduleExecutionInputs.projectId, projectId),
+        eq(moduleExecutionInputs.executionId, executionId),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+export function createDrizzleModuleExecutionInputStore(db: Database): ExecutionInputStore {
+  return {
+    async get(accountId, projectId, executionId) {
+      const row = await getExecutionInput(db, accountId, projectId, executionId);
+      return row ? executionInput(row) : null;
+    },
+  };
+}
+
 export function createDrizzleModuleExecutionRepository(db: Database): ModuleExecutionRepository {
   return {
     async create(input) {
@@ -260,8 +309,12 @@ export function createDrizzleModuleExecutionRepository(db: Database): ModuleExec
               ),
             )
             .limit(1);
+          const priorInput = prior
+            ? await getExecutionInput(tx, prior.accountId, prior.projectId, prior.executionId)
+            : null;
           if (
             prior &&
+            priorInput &&
             prior.accountId === input.execution.accountId &&
             prior.installationId === input.execution.installationId &&
             prior.releaseId === input.execution.releaseId &&
@@ -270,12 +323,21 @@ export function createDrizzleModuleExecutionRepository(db: Database): ModuleExec
             prior.runtimeKind === input.execution.runtimeKind &&
             prior.runtimeProfile === input.execution.runtimeProfile &&
             prior.workEnvelopeDigest === input.execution.workEnvelopeDigest &&
-            prior.deadlineAt === input.execution.deadlineAt
+            prior.deadlineAt === input.execution.deadlineAt &&
+            priorInput.inputDigest === input.input.digest
           ) {
             return execution(prior);
           }
           throw new ModuleExecutionError('MODULE_EXECUTION_STATE_CONFLICT', 409);
         }
+        await tx.insert(moduleExecutionInputs).values({
+          executionId: input.input.executionId,
+          accountId: input.input.accountId,
+          projectId: input.input.projectId,
+          inputPayload: input.input.payload,
+          inputDigest: input.input.digest,
+          createdAt: input.input.createdAt,
+        });
         await appendEvent(tx, {
           executionId: created.executionId,
           accountId: created.accountId,
@@ -389,48 +451,38 @@ export function createDrizzleModuleExecutionRepository(db: Database): ModuleExec
       return rows.map(event);
     },
 
-    async claim(command: ClaimModuleExecutionCommand) {
+    async claimNext(command: ClaimNextModuleExecutionCommand) {
       return db.transaction(async (tx) => {
-        const [generationRow] = await tx
-          .select({ generation: max(moduleExecutionLeases.generation) })
-          .from(moduleExecutionLeases)
-          .where(eq(moduleExecutionLeases.executionId, command.executionId));
-        const generation = Number(generationRow?.generation ?? 0) + 1;
+        let claimed: Array<{ leaseId: string; executionId: string; projectId: string }>;
         try {
-          await tx.execute(sql`
-            SELECT * FROM kortix.claim_module_execution(
+          claimed = (await tx.execute(sql`
+            SELECT
+              lease_id AS "leaseId",
+              execution_id AS "executionId",
+              project_id AS "projectId"
+            FROM kortix.claim_next_module_execution(
               ${command.accountId}::uuid,
-              ${command.projectId}::uuid,
-              ${command.executionId}::uuid,
-              ${command.runnerId}::uuid,
-              ${command.leaseId}::uuid,
-              ${generation}::integer,
-              ${command.deadlineAt}::timestamptz
+              ${command.runnerId}::uuid
             )
-          `);
+          `)) as typeof claimed;
         } catch (error) {
           conflict(error);
         }
+        const selected = claimed[0];
+        if (!selected) return null;
         const row = await getExecution(
           tx,
           command.accountId,
-          command.projectId,
-          command.executionId,
+          selected.projectId,
+          selected.executionId,
         );
         const [leaseRow] = await tx
           .select()
           .from(moduleExecutionLeases)
-          .where(eq(moduleExecutionLeases.leaseId, command.leaseId))
+          .where(eq(moduleExecutionLeases.leaseId, selected.leaseId))
           .limit(1);
         if (!row || !leaseRow)
           throw new ModuleExecutionError('MODULE_EXECUTION_STATE_CONFLICT', 409);
-        await appendEvent(tx, {
-          executionId: command.executionId,
-          accountId: command.accountId,
-          projectId: command.projectId,
-          eventType: 'execution_claimed',
-          payload: { lease_id: command.leaseId, generation },
-        });
         return { execution: execution(row), lease: lease(leaseRow) };
       });
     },
@@ -632,21 +684,6 @@ export function createDrizzleModuleExecutionRepository(db: Database): ModuleExec
       });
     },
 
-    async findDispatchable(executionId) {
-      const [row] = await db
-        .select()
-        .from(moduleExecutions)
-        .where(
-          and(
-            eq(moduleExecutions.executionId, executionId),
-            eq(moduleExecutions.state, 'dispatchable'),
-            gt(moduleExecutions.deadlineAt, sql`now()`),
-          ),
-        )
-        .limit(1);
-      return row ? execution(row) : null;
-    },
-
     async cancel(command) {
       return db.transaction(async (tx) => {
         const cancelledAt = new Date().toISOString();
@@ -807,6 +844,7 @@ export function createDrizzleModuleExecutionBindingResolver(
         release: developerModuleReleases,
         consent: projectModuleConsentRevisions,
         descriptor: moduleRuntimeDescriptors,
+        artifact: moduleRuntimeArtifacts,
       })
       .from(projectModuleInstallations)
       .innerJoin(
@@ -837,6 +875,14 @@ export function createDrizzleModuleExecutionBindingResolver(
           eq(moduleRuntimeDescriptors.accountId, developerModuleReleases.accountId),
         ),
       )
+      .innerJoin(
+        moduleRuntimeArtifacts,
+        and(
+          eq(moduleRuntimeArtifacts.accountId, developerModuleReleases.accountId),
+          eq(moduleRuntimeArtifacts.releaseId, developerModuleReleases.releaseId),
+          eq(moduleRuntimeArtifacts.runtimeDescriptorId, moduleRuntimeDescriptors.descriptorId),
+        ),
+      )
       .where(
         and(
           eq(projectModuleInstallations.accountId, coordinates.accountId),
@@ -852,15 +898,31 @@ export function createDrizzleModuleExecutionBindingResolver(
             moduleRuntimeDescriptors.descriptorDigest,
             developerModuleReleases.runtimeDescriptorDigest,
           ),
+          eq(moduleRuntimeDescriptors.runtimeKind, developerModuleReleases.runtimeKind),
         ),
       )
       .orderBy(desc(projectModuleConsentRevisions.createdAt))
       .limit(1);
+    if (!row) return null;
     if (!row.release.signaturePayloadDigest || !row.release.verificationPolicyDigest) return null;
     let descriptor: ReturnType<typeof parseRuntimeDescriptor>;
     try {
       descriptor = parseRuntimeDescriptor(row.descriptor.descriptor);
     } catch {
+      return null;
+    }
+    if (descriptor.runtime.kind !== 'wasi-component') return null;
+    if (!row.artifact) return null;
+    const artifactBytes = Number(row.artifact.artifactBytes);
+    if (
+      row.artifact.releaseId !== row.release.releaseId ||
+      row.artifact.runtimeDescriptorId !== row.descriptor.descriptorId ||
+      !SHA256_DIGEST.test(row.artifact.artifactDigest) ||
+      !Number.isSafeInteger(artifactBytes) ||
+      artifactBytes < 1 ||
+      artifactBytes > WASI_RUNTIME_ARTIFACT_MAX_BYTES ||
+      row.artifact.mediaType !== 'application/wasm'
+    ) {
       return null;
     }
     const killSwitches = await db
@@ -895,9 +957,11 @@ export function createDrizzleModuleExecutionBindingResolver(
       policyDigest: row.release.verificationPolicyDigest as Sha256Digest,
       runtimeDescriptorId: row.descriptor.descriptorId,
       runtimeDescriptorDigest: row.descriptor.descriptorDigest as Sha256Digest,
+      runtimeDescriptor: descriptor,
+      runtimeArtifactDigest: row.artifact.artifactDigest as Sha256Digest,
+      runtimeArtifactBytes: artifactBytes,
       runtimeKind: descriptor.runtime.kind,
-      runtimeProfile:
-        descriptor.runtime.kind === 'oci-image' ? descriptor.runtime.profile : 'openopc-wasi-v1',
+      runtimeProfile: 'openopc-wasi-v1',
       killSwitchGeneration: Number(killSwitches[0]?.generation ?? 0),
       resourceCeilings: {
         cpuMillis: row.consent.resourceCpuMillisCeiling,
@@ -905,8 +969,7 @@ export function createDrizzleModuleExecutionBindingResolver(
         wallTimeMs: row.consent.resourceWallTimeMsCeiling,
         costMicro: row.consent.costCeilingMicro,
       },
-      confirmationRequired:
-        descriptor.runtime.kind === 'oci-image' || row.consent.costCeilingMicro > 0,
+      confirmationRequired: row.consent.costCeilingMicro > 0,
     };
   };
   return {

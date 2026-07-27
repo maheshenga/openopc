@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 
+import { createMemoryExecutionInputStore } from './execution-inputs';
 import {
   type ModuleExecution,
   type ModuleExecutionBinding,
@@ -17,6 +18,8 @@ const NOW = '2026-07-27T08:00:00.000Z';
 const RUNNER_ID = '90000000-0000-4000-8000-000000000001';
 const ACCOUNT_ID = '20000000-0000-4000-8000-000000000001';
 const PROJECT_ID = '30000000-0000-4000-8000-000000000001';
+const INPUT_DIGEST =
+  'sha256:e844558922d2b0432d7ccf86f3f56b1afadfbaa9a0add07371f46f1a868821ef' as const;
 
 const identity: ModuleRunnerIdentity = {
   runnerId: RUNNER_ID,
@@ -33,8 +36,8 @@ function dispatchableExecution(): ModuleExecution {
     releaseId: '50000000-0000-4000-8000-000000000001',
     consentRevisionId: '60000000-0000-4000-8000-000000000001',
     runtimeDescriptorId: '70000000-0000-4000-8000-000000000001',
-    runtimeKind: 'oci-image',
-    runtimeProfile: 'openopc-oci-v1',
+    runtimeKind: 'wasi-component',
+    runtimeProfile: 'openopc-wasi-v1',
     state: 'dispatchable',
     idempotencyKey: 'execution-op-1',
     workEnvelopeDigest: `sha256:${'1'.repeat(64)}`,
@@ -46,7 +49,12 @@ function dispatchableExecution(): ModuleExecution {
   };
 }
 
-function ociBinding(execution: ModuleExecution): ModuleExecutionBinding {
+type WasiModuleExecutionBinding = ModuleExecutionBinding & {
+  runtimeArtifactDigest: NonNullable<ModuleExecutionBinding['runtimeArtifactDigest']>;
+  runtimeArtifactBytes: number;
+};
+
+function wasiBinding(execution: ModuleExecution): WasiModuleExecutionBinding {
   return {
     accountId: execution.accountId,
     projectId: execution.projectId,
@@ -58,9 +66,30 @@ function ociBinding(execution: ModuleExecution): ModuleExecutionBinding {
     permissionDigest: `sha256:${'3'.repeat(64)}`,
     policyDigest: `sha256:${'4'.repeat(64)}`,
     runtimeDescriptorId: execution.runtimeDescriptorId,
-    runtimeDescriptorDigest: `sha256:${'5'.repeat(64)}`,
-    runtimeKind: 'oci-image',
-    runtimeProfile: 'openopc-oci-v1',
+    runtimeDescriptorDigest:
+      'sha256:42aa9d47b5b374e80fa2077d76a9488331dd93478fa808a30f3b28c9f3d54aa7',
+    runtimeDescriptor: {
+      descriptorVersion: 1,
+      runtime: {
+        kind: 'wasi-component',
+        component: 'runtime/main.wasm',
+        world: 'openopc:module/runtime',
+        operation: 'run',
+        imports: ['openopc:module/input', 'openopc:module/output'],
+        limits: {
+          cpuMillis: 10_000,
+          fuel: 10_000_000,
+          memoryMiB: 512,
+          outputBytes: 1_048_576,
+          pids: 16,
+          wallTimeMs: 120_000,
+        },
+      },
+    },
+    runtimeArtifactDigest: `sha256:${'8'.repeat(64)}`,
+    runtimeArtifactBytes: 4096,
+    runtimeKind: 'wasi-component',
+    runtimeProfile: 'openopc-wasi-v1',
     killSwitchGeneration: execution.killSwitchGeneration,
     resourceCeilings: {
       cpuMillis: 10_000,
@@ -72,11 +101,29 @@ function ociBinding(execution: ModuleExecution): ModuleExecutionBinding {
   };
 }
 
+function executionInputStore(execution?: ModuleExecution) {
+  return createMemoryExecutionInputStore({
+    inputs: execution
+      ? [
+          {
+            executionId: execution.executionId,
+            accountId: execution.accountId,
+            projectId: execution.projectId,
+            payload: new TextEncoder().encode('{"prompt":"claim"}'),
+            digest: INPUT_DIGEST,
+            createdAt: execution.createdAt,
+          },
+        ]
+      : [],
+  });
+}
+
 test('Runner cannot claim an unsupported profile', async () => {
   const execution = dispatchableExecution();
   const executionRepository = createMemoryModuleExecutionRepository({
     executions: [execution],
     now: () => new Date(NOW),
+    createId: () => '80000000-0000-4000-8000-000000000001',
   });
   const runnerRepository = createMemoryModuleRunnerRepository({
     runners: [
@@ -90,8 +137,8 @@ test('Runner cannot claim an unsupported profile', async () => {
         certificateThumbprint: identity.certificateThumbprint,
         profiles: [
           {
-            profileName: 'openopc-wasi-v1',
-            runtimeKind: 'wasi-component',
+            profileName: 'openopc-oci-v1',
+            runtimeKind: 'oci-image',
           },
         ],
         updatedAt: NOW,
@@ -100,34 +147,40 @@ test('Runner cannot claim an unsupported profile', async () => {
   });
   const protocol = new ModuleRunnerProtocol({
     executionRepository,
+    executionInputStore: executionInputStore(),
     runnerRepository,
-    bindingResolver: { resolveForClaim: async () => ociBinding(execution) },
+    bindingResolver: { resolveForClaim: async () => wasiBinding(execution) },
     now: () => new Date(NOW),
   });
 
   await expect(
-    protocol.claim(identity, { executionId: execution.executionId }),
+    protocol.claimNext(identity, {}),
   ).rejects.toMatchObject({ code: 'RUNNER_PROFILE_UNAVAILABLE' });
-  expect(await executionRepository.findDispatchable(execution.executionId)).not.toBeNull();
+  expect(
+    (await executionRepository.get(execution.accountId, execution.projectId, execution.executionId))
+      ?.state,
+  ).toBe('dispatchable');
 });
 
 test('claim binds immutable execution state and every capability token into the signed envelope', async () => {
   const execution = dispatchableExecution();
-  const binding = ociBinding(execution);
+  const binding = wasiBinding(execution);
   execution.workEnvelopeDigest = await computeModuleExecutionBindingDigest(
     binding,
     execution.deadlineAt,
+    INPUT_DIGEST,
   );
   const executionRepository = createMemoryModuleExecutionRepository({
     executions: [execution],
     now: () => new Date(NOW),
+    createId: () => '80000000-0000-4000-8000-000000000001',
   });
   const runnerRepository = createMemoryModuleRunnerRepository({
     runners: [
       {
         runnerId: RUNNER_ID,
         accountId: ACCOUNT_ID,
-        nodeIdentity: 'runner-oci-1',
+        nodeIdentity: 'runner-wasi-1',
         status: 'active',
         softwareVersion: '1.0.0',
         attestationDigest: `sha256:${'6'.repeat(64)}`,
@@ -138,8 +191,10 @@ test('claim binds immutable execution state and every capability token into the 
     ],
   });
   let signedTraceparent: string | undefined;
+  let signedEnvelopeValue: unknown;
   const protocol = new ModuleRunnerProtocol({
     executionRepository,
+    executionInputStore: executionInputStore(execution),
     runnerRepository,
     bindingResolver: { resolveForClaim: async () => binding },
     capabilityIssuer: {
@@ -155,15 +210,17 @@ test('claim binds immutable execution state and every capability token into the 
     envelopeSigner: {
       sign: async (envelope, metadata) => {
         signedTraceparent = metadata.traceparent;
-        return JSON.stringify(envelope);
+        signedEnvelopeValue = structuredClone(envelope);
+        return 'e30.e30.e30';
       },
     },
     now: () => new Date(NOW),
     createId: () => '80000000-0000-4000-8000-000000000001',
   });
 
-  const claim = await protocol.claim(identity, { executionId: execution.executionId });
-  const envelope = JSON.parse(claim.signedEnvelope);
+  const claim = await protocol.claimNext(identity, {});
+  if (!claim) throw new Error('expected claim bundle');
+  const envelope = signedEnvelopeValue as Record<string, any>;
 
   expect(claim.capabilityTokens).toEqual([
     {
@@ -172,6 +229,13 @@ test('claim binds immutable execution state and every capability token into the 
       token: 'runner-secret-capability-token',
     },
   ]);
+  expect(claim.runtimeDescriptor).toEqual(binding.runtimeDescriptor);
+  expect(claim.inputBase64).toBe('eyJwcm9tcHQiOiJjbGFpbSJ9');
+  expect(claim.runtimeArtifact).toEqual({
+    fetchPath: 'module-runtime/artifacts/fetch',
+    digest: binding.runtimeArtifactDigest,
+    bytes: binding.runtimeArtifactBytes,
+  });
   expect(envelope).toEqual({
     envelopeVersion: 1,
     executionId: '10000000-0000-4000-8000-000000000001',
@@ -185,13 +249,17 @@ test('claim binds immutable execution state and every capability token into the 
     consentRevisionId: '60000000-0000-4000-8000-000000000001',
     permissionDigest: `sha256:${'3'.repeat(64)}`,
     runtimeDescriptorId: '70000000-0000-4000-8000-000000000001',
-    runtimeDescriptorDigest: `sha256:${'5'.repeat(64)}`,
-    runtimeKind: 'oci-image',
-    runtimeProfile: 'openopc-oci-v1',
+    runtimeDescriptorDigest:
+      'sha256:42aa9d47b5b374e80fa2077d76a9488331dd93478fa808a30f3b28c9f3d54aa7',
+    inputDigest: INPUT_DIGEST,
+    runtimeArtifactDigest: `sha256:${'8'.repeat(64)}`,
+    runtimeArtifactBytes: 4096,
+    runtimeKind: 'wasi-component',
+    runtimeProfile: 'openopc-wasi-v1',
     policyDigest: `sha256:${'4'.repeat(64)}`,
     killSwitchGeneration: 0,
     executionDeadline: '2026-07-27T09:00:00.000Z',
-    bindingDigest: 'sha256:6f1da6296afd1a6ea52b67bd17625ead5dee47efd49299dabd6364456e37126a',
+    bindingDigest: 'sha256:082e861f22906420472fdace2dd4a614c9a0593ad8eb7cb518194c21d7afcff4',
     resourceCeilings: {
       cpuMillis: 10_000,
       memoryMiB: 512,
@@ -228,10 +296,11 @@ test('claim binds immutable execution state and every capability token into the 
 
 test('claim releases its lease when envelope signing fails before delivery', async () => {
   const execution = dispatchableExecution();
-  const binding = ociBinding(execution);
+  const binding = wasiBinding(execution);
   execution.workEnvelopeDigest = await computeModuleExecutionBindingDigest(
     binding,
     execution.deadlineAt,
+    INPUT_DIGEST,
   );
   const executionRepository = createMemoryModuleExecutionRepository({
     executions: [execution],
@@ -242,7 +311,7 @@ test('claim releases its lease when envelope signing fails before delivery', asy
       {
         runnerId: RUNNER_ID,
         accountId: ACCOUNT_ID,
-        nodeIdentity: 'runner-oci-1',
+        nodeIdentity: 'runner-wasi-1',
         status: 'active',
         softwareVersion: '1.0.0',
         attestationDigest: `sha256:${'6'.repeat(64)}`,
@@ -254,6 +323,7 @@ test('claim releases its lease when envelope signing fails before delivery', asy
   });
   const protocol = new ModuleRunnerProtocol({
     executionRepository,
+    executionInputStore: executionInputStore(execution),
     runnerRepository,
     bindingResolver: { resolveForClaim: async () => binding },
     capabilityIssuer: { issueForClaim: async () => [] },
@@ -266,10 +336,85 @@ test('claim releases its lease when envelope signing fails before delivery', asy
     createId: () => '80000000-0000-4000-8000-000000000001',
   });
 
-  await expect(protocol.claim(identity, { executionId: execution.executionId })).rejects.toThrow(
-    'staging signer unavailable',
-  );
-  expect(await executionRepository.findDispatchable(execution.executionId)).not.toBeNull();
+  await expect(protocol.claimNext(identity, {})).rejects.toThrow('staging signer unavailable');
+  expect(
+    (await executionRepository.get(execution.accountId, execution.projectId, execution.executionId))
+      ?.state,
+  ).toBe('dispatchable');
+});
+
+test('claim-next abandons the lease when bundle inputs change during signing', async () => {
+  for (const mutation of ['descriptor', 'input', 'artifact-digest', 'artifact-bytes'] as const) {
+    const execution = dispatchableExecution();
+    const binding = wasiBinding(execution);
+    execution.workEnvelopeDigest = await computeModuleExecutionBindingDigest(
+      binding,
+      execution.deadlineAt,
+      INPUT_DIGEST,
+    );
+    const executionRepository = createMemoryModuleExecutionRepository({
+      executions: [execution],
+      now: () => new Date(NOW),
+    });
+    const executionInput = {
+      executionId: execution.executionId,
+      accountId: execution.accountId,
+      projectId: execution.projectId,
+      payload: new TextEncoder().encode('{"prompt":"claim"}'),
+      digest: INPUT_DIGEST,
+      createdAt: execution.createdAt,
+    };
+    const protocol = new ModuleRunnerProtocol({
+      executionRepository,
+      executionInputStore: { get: async () => executionInput },
+      runnerRepository: createMemoryModuleRunnerRepository({
+        runners: [
+          {
+            runnerId: RUNNER_ID,
+            accountId: ACCOUNT_ID,
+            nodeIdentity: 'runner-wasi-1',
+            status: 'active',
+            softwareVersion: '1.0.0',
+            attestationDigest: `sha256:${'6'.repeat(64)}`,
+            certificateThumbprint: identity.certificateThumbprint,
+            profiles: [{ profileName: binding.runtimeProfile, runtimeKind: binding.runtimeKind }],
+            updatedAt: NOW,
+          },
+        ],
+      }),
+      bindingResolver: { resolveForClaim: async () => binding },
+      capabilityIssuer: { issueForClaim: async () => [] },
+      envelopeSigner: {
+        sign: async (envelope) => {
+          if (mutation === 'descriptor' && binding.runtimeDescriptor.runtime.kind === 'wasi-component') {
+            binding.runtimeDescriptor.runtime.operation = 'substituted';
+          } else if (mutation === 'input') {
+            executionInput.payload = new TextEncoder().encode('{"prompt":"substituted"}');
+          } else if (mutation === 'artifact-digest') {
+            binding.runtimeArtifactDigest = `sha256:${'9'.repeat(64)}`;
+          } else if (mutation === 'artifact-bytes') {
+            binding.runtimeArtifactBytes = 4097;
+          }
+          return 'e30.e30.e30';
+        },
+      },
+      now: () => new Date(NOW),
+      createId: () => '80000000-0000-4000-8000-000000000001',
+    });
+
+    await expect(protocol.claimNext(identity, {})).rejects.toMatchObject({
+      code: 'RUNNER_CAPABILITY_BINDING_INVALID',
+    });
+    expect(
+      (
+        await executionRepository.get(
+          execution.accountId,
+          execution.projectId,
+          execution.executionId,
+        )
+      )?.state,
+    ).toBe('dispatchable');
+  }
 });
 
 test('an authenticated Runner heartbeat advances a leased execution to running', async () => {
@@ -307,8 +452,9 @@ test('an authenticated Runner heartbeat advances a leased execution to running',
   });
   const protocol = new ModuleRunnerProtocol({
     executionRepository,
+    executionInputStore: executionInputStore(),
     runnerRepository,
-    bindingResolver: { resolveForClaim: async () => ociBinding(execution) },
+    bindingResolver: { resolveForClaim: async () => wasiBinding(execution) },
     now: () => new Date(NOW),
   });
 
@@ -327,6 +473,7 @@ test('Runner registration derives the account from a signed registration token',
   const runnerRepository = createMemoryModuleRunnerRepository();
   const protocol = new ModuleRunnerProtocol({
     executionRepository: createMemoryModuleExecutionRepository(),
+    executionInputStore: executionInputStore(),
     runnerRepository,
     bindingResolver: { resolveForClaim: async () => null },
     registrationVerifier: {
@@ -375,6 +522,7 @@ test('Runner node heartbeat updates only mutable node health fields', async () =
   const runnerRepository = createMemoryModuleRunnerRepository({ runners: [original] });
   const protocol = new ModuleRunnerProtocol({
     executionRepository: createMemoryModuleExecutionRepository(),
+    executionInputStore: executionInputStore(),
     runnerRepository,
     bindingResolver: { resolveForClaim: async () => null },
     now: () => new Date(NOW),
@@ -428,8 +576,9 @@ test('Runner appends bounded progress evidence only through a live lease', async
   });
   const protocol = new ModuleRunnerProtocol({
     executionRepository,
+    executionInputStore: executionInputStore(),
     runnerRepository,
-    bindingResolver: { resolveForClaim: async () => ociBinding(execution) },
+    bindingResolver: { resolveForClaim: async () => wasiBinding(execution) },
     now: () => new Date(NOW),
   });
 
@@ -484,8 +633,9 @@ test('Runner finalize derives tenant and runner coordinates from its authenticat
   });
   const protocol = new ModuleRunnerProtocol({
     executionRepository,
+    executionInputStore: executionInputStore(),
     runnerRepository,
-    bindingResolver: { resolveForClaim: async () => ociBinding(execution) },
+    bindingResolver: { resolveForClaim: async () => wasiBinding(execution) },
     now: () => new Date(NOW),
   });
 

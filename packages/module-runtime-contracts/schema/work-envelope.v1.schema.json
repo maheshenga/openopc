@@ -18,6 +18,9 @@
     "permissionDigest",
     "runtimeDescriptorId",
     "runtimeDescriptorDigest",
+    "inputDigest",
+    "runtimeArtifactDigest",
+    "runtimeArtifactBytes",
     "runtimeKind",
     "runtimeProfile",
     "policyDigest",
@@ -45,6 +48,13 @@
     "permissionDigest": { "$ref": "#/$defs/sha256Digest" },
     "runtimeDescriptorId": { "$ref": "#/$defs/uuid" },
     "runtimeDescriptorDigest": { "$ref": "#/$defs/sha256Digest" },
+    "inputDigest": { "$ref": "#/$defs/sha256Digest" },
+    "runtimeArtifactDigest": { "$ref": "#/$defs/sha256Digest" },
+    "runtimeArtifactBytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 33554432
+    },
     "runtimeKind": { "enum": ["wasi-component", "oci-image"] },
     "runtimeProfile": {
       "type": "string",

@@ -5,6 +5,10 @@ import {
   readRegistryModuleManifest,
   validateRegistryItem,
 } from '@kortix/registry';
+import type {
+  RuntimeArtifactStore,
+  StoredRuntimeArtifact,
+} from '../module-runtime/runtime-artifacts';
 import {
   type DeveloperArtifactStore,
   DeveloperModuleArtifactError,
@@ -14,8 +18,8 @@ import {
 } from './artifacts';
 import type { DeveloperPublisherPermissionPort } from './publishers';
 import {
-  type RuntimeDescriptorEvidence,
   DeveloperRuntimeDescriptorError,
+  type RuntimeDescriptorEvidence,
   extractRuntimeDescriptor,
 } from './runtime-descriptors';
 
@@ -87,7 +91,8 @@ export interface DeveloperModuleReleaseInsert {
   manifestDigest: `sha256:${string}`;
   artifactId: string;
   artifactDigest: `sha256:${string}`;
-  runtimeDescriptor: RuntimeDescriptorEvidence | null;
+  runtimeDescriptor: Omit<RuntimeDescriptorEvidence, 'runtimeArtifact'> | null;
+  runtimeArtifact: StoredRuntimeArtifact | null;
   verification: DeveloperModuleVerificationQueueBinding;
   reviewRequirements: DeveloperModuleReviewRequirement[];
 }
@@ -210,6 +215,7 @@ export class DeveloperModuleReleaseService {
       repository: DeveloperModuleReleaseRepository;
       artifacts: Pick<DeveloperModuleArtifactRepository, 'getArtifact'>;
       artifactStore?: Pick<DeveloperArtifactStore, 'readCanonical'>;
+      runtimeArtifactStore?: RuntimeArtifactStore;
       verification?: DeveloperModuleVerificationQueueBinding;
       permissions?: DeveloperPublisherPermissionPort;
     },
@@ -241,7 +247,8 @@ export class DeveloperModuleReleaseService {
       'release',
     );
 
-    let runtimeDescriptor: RuntimeDescriptorEvidence | null = null;
+    let runtimeDescriptor: Omit<RuntimeDescriptorEvidence, 'runtimeArtifact'> | null = null;
+    let runtimeArtifact: StoredRuntimeArtifact | null = null;
     if (manifest.execution.mode === 'server-adapter') {
       if (!this.input.artifactStore) {
         throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_STORE_UNAVAILABLE', 503);
@@ -264,9 +271,39 @@ export class DeveloperModuleReleaseService {
         if (envelope.artifactDigest !== artifact.artifact_digest) {
           throw new DeveloperRuntimeDescriptorError('DEVELOPER_RUNTIME_ARTIFACT_INVALID');
         }
-        runtimeDescriptor = await extractRuntimeDescriptor({ manifest, artifactBytes });
+        const evidence = await extractRuntimeDescriptor({ manifest, artifactBytes });
+        if (evidence) {
+          const { runtimeArtifact: extractedArtifact, ...descriptorEvidence } = evidence;
+          runtimeDescriptor = descriptorEvidence;
+          if (extractedArtifact) {
+            if (!this.input.runtimeArtifactStore) {
+              throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_STORE_UNAVAILABLE', 503);
+            }
+            try {
+              runtimeArtifact = await this.input.runtimeArtifactStore.write({
+                accountId: input.accountId,
+                digest: extractedArtifact.digest,
+                bytes: extractedArtifact.bytes,
+              });
+              if (
+                runtimeArtifact.digest !== extractedArtifact.digest ||
+                runtimeArtifact.bytes !== extractedArtifact.bytes.byteLength ||
+                runtimeArtifact.mediaType !== extractedArtifact.mediaType
+              ) {
+                throw new Error('Runtime artifact store metadata mismatch');
+              }
+            } catch {
+              throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_STORE_UNAVAILABLE', 503);
+            }
+          }
+        }
       } catch (error) {
-        if (error instanceof DeveloperRuntimeDescriptorError) throw error;
+        if (
+          error instanceof DeveloperRuntimeDescriptorError ||
+          error instanceof DeveloperModuleArtifactError
+        ) {
+          throw error;
+        }
         throw new DeveloperRuntimeDescriptorError('DEVELOPER_RUNTIME_ARTIFACT_INVALID');
       }
     }
@@ -280,6 +317,7 @@ export class DeveloperModuleReleaseService {
       artifactId: artifact.artifact_id,
       artifactDigest: artifact.artifact_digest,
       runtimeDescriptor,
+      runtimeArtifact,
       verification: this.input.verification ?? DEFAULT_DEVELOPER_MODULE_VERIFICATION_BINDING,
       reviewRequirements: reviewRequirements(manifest),
     });
@@ -307,6 +345,7 @@ export function createMemoryDeveloperModuleReleaseRepository(input?: {
   const releases = new Map<string, DeveloperModuleRelease>();
   const publisherAccounts = new Map<string, string>();
   const releaseVersions = new Map<string, string>();
+  const runtimeArtifacts = new Map<string, StoredRuntimeArtifact | null>();
 
   return {
     async submit(submission) {
@@ -324,7 +363,13 @@ export function createMemoryDeveloperModuleReleaseRepository(input?: {
           !existing ||
           existing.account_id !== submission.accountId ||
           existing.manifest_digest !== submission.manifestDigest ||
-          existing.artifact_digest !== submission.artifactDigest
+          existing.artifact_digest !== submission.artifactDigest ||
+          existing.runtime_descriptor_digest !==
+            (submission.runtimeDescriptor?.descriptorDigest ?? null) ||
+          existing.runtime_descriptor_path !== (submission.runtimeDescriptor?.entryPath ?? null) ||
+          existing.runtime_kind !== (submission.runtimeDescriptor?.runtimeKind ?? null) ||
+          JSON.stringify(runtimeArtifacts.get(existingReleaseId) ?? null) !==
+            JSON.stringify(submission.runtimeArtifact)
         ) {
           throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
         }
@@ -365,6 +410,7 @@ export function createMemoryDeveloperModuleReleaseRepository(input?: {
       };
       publisherAccounts.set(publisherId, submission.accountId);
       releases.set(release.release_id, structuredClone(release));
+      runtimeArtifacts.set(release.release_id, structuredClone(submission.runtimeArtifact));
       releaseVersions.set(versionKey, release.release_id);
       return { release: structuredClone(release), created: true };
     },

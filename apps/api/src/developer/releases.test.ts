@@ -12,6 +12,7 @@ import {
 import { DeveloperPublisherError } from './publishers';
 import {
   DeveloperModuleReleaseError,
+  type DeveloperModuleReleaseInsert,
   DeveloperModuleReleaseService,
   createMemoryDeveloperModuleReleaseRepository,
 } from './releases';
@@ -82,6 +83,56 @@ function serverAdapterPackageBytes(): Uint8Array {
   });
 }
 
+function wasiServerAdapterPackageBytes(): Uint8Array {
+  const descriptor = new TextEncoder().encode(
+    '{"descriptorVersion":1,"runtime":{"component":"runtime/adapter.wasm","imports":["openopc:module/input","openopc:module/output"],"kind":"wasi-component","limits":{"cpuMillis":1000,"fuel":1000000,"memoryMiB":64,"outputBytes":1048576,"pids":8,"wallTimeMs":5000},"operation":"run","world":"openopc:adapter/runtime@1.0.0"}}',
+  );
+  return serializeDeveloperModuleArtifactPackage({
+    item: {
+      name: 'wasi-server-adapter',
+      type: 'registry:module',
+      files: [
+        {
+          path: 'runtime/openopc.runtime.json',
+          target: 'runtime/openopc.runtime.json',
+          type: 'registry:file',
+        },
+        {
+          path: 'runtime/adapter.wasm',
+          target: 'runtime/adapter.wasm',
+          type: 'registry:file',
+        },
+      ],
+      module: {
+        schemaVersion: 2,
+        id: 'acme.wasi-server-adapter',
+        version: '1.0.0',
+        publisher: { id: 'acme', displayName: 'Acme' },
+        category: 'automation',
+        locales: ['en'],
+        compatibility: { platform: '^1.0.0' },
+        execution: { mode: 'server-adapter', entry: 'runtime/openopc.runtime.json' },
+        verification: { profile: 'server-conformance' },
+      },
+    },
+    files: [
+      {
+        path: 'runtime/openopc.runtime.json',
+        target: 'runtime/openopc.runtime.json',
+        mediaType: 'application/json',
+        bytes: descriptor,
+      },
+      {
+        path: 'runtime/adapter.wasm',
+        target: 'runtime/adapter.wasm',
+        mediaType: 'application/wasm',
+        bytes: new Uint8Array([0, 97, 115, 109]),
+      },
+    ],
+    lockGraph: { format: 'openopc-lock.v1', nodes: [] },
+  });
+}
+
 function fixture() {
   const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
   return {
@@ -131,6 +182,143 @@ async function submitItem(
 }
 
 describe('developer module release service', () => {
+  test('stores a WASI derivative before repository submission without forwarding raw bytes', async () => {
+    const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
+    const memoryStore = createMemoryDeveloperArtifactStore();
+    const artifactService = new DeveloperModuleArtifactService({
+      repository: artifacts,
+      store: memoryStore.store,
+      now: () => NOW,
+      codeModulesEnabled: true,
+      trustInfrastructureReady: () => true,
+    });
+    const bytes = wasiServerAdapterPackageBytes();
+    const upload = await artifactService.createUpload({
+      accountId: ACCOUNT_ID,
+      publisherId: 'acme',
+      expectedSize: bytes.byteLength,
+      expectedDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+      actorUserId: USER_ID,
+    });
+    await memoryStore.upload(upload.upload_url, bytes, upload.headers);
+    const artifact = await artifactService.finalizeUpload({
+      accountId: ACCOUNT_ID,
+      uploadId: upload.upload_id,
+      actorUserId: USER_ID,
+    });
+    const order: string[] = [];
+    let persisted: DeveloperModuleReleaseInsert | undefined;
+    const backingRepository = createMemoryDeveloperModuleReleaseRepository({ now: () => NOW });
+    const repository = {
+      ...backingRepository,
+      async submit(input: DeveloperModuleReleaseInsert) {
+        order.push('repository');
+        persisted = input;
+        return backingRepository.submit(input);
+      },
+    };
+    const service = new DeveloperModuleReleaseService({
+      repository,
+      artifacts,
+      artifactStore: memoryStore.store,
+      runtimeArtifactStore: {
+        async write(input) {
+          order.push('store');
+          expect(input).toEqual({
+            accountId: ACCOUNT_ID,
+            digest: 'sha256:cd5d4935a48c0672cb06407bb443bc0087aff947c6b864bac886982c73b3027f',
+            bytes: new Uint8Array([0, 97, 115, 109]),
+          });
+          return {
+            digest: input.digest,
+            bytes: input.bytes.byteLength,
+            mediaType: 'application/wasm' as const,
+            storageKey: 'module-runtime/artifacts/internal/component.wasm',
+          };
+        },
+        async *read() {
+          yield* [] as Uint8Array[];
+          throw new Error('unexpected read');
+        },
+      },
+    });
+
+    const result = await service.submit({
+      accountId: ACCOUNT_ID,
+      actorUserId: USER_ID,
+      artifactId: artifact.artifact_id,
+    });
+
+    expect(order).toEqual(['store', 'repository']);
+    expect(persisted?.runtimeDescriptor).toMatchObject({ runtimeKind: 'wasi-component' });
+    expect(persisted?.runtimeDescriptor).not.toHaveProperty('runtimeArtifact');
+    expect(persisted?.runtimeArtifact).toEqual({
+      digest: 'sha256:cd5d4935a48c0672cb06407bb443bc0087aff947c6b864bac886982c73b3027f',
+      bytes: 4,
+      mediaType: 'application/wasm',
+      storageKey: 'module-runtime/artifacts/internal/component.wasm',
+    });
+    expect(result.release).not.toHaveProperty('storage_key');
+    expect(JSON.stringify(result.release)).not.toContain('module-runtime/artifacts/');
+  });
+
+  test('maps a WASI derivative storage failure to a stable 503', async () => {
+    const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
+    const memoryStore = createMemoryDeveloperArtifactStore();
+    const artifactService = new DeveloperModuleArtifactService({
+      repository: artifacts,
+      store: memoryStore.store,
+      now: () => NOW,
+      codeModulesEnabled: true,
+      trustInfrastructureReady: () => true,
+    });
+    const bytes = wasiServerAdapterPackageBytes();
+    const upload = await artifactService.createUpload({
+      accountId: ACCOUNT_ID,
+      publisherId: 'acme',
+      expectedSize: bytes.byteLength,
+      expectedDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+      actorUserId: USER_ID,
+    });
+    await memoryStore.upload(upload.upload_url, bytes, upload.headers);
+    const artifact = await artifactService.finalizeUpload({
+      accountId: ACCOUNT_ID,
+      uploadId: upload.upload_id,
+      actorUserId: USER_ID,
+    });
+    let repositoryCalls = 0;
+    const backingRepository = createMemoryDeveloperModuleReleaseRepository({ now: () => NOW });
+    const service = new DeveloperModuleReleaseService({
+      repository: {
+        ...backingRepository,
+        async submit(input: DeveloperModuleReleaseInsert) {
+          repositoryCalls += 1;
+          return backingRepository.submit(input);
+        },
+      },
+      artifacts,
+      artifactStore: memoryStore.store,
+      runtimeArtifactStore: {
+        async write() {
+          throw new Error('storage unavailable');
+        },
+        async *read() {
+          yield* [] as Uint8Array[];
+          throw new Error('unexpected read');
+        },
+      },
+    });
+
+    await expect(
+      service.submit({
+        accountId: ACCOUNT_ID,
+        actorUserId: USER_ID,
+        artifactId: artifact.artifact_id,
+      }),
+    ).rejects.toMatchObject({ code: 'DEVELOPER_ARTIFACT_STORE_UNAVAILABLE', status: 503 });
+    expect(repositoryCalls).toBe(0);
+  });
+
   test('derives and persists server runtime evidence from canonical artifact bytes', async () => {
     const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
     const memoryStore = createMemoryDeveloperArtifactStore();

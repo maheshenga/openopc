@@ -1016,3 +1016,32 @@ type snapshot -> 6 additions, 0 removals
 remains **NOT YET**: browser acceptance is pending and the current full Web build
 was terminated by the Windows host with exit status `4294967295` under zero
 available physical memory, without a compiler diagnostic.
+
+---
+
+### 2026-07-28 - OpenOPC execution input Task 3 completion (`Codex`)
+
+Completed Task 3 from
+`docs/plans/2026-07-28-module-runner-execution-bundle-dispatch-implementation.md`:
+add the canonical project module execution input to the public SDK request contract while
+preserving every existing exported name. The change is additive at runtime and intentionally makes
+the previously incomplete create-input type require the server-required `input` value before the
+platform is released.
+
+The enclosing OpenOPC plan forbids commits during task execution, so this claim remains in the
+working tree instead of being committed separately. The public runtime and type snapshot files did
+not change because the existing exported name remains the same; both snapshot tests passed.
+
+**Final SDK gates**
+
+```
+bun test src/core/rest/projects-client/module-executions.test.ts -> 1 pass, 0 fail
+pnpm.cmd --filter @kortix/sdk test -> 1166 pass, 0 fail, 5461 expect() calls, 88 files
+pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
+pnpm.cmd --filter @kortix/sdk run smoke:install -> Install smoke test passed
+runtime snapshot -> unchanged, snapshot test passed
+type snapshot -> unchanged, snapshot test passed
+```
+
+**Shippable to production: YES** for the Task 3 SDK surface. The enclosing module Runner execution
+bundle and dispatch plan remains **NOT YET** because Tasks 4-8 are pending.

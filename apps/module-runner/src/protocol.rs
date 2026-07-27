@@ -19,9 +19,9 @@ pub const WORK_ENVELOPE_SCHEMA: &str =
 pub const CLAIM_BUNDLE_SCHEMA: &str =
     include_str!("../../../packages/module-runtime-contracts/schema/claim-bundle.v1.schema.json");
 
-const MODULE_EXECUTION_INPUT_MAX_BYTES: usize = 262_144;
-const WASI_RUNTIME_ARTIFACT_MAX_BYTES: u64 = 33_554_432;
-const RUNTIME_ARTIFACT_FETCH_PATH: &str = "module-runtime/artifacts/fetch";
+pub const MODULE_EXECUTION_INPUT_MAX_BYTES: usize = 262_144;
+pub const WASI_RUNTIME_ARTIFACT_MAX_BYTES: u64 = 33_554_432;
+pub const RUNTIME_ARTIFACT_FETCH_PATH: &str = "module-runtime/artifacts/fetch";
 
 #[derive(Debug, Error)]
 pub enum ProtocolError {
@@ -43,6 +43,14 @@ pub enum ProtocolError {
     InvalidCapabilityBinding,
     #[error("RUNNER_CLAIM_BUNDLE_INVALID")]
     InvalidClaimBundle,
+    #[error("RUNNER_DESCRIPTOR_DIGEST_MISMATCH")]
+    DescriptorDigestMismatch,
+    #[error("RUNNER_INPUT_DIGEST_MISMATCH")]
+    InputDigestMismatch,
+    #[error("RUNNER_ARTIFACT_DIGEST_MISMATCH")]
+    ArtifactDigestMismatch,
+    #[error("RUNNER_ARTIFACT_LIMIT")]
+    ArtifactLimit,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -98,6 +106,9 @@ pub struct WorkEnvelopeV1 {
     pub permission_digest: String,
     pub runtime_descriptor_id: String,
     pub runtime_descriptor_digest: String,
+    pub input_digest: String,
+    pub runtime_artifact_digest: String,
+    pub runtime_artifact_bytes: u64,
     pub runtime_kind: RuntimeKind,
     pub runtime_profile: String,
     pub policy_digest: String,
@@ -185,21 +196,31 @@ pub struct RunnerClaimBundleV1 {
     pub capability_tokens: Vec<RunnerCapabilityTokenV1>,
     pub runtime_descriptor: RuntimeDescriptorV1,
     pub input_base64: String,
-    pub runtime_artifact: RuntimeArtifactReferenceV1,
+    pub runtime_artifact: RuntimeArtifactReference,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RuntimeArtifactReferenceV1 {
+pub struct RuntimeArtifactReference {
     pub fetch_path: String,
     pub digest: String,
     pub bytes: u64,
 }
 
+pub type RuntimeArtifactReferenceV1 = RuntimeArtifactReference;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifiedClaim {
     pub envelope: WorkEnvelopeV1,
     pub capability_tokens: Vec<RunnerCapabilityTokenV1>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedExecutionBundle {
+    pub claim: VerifiedClaim,
+    pub runtime_descriptor: RuntimeDescriptorV1,
+    pub input: Vec<u8>,
+    pub runtime_artifact: RuntimeArtifactReference,
 }
 
 #[derive(Debug, Deserialize)]
@@ -277,14 +298,90 @@ pub fn compute_binding_digest(envelope: &WorkEnvelopeV1) -> Result<String, Proto
         "policyDigest": envelope.policy_digest,
         "runtimeDescriptorId": envelope.runtime_descriptor_id,
         "runtimeDescriptorDigest": envelope.runtime_descriptor_digest,
+        "inputDigest": envelope.input_digest,
+        "runtimeArtifactDigest": envelope.runtime_artifact_digest,
+        "runtimeArtifactBytes": envelope.runtime_artifact_bytes,
         "runtimeKind": envelope.runtime_kind,
         "runtimeProfile": envelope.runtime_profile,
         "killSwitchGeneration": envelope.kill_switch_generation,
         "resourceCeilings": envelope.resource_ceilings,
         "deadlineAt": envelope.execution_deadline,
     });
-    let canonical = serde_json::to_vec(&sort_json(binding))?;
+    let canonical = canonical_json_bytes(binding)?;
     Ok(format!("sha256:{:x}", Sha256::digest(canonical)))
+}
+
+pub fn verify_claim_bundle(
+    bundle: RunnerClaimBundleV1,
+    public_key: &VerifyingKey,
+    expected_key_id: &str,
+    now: DateTime<Utc>,
+) -> Result<VerifiedExecutionBundle, ProtocolError> {
+    if !(1..=WASI_RUNTIME_ARTIFACT_MAX_BYTES).contains(&bundle.runtime_artifact.bytes) {
+        return Err(ProtocolError::ArtifactLimit);
+    }
+    if bundle.runtime_artifact.fetch_path != RUNTIME_ARTIFACT_FETCH_PATH
+        || !valid_sha256(&bundle.runtime_artifact.digest)
+    {
+        return Err(ProtocolError::InvalidClaimBundle);
+    }
+
+    let claim = verify_claim_response(
+        RunnerClaimResponseV1 {
+            signed_envelope: bundle.signed_envelope,
+            capability_tokens: bundle.capability_tokens,
+        },
+        public_key,
+        expected_key_id,
+        now,
+    )?;
+
+    let descriptor_bytes = canonical_json_bytes(
+        serde_json::to_value(&bundle.runtime_descriptor)
+            .map_err(|_| ProtocolError::InvalidRuntimeDescriptor)?,
+    )?;
+    let descriptor_digest = format!("sha256:{:x}", Sha256::digest(&descriptor_bytes));
+    let runtime_kind_matches = matches!(
+        (
+            &bundle.runtime_descriptor.runtime,
+            claim.envelope.runtime_kind
+        ),
+        (Runtime::WasiComponent { .. }, RuntimeKind::WasiComponent)
+            | (Runtime::OciImage { .. }, RuntimeKind::OciImage)
+    );
+    if descriptor_digest != claim.envelope.runtime_descriptor_digest || !runtime_kind_matches {
+        return Err(ProtocolError::DescriptorDigestMismatch);
+    }
+
+    let input = URL_SAFE_NO_PAD
+        .decode(&bundle.input_base64)
+        .map_err(|_| ProtocolError::InputDigestMismatch)?;
+    if input.is_empty()
+        || input.len() > MODULE_EXECUTION_INPUT_MAX_BYTES
+        || URL_SAFE_NO_PAD.encode(&input) != bundle.input_base64
+    {
+        return Err(ProtocolError::InputDigestMismatch);
+    }
+    let parsed_input: Value =
+        serde_json::from_slice(&input).map_err(|_| ProtocolError::InputDigestMismatch)?;
+    if canonical_json_bytes(parsed_input)? != input
+        || format!("sha256:{:x}", Sha256::digest(&input)) != claim.envelope.input_digest
+    {
+        return Err(ProtocolError::InputDigestMismatch);
+    }
+
+    if bundle.runtime_artifact.digest != claim.envelope.runtime_artifact_digest
+        || bundle.runtime_artifact.bytes != claim.envelope.runtime_artifact_bytes
+    {
+        return Err(ProtocolError::ArtifactDigestMismatch);
+    }
+
+    Ok(VerifiedExecutionBundle {
+        claim,
+        runtime_descriptor: bundle.runtime_descriptor,
+        input,
+        runtime_artifact: bundle.runtime_artifact,
+    })
 }
 
 pub fn verify_claim_response(
@@ -382,6 +479,8 @@ fn validate_work_envelope(envelope: &WorkEnvelopeV1) -> Result<(), ProtocolError
         &envelope.release_digest,
         &envelope.permission_digest,
         &envelope.runtime_descriptor_digest,
+        &envelope.input_digest,
+        &envelope.runtime_artifact_digest,
         &envelope.policy_digest,
         &envelope.binding_digest,
     ];
@@ -405,6 +504,7 @@ fn validate_work_envelope(envelope: &WorkEnvelopeV1) -> Result<(), ProtocolError
         || digests.iter().any(|value| !valid_sha256(value))
         || !valid_runtime_profile(&envelope.runtime_profile)
         || envelope.kill_switch_generation > i32::MAX as u32
+        || !(1..=WASI_RUNTIME_ARTIFACT_MAX_BYTES).contains(&envelope.runtime_artifact_bytes)
         || timestamp(&envelope.execution_deadline).is_err()
         || !(1..=i32::MAX as u32).contains(&envelope.lease.generation)
         || timestamp(&envelope.lease.deadline).is_err()
@@ -430,21 +530,51 @@ fn valid_compact_signature(value: &str) -> bool {
         })
 }
 
-fn sort_json(value: Value) -> Value {
+fn canonical_json_bytes(value: Value) -> Result<Vec<u8>, ProtocolError> {
+    let mut output = Vec::new();
+    encode_canonical_json(&value, &mut output)?;
+    Ok(output)
+}
+
+fn encode_canonical_json(value: &Value, output: &mut Vec<u8>) -> Result<(), ProtocolError> {
     match value {
-        Value::Array(values) => Value::Array(values.into_iter().map(sort_json).collect()),
-        Value::Object(values) => {
-            let mut entries: Vec<_> = values.into_iter().collect();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (key, sort_json(value)))
-                    .collect(),
-            )
+        Value::Null => output.extend_from_slice(b"null"),
+        Value::Bool(true) => output.extend_from_slice(b"true"),
+        Value::Bool(false) => output.extend_from_slice(b"false"),
+        Value::Number(number) => {
+            let number = number
+                .as_f64()
+                .filter(|number| number.is_finite())
+                .ok_or(ProtocolError::InvalidClaimBundle)?;
+            output.extend_from_slice(ryu_js::Buffer::new().format_finite(number).as_bytes());
         }
-        scalar => scalar,
+        Value::String(value) => output.extend_from_slice(serde_json::to_string(value)?.as_bytes()),
+        Value::Array(values) => {
+            output.push(b'[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    output.push(b',');
+                }
+                encode_canonical_json(value, output)?;
+            }
+            output.push(b']');
+        }
+        Value::Object(values) => {
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.encode_utf16().cmp(right.encode_utf16()));
+            output.push(b'{');
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index > 0 {
+                    output.push(b',');
+                }
+                output.extend_from_slice(serde_json::to_string(key)?.as_bytes());
+                output.push(b':');
+                encode_canonical_json(value, output)?;
+            }
+            output.push(b'}');
+        }
     }
+    Ok(())
 }
 
 fn timestamp(value: &str) -> Result<DateTime<Utc>, ProtocolError> {

@@ -3,8 +3,11 @@ import {
   developerModuleReleases,
   developerModuleVerificationRuns,
   developerPublishers,
+  moduleRuntimeArtifacts,
+  moduleRuntimeDescriptors,
 } from '@kortix/db';
 import type { RegistryModuleManifest } from '@kortix/registry';
+import { canonicalDigest } from '@openopc/module-runtime-contracts';
 import { and, desc, eq } from 'drizzle-orm';
 
 import {
@@ -97,6 +100,46 @@ export function createDrizzleDeveloperModuleReleaseRepository(
           .returning();
 
         if (inserted) {
+          let runtimeDescriptorId: string | null = null;
+          if (input.runtimeDescriptor) {
+            const [descriptor] = await tx
+              .insert(moduleRuntimeDescriptors)
+              .values({
+                accountId: input.accountId,
+                releaseId: inserted.releaseId,
+                runtimeKind: input.runtimeDescriptor.runtimeKind,
+                descriptorDigest: input.runtimeDescriptor.descriptorDigest,
+                descriptor: input.runtimeDescriptor.descriptor as unknown as Record<
+                  string,
+                  unknown
+                >,
+              })
+              .returning();
+            if (!descriptor) {
+              throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
+            }
+            runtimeDescriptorId = descriptor.descriptorId;
+          }
+          if (input.runtimeArtifact) {
+            if (!runtimeDescriptorId || input.runtimeDescriptor?.runtimeKind !== 'wasi-component') {
+              throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
+            }
+            const [artifact] = await tx
+              .insert(moduleRuntimeArtifacts)
+              .values({
+                accountId: input.accountId,
+                releaseId: inserted.releaseId,
+                runtimeDescriptorId,
+                artifactDigest: input.runtimeArtifact.digest,
+                artifactBytes: input.runtimeArtifact.bytes,
+                mediaType: input.runtimeArtifact.mediaType,
+                storageKey: input.runtimeArtifact.storageKey,
+              })
+              .returning();
+            if (!artifact) {
+              throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
+            }
+          }
           await tx
             .insert(developerModuleVerificationRuns)
             .values({
@@ -132,6 +175,57 @@ export function createDrizzleDeveloperModuleReleaseRepository(
             (input.runtimeDescriptor?.descriptorDigest ?? null) ||
           existingRelease.runtimeDescriptorPath !== (input.runtimeDescriptor?.entryPath ?? null) ||
           existingRelease.runtimeKind !== (input.runtimeDescriptor?.runtimeKind ?? null)
+        ) {
+          throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
+        }
+        if (!input.runtimeDescriptor) {
+          if (input.runtimeArtifact) {
+            throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
+          }
+          return { release: serializeDeveloperModuleReleaseRow(existingRelease), created: false };
+        }
+        const [existingDescriptor] = await tx
+          .select()
+          .from(moduleRuntimeDescriptors)
+          .where(
+            and(
+              eq(moduleRuntimeDescriptors.accountId, input.accountId),
+              eq(moduleRuntimeDescriptors.releaseId, existingRelease.releaseId),
+              eq(
+                moduleRuntimeDescriptors.descriptorDigest,
+                input.runtimeDescriptor.descriptorDigest,
+              ),
+            ),
+          )
+          .limit(1);
+        if (
+          !existingDescriptor ||
+          existingDescriptor.runtimeKind !== input.runtimeDescriptor.runtimeKind ||
+          (await canonicalDigest(existingDescriptor.descriptor)) !==
+            input.runtimeDescriptor.descriptorDigest
+        ) {
+          throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
+        }
+        const [existingArtifact] = await tx
+          .select()
+          .from(moduleRuntimeArtifacts)
+          .where(
+            and(
+              eq(moduleRuntimeArtifacts.accountId, input.accountId),
+              eq(moduleRuntimeArtifacts.releaseId, existingRelease.releaseId),
+              eq(moduleRuntimeArtifacts.runtimeDescriptorId, existingDescriptor.descriptorId),
+            ),
+          )
+          .limit(1);
+        if (
+          input.runtimeDescriptor.runtimeKind === 'wasi-component'
+            ? !input.runtimeArtifact ||
+              !existingArtifact ||
+              existingArtifact.artifactDigest !== input.runtimeArtifact.digest ||
+              Number(existingArtifact.artifactBytes) !== input.runtimeArtifact.bytes ||
+              existingArtifact.mediaType !== input.runtimeArtifact.mediaType ||
+              existingArtifact.storageKey !== input.runtimeArtifact.storageKey
+            : input.runtimeArtifact !== null || existingArtifact !== undefined
         ) {
           throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_VERSION_CONFLICT', 409);
         }

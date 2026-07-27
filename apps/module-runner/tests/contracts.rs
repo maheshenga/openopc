@@ -11,6 +11,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+use tokio::sync::Notify;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -53,13 +54,16 @@ fn envelope(token: &str) -> Value {
         "consentRevisionId": "10000000-0000-4000-8000-000000000008",
         "permissionDigest": digest('4'),
         "runtimeDescriptorId": "10000000-0000-4000-8000-000000000009",
-        "runtimeDescriptorDigest": digest('2'),
-        "runtimeKind": "oci-image",
-        "runtimeProfile": "openopc-oci-v1",
+        "runtimeDescriptorDigest": "sha256:34e670fbb2510c18e701afc47c2ecefe4ced432b0db6d66739e3dd0bba7aa04b",
+        "inputDigest": "sha256:015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+        "runtimeArtifactDigest": digest('6'),
+        "runtimeArtifactBytes": 4096,
+        "runtimeKind": "wasi-component",
+        "runtimeProfile": "openopc-wasi-v1",
         "policyDigest": digest('3'),
         "killSwitchGeneration": 7,
         "executionDeadline": "2026-07-30T10:30:00.000Z",
-        "bindingDigest": "sha256:0a87679a518beb47351d90108f77cf6dd8fbaf0bab3dfee2cf6f75494ff1062c",
+        "bindingDigest": "sha256:8a6738ae79db9db09921ea35975c384123332aa95b4a543acf4877f94a9eba26",
         "resourceCeilings": {
             "cpuMillis": 60000,
             "memoryMiB": 512,
@@ -111,7 +115,7 @@ fn reproduces_the_typescript_binding_digest_vector() {
     let parsed = protocol::parse_work_envelope_value(envelope("capability-token")).unwrap();
     assert_eq!(
         protocol::compute_binding_digest(&parsed).unwrap(),
-        "sha256:0a87679a518beb47351d90108f77cf6dd8fbaf0bab3dfee2cf6f75494ff1062c"
+        "sha256:8a6738ae79db9db09921ea35975c384123332aa95b4a543acf4877f94a9eba26"
     );
 }
 
@@ -336,12 +340,23 @@ fn verified_claim(key: &SigningKey) -> protocol::VerifiedClaim {
 }
 
 struct FakeTransport {
-    responses: Mutex<VecDeque<client::ControlPlaneResponse>>,
+    responses: Mutex<VecDeque<Result<client::ControlPlaneResponse, client::RunnerClientError>>>,
     requests: Mutex<Vec<client::ControlPlaneRequest>>,
 }
 
 impl FakeTransport {
     fn new(responses: impl IntoIterator<Item = client::ControlPlaneResponse>) -> Self {
+        Self {
+            responses: Mutex::new(responses.into_iter().map(Ok).collect()),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn with_outcomes(
+        responses: impl IntoIterator<
+            Item = Result<client::ControlPlaneResponse, client::RunnerClientError>,
+        >,
+    ) -> Self {
         Self {
             responses: Mutex::new(responses.into_iter().collect()),
             requests: Mutex::new(Vec::new()),
@@ -361,7 +376,7 @@ impl client::ControlPlaneTransport for FakeTransport {
                 .lock()
                 .unwrap()
                 .pop_front()
-                .ok_or(client::RunnerClientError::Transport)
+                .unwrap_or(Err(client::RunnerClientError::Transport))
         })
     }
 }
@@ -389,13 +404,12 @@ fn test_client(
 }
 
 #[tokio::test]
-async fn claim_returns_none_for_an_unavailable_execution_and_verifies_a_delivered_claim() {
+async fn claim_next_returns_none_for_an_unavailable_execution_and_verifies_a_delivered_bundle() {
     let key = SigningKey::from_bytes(&[7; 32]);
-    let execution_id = Uuid::parse_str("10000000-0000-4000-8000-000000000001").unwrap();
-    let (missing_client, missing_transport) = test_client(&key, [response(404, json!({}))]);
+    let (missing_client, missing_transport) = test_client(&key, [response(204, json!({}))]);
     assert!(
         missing_client
-            .claim_at(execution_id, Utc::now())
+            .claim_next_at(Utc::now())
             .await
             .unwrap()
             .is_none()
@@ -403,29 +417,28 @@ async fn claim_returns_none_for_an_unavailable_execution_and_verifies_a_delivere
     assert_eq!(
         missing_transport.requests(),
         [client::ControlPlaneRequest {
-            path: "module-runtime/claims".into(),
+            path: "module-runtime/claims/next".into(),
             runner_id: "10000000-0000-4000-8000-000000000010".into(),
             account_id: "10000000-0000-4000-8000-000000000002".into(),
-            body: json!({ "executionId": execution_id }),
+            body: json!({}),
         }]
     );
 
-    let delivered = serde_json::to_value(signed_claim(
-        &envelope("capability-token"),
-        "capability-token",
-        &key,
-    ))
-    .unwrap();
+    let signed = signed_claim(&envelope("capability-token"), "capability-token", &key);
+    let mut delivered = claim_bundle();
+    delivered["signedEnvelope"] = json!(signed.signed_envelope);
+    delivered["capabilityTokens"] = serde_json::to_value(signed.capability_tokens).unwrap();
     let (client, _) = test_client(&key, [response(200, delivered)]);
-    let claim = client
-        .claim_at(
-            execution_id,
-            Utc.with_ymd_and_hms(2026, 7, 30, 9, 0, 0).unwrap(),
-        )
+    let bundle = client
+        .claim_next_at(Utc.with_ymd_and_hms(2026, 7, 30, 9, 0, 0).unwrap())
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(claim.envelope.execution_id, execution_id.to_string());
+    assert_eq!(
+        bundle.claim.envelope.execution_id,
+        "10000000-0000-4000-8000-000000000001"
+    );
+    assert_eq!(bundle.input, br#"{"a":1}"#);
 }
 
 #[tokio::test]
@@ -435,7 +448,22 @@ async fn derives_lease_coordinates_and_sends_finalize_only_once() {
     let (client, transport) = test_client(
         &key,
         [
-            response(200, json!({ "state": "running" })),
+            response(
+                200,
+                json!({
+                    "execution": {
+                        "executionId": "10000000-0000-4000-8000-000000000001",
+                        "state": "running"
+                    },
+                    "lease": {
+                        "leaseId": "10000000-0000-4000-8000-000000000005",
+                        "executionId": "10000000-0000-4000-8000-000000000001",
+                        "generation": 1,
+                        "deadlineAt": "2026-07-30T10:00:00.000Z",
+                        "releasedAt": null
+                    }
+                }),
+            ),
             response(200, json!({ "sequence": 2 })),
             response(200, json!({ "state": "succeeded" })),
         ],
@@ -446,7 +474,12 @@ async fn derives_lease_coordinates_and_sends_finalize_only_once() {
         "leaseId": "10000000-0000-4000-8000-000000000005",
         "generation": 1
     });
-    client.heartbeat(&claim).await.unwrap();
+    let heartbeat = client.heartbeat(&claim).await.unwrap();
+    assert_eq!(
+        heartbeat.execution.state,
+        client::HeartbeatExecutionState::Running
+    );
+    assert_eq!(heartbeat.lease.generation, 1);
 
     client
         .append_evidence(&claim, "runtime_started", json!({ "runtime": "oci-image" }))
@@ -523,6 +556,142 @@ async fn invalid_finalize_input_does_not_consume_the_finalize_fence() {
         Err(client::RunnerClientError::AlreadyFinalized)
     ));
     assert_eq!(transport.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn finalize_restores_retryable_fences_and_closes_acknowledged_or_permanent_results() {
+    let key = SigningKey::from_bytes(&[7; 32]);
+    let claim = verified_claim(&key);
+    let retry_transport = Arc::new(FakeTransport::with_outcomes([
+        Ok(response(503, json!({ "error": "unavailable" }))),
+        Err(client::RunnerClientError::Transport),
+        Ok(response(200, json!({ "state": "succeeded" }))),
+    ]));
+    let retry_client = client::RunnerClient::with_transport(
+        Uuid::parse_str("10000000-0000-4000-8000-000000000010").unwrap(),
+        Uuid::parse_str("10000000-0000-4000-8000-000000000002").unwrap(),
+        key.verifying_key(),
+        "staging-execution-v1".into(),
+        retry_transport.clone(),
+    );
+    let input = client::FinalizeInput {
+        outcome: client::TerminalOutcome::Succeeded,
+        evidence_digest: "sha256:bc1cc9f74fae9166b2b01c9c94f1ff5a10a3fda7e94ac4879359ce65aaf72f76"
+            .into(),
+        evidence: json!({ "result": "bounded" }),
+        usage: json!({ "cpuMillis": 12 }),
+    };
+
+    assert!(matches!(
+        retry_client.finalize(&claim, input.clone()).await,
+        Err(client::RunnerClientError::Status(503))
+    ));
+    assert_eq!(
+        retry_client.finalize_fence_state(&claim),
+        client::FinalizeFenceState::Available
+    );
+    assert!(matches!(
+        retry_client.finalize(&claim, input.clone()).await,
+        Err(client::RunnerClientError::Transport)
+    ));
+    assert_eq!(
+        retry_client.finalize_fence_state(&claim),
+        client::FinalizeFenceState::Available
+    );
+    retry_client.finalize(&claim, input.clone()).await.unwrap();
+    assert_eq!(
+        retry_client.finalize_fence_state(&claim),
+        client::FinalizeFenceState::Acknowledged
+    );
+    assert!(matches!(
+        retry_client.finalize(&claim, input.clone()).await,
+        Err(client::RunnerClientError::AlreadyFinalized)
+    ));
+    assert_eq!(retry_transport.requests().len(), 3);
+
+    let permanent_transport = Arc::new(FakeTransport::new([
+        response(409, json!({ "error": "stale" })),
+        response(200, json!({ "state": "succeeded" })),
+    ]));
+    let permanent_client = client::RunnerClient::with_transport(
+        Uuid::parse_str("10000000-0000-4000-8000-000000000010").unwrap(),
+        Uuid::parse_str("10000000-0000-4000-8000-000000000002").unwrap(),
+        key.verifying_key(),
+        "staging-execution-v1".into(),
+        permanent_transport.clone(),
+    );
+    assert!(matches!(
+        permanent_client.finalize(&claim, input.clone()).await,
+        Err(client::RunnerClientError::Status(409))
+    ));
+    assert_eq!(
+        permanent_client.finalize_fence_state(&claim),
+        client::FinalizeFenceState::Acknowledged
+    );
+    assert!(matches!(
+        permanent_client.finalize(&claim, input).await,
+        Err(client::RunnerClientError::AlreadyFinalized)
+    ));
+    assert_eq!(permanent_transport.requests().len(), 1);
+}
+
+struct BlockingTransport {
+    requests: Mutex<Vec<client::ControlPlaneRequest>>,
+    started: Notify,
+    release: Notify,
+}
+
+impl client::ControlPlaneTransport for BlockingTransport {
+    fn post<'a>(&'a self, request: client::ControlPlaneRequest) -> client::TransportFuture<'a> {
+        Box::pin(async move {
+            self.requests.lock().unwrap().push(request);
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(response(200, json!({ "state": "succeeded" })))
+        })
+    }
+}
+
+#[tokio::test]
+async fn concurrent_finalize_calls_observe_the_in_flight_fence() {
+    let key = SigningKey::from_bytes(&[7; 32]);
+    let claim = verified_claim(&key);
+    let transport = Arc::new(BlockingTransport {
+        requests: Mutex::new(Vec::new()),
+        started: Notify::new(),
+        release: Notify::new(),
+    });
+    let client = client::RunnerClient::with_transport(
+        Uuid::parse_str("10000000-0000-4000-8000-000000000010").unwrap(),
+        Uuid::parse_str("10000000-0000-4000-8000-000000000002").unwrap(),
+        key.verifying_key(),
+        "staging-execution-v1".into(),
+        transport.clone(),
+    );
+    let input = client::FinalizeInput {
+        outcome: client::TerminalOutcome::Succeeded,
+        evidence_digest: "sha256:bc1cc9f74fae9166b2b01c9c94f1ff5a10a3fda7e94ac4879359ce65aaf72f76"
+            .into(),
+        evidence: json!({ "result": "bounded" }),
+        usage: json!({ "cpuMillis": 12 }),
+    };
+    let first_client = client.clone();
+    let first_claim = claim.clone();
+    let first_input = input.clone();
+    let first = tokio::spawn(async move { first_client.finalize(&first_claim, first_input).await });
+    transport.started.notified().await;
+
+    assert!(matches!(
+        client.finalize(&claim, input).await,
+        Err(client::RunnerClientError::FinalizeInFlight)
+    ));
+    assert_eq!(
+        client.finalize_fence_state(&claim),
+        client::FinalizeFenceState::InFlight
+    );
+    transport.release.notify_one();
+    first.await.unwrap().unwrap();
+    assert_eq!(transport.requests.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

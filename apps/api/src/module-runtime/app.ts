@@ -5,6 +5,10 @@ import { PROJECT_ACTIONS } from '../iam/actions';
 import { makeOpenApiApp } from '../openapi';
 import type { AppEnv } from '../types';
 import {
+  RuntimeArtifactAccessError,
+  type RuntimeArtifactService,
+} from './runtime-artifacts';
+import {
   type ModuleExecution,
   ModuleExecutionError,
   type ModuleExecutionEstimate,
@@ -40,8 +44,9 @@ export interface ModuleRuntimeAppDependencies {
   >;
   runnerProtocol: Pick<
     ModuleRunnerProtocol,
-    'register' | 'heartbeatNode' | 'claim' | 'heartbeatLease' | 'appendEvidence' | 'finalize'
+    'register' | 'heartbeatNode' | 'claimNext' | 'heartbeatLease' | 'appendEvidence' | 'finalize'
   >;
+  runtimeArtifactService: Pick<RuntimeArtifactService, 'openForLease'>;
   authenticateRunner(context: Context<AppEnv>): Promise<ModuleRunnerIdentity>;
   registrationIdentity(context: Context<AppEnv>): Promise<RunnerRegistrationIdentity>;
 }
@@ -56,8 +61,9 @@ const RUNNER_EVIDENCE_MAX_REQUEST_BYTES = 512 * 1024;
 const RUNNER_FINALIZE_MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 const projectInput = z.object({ installation_id: uuid }).strict();
 const createInput = projectInput
-  .extend({ deadline_at: z.string().datetime({ offset: true }) })
-  .strict();
+  .extend({ deadline_at: z.string().datetime({ offset: true }), input: z.unknown() })
+  .strict()
+  .refine((value) => Object.hasOwn(value, 'input'));
 
 function executionWire(value: ModuleExecution) {
   return {
@@ -107,7 +113,11 @@ function eventWire(value: ModuleExecutionEvent) {
 }
 
 function errorResponse(context: Context<AppEnv>, error: unknown): Response | null {
-  if (error instanceof ModuleExecutionError || error instanceof ModuleRunnerProtocolError) {
+  if (
+    error instanceof ModuleExecutionError ||
+    error instanceof ModuleRunnerProtocolError ||
+    error instanceof RuntimeArtifactAccessError
+  ) {
     return context.json({ error: error.code }, error.status);
   }
   return null;
@@ -231,6 +241,7 @@ export function createModuleRuntimeApp(dependencies: ModuleRuntimeAppDependencie
         actorUserId: loaded.userId,
         idempotencyKey,
         deadlineAt: body.data.deadline_at,
+        input: body.data.input,
       });
       return context.json(executionWire(created), 201);
     } catch (error) {
@@ -374,16 +385,55 @@ export function createModuleRuntimeApp(dependencies: ModuleRuntimeAppDependencie
     });
   });
 
-  app.post('/module-runtime/claims', async (context) => {
+  app.post('/module-runtime/claims/next', async (context) => {
     return withRunner(context, async (identity) => {
       const body = await runnerBody(
         context,
-        z.object({ executionId: uuid }).strict(),
+        z.object({}).strict(),
         RUNNER_CONTROL_MAX_REQUEST_BYTES,
         'RUNNER_EXECUTION_UNAVAILABLE',
       );
       if (body instanceof Response) return body;
-      return context.json(await dependencies.runnerProtocol.claim(identity, body), 200);
+      const claimed = await dependencies.runnerProtocol.claimNext(identity, body);
+      return claimed ? context.json(claimed, 200) : new Response(null, { status: 204 });
+    });
+  });
+
+  app.post('/module-runtime/artifacts/fetch', async (context) => {
+    return withRunner(context, async (identity) => {
+      if (context.req.header('range') !== undefined) {
+        return context.json({ error: 'RUNNER_EXECUTION_UNAVAILABLE' }, 400);
+      }
+      const body = await runnerBody(
+        context,
+        z
+          .object({
+            projectId: uuid,
+            executionId: uuid,
+            leaseId: uuid,
+            generation: z.number().int().positive(),
+          })
+          .strict(),
+        RUNNER_CONTROL_MAX_REQUEST_BYTES,
+        'RUNNER_EXECUTION_UNAVAILABLE',
+      );
+      if (body instanceof Response) return body;
+      const artifact = await dependencies.runtimeArtifactService.openForLease({
+        accountId: identity.accountId,
+        projectId: body.projectId,
+        executionId: body.executionId,
+        leaseId: body.leaseId,
+        generation: body.generation,
+        runnerId: identity.runnerId,
+      });
+      return new Response(artifact.body, {
+        status: 200,
+        headers: {
+          'content-type': 'application/wasm',
+          'content-length': String(artifact.bytes),
+          'x-openopc-artifact-sha256': artifact.digest,
+        },
+      });
     });
   });
 

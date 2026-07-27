@@ -5,14 +5,22 @@ import { CompactSign, importPKCS8, jwtVerify } from 'jose';
 import { supabaseAuth } from '../middleware/auth';
 import { assertProjectCapability, loadProjectForUser } from '../projects/lib/access';
 import { db } from '../shared/db';
+import { getDefaultStudioApiRuntime } from '../studio/default-routes';
 import type { AppEnv } from '../types';
 import { createModuleRuntimeApp } from './app';
 import { ModuleExecutionService } from './executions';
 import {
   createDrizzleModuleExecutionBindingResolver,
+  createDrizzleModuleExecutionInputStore,
   createDrizzleModuleExecutionRepository,
   createDrizzleModuleRunnerRepository,
 } from './executions.drizzle';
+import {
+  RuntimeArtifactService,
+  createUnavailableRuntimeArtifactStore,
+} from './runtime-artifacts';
+import { createDrizzleRuntimeArtifactLeaseStore } from './runtime-artifacts.drizzle';
+import { createRuntimeArtifactS3Store } from './runtime-artifacts.s3';
 import {
   type ModuleRunnerIdentity,
   ModuleRunnerProtocol,
@@ -21,8 +29,12 @@ import {
 } from './runner-protocol';
 
 export * from './app';
+export * from './execution-inputs';
 export * from './executions';
 export * from './executions.drizzle';
+export * from './runtime-artifacts';
+export * from './runtime-artifacts.drizzle';
+export * from './runtime-artifacts.s3';
 export * from './runner-protocol';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -75,15 +87,33 @@ async function registrationIdentity(context: Context<AppEnv>): Promise<RunnerReg
 }
 
 export const moduleExecutionRepository = createDrizzleModuleExecutionRepository(db);
+export const moduleExecutionInputStore = createDrizzleModuleExecutionInputStore(db);
 export const moduleExecutionBindingResolver = createDrizzleModuleExecutionBindingResolver(db);
 export const moduleExecutionService = new ModuleExecutionService({
   repository: moduleExecutionRepository,
+  executionInputStore: moduleExecutionInputStore,
   bindingResolver: moduleExecutionBindingResolver,
 });
 export const moduleRunnerRepository = createDrizzleModuleRunnerRepository(db);
+const moduleRuntimeStudioRuntime = (() => {
+  try {
+    return getDefaultStudioApiRuntime();
+  } catch {
+    return { enabled: false } as const;
+  }
+})();
+export const moduleRuntimeArtifactStore = moduleRuntimeStudioRuntime.enabled
+  ? createRuntimeArtifactS3Store(moduleRuntimeStudioRuntime.store)
+  : createUnavailableRuntimeArtifactStore();
+export const moduleRuntimeArtifactLeaseStore = createDrizzleRuntimeArtifactLeaseStore(db);
+export const moduleRuntimeArtifactService = new RuntimeArtifactService({
+  leaseStore: moduleRuntimeArtifactLeaseStore,
+  artifactStore: moduleRuntimeArtifactStore,
+});
 
 export const moduleRunnerProtocol = new ModuleRunnerProtocol({
   executionRepository: moduleExecutionRepository,
+  executionInputStore: moduleExecutionInputStore,
   runnerRepository: moduleRunnerRepository,
   bindingResolver: moduleExecutionBindingResolver,
   registrationVerifier: {
@@ -139,6 +169,7 @@ export const moduleRuntimeApp = createModuleRuntimeApp({
   assertProjectCapability,
   executionService: moduleExecutionService,
   runnerProtocol: moduleRunnerProtocol,
+  runtimeArtifactService: moduleRuntimeArtifactService,
   authenticateRunner: runnerIdentity,
   registrationIdentity,
 });

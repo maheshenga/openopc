@@ -42,7 +42,10 @@ function decodedBase64UrlBytes(value: string): number {
   try {
     const standard = value.replaceAll('-', '+').replaceAll('_', '/');
     const padding = '='.repeat((4 - (standard.length % 4)) % 4);
-    return atob(`${standard}${padding}`).length;
+    const decoded = atob(`${standard}${padding}`);
+    const canonical = btoa(decoded).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+    if (canonical !== value) invalid();
+    return decoded.length;
   } catch {
     invalid();
   }

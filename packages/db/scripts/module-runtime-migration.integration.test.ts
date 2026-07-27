@@ -28,6 +28,8 @@ const DESCRIPTOR_A = '50000000-0000-4000-a000-000000000001';
 const RUNTIME_ARTIFACT_A = '50000000-0000-4000-a000-000000000002';
 const CONSENT_A = '60000000-0000-4000-a000-000000000001';
 const RUNNER_A = '70000000-0000-4000-a000-000000000001';
+const RUNNER_CLAIM_NEXT = '70000000-0000-4000-a000-000000000002';
+const RUNNER_PROFILE_MISMATCH = '70000000-0000-4000-a000-000000000003';
 const EXECUTION_A = '80000000-0000-4000-a000-000000000001';
 const EXECUTION_HEARTBEAT = '80000000-0000-4000-a000-000000000002';
 const EXECUTION_DEADLINE_FENCE = '80000000-0000-4000-a000-000000000003';
@@ -41,16 +43,12 @@ const EXECUTION_SERVICE_ROLE_LEASED = '80000000-0000-4000-a000-000000000010';
 const EXECUTION_APPEND_FIRST = '80000000-0000-4000-a000-000000000011';
 const EXECUTION_FINALIZE_FIRST = '80000000-0000-4000-a000-000000000012';
 const EXECUTION_LOCK_ORDER = '80000000-0000-4000-a000-000000000013';
+const EXECUTION_CLAIM_NEXT = '80000000-0000-4000-a000-000000000014';
 const LEASE_A = '90000000-0000-4000-a000-000000000001';
 const LEASE_HEARTBEAT = '90000000-0000-4000-a000-000000000002';
 const LEASE_DEADLINE_FENCE = '90000000-0000-4000-a000-000000000003';
 const LEASE_EXPIRED = '90000000-0000-4000-a000-000000000004';
-const LEASE_RUNNER_KILL_SWITCH = '90000000-0000-4000-a000-000000000005';
-const LEASE_REVOKED_RELEASE = '90000000-0000-4000-a000-000000000006';
-const LEASE_STALE_KILL_SWITCH = '90000000-0000-4000-a000-000000000007';
-const LEASE_CLAIM_DEADLINE = '90000000-0000-4000-a000-000000000008';
 const LEASE_SERVICE_ROLE = '90000000-0000-4000-a000-000000000009';
-const LEASE_SERVICE_ROLE_FORBIDDEN = '90000000-0000-4000-a000-000000000010';
 const LEASE_APPEND_FIRST = '90000000-0000-4000-a000-000000000011';
 const LEASE_FINALIZE_FIRST = '90000000-0000-4000-a000-000000000012';
 const LEASE_LOCK_ORDER = '90000000-0000-4000-a000-000000000013';
@@ -179,11 +177,41 @@ function seedLeasedExecution(input: {
       now() + interval '10 minutes'
     FROM kortix.module_executions
     WHERE execution_id = '${EXECUTION_A}';
+  `);
+  leaseExecution(input.executionId, input.leaseId);
+}
 
-    SELECT * FROM kortix.claim_module_execution(
-      '${ACCOUNT_A}', '${PROJECT_A}', '${input.executionId}', '${RUNNER_A}',
-      '${input.leaseId}', 1, now() + interval '5 minutes'
-    );
+function leaseExecution(executionId: string, leaseId: string) {
+  dockerPsql(`
+    INSERT INTO kortix.module_execution_leases(
+      lease_id, execution_id, account_id, project_id, runner_id, generation, deadline_at
+    )
+    SELECT
+      '${leaseId}', execution_id, account_id, project_id, '${RUNNER_A}', 1,
+      LEAST(now() + interval '5 minutes', deadline_at)
+    FROM kortix.module_executions
+    WHERE execution_id = '${executionId}';
+
+    UPDATE kortix.module_executions AS execution
+    SET state = 'leased'
+    WHERE execution.execution_id = '${executionId}';
+
+    INSERT INTO kortix.module_execution_events(
+      execution_id, account_id, project_id, sequence, event_type, payload
+    )
+    SELECT
+      execution.execution_id,
+      execution.account_id,
+      execution.project_id,
+      COALESCE((
+        SELECT MAX(event.sequence) + 1
+        FROM kortix.module_execution_events AS event
+        WHERE event.execution_id = execution.execution_id
+      ), 1),
+      'execution_claimed',
+      jsonb_build_object('lease_id', '${leaseId}', 'generation', 1)
+    FROM kortix.module_executions AS execution
+    WHERE execution.execution_id = '${executionId}';
   `);
 }
 
@@ -213,6 +241,12 @@ function seedControlPlaneRows() {
     ) VALUES (
       '${RUNNER_A}', '${ACCOUNT_A}', 'runner-node-a', 'active', '1.0.0',
       '${DIGEST}', '${'c'.repeat(64)}'
+    );
+
+    INSERT INTO kortix.module_runner_profiles(
+      runner_id, account_id, profile_name, runtime_kind
+    ) VALUES (
+      '${RUNNER_A}', '${ACCOUNT_A}', 'openopc-wasi-v1', 'wasi-component'
     );
 
     INSERT INTO kortix.module_executions(
@@ -367,7 +401,7 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
           JOIN pg_namespace n ON n.oid = p.pronamespace
           WHERE n.nspname = 'kortix'
             AND p.proname IN (
-              'claim_module_execution',
+              'claim_next_module_execution',
               'heartbeat_module_execution',
               'finalize_module_execution'
             )),
@@ -381,10 +415,13 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
         ) IS NOT NULL,
         to_regprocedure(
           'kortix.heartbeat_module_execution(uuid,uuid,uuid,uuid,integer,uuid,timestamptz)'
+        ) IS NULL,
+        to_regprocedure(
+          'kortix.claim_module_execution(uuid,uuid,uuid,uuid,uuid,integer,timestamptz)'
         ) IS NULL;
     `).output.trim();
 
-    expect(shape).toBe('16|1|1|3|t|t|t');
+    expect(shape).toBe('16|1|1|3|t|t|t|t');
   }, DOCKER_TEST_TIMEOUT);
 
   test('rejects invalid execution input and WASI runtime artifact boundaries', () => {
@@ -484,18 +521,14 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
     expect(plan).not.toMatch(/descriptor/i);
   }, DOCKER_TEST_TIMEOUT);
 
-  test('allows only one live lease per dispatchable execution', () => {
+  test('allows only one live lease per execution', () => {
+    leaseExecution(EXECUTION_A, LEASE_A);
     const claimed = dockerPsql(`
-      SELECT lease_id, execution_id, generation, state
-      FROM kortix.claim_module_execution(
-        '${ACCOUNT_A}',
-        '${PROJECT_A}',
-        '${EXECUTION_A}',
-        '${RUNNER_A}',
-        '${LEASE_A}',
-        1,
-        now() + interval '5 minutes'
-      );
+      SELECT lease.lease_id, lease.execution_id, lease.generation, execution.state
+      FROM kortix.module_execution_leases AS lease
+      INNER JOIN kortix.module_executions AS execution
+        ON execution.execution_id = lease.execution_id
+      WHERE lease.lease_id = '${LEASE_A}';
     `).output.trim();
 
     expect(claimed).toBe(`${LEASE_A}|${EXECUTION_A}|1|leased`);
@@ -516,41 +549,153 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
     expect(second.output).toMatch(/module_execution_leases_live_execution_unique|unique/i);
   }, DOCKER_TEST_TIMEOUT);
 
-  test('rejects a claim lease beyond the immutable execution deadline', () => {
-    const claim = dockerPsql(
-      `
-        INSERT INTO kortix.module_executions(
-          execution_id, account_id, project_id, installation_id, release_id,
-          consent_revision_id, runtime_descriptor_id, runtime_kind, runtime_profile,
-          state, idempotency_key,
-          work_envelope_digest, kill_switch_generation, deadline_at
-        ) VALUES (
-          '${EXECUTION_CLAIM_DEADLINE}', '${ACCOUNT_A}', '${PROJECT_A}', '${INSTALL_A}',
-          '${RELEASE_A}', '${CONSENT_A}', '${DESCRIPTOR_A}',
-          'wasi-component', 'openopc-wasi-v1', 'dispatchable',
-          'idem-module-runtime-claim-deadline', '${DIGEST}', 0, now() + interval '2 minutes'
+  test('atomically selects one compatible execution without disclosing profile or tenant mismatches', async () => {
+    dockerPsql(`
+      INSERT INTO kortix.module_runners(
+        runner_id, account_id, node_identity, status, software_version,
+        attestation_digest, certificate_thumbprint
+      ) VALUES
+        (
+          '${RUNNER_CLAIM_NEXT}', '${ACCOUNT_A}', 'runner-claim-next', 'active', '1.0.0',
+          '${DIGEST}', '${'d'.repeat(64)}'
+        ),
+        (
+          '${RUNNER_PROFILE_MISMATCH}', '${ACCOUNT_A}', 'runner-profile-mismatch', 'active', '1.0.0',
+          '${DIGEST}', '${'e'.repeat(64)}'
         );
-        SELECT * FROM kortix.claim_module_execution(
-          '${ACCOUNT_A}', '${PROJECT_A}', '${EXECUTION_CLAIM_DEADLINE}', '${RUNNER_A}',
-          '${LEASE_CLAIM_DEADLINE}', 1, now() + interval '5 minutes'
-        );
-      `,
-      true,
-    );
 
-    expect(claim.exitCode).not.toBe(0);
-    expect(claim.output).toMatch(/deadline|lease|execution/i);
+      INSERT INTO kortix.module_runner_profiles(
+        runner_id, account_id, profile_name, runtime_kind
+      ) VALUES
+        ('${RUNNER_CLAIM_NEXT}', '${ACCOUNT_A}', 'claim-next-wasi-v1', 'wasi-component'),
+        ('${RUNNER_PROFILE_MISMATCH}', '${ACCOUNT_A}', 'other-wasi-v1', 'wasi-component');
+
+      INSERT INTO kortix.module_executions(
+        execution_id, account_id, project_id, installation_id, release_id,
+        consent_revision_id, runtime_descriptor_id, runtime_kind, runtime_profile,
+        state, idempotency_key, work_envelope_digest, kill_switch_generation,
+        deadline_at, created_at
+      ) VALUES (
+        '${EXECUTION_CLAIM_NEXT}', '${ACCOUNT_A}', '${PROJECT_A}', '${INSTALL_A}', '${RELEASE_A}',
+        '${CONSENT_A}', '${DESCRIPTOR_A}', 'wasi-component', 'claim-next-wasi-v1',
+        'dispatchable', 'idem-module-runtime-claim-next', '${DIGEST}', 0,
+        now() + interval '10 minutes', '2026-07-28T00:00:00.000Z'
+      );
+    `);
+
+    const profileMismatch = dockerPsql(`
+      SELECT count(*)
+      FROM kortix.claim_next_module_execution(
+        '${ACCOUNT_A}', '${RUNNER_PROFILE_MISMATCH}'
+      );
+    `).output.trim();
+    const tenantMismatch = dockerPsql(`
+      SELECT count(*)
+      FROM kortix.claim_next_module_execution(
+        '${ACCOUNT_B}', '${RUNNER_CLAIM_NEXT}'
+      );
+    `).output.trim();
+
+    expect(profileMismatch).toBe('0');
+    expect(tenantMismatch).toBe('0');
+
+    type ClaimNextRow = {
+      leaseId: string;
+      executionId: string;
+      generation: number;
+      state: string;
+    };
+    const left = postgresSession('module-runtime-claim-next-left');
+    const right = postgresSession('module-runtime-claim-next-right');
+    let leftRows: ClaimNextRow[] = [];
+    let rightRows: ClaimNextRow[] = [];
+    try {
+      [leftRows, rightRows] = await Promise.all([
+        left<ClaimNextRow[]>`
+          SELECT
+            lease_id::text AS "leaseId",
+            execution_id::text AS "executionId",
+            generation,
+            state::text AS state
+          FROM kortix.claim_next_module_execution(
+            ${ACCOUNT_A}::uuid,
+            ${RUNNER_CLAIM_NEXT}::uuid
+          )
+        `,
+        right<ClaimNextRow[]>`
+          SELECT
+            lease_id::text AS "leaseId",
+            execution_id::text AS "executionId",
+            generation,
+            state::text AS state
+          FROM kortix.claim_next_module_execution(
+            ${ACCOUNT_A}::uuid,
+            ${RUNNER_CLAIM_NEXT}::uuid
+          )
+        `,
+      ]);
+    } finally {
+      await Promise.all([left.end(), right.end()]);
+    }
+
+    const claims = [...leftRows, ...rightRows];
+    expect(claims).toEqual([
+      expect.objectContaining({
+        executionId: EXECUTION_CLAIM_NEXT,
+        generation: 1,
+        state: 'leased',
+      }),
+    ]);
+    expect(claims[0]?.leaseId).toMatch(/^[0-9a-f-]{36}$/i);
+
     const persisted = dockerPsql(`
       SELECT
         execution.state,
-        count(lease.lease_id)
+        count(DISTINCT lease.lease_id) FILTER (WHERE lease.released_at IS NULL),
+        max(lease.generation),
+        count(DISTINCT event.event_id) FILTER (
+          WHERE event.event_type = 'execution_claimed'
+        )
       FROM kortix.module_executions AS execution
       LEFT JOIN kortix.module_execution_leases AS lease
         ON lease.execution_id = execution.execution_id
-      WHERE execution.execution_id = '${EXECUTION_CLAIM_DEADLINE}'
+       AND lease.account_id = execution.account_id
+       AND lease.project_id = execution.project_id
+      LEFT JOIN kortix.module_execution_events AS event
+        ON event.execution_id = execution.execution_id
+       AND event.account_id = execution.account_id
+       AND event.project_id = execution.project_id
+      WHERE execution.execution_id = '${EXECUTION_CLAIM_NEXT}'
       GROUP BY execution.state;
     `).output.trim();
-    expect(persisted).toBe('dispatchable|0');
+
+    expect(persisted).toBe('leased|1|1|1');
+  }, CONCURRENCY_TEST_TIMEOUT);
+
+  test('caps an atomic claim lease at the immutable execution deadline', () => {
+    dockerPsql(`
+      INSERT INTO kortix.module_executions(
+        execution_id, account_id, project_id, installation_id, release_id,
+        consent_revision_id, runtime_descriptor_id, runtime_kind, runtime_profile,
+        state, idempotency_key,
+        work_envelope_digest, kill_switch_generation, deadline_at
+      ) VALUES (
+        '${EXECUTION_CLAIM_DEADLINE}', '${ACCOUNT_A}', '${PROJECT_A}', '${INSTALL_A}',
+        '${RELEASE_A}', '${CONSENT_A}', '${DESCRIPTOR_A}',
+        'wasi-component', 'openopc-wasi-v1', 'dispatchable',
+        'idem-module-runtime-claim-deadline', '${DIGEST}', 0, now() + interval '10 seconds'
+      );
+    `);
+    const claim = dockerPsql(`
+      SELECT
+        claim.execution_id,
+        claim.deadline_at = execution.deadline_at
+      FROM kortix.claim_next_module_execution('${ACCOUNT_A}', '${RUNNER_A}') AS claim
+      INNER JOIN kortix.module_executions AS execution
+        ON execution.execution_id = claim.execution_id;
+    `).output.trim();
+
+    expect(claim).toBe(`${EXECUTION_CLAIM_DEADLINE}|t`);
   }, DOCKER_TEST_TIMEOUT);
 
   test('runner kill switch blocks claim inside the database fence', () => {
@@ -573,10 +718,7 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
 
     const claim = dockerPsql(
       `
-        SELECT * FROM kortix.claim_module_execution(
-          '${ACCOUNT_A}', '${PROJECT_A}', '${EXECUTION_RUNNER_KILL_SWITCH}', '${RUNNER_A}',
-          '${LEASE_RUNNER_KILL_SWITCH}', 1, now() + interval '30 seconds'
-        );
+        SELECT * FROM kortix.claim_next_module_execution('${ACCOUNT_A}', '${RUNNER_A}');
       `,
       true,
     );
@@ -621,10 +763,7 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
 
     const claim = dockerPsql(
       `
-        SELECT * FROM kortix.claim_module_execution(
-          '${ACCOUNT_A}', '${PROJECT_A}', '${EXECUTION_REVOKED_RELEASE}', '${RUNNER_A}',
-          '${LEASE_REVOKED_RELEASE}', 1, now() + interval '30 seconds'
-        );
+        SELECT * FROM kortix.claim_next_module_execution('${ACCOUNT_A}', '${RUNNER_A}');
       `,
       true,
     );
@@ -669,10 +808,7 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
 
     const claim = dockerPsql(
       `
-        SELECT * FROM kortix.claim_module_execution(
-          '${ACCOUNT_A}', '${PROJECT_A}', '${EXECUTION_STALE_KILL_SWITCH}', '${RUNNER_A}',
-          '${LEASE_STALE_KILL_SWITCH}', 1, now() + interval '30 seconds'
-        );
+        SELECT * FROM kortix.claim_next_module_execution('${ACCOUNT_A}', '${RUNNER_A}');
       `,
       true,
     );
@@ -711,17 +847,13 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
       );
     `);
 
+    leaseExecution(EXECUTION_HEARTBEAT, LEASE_HEARTBEAT);
     const claimed = dockerPsql(`
-      SELECT lease_id, execution_id, generation, state
-      FROM kortix.claim_module_execution(
-        '${ACCOUNT_A}',
-        '${PROJECT_A}',
-        '${EXECUTION_HEARTBEAT}',
-        '${RUNNER_A}',
-        '${LEASE_HEARTBEAT}',
-        1,
-        now() + interval '5 minutes'
-      );
+      SELECT lease.lease_id, lease.execution_id, lease.generation, execution.state
+      FROM kortix.module_execution_leases AS lease
+      INNER JOIN kortix.module_executions AS execution
+        ON execution.execution_id = lease.execution_id
+      WHERE lease.lease_id = '${LEASE_HEARTBEAT}';
     `).output.trim();
     expect(claimed).toBe(`${LEASE_HEARTBEAT}|${EXECUTION_HEARTBEAT}|1|leased`);
 
@@ -952,21 +1084,15 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
       ) AS candidate(execution_id, idempotency_key)
       WHERE execution.execution_id = '${EXECUTION_A}';
 
-      SELECT * FROM kortix.claim_module_execution(
-        '${ACCOUNT_A}', '${PROJECT_A}', '${EXECUTION_SERVICE_ROLE_LEASED}', '${RUNNER_A}',
-        '${LEASE_SERVICE_ROLE}', 1, now() + interval '30 seconds'
-      );
     `);
+    leaseExecution(EXECUTION_SERVICE_ROLE_LEASED, LEASE_SERVICE_ROLE);
 
     const attempts = [
       dockerPsql(
         `\\set VERBOSITY verbose
          BEGIN;
          SET LOCAL ROLE service_role;
-         SELECT * FROM kortix.claim_module_execution(
-           '${ACCOUNT_A}', '${PROJECT_A}', '${EXECUTION_SERVICE_ROLE_CLAIM}', '${RUNNER_A}',
-           '${LEASE_SERVICE_ROLE_FORBIDDEN}', 1, now() + interval '30 seconds'
-         );
+         SELECT * FROM kortix.claim_next_module_execution('${ACCOUNT_A}', '${RUNNER_A}');
          ROLLBACK;`,
         true,
       ),
@@ -1037,7 +1163,7 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
          INNER JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
          WHERE namespace.nspname = 'kortix'
            AND procedure.proname IN (
-             'claim_module_execution',
+             'claim_next_module_execution',
              'heartbeat_module_execution',
              'finalize_module_execution',
              'reject_module_runtime_append_only',
@@ -1093,7 +1219,7 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
       await gate`SELECT pg_advisory_unlock(${APPEND_GATE})`;
       gateHeld = false;
       const [progress, finalized] = await Promise.all([appendPromise, finalizePromise]);
-      expect(progress).toMatchObject({ eventType: 'runner_progress', sequence: 1 });
+      expect(progress).toMatchObject({ eventType: 'runner_progress', sequence: 2 });
       expect(finalized.execution.state).toBe('succeeded');
 
       const persisted = dockerPsql(`
@@ -1110,7 +1236,9 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
         WHERE execution.execution_id = '${EXECUTION_APPEND_FIRST}'
         GROUP BY execution.execution_id, execution.state;
       `).output.trim();
-      expect(persisted).toBe('succeeded|runner_progress,execution_finalized|1|1');
+      expect(persisted).toBe(
+        'succeeded|execution_claimed,runner_progress,execution_finalized|1|1',
+      );
     } finally {
       if (gateHeld) await gate`SELECT pg_advisory_unlock(${APPEND_GATE})`;
       await Promise.all([
@@ -1197,7 +1325,7 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
         WHERE execution.execution_id = '${EXECUTION_FINALIZE_FIRST}'
         GROUP BY execution.execution_id, execution.state;
       `).output.trim();
-      expect(persisted).toBe('succeeded|execution_finalized|0|1|1');
+      expect(persisted).toBe('succeeded|execution_claimed,execution_finalized|0|1|1');
     } finally {
       if (gateHeld) await gate`SELECT pg_advisory_unlock(${FINALIZE_GATE})`;
       await Promise.all([
@@ -1281,7 +1409,7 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
         WHERE execution.execution_id = '${EXECUTION_LOCK_ORDER}'
         GROUP BY execution.execution_id, execution.state;
       `).output.trim();
-      expect(persisted).toBe('cancelled|t|execution_cancelled');
+      expect(persisted).toBe('cancelled|t|execution_claimed,execution_cancelled');
     } finally {
       if (gateHeld) await gate`SELECT pg_advisory_unlock(${CANCEL_GATE})`;
       await Promise.all([
@@ -1386,23 +1514,11 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
     `).output.trim();
     expect(crossTenant).toBe('0');
 
-    const claimCross = dockerPsql(
-      `
-        SELECT * FROM kortix.claim_module_execution(
-          '${ACCOUNT_B}',
-          '${PROJECT_A}',
-          '${EXECUTION_A}',
-          '${RUNNER_A}',
-          '92000000-0000-4000-a000-000000000001',
-          1,
-          now() + interval '5 minutes'
-        );
-      `,
-      true,
-    );
-    expect(claimCross.exitCode).not.toBe(0);
-    expect(claimCross.output).not.toMatch(/permission denied|403|forbidden/i);
-    expect(claimCross.output).toMatch(/not found|does not exist|no row|missing/i);
+    const claimCross = dockerPsql(`
+      SELECT count(*)
+      FROM kortix.claim_next_module_execution('${ACCOUNT_B}', '${RUNNER_A}');
+    `).output.trim();
+    expect(claimCross).toBe('0');
 
     const finalizeCross = dockerPsql(
       `

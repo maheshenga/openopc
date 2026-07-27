@@ -38,6 +38,9 @@ export interface WorkEnvelopeV1 {
   permissionDigest: Sha256Digest;
   runtimeDescriptorId: string;
   runtimeDescriptorDigest: Sha256Digest;
+  inputDigest: Sha256Digest;
+  runtimeArtifactDigest: Sha256Digest;
+  runtimeArtifactBytes: number;
   runtimeKind: 'wasi-component' | 'oci-image';
   runtimeProfile: string;
   policyDigest: Sha256Digest;

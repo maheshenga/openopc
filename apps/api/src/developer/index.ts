@@ -5,6 +5,7 @@ import { config } from '../config';
 import { assertAuthorized } from '../iam/dispatcher';
 import { registerDeveloperModuleMarketplaceSource } from '../marketplace/developer-modules';
 import { supabaseAuth } from '../middleware/auth';
+import { createRuntimeArtifactS3Store } from '../module-runtime/runtime-artifacts.s3';
 import { db } from '../shared/db';
 import { resolveScopedAccountId } from '../shared/resolve-account';
 import { getDefaultStudioApiRuntime } from '../studio/default-routes';
@@ -102,16 +103,19 @@ const artifactRepository: DeveloperModuleArtifactRepository =
 export const developerPublisherService = new DeveloperPublisherService({
   repository: createDrizzleDeveloperPublisherRepository(db),
 });
-const artifactStore = (() => {
+const developerStudioRuntime = (() => {
   try {
-    const runtime = getDefaultStudioApiRuntime();
-    return runtime.enabled
-      ? createDeveloperModuleS3ArtifactStore(runtime.store)
-      : createUnavailableDeveloperArtifactStore();
+    return getDefaultStudioApiRuntime();
   } catch {
-    return createUnavailableDeveloperArtifactStore();
+    return { enabled: false } as const;
   }
 })();
+const artifactStore = developerStudioRuntime.enabled
+  ? createDeveloperModuleS3ArtifactStore(developerStudioRuntime.store)
+  : createUnavailableDeveloperArtifactStore();
+const runtimeArtifactStore = developerStudioRuntime.enabled
+  ? createRuntimeArtifactS3Store(developerStudioRuntime.store)
+  : undefined;
 const developerTrustReadiness = createDeveloperTrustReadinessClient({
   enabled: process.env.DEVELOPER_TRUST_ENABLED === 'true',
   url: process.env.DEVELOPER_TRUST_READINESS_URL,
@@ -129,6 +133,7 @@ const releaseService = new DeveloperModuleReleaseService({
   repository: releaseRepository,
   artifacts: artifactRepository,
   artifactStore,
+  runtimeArtifactStore,
   permissions: developerPublisherService,
 });
 export const developerModuleVerificationRepository =

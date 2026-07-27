@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import type { RegistryModuleManifest, ResolvedRegistryModuleFile } from '@kortix/registry';
+import { WASI_RUNTIME_ARTIFACT_MAX_BYTES } from '@openopc/module-runtime-contracts';
 
 import { serializeDeveloperModuleArtifactPackage } from './artifacts';
-import { extractRuntimeDescriptor } from './runtime-descriptors';
+import { DeveloperRuntimeDescriptorError, extractRuntimeDescriptor } from './runtime-descriptors';
 
 const encoder = new TextEncoder();
 const LIMITS =
@@ -50,6 +51,11 @@ function artifactBytes(
     descriptorKind?: ResolvedRegistryModuleFile['kind'];
     duplicateDescriptor?: boolean;
     includeDescriptor?: boolean;
+    componentBytes?: Uint8Array;
+    componentKind?: ResolvedRegistryModuleFile['kind'];
+    componentMediaType?: string;
+    duplicateComponent?: boolean;
+    includeComponent?: boolean;
   } = {},
 ): Uint8Array {
   const moduleManifest = options.manifest ?? manifest();
@@ -81,17 +87,25 @@ function artifactBytes(
     files.push({ ...descriptorFile, bytes: descriptorFile.bytes.slice() });
   }
   if (new TextDecoder().decode(descriptorBytes) === WASI_DESCRIPTOR) {
-    declarations.push({
-      path: 'runtime/adapter.wasm',
-      target: 'runtime/adapter.wasm',
-      type: 'registry:file',
-    });
-    files.push({
-      path: 'runtime/adapter.wasm',
-      target: 'runtime/adapter.wasm',
-      mediaType: 'application/wasm',
-      bytes: new Uint8Array([0, 97, 115, 109]),
-    });
+    const includeComponent = options.includeComponent ?? true;
+    if (includeComponent) {
+      declarations.push({
+        path: 'runtime/adapter.wasm',
+        target: 'runtime/adapter.wasm',
+        type: 'registry:file',
+      });
+      const component = {
+        path: 'runtime/adapter.wasm',
+        target: 'runtime/adapter.wasm',
+        mediaType: options.componentMediaType ?? 'application/wasm',
+        bytes: options.componentBytes ?? new Uint8Array([0, 97, 115, 109]),
+        ...(options.componentKind === undefined ? {} : { kind: options.componentKind }),
+      } satisfies ResolvedRegistryModuleFile;
+      files.push(component);
+      if (options.duplicateComponent) {
+        files.push({ ...component, bytes: component.bytes.slice() });
+      }
+    }
   }
   return serializeDeveloperModuleArtifactPackage({
     item: {
@@ -106,25 +120,40 @@ function artifactBytes(
 }
 
 describe('artifact-bound runtime descriptor extraction', () => {
-  test.each([
-    ['WASI component', WASI_DESCRIPTOR, 'wasi-component'],
-    ['OCI image', OCI_DESCRIPTOR, 'oci-image'],
-  ] as const)(
-    'extracts canonical %s evidence from the declared artifact entry',
-    async (_label, json, kind) => {
-      await expect(
-        extractRuntimeDescriptor({
-          manifest: manifest(),
-          artifactBytes: artifactBytes(encoder.encode(json)),
-        }),
-      ).resolves.toMatchObject({
-        descriptorDigest: digest(json),
-        entryPath: 'runtime/openopc.runtime.json',
-        runtimeKind: kind,
-        descriptor: { descriptorVersion: 1, runtime: { kind } },
-      });
-    },
-  );
+  test('extracts the exact bounded WASI component derivative', async () => {
+    const evidence = await extractRuntimeDescriptor({
+      manifest: manifest(),
+      artifactBytes: artifactBytes(),
+    });
+
+    expect(evidence).toMatchObject({
+      descriptorDigest: digest(WASI_DESCRIPTOR),
+      entryPath: 'runtime/openopc.runtime.json',
+      runtimeKind: 'wasi-component',
+      descriptor: { descriptorVersion: 1, runtime: { kind: 'wasi-component' } },
+      runtimeArtifact: {
+        componentPath: 'runtime/adapter.wasm',
+        mediaType: 'application/wasm',
+        digest: 'sha256:cd5d4935a48c0672cb06407bb443bc0087aff947c6b864bac886982c73b3027f',
+        bytes: new Uint8Array([0, 97, 115, 109]),
+      },
+    });
+  });
+
+  test('keeps a valid OCI descriptor without a local runtime artifact', async () => {
+    await expect(
+      extractRuntimeDescriptor({
+        manifest: manifest(),
+        artifactBytes: artifactBytes(encoder.encode(OCI_DESCRIPTOR)),
+      }),
+    ).resolves.toMatchObject({
+      descriptorDigest: digest(OCI_DESCRIPTOR),
+      entryPath: 'runtime/openopc.runtime.json',
+      runtimeKind: 'oci-image',
+      descriptor: { descriptorVersion: 1, runtime: { kind: 'oci-image' } },
+      runtimeArtifact: null,
+    });
+  });
 
   test('leaves non-server-adapter execution modes unchanged', async () => {
     await expect(
@@ -174,6 +203,25 @@ describe('artifact-bound runtime descriptor extraction', () => {
     ).rejects.toMatchObject({
       code,
     });
+  });
+
+  test.each([
+    ['missing component', { includeComponent: false }],
+    ['duplicate component', { duplicateComponent: true }],
+    ['symlink component', { componentKind: 'symlink' as const }],
+    ['non-WASM component media type', { componentMediaType: 'application/octet-stream' }],
+    ['zero-byte component', { componentBytes: new Uint8Array() }],
+    [
+      'component above the byte limit',
+      { componentBytes: new Uint8Array(WASI_RUNTIME_ARTIFACT_MAX_BYTES + 1) },
+    ],
+  ] as const)('rejects a WASI artifact with a %s', async (_label, options) => {
+    await expect(
+      extractRuntimeDescriptor({
+        manifest: manifest(),
+        artifactBytes: artifactBytes(encoder.encode(WASI_DESCRIPTOR), options),
+      }),
+    ).rejects.toBeInstanceOf(DeveloperRuntimeDescriptorError);
   });
 
   test.each([

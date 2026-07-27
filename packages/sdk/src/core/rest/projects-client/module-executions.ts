@@ -60,6 +60,7 @@ export interface EstimateProjectModuleExecutionInput {
 export interface CreateProjectModuleExecutionInput {
   installation_id: string;
   deadline_at: string;
+  input: unknown;
 }
 
 export interface CreateProjectModuleExecutionOptions {

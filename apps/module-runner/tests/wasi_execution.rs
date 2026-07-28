@@ -1,18 +1,34 @@
+use std::collections::VecDeque;
 use std::fs;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
+use chrono::Utc;
+use ed25519_dalek::SigningKey;
+use openopc_module_runner::client::{
+    self, ArtifactFetchResponse, ControlPlaneRequest, ControlPlaneResponse, RunnerClient,
+    RunnerClientError, RuntimeArtifactClient, RuntimeArtifactFetchRequest,
+};
+use openopc_module_runner::dispatcher::{
+    ClaimedExecutionRunner, WasiClaimRunner, WasiClaimRunnerConfig,
+};
+use openopc_module_runner::lease::LeaseSupervisorConfig;
 use openopc_module_runner::protocol::{
-    RunnerCapabilityTokenV1, Runtime, RuntimeDescriptorV1, RuntimeKind, RuntimeLimits,
-    VerifiedClaim, WorkEnvelopeGrantV1, WorkEnvelopeLeaseV1, WorkEnvelopeResourceCeilingsV1,
-    WorkEnvelopeV1,
+    RunnerCapabilityTokenV1, Runtime, RuntimeArtifactReference, RuntimeDescriptorV1, RuntimeKind,
+    RuntimeLimits, VerifiedClaim, VerifiedExecutionBundle, WorkEnvelopeGrantV1,
+    WorkEnvelopeLeaseV1, WorkEnvelopeResourceCeilingsV1, WorkEnvelopeV1,
 };
 use openopc_module_runner::wasi::{
     CancellationToken, DenyCapabilityBridge, TerminalEvidence, WasiExecutor, WasiExecutorConfig,
     WasiInvocation,
 };
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
+use uuid::Uuid;
 
 fn digest(character: char) -> String {
     format!("sha256:{}", character.to_string().repeat(64))
@@ -332,4 +348,227 @@ async fn interrupts_a_component_when_the_execution_is_cancelled() {
     .expect("epoch interruption must observe cancellation");
     canceller.join().unwrap();
     assert_eq!(evidence.code, "EXECUTION_CANCELLED");
+}
+
+struct LifecycleTransport {
+    artifact: Vec<u8>,
+    responses: Mutex<VecDeque<Result<ControlPlaneResponse, RunnerClientError>>>,
+    requests: Mutex<Vec<ControlPlaneRequest>>,
+    stall_finalize: bool,
+}
+
+impl LifecycleTransport {
+    fn new(
+        artifact: Vec<u8>,
+        responses: impl IntoIterator<Item = Result<ControlPlaneResponse, RunnerClientError>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            artifact,
+            responses: Mutex::new(responses.into_iter().collect()),
+            requests: Mutex::new(Vec::new()),
+            stall_finalize: false,
+        })
+    }
+
+    fn stalled_finalize(artifact: Vec<u8>) -> Arc<Self> {
+        Arc::new(Self {
+            artifact,
+            responses: Mutex::new([response(200)].into_iter().collect()),
+            requests: Mutex::new(Vec::new()),
+            stall_finalize: true,
+        })
+    }
+
+    fn paths(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| request.path.clone())
+            .collect()
+    }
+}
+
+impl client::ControlPlaneTransport for LifecycleTransport {
+    fn post<'a>(&'a self, request: ControlPlaneRequest) -> client::TransportFuture<'a> {
+        Box::pin(async move {
+            let stall = self.stall_finalize && request.path == "module-runtime/finalize";
+            self.requests.lock().unwrap().push(request);
+            if stall {
+                std::future::pending().await
+            }
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Err(RunnerClientError::Transport))
+        })
+    }
+
+    fn fetch_to<'a>(
+        &'a self,
+        request: RuntimeArtifactFetchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ArtifactFetchResponse, RunnerClientError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let mut file = tokio::fs::File::create(&request.destination)
+                .await
+                .map_err(|_| RunnerClientError::ArtifactIo)?;
+            file.write_all(&self.artifact)
+                .await
+                .map_err(|_| RunnerClientError::ArtifactIo)?;
+            file.flush()
+                .await
+                .map_err(|_| RunnerClientError::ArtifactIo)?;
+            let digest = format!("sha256:{:x}", Sha256::digest(&self.artifact));
+            Ok(ArtifactFetchResponse {
+                status: 200,
+                content_type: Some("application/wasm".into()),
+                content_length: Some(self.artifact.len() as u64),
+                digest: Some(digest.clone()),
+                body_digest: Some(digest),
+                bytes_written: self.artifact.len() as u64,
+            })
+        })
+    }
+}
+
+fn response(status: u16) -> Result<ControlPlaneResponse, RunnerClientError> {
+    Ok(ControlPlaneResponse {
+        status,
+        body: br#"{}"#.to_vec(),
+    })
+}
+
+fn execution_bundle(component: &str, bytes: &[u8]) -> VerifiedExecutionBundle {
+    let mut claim = claim();
+    let digest = format!("sha256:{:x}", Sha256::digest(bytes));
+    claim.envelope.runtime_artifact_digest = digest.clone();
+    claim.envelope.runtime_artifact_bytes = bytes.len() as u64;
+    claim.envelope.lease.deadline = "2099-07-30T10:00:00.000Z".into();
+    claim.envelope.execution_deadline = "2099-07-30T10:30:00.000Z".into();
+    VerifiedExecutionBundle {
+        claim,
+        runtime_descriptor: descriptor(
+            &format!("components/{component}"),
+            1_000_000_000_000,
+            64,
+            1_000,
+            4_096,
+        ),
+        input: br#"{}"#.to_vec(),
+        runtime_artifact: RuntimeArtifactReference {
+            fetch_path: "module-runtime/artifacts/fetch".into(),
+            digest,
+            bytes: bytes.len() as u64,
+        },
+    }
+}
+
+fn lifecycle_runner(
+    transport: Arc<LifecycleTransport>,
+    lease_interval: Duration,
+) -> WasiClaimRunner {
+    let key = SigningKey::from_bytes(&[7; 32]);
+    let runner_id = Uuid::parse_str("90000000-0000-4000-8000-000000000001").unwrap();
+    let account_id = Uuid::parse_str("10000000-0000-4000-8000-000000000002").unwrap();
+    let client = RunnerClient::with_transport(
+        runner_id,
+        account_id,
+        key.verifying_key(),
+        "test-key".into(),
+        transport.clone(),
+    );
+    let artifacts = RuntimeArtifactClient::with_transport(runner_id, account_id, transport);
+    WasiClaimRunner::with_config(
+        client,
+        artifacts,
+        Arc::new(DenyCapabilityBridge),
+        WasiClaimRunnerConfig {
+            executor: WasiExecutorConfig {
+                fuel_per_cpu_millis: 1_000_000_000,
+                ..WasiExecutorConfig::default()
+            },
+            lease: LeaseSupervisorConfig {
+                heartbeat_interval: lease_interval,
+                now: Arc::new(Utc::now),
+            },
+            finalize_initial_backoff: Duration::from_millis(1),
+            finalize_max_backoff: Duration::from_millis(2),
+        },
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lease_loss_cancels_wasi_and_suppresses_stale_finalize() {
+    let component = fixture("spin.component.wasm");
+    let transport = LifecycleTransport::new(component.clone(), [response(200), response(409)]);
+    let runner = lifecycle_runner(transport.clone(), Duration::from_millis(10));
+
+    let evidence = tokio::time::timeout(
+        Duration::from_secs(2),
+        runner.run(
+            execution_bundle("spin.component.wasm", &component),
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(evidence.code, "EXECUTION_CANCELLED");
+    assert_eq!(
+        transport.paths(),
+        ["module-runtime/evidence", "module-runtime/leases/heartbeat"]
+    );
+}
+
+#[tokio::test]
+async fn retries_transient_finalize_without_reexecuting_the_component() {
+    let component = fixture("echo.component.wasm");
+    let transport = LifecycleTransport::new(
+        component.clone(),
+        [response(200), response(503), response(200)],
+    );
+    let runner = lifecycle_runner(transport.clone(), Duration::from_secs(60));
+
+    let evidence = runner
+        .run(
+            execution_bundle("echo.component.wasm", &component),
+            CancellationToken::new(),
+        )
+        .await;
+
+    assert_eq!(evidence.code, "OK");
+    assert_eq!(
+        transport.paths(),
+        [
+            "module-runtime/evidence",
+            "module-runtime/finalize",
+            "module-runtime/finalize"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_stalled_finalize_request_cannot_outlive_the_signed_deadline() {
+    let component = fixture("echo.component.wasm");
+    let transport = LifecycleTransport::stalled_finalize(component.clone());
+    let runner = lifecycle_runner(transport.clone(), Duration::from_secs(60));
+    let mut bundle = execution_bundle("echo.component.wasm", &component);
+    let deadline = (Utc::now() + chrono::Duration::milliseconds(500)).to_rfc3339();
+    bundle.claim.envelope.lease.deadline = deadline.clone();
+    bundle.claim.envelope.execution_deadline = deadline;
+
+    let evidence = tokio::time::timeout(
+        Duration::from_secs(2),
+        runner.run(bundle, CancellationToken::new()),
+    )
+    .await
+    .expect("finalize must stop at the signed deadline");
+
+    assert_eq!(evidence.code, "OK");
+    assert_eq!(
+        transport.paths(),
+        ["module-runtime/evidence", "module-runtime/finalize"]
+    );
 }

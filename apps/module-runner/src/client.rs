@@ -25,8 +25,9 @@ use zeroize::Zeroizing;
 use crate::config::RunnerConfig;
 use crate::evidence::{evidence_digest, sanitize_evidence};
 use crate::protocol::{
-    ProtocolError, RUNTIME_ARTIFACT_FETCH_PATH, VerifiedClaim, VerifiedExecutionBundle,
-    WASI_RUNTIME_ARTIFACT_MAX_BYTES, verify_claim_bundle,
+    ProtocolError, RUNTIME_ARTIFACT_FETCH_PATH, RunnerClaimResponseV1, VerifiedClaim,
+    VerifiedExecutionBundle, WASI_RUNTIME_ARTIFACT_MAX_BYTES, verify_claim_bundle,
+    verify_claim_response,
 };
 
 const MAX_CONTROL_PLANE_RESPONSE_BYTES: usize = 1_048_576;
@@ -322,8 +323,38 @@ pub enum RunnerClientError {
     ArtifactLimit,
     #[error("RUNNER_ARTIFACT_IO_FAILED")]
     ArtifactIo,
+    #[error("{code}")]
+    TrustedClaimBundle {
+        claim: Box<VerifiedClaim>,
+        code: TrustedClaimFailureCode,
+    },
     #[error(transparent)]
     Protocol(#[from] ProtocolError),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrustedClaimFailureCode {
+    DescriptorDigestMismatch,
+    InputDigestMismatch,
+    ArtifactDigestMismatch,
+    ArtifactLimit,
+}
+
+impl TrustedClaimFailureCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DescriptorDigestMismatch => "RUNNER_DESCRIPTOR_DIGEST_MISMATCH",
+            Self::InputDigestMismatch => "RUNNER_INPUT_DIGEST_MISMATCH",
+            Self::ArtifactDigestMismatch => "RUNNER_ARTIFACT_DIGEST_MISMATCH",
+            Self::ArtifactLimit => "RUNNER_ARTIFACT_LIMIT",
+        }
+    }
+}
+
+impl std::fmt::Display for TrustedClaimFailureCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 impl RunnerClient {
@@ -430,9 +461,25 @@ impl RunnerClient {
         let value = serde_json::from_slice(&response.body)
             .map_err(|_| RunnerClientError::InvalidResponse)?;
         let bundle = crate::protocol::parse_runner_claim_bundle_value(value)?;
-        verify_claim_bundle(bundle, &self.public_key, &self.expected_key_id, now)
-            .map(Some)
-            .map_err(Into::into)
+        let trusted_claim = verify_claim_response(
+            RunnerClaimResponseV1 {
+                signed_envelope: bundle.signed_envelope.clone(),
+                capability_tokens: bundle.capability_tokens.clone(),
+            },
+            &self.public_key,
+            &self.expected_key_id,
+            now,
+        )?;
+        match verify_claim_bundle(bundle, &self.public_key, &self.expected_key_id, now) {
+            Ok(bundle) => Ok(Some(bundle)),
+            Err(error) => match trusted_failure_code(&error) {
+                Some(code) => Err(RunnerClientError::TrustedClaimBundle {
+                    claim: Box::new(trusted_claim),
+                    code,
+                }),
+                None => Err(error.into()),
+            },
+        }
     }
 
     #[instrument(
@@ -561,6 +608,14 @@ impl RunnerClient {
             .lock()
             .map(|fences| fences.get(&fence).copied().unwrap_or_default())
             .unwrap_or(FinalizeFenceState::Acknowledged)
+    }
+
+    pub fn runtime_artifact_client(&self) -> RuntimeArtifactClient {
+        RuntimeArtifactClient {
+            runner_id: self.runner_id,
+            account_id: self.account_id,
+            transport: self.transport.clone(),
+        }
     }
 
     fn set_finalize_fence_state(
@@ -728,6 +783,20 @@ fn finalize_fence_key(claim: &VerifiedClaim) -> String {
         "{}:{}:{}",
         claim.envelope.execution_id, claim.envelope.lease.id, claim.envelope.lease.generation
     )
+}
+
+fn trusted_failure_code(error: &ProtocolError) -> Option<TrustedClaimFailureCode> {
+    match error {
+        ProtocolError::DescriptorDigestMismatch => {
+            Some(TrustedClaimFailureCode::DescriptorDigestMismatch)
+        }
+        ProtocolError::InputDigestMismatch => Some(TrustedClaimFailureCode::InputDigestMismatch),
+        ProtocolError::ArtifactDigestMismatch => {
+            Some(TrustedClaimFailureCode::ArtifactDigestMismatch)
+        }
+        ProtocolError::ArtifactLimit => Some(TrustedClaimFailureCode::ArtifactLimit),
+        _ => None,
+    }
 }
 
 fn valid_event_type(value: &str) -> bool {

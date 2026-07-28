@@ -309,6 +309,7 @@ fn refuses_to_start_when_any_security_critical_runner_setting_is_missing() {
     assert_eq!(parsed.contract_version, 1);
     assert_eq!(parsed.profiles.len(), 2);
     assert_eq!(parsed.capacity, 4);
+    assert_eq!(parsed.shutdown_timeout, std::time::Duration::from_secs(30));
 }
 
 #[test]
@@ -439,6 +440,34 @@ async fn claim_next_returns_none_for_an_unavailable_execution_and_verifies_a_del
         "10000000-0000-4000-8000-000000000001"
     );
     assert_eq!(bundle.input, br#"{"a":1}"#);
+}
+
+#[tokio::test]
+async fn preserves_a_trusted_claim_when_bound_bundle_metadata_is_invalid() {
+    let key = SigningKey::from_bytes(&[7; 32]);
+    let signed = signed_claim(&envelope("capability-token"), "capability-token", &key);
+    let mut delivered = claim_bundle();
+    delivered["signedEnvelope"] = json!(signed.signed_envelope);
+    delivered["capabilityTokens"] = serde_json::to_value(signed.capability_tokens).unwrap();
+    delivered["runtimeDescriptor"]["runtime"]["operation"] = json!("substituted");
+    let (client, _) = test_client(&key, [response(200, delivered)]);
+
+    let error = client
+        .claim_next_at(Utc.with_ymd_and_hms(2026, 7, 30, 9, 0, 0).unwrap())
+        .await
+        .unwrap_err();
+
+    let client::RunnerClientError::TrustedClaimBundle { claim, code } = error else {
+        panic!("expected a trusted bundle failure");
+    };
+    assert_eq!(
+        claim.envelope.execution_id,
+        "10000000-0000-4000-8000-000000000001"
+    );
+    assert_eq!(
+        code,
+        client::TrustedClaimFailureCode::DescriptorDigestMismatch
+    );
 }
 
 #[tokio::test]

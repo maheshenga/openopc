@@ -169,6 +169,23 @@ pub struct TerminalEvidence {
     pub usage: WasiUsage,
 }
 
+impl TerminalEvidence {
+    pub fn from_code(code: &str) -> Self {
+        terminal(code, Vec::new(), 0, Instant::now())
+    }
+
+    pub fn evidence(&self) -> serde_json::Value {
+        json!({
+            "code": self.code,
+            "events": self.events,
+            "outcome": self.outcome,
+            "outputDigest": self.output_digest,
+            "usage": self.usage,
+            "wasmtimeVersion": WASMTIME_VERSION,
+        })
+    }
+}
+
 pub struct WasiExecutor {
     engine: Engine,
     engine_identity: String,

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use thiserror::Error;
 use url::Url;
@@ -36,6 +37,7 @@ pub struct RunnerConfig {
     pub listen_addr: SocketAddr,
     pub wasmtime_identity: Option<String>,
     pub oci_profile_status: EngineStatus,
+    pub shutdown_timeout: Duration,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +116,13 @@ impl RunnerConfig {
                 .map(String::as_str)
                 .unwrap_or("disabled"),
         )?;
+        let shutdown_timeout = Duration::from_millis(optional_bounded_u64(
+            values,
+            "OPENOPC_RUNNER_SHUTDOWN_TIMEOUT_MS",
+            30_000,
+            1_000,
+            300_000,
+        )?);
         Ok(Self {
             control_plane_url,
             control_plane_public_key_file,
@@ -132,6 +141,7 @@ impl RunnerConfig {
             listen_addr,
             wasmtime_identity,
             oci_profile_status,
+            shutdown_timeout,
         })
     }
 }
@@ -221,6 +231,23 @@ fn optional_bool(
         Some("true") => Ok(true),
         Some("false") => Ok(false),
         Some(_) => invalid(name),
+        None => Ok(default),
+    }
+}
+
+fn optional_bounded_u64(
+    values: &HashMap<String, String>,
+    name: &'static str,
+    default: u64,
+    minimum: u64,
+    maximum: u64,
+) -> Result<u64, RunnerConfigError> {
+    match values.get(name) {
+        Some(value) => value
+            .parse::<u64>()
+            .ok()
+            .filter(|value| (minimum..=maximum).contains(value))
+            .ok_or_else(|| error(name)),
         None => Ok(default),
     }
 }

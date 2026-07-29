@@ -51,12 +51,14 @@ describe('notification emails', () => {
     const payload = sentPayload();
     expect(payload.from).toEqual({ email: 'noreply@example.test', name: 'Kortix Test' });
     expect(payload.to).toEqual([{ email: 'teammate@example.test' }]);
-    expect(payload.subject).toBe('You\'re invited to join "Acme <Labs>" on Kortix');
+    expect(payload.subject).toBe('You\'re invited to join "Acme <Labs>" on OpenOPC');
     expect(payload.category).toBe('account-invite');
     expect(payload.html).toContain('https://app.example.test/invites/invite-account-123');
     expect(payload.html).toContain('Acme &lt;Labs&gt;');
     expect(payload.html).toContain('owner@example.test');
     expect(payload.html).toContain('ADMIN');
+    expect(payload.html).toContain('OpenOPC');
+    expect(payload.html).not.toContain('on Kortix');
   });
 
   test('does not call Mailtrap when email delivery is not configured', async () => {

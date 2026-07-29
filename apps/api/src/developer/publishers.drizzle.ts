@@ -1,5 +1,6 @@
 import {
   type Database,
+  developerApplications,
   developerInvitations,
   developerOrganizations,
   developerPublisherAuditEvents,
@@ -17,6 +18,7 @@ import type {
   DeveloperPublisherAuthority,
   DeveloperPublisherMember,
   DeveloperPublisherMutation,
+  DeveloperPublisherMutationFailure,
   DeveloperPublisherRepository,
 } from './publishers';
 
@@ -110,15 +112,7 @@ export function serializeDeveloperPublisherAuditEvent(row: AuditRow): DeveloperP
   };
 }
 
-function failure<T>(
-  reason:
-    | 'not_found'
-    | 'conflict'
-    | 'expired'
-    | 'email_mismatch'
-    | 'verification_required'
-    | 'forbidden',
-): DeveloperPublisherMutation<T> {
+function failure<T>(reason: DeveloperPublisherMutationFailure): DeveloperPublisherMutation<T> {
   return { ok: false, reason };
 }
 
@@ -415,6 +409,18 @@ export function createDrizzleDeveloperPublisherRepository(
           if (organization.verificationState !== 'verified') {
             return failure('verification_required');
           }
+          const [application] = await tx
+            .select({ applicationId: developerApplications.applicationId })
+            .from(developerApplications)
+            .where(
+              and(
+                eq(developerApplications.accountId, command.accountId),
+                eq(developerApplications.organizationId, command.organizationId),
+                eq(developerApplications.state, 'approved'),
+              ),
+            )
+            .limit(1);
+          if (!application) return failure('application_required');
           const [publisher] = await tx
             .insert(developerPublishers)
             .values({

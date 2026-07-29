@@ -1,4 +1,5 @@
 export { TunnelAgent } from './agent';
+export type { TunnelAgentLifecycleEvent, TunnelAgentOptions } from './agent';
 export { loadConfig, type TunnelConfig } from './config';
 export { CapabilityRegistry } from './capabilities/index';
 export type { Capability, RpcHandler } from './capabilities/index';

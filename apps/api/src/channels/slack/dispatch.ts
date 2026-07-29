@@ -349,7 +349,7 @@ async function postSlashResponseToChannel(
   resp: SlashResponse,
 ): Promise<void> {
   if (resp.blocks && resp.blocks.length > 0) {
-    await postBlocks(token, channelId, resp.text ?? 'Kortix', resp.blocks, threadTs);
+    await postBlocks(token, channelId, resp.text ?? 'OpenOPC', resp.blocks, threadTs);
   } else if (resp.text) {
     await postMessage(token, channelId, resp.text, threadTs);
   }
@@ -462,7 +462,7 @@ async function threadIsOwned(teamId: string, threadTs: string): Promise<boolean>
   return !!row;
 }
 
-const CHANNEL_INTRO_FALLBACK = "Kortix is now connected to this channel. Mention @Kortix with a task to get started.";
+const CHANNEL_INTRO_FALLBACK = "OpenOPC is now connected to this channel. Mention @OpenOPC with a task to get started.";
 
 async function postChannelIntro(projectId: string, channelId: string): Promise<void> {
   const token = await loadSlackTokenForProject(projectId);
@@ -474,25 +474,25 @@ async function postChannelIntro(projectId: string, channelId: string): Promise<v
     .limit(1);
   const projectLine = project?.name
     ? `This channel is connected to *${escapeMrkdwn(project.name)}*.`
-    : 'This channel is connected to a Kortix project.';
+    : 'This channel is connected to an OpenOPC project.';
   const blocks: Array<Record<string, unknown>> = [
     {
       type: 'header',
-      text: { type: 'plain_text', text: 'Kortix is connected to this channel', emoji: false },
+      text: { type: 'plain_text', text: 'OpenOPC is connected to this channel', emoji: false },
     },
     {
       type: 'section',
       text: {
         type: 'mrkdwn',
         text: [
-          '`@`-mention Kortix with a task and an agent gets on it — working across your connected tools and replying right here in the thread. Follow-ups stay in the same conversation, with full context.',
+          '`@`-mention OpenOPC with a task and an agent gets on it — working across your connected tools and replying right here in the thread. Follow-ups stay in the same conversation, with full context.',
           projectLine,
           'Agent, model, and session policy settings are shared by this Slack channel.',
           '',
           'Try something like:',
-          '• `@Kortix summarize this thread and draft a reply to the customer`',
-          '• `@Kortix pull last week’s signups, group them by source, and drop a CSV here`',
-          '• `@Kortix put together a one-pager on our Q2 numbers`',
+          '• `@OpenOPC summarize this thread and draft a reply to the customer`',
+          '• `@OpenOPC pull last week’s signups, group them by source, and drop a CSV here`',
+          '• `@OpenOPC put together a one-pager on our Q2 numbers`',
           '',
           'Use the app slash command with `help` to see channel settings.',
         ].join('\n'),
@@ -579,7 +579,7 @@ export async function dispatchSlackEvent(projectId: string, envelope: SlackEnvel
       await postMessage(
         token,
         event.channel,
-        "Mention @Kortix with a task and I'll get on it.",
+        "Mention @OpenOPC with a task and I'll get on it.",
         event.thread_ts ?? event.ts,
       );
     }
@@ -748,7 +748,7 @@ export async function spawnAgentTurn(
           if (await claimThreadErrorNotice(teamId, threadId)) {
             const url = sessionWebUrl(config.FRONTEND_URL, projectId, existing.sessionId);
             await finalizeTurn(handle, {
-              error: `This thread's session hit an error and couldn't start. <${url}|Open it in Kortix> to see what happened.`,
+              error: `This thread's session hit an error and couldn't start. <${url}|Open it in OpenOPC> to see what happened.`,
             });
           } else {
             await finalizeTurn(handle, {});

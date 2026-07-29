@@ -92,6 +92,8 @@ describe('bare /kortix → channel panel', () => {
     expect(ids).toContain('cfg_open_projects');
     // honest effective-model + source line
     expect(JSON.stringify(resp.blocks)).toContain('project default');
+    expect(JSON.stringify(resp)).toContain('OpenOPC');
+    expect(JSON.stringify(resp)).not.toContain('Kortix');
   });
 
   test('unconnected channel → a Connect button, not a "type switch" instruction', async () => {

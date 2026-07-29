@@ -1,4 +1,4 @@
-// Kortix desktop shell — Electron main process.
+// OpenOPC desktop shell — Electron main process.
 //
 // A thin native wrapper around the remote web app: window sizing, the kortix://
 // deep-link auth flow, a navigation gate (logged-in product + auth pages in-app;
@@ -21,28 +21,39 @@ const {
   Menu,
   shell,
   ipcMain,
+  dialog,
+  safeStorage,
   nativeTheme,
 } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const { setupAutoUpdates, checkForUpdatesInteractive } = require('./updater');
-const {
-  DESKTOP_CHROME_JS,
-  configureNativeWindowControls,
-} = require('./window-chrome');
+const { DESKTOP_CHROME_JS, configureNativeWindowControls } = require('./window-chrome');
 const {
   downloadFromWebContents,
-  isMainAppHost,
+  isLocalGrantOperation,
+  isTrustedAppSender,
   shouldLoadInApp,
   shouldRegisterProtocol,
 } = require('./app-policy');
+const {
+  LEGACY_DESKTOP_IDENTIFIERS,
+  PRODUCT_BRAND,
+  legacyUserDataName,
+  openOpcEnv,
+} = require('./product-brand');
+const {
+  createLocalGrantController,
+  createElectronKeychainStore,
+  createNativeConfirmation,
+} = require('./local-grants');
+const { fetchDesktopSessionUserId } = require('./desktop-session');
 
-// Name comes from the bundle (productName): "Kortix" for prod, "Kortix Dev" for
-// dev builds. Per-name data dir so dev + prod coexist without sharing a session,
-// and so we never inherit another "Kortix" app's stale Chromium state (per-site
-// zoom / GPU cache) — a real cause of blurry rendering. `${name} Desktop` keeps
-// us off the bare "Kortix" Application Support folder.
-app.setPath('userData', path.join(app.getPath('appData'), `${app.getName()} Desktop`));
+// Keep the existing data directory even though the visible bundle name is now
+// OpenOPC. This preserves sessions, URL overrides, zoom, and updater state for
+// users moving from a Kortix-branded build.
+app.setPath('userData', path.join(app.getPath('appData'), legacyUserDataName(app.getName())));
 
 /* ─── Config ──────────────────────────────────────────────────────────── */
 
@@ -51,7 +62,8 @@ app.setPath('userData', path.join(app.getPath('appData'), `${app.getName()} Desk
 // Dev builds → dev.kortix.com; prod → kortix.com.
 function bakedDefaultUrl() {
   try {
-    return require('../package.json').kortixDefaultUrl || null;
+    const metadata = require('../package.json');
+    return metadata.openopcDefaultUrl || metadata.kortixDefaultUrl || null;
   } catch {
     return null;
   }
@@ -63,7 +75,7 @@ function bakedDefaultUrl() {
 //   3. production kortix.com
 // A runtime KORTIX_DESKTOP_URL / the Frontend-URL menu still overrides this.
 const DEFAULT_URL =
-  process.env.KORTIX_DESKTOP_DEFAULT_URL ||
+  openOpcEnv('OPENOPC_DESKTOP_DEFAULT_URL', 'KORTIX_DESKTOP_DEFAULT_URL') ||
   bakedDefaultUrl() ||
   'https://kortix.com/projects';
 
@@ -71,10 +83,10 @@ const PRESET_PROD = 'https://kortix.com/projects';
 const PRESET_DEV = 'https://dev.kortix.com/projects';
 const PRESET_LOCAL = 'http://localhost:3000/projects';
 
-const URL_SCHEME = 'kortix';
+const URL_SCHEME = LEGACY_DESKTOP_IDENTIFIERS.urlScheme;
 // Matches DESKTOP_UA_TOKEN in apps/web/src/lib/desktop.ts and the
 // KortixDesktop check in apps/web/src/middleware.ts.
-const UA_TOKEN = 'KortixDesktop/0.1.0';
+const UA_TOKEN = LEGACY_DESKTOP_IDENTIFIERS.userAgentToken;
 
 // Opaque dark background so the first paint (before the remote app loads) is
 // the brand surface, never a white flash. Tauri sets this on <body> via CSS;
@@ -118,7 +130,7 @@ function clearUrlOverride() {
 }
 
 function appBaseUrl() {
-  return process.env.KORTIX_DESKTOP_URL || DEFAULT_URL;
+  return openOpcEnv('OPENOPC_DESKTOP_URL', 'KORTIX_DESKTOP_URL') || DEFAULT_URL;
 }
 
 /** Effective URL the window should load — persisted override beats the default. */
@@ -188,9 +200,7 @@ function translateDeepLink(deepLink) {
 function handleDeepLink(deepLink) {
   const target = translateDeepLink(deepLink);
   if (!target || !mainWindow) return;
-  mainWindow.webContents.executeJavaScript(
-    `window.location.replace(${JSON.stringify(target)})`,
-  );
+  mainWindow.webContents.executeJavaScript(`window.location.replace(${JSON.stringify(target)})`);
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.focus();
 }
@@ -232,7 +242,7 @@ function createSplash() {
     center: true,
     hasShadow: true,
     backgroundColor: BG_COLOR,
-    title: 'Kortix',
+    title: PRODUCT_BRAND.desktopName,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
   splashWindow.loadFile(path.join(__dirname, '..', 'assets', 'splash.html'));
@@ -265,7 +275,7 @@ function createMainWindow() {
     center: true,
     show: false, // revealed once the remote app finishes loading (splash covers the gap)
     backgroundColor: BG_COLOR,
-    title: 'Kortix',
+    title: PRODUCT_BRAND.desktopName,
     // macOS: hidden title bar with the traffic lights nudged to sit centered in
     // the app's ~40px tab bar — mirrors lib.rs traffic_light_position(10, 22)
     // and the 72px collapsed-sidebar rail math.
@@ -319,17 +329,14 @@ function createMainWindow() {
     mainWindow?.webContents
       .executeJavaScript('window.devicePixelRatio')
       .then((dpr) =>
-        console.log(
-          `[kortix-render] dpr=${dpr} zoom=${mainWindow?.webContents.getZoomFactor()}`,
-        ),
+        console.log(`[kortix-render] dpr=${dpr} zoom=${mainWindow?.webContents.getZoomFactor()}`),
       )
       .catch(() => {});
   });
 
   // Persist ONLY the maximized flag, and notify the renderer so any custom
   // window controls can refresh their maximize/restore state (Tauri onResized).
-  const emitResized = () =>
-    mainWindow?.webContents.send('kortix:resized');
+  const emitResized = () => mainWindow?.webContents.send('kortix:resized');
   mainWindow.on('resize', emitResized);
   mainWindow.on('maximize', () => {
     writeMaximized(true);
@@ -344,7 +351,7 @@ function createMainWindow() {
   // auth page or a sandbox preview opens in the user's real browser. Iframes
   // (Pipedream Connect) are NOT gated and load freely in-app.
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (shouldLoadInApp(url)) return;
+    if (shouldLoadInApp(url, resolveAppUrl())) return;
     event.preventDefault();
     shell.openExternal(url);
   });
@@ -397,9 +404,7 @@ function createMainWindow() {
 /** Full-page reload of the main window onto `url` (used by the menu/IPC). */
 function navigateMainWindow(url) {
   if (!mainWindow) return;
-  mainWindow.webContents.executeJavaScript(
-    `window.location.replace(${JSON.stringify(url)})`,
-  );
+  mainWindow.webContents.executeJavaScript(`window.location.replace(${JSON.stringify(url)})`);
   mainWindow.focus();
 }
 
@@ -515,20 +520,147 @@ function buildMenu() {
 
 // The preload exposes the native bridge to whatever page is loaded in the main
 // window — including sandbox-preview / tunnel content, which is untrusted
-// (agent- or attacker-rendered). Only the Kortix app shell may drive privileged
+// (agent- or attacker-rendered). Only the OpenOPC app shell may drive privileged
 // commands; otherwise a preview page could call e.g. set_frontend_url to
 // permanently repoint the whole desktop app at an attacker origin. Derive the
-// SENDER's current origin and require it be a main-app host.
+// SENDER's current origin and require the exact configured app origin.
 function isTrustedSender(event) {
   try {
     const url =
       event.senderFrame?.url ||
       BrowserWindow.fromWebContents(event.sender)?.webContents?.getURL() ||
       '';
-    return isMainAppHost(new URL(url).hostname);
+    return isTrustedAppSender(resolveAppUrl(), url);
   } catch {
     return false;
   }
+}
+
+let localGrantController = null;
+let localDeviceId = null;
+
+function localDeviceIdPath() {
+  return path.join(app.getPath('userData'), 'device_id');
+}
+
+function getLocalDeviceId() {
+  if (localDeviceId) return localDeviceId;
+  try {
+    const stored = fs.readFileSync(localDeviceIdPath(), 'utf8').trim();
+    if (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(stored)) {
+      localDeviceId = stored;
+      return localDeviceId;
+    }
+  } catch {
+    /* first launch */
+  }
+  localDeviceId = randomUUID();
+  try {
+    fs.mkdirSync(path.dirname(localDeviceIdPath()), { recursive: true });
+    fs.writeFileSync(localDeviceIdPath(), `${localDeviceId}\n`, { encoding: 'utf8', mode: 0o600 });
+  } catch {
+    // A device without durable identity cannot be paired; requests still fail closed.
+  }
+  return localDeviceId;
+}
+
+function pairedDevicePublicKey() {
+  const configured = process.env.OPENOPC_PAIRED_DEVICE_PUBLIC_KEY;
+  if (configured) return configured;
+  try {
+    const keychain = createElectronKeychainStore({
+      safeStorage,
+      storagePath: path.join(app.getPath('userData'), 'local-secrets.json'),
+    });
+    const protectedKey = keychain.get('paired-device-public-key');
+    if (protectedKey) return protectedKey;
+  } catch {
+    // A public-key migration may still be present in the legacy PEM location.
+  }
+  try {
+    const stored = fs.readFileSync(
+      path.join(app.getPath('userData'), 'paired_device_public_key.pem'),
+      'utf8',
+    );
+    return stored.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function getLocalGrantController() {
+  if (!localGrantController) {
+    const userData = app.getPath('userData');
+    localGrantController = createLocalGrantController({
+      publicKey: pairedDevicePublicKey(),
+      storagePath: path.join(userData, 'local-grants.json'),
+      auditPath: path.join(userData, 'local-grants.audit.jsonl'),
+      resolveRoot: resolveLocalGrantRoot,
+    });
+  }
+  return localGrantController;
+}
+
+function resolveLocalGrantRoot(root) {
+  let candidate = root;
+  const suffix = [];
+  while (!fs.existsSync(candidate)) {
+    const parent = path.dirname(candidate);
+    if (parent === candidate) throw new Error('Local grant root does not exist');
+    suffix.unshift(path.basename(candidate));
+    candidate = parent;
+  }
+  const resolved = fs.realpathSync.native(candidate);
+  return path.join(resolved, ...suffix);
+}
+
+function localGrantDialog(command, action) {
+  const capability = String(command?.capability || 'requested capability');
+  const roots = Array.isArray(command?.roots) ? command.roots.join('\n') : '';
+  const expiry = typeof command?.expiresAt === 'string' ? command.expiresAt : 'unknown';
+  const detail = `${roots ? `\n\nRoots:\n${roots}` : ''}\n\nExpires: ${expiry}`;
+  return dialog
+    .showMessageBox({
+      type: 'warning',
+      buttons: ['Approve', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      title: action === 'revoke' ? 'Revoke local access' : 'Approve local access',
+      message:
+        action === 'revoke'
+          ? `Revoke ${capability} access on this device?`
+          : `Allow ${capability} access on this device?`,
+      detail: `${PRODUCT_BRAND.displayName} will record this local decision.${detail}`,
+    })
+    .then((result) => result.response === 0);
+}
+
+function grantRequestPayload(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid local grant request');
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    throw new Error('Invalid local grant request');
+  }
+}
+
+async function resolveAuthenticatedLocalUserId(event) {
+  const frameUrl =
+    event.senderFrame?.url ||
+    BrowserWindow.fromWebContents(event.sender)?.webContents?.getURL() ||
+    '';
+  const senderSession = event.sender?.session;
+  if (!senderSession || typeof senderSession.fetch !== 'function') {
+    throw new Error('Authenticated desktop session is unavailable');
+  }
+  return fetchDesktopSessionUserId({
+    configuredUrl: resolveAppUrl(),
+    frameUrl,
+    fetchSession: (url, init) => senderSession.fetch(url, init),
+  });
 }
 
 function registerIpc() {
@@ -606,6 +738,59 @@ function registerIpc() {
         return null;
     }
   });
+
+  // Bounded local-grant control plane. The renderer never supplies the paired
+  // public key, device identity, or native-confirmation token; those values are
+  // resolved in this process and every operation is explicit.
+  ipcMain.handle('openopc:local-grants', async (event, operation, rawArgs = {}) => {
+    if (!isTrustedSender(event)) throw new Error('Unauthorized IPC sender');
+    if (!isLocalGrantOperation(operation))
+      throw new Error(`Unknown local-grant operation: ${operation}`);
+    const args = grantRequestPayload(rawArgs || {});
+    const userId = await resolveAuthenticatedLocalUserId(event);
+    const controller = getLocalGrantController();
+    const deviceId = getLocalDeviceId();
+
+    switch (operation) {
+      case 'requestLocalGrant': {
+        const command = grantRequestPayload(args.command);
+        if (command.deviceId !== deviceId || command.userId !== userId) {
+          throw new Error('Local grant identity mismatch');
+        }
+        const nativeConfirmation = createNativeConfirmation();
+        return controller.requestLocalGrant({
+          command,
+          publicKey: pairedDevicePublicKey(),
+          expectedUserId: userId,
+          expectedDeviceId: deviceId,
+          nativeConfirmation,
+          confirm: (resolvedCommand) => localGrantDialog(resolvedCommand, 'request'),
+        });
+      }
+      case 'listLocalGrants':
+        return controller
+          .listLocalGrants()
+          .filter((grant) => grant.userId === userId && grant.deviceId === deviceId);
+      case 'revokeLocalGrant': {
+        const grantId = typeof args.grantId === 'string' ? args.grantId : '';
+        if (!grantId) throw new Error('Local grant id is required');
+        const current = controller
+          .listLocalGrants()
+          .find(
+            (grant) =>
+              grant.grantId === grantId && grant.userId === userId && grant.deviceId === deviceId,
+          );
+        if (!current) throw new Error('Local grant not found');
+        return controller.revokeLocalGrant({
+          grantId,
+          expectedUserId: userId,
+          expectedDeviceId: deviceId,
+          reason: typeof args.reason === 'string' ? args.reason.slice(0, 500) : undefined,
+          confirm: () => localGrantDialog(current, 'revoke'),
+        });
+      }
+    }
+  });
 }
 
 /* ─── User agent ──────────────────────────────────────────────────────────
@@ -614,7 +799,7 @@ function registerIpc() {
 
 function applyUserAgent() {
   // Strip the Electron token and the product token (whatever the app is named —
-  // "Kortix" or "Kortix Dev") before appending the stable KortixDesktop marker.
+  // "OpenOPC" or "OpenOPC Dev") before appending the stable KortixDesktop marker.
   const name = app.getName().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const ua = app.userAgentFallback
     .replace(/\sElectron\/\S+/, '')
@@ -679,9 +864,7 @@ if (!gotLock) {
     });
 
     // A deep link that arrived during cold start (macOS first-launch via URL).
-    const firstArgvDeepLink = process.argv.find((a) =>
-      a.startsWith(`${URL_SCHEME}://`),
-    );
+    const firstArgvDeepLink = process.argv.find((a) => a.startsWith(`${URL_SCHEME}://`));
     if (firstArgvDeepLink) pendingDeepLink = firstArgvDeepLink;
     if (pendingDeepLink) {
       mainWindow?.webContents.once('did-finish-load', () => {

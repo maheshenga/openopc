@@ -5,6 +5,11 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { ACCOUNT_ACTIONS } from '../iam/actions';
 import { auth, errors, json, makeOpenApiApp } from '../openapi';
 import type { AppEnv } from '../types';
+import {
+  DEVELOPER_APPLICATION_STATES,
+  DeveloperApplicationError,
+  type DeveloperApplicationService,
+} from './applications';
 import { DeveloperModuleArtifactError, type DeveloperModuleArtifactService } from './artifacts';
 import {
   DEVELOPER_ORGANIZATION_VERIFICATION_STATES,
@@ -225,6 +230,48 @@ const DeveloperOrganizationSchema = z.object({
   updated_at: z.string(),
 });
 
+const DeveloperApplicationPolicyVersionsSchema = z
+  .object({
+    moduleRules: z.string().min(1).max(64),
+    acceptableUse: z.string().min(1).max(64),
+  })
+  .strict();
+
+export const DeveloperApplicationSchema = z.object({
+  application_id: z.string().uuid(),
+  account_id: z.string().uuid(),
+  organization_id: z.string().uuid(),
+  state: z.enum(DEVELOPER_APPLICATION_STATES),
+  revision: z.number().int().nonnegative(),
+  policy_versions: DeveloperApplicationPolicyVersionsSchema,
+  submitted_at: z.string().nullable(),
+  decided_at: z.string().nullable(),
+  suspended_at: z.string().nullable(),
+  decision_reason: z.string().nullable(),
+  created_by: z.string().uuid(),
+  updated_by: z.string().uuid().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+const DeveloperApplicationSubmitBodySchema = z
+  .object({
+    account_id: z.string().uuid().optional(),
+    organization_name: z.string().min(1).max(255),
+    policy_versions: DeveloperApplicationPolicyVersionsSchema,
+  })
+  .strict();
+
+const DeveloperApplicationCurrentResponseSchema = z.object({
+  application: DeveloperApplicationSchema.nullable(),
+  current_policy_versions: DeveloperApplicationPolicyVersionsSchema,
+});
+
+const DeveloperApplicationSubmitResponseSchema = DeveloperApplicationCurrentResponseSchema.extend({
+  application: DeveloperApplicationSchema,
+  created: z.boolean(),
+});
+
 const DeveloperInvitationSchema = z.object({
   invitation_id: z.string().uuid(),
   account_id: z.string().uuid(),
@@ -391,6 +438,9 @@ export type DeveloperAppDependencies = Readonly<{
     accountId: string,
     action: DeveloperAccountAction,
   ) => Promise<void>;
+  applicationService: Pick<DeveloperApplicationService, 'submit' | 'current'> & {
+    readonly currentPolicyVersions: DeveloperApplicationService['currentPolicyVersions'];
+  };
   artifactService: Pick<
     DeveloperModuleArtifactService,
     'createDeclarative' | 'createUpload' | 'finalizeUploadResult' | 'cancelUpload' | 'getArtifact'
@@ -446,10 +496,105 @@ function publisherErrorResponse(context: Context<AppEnv>, error: unknown) {
   return context.json(body, 409);
 }
 
+function applicationErrorResponse(context: Context<AppEnv>, error: unknown) {
+  if (!(error instanceof DeveloperApplicationError)) throw error;
+  const body = { error: error.code };
+  if (error.status === 400) return context.json(body, 400);
+  if (error.status === 403) return context.json(body, 403);
+  if (error.status === 404) return context.json(body, 404);
+  if (error.status === 409) return context.json(body, 409);
+  return context.json(body, 503);
+}
+
+function requireApplicationService(dependencies: DeveloperAppDependencies) {
+  const service = dependencies.applicationService;
+  if (!service) {
+    throw new DeveloperApplicationError('DEVELOPER_APPLICATION_DEPENDENCY_UNAVAILABLE', 503);
+  }
+  return service;
+}
+
 export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
+  requireApplicationService(dependencies);
   const app = makeOpenApiApp<AppEnv>();
 
   app.use('*', dependencies.authenticate);
+
+  app.openapi(
+    createRoute({
+      method: 'post',
+      path: '/applications',
+      tags: ['developer'],
+      summary: 'Submit the current account for developer admission',
+      ...auth,
+      request: {
+        body: {
+          required: true,
+          content: { 'application/json': { schema: DeveloperApplicationSubmitBodySchema } },
+        },
+      },
+      responses: {
+        200: json(DeveloperApplicationSubmitResponseSchema, 'Idempotent developer application'),
+        201: json(DeveloperApplicationSubmitResponseSchema, 'Developer application submitted'),
+        ...errors(400, 401, 403, 404, 409, 503),
+      },
+    }),
+    async (context) => {
+      const accountId = await dependencies.resolveAccountId(context, 'body');
+      context.set('accountId', accountId);
+      await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_WRITE);
+      const body = context.req.valid('json');
+      try {
+        const service = requireApplicationService(dependencies);
+        const result = await service.submit({
+          actor: { accountId, userId: context.get('userId') },
+          organizationName: body.organization_name,
+          policyVersions: body.policy_versions,
+        });
+        const response = {
+          ...result,
+          current_policy_versions: service.currentPolicyVersions,
+        };
+        return context.json(response, result.created ? 201 : 200);
+      } catch (error) {
+        return applicationErrorResponse(context, error);
+      }
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/applications/current',
+      tags: ['developer'],
+      summary: 'Read the current account developer application',
+      ...auth,
+      request: { query: DeveloperAccountQuerySchema },
+      responses: {
+        200: json(DeveloperApplicationCurrentResponseSchema, 'Current developer application'),
+        ...errors(400, 401, 403, 404, 409, 503),
+      },
+    }),
+    async (context) => {
+      const accountId = await dependencies.resolveAccountId(context, 'query');
+      context.set('accountId', accountId);
+      await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_READ);
+      try {
+        const service = requireApplicationService(dependencies);
+        const application = await service.current({
+          accountId,
+          userId: context.get('userId'),
+        });
+        return context.json(
+          { application, current_policy_versions: service.currentPolicyVersions },
+          200,
+        );
+      } catch (error) {
+        return applicationErrorResponse(context, error);
+      }
+    },
+  );
+
   app.openapi(
     createRoute({
       method: 'post',

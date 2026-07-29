@@ -122,14 +122,37 @@ impl WasiClaimRunner {
     ) -> TerminalEvidence {
         let artifact = match self.artifacts.fetch(&bundle).await {
             Ok(artifact) => artifact,
-            Err(error) => return TerminalEvidence::from_code(artifact_error_code(&error)),
+            Err(RunnerClientError::Status(404 | 409)) => {
+                cancellation.cancel();
+                return TerminalEvidence::from_code("EXECUTION_CANCELLED");
+            }
+            Err(error) => {
+                return self
+                    .finalize_before_execution(
+                        &bundle.claim,
+                        TerminalEvidence::from_code(artifact_error_code(&error)),
+                    )
+                    .await;
+            }
         };
         let component_bytes = match tokio::fs::read(artifact.path()).await {
             Ok(bytes) => bytes,
-            Err(_) => return TerminalEvidence::from_code("RUNNER_ARTIFACT_UNAVAILABLE"),
+            Err(_) => {
+                return self
+                    .finalize_before_execution(
+                        &bundle.claim,
+                        TerminalEvidence::from_code("RUNNER_ARTIFACT_UNAVAILABLE"),
+                    )
+                    .await;
+            }
         };
         let Runtime::WasiComponent { component, .. } = &bundle.runtime_descriptor.runtime else {
-            return TerminalEvidence::from_code("RUNNER_DESCRIPTOR_DIGEST_MISMATCH");
+            return self
+                .finalize_before_execution(
+                    &bundle.claim,
+                    TerminalEvidence::from_code("RUNNER_DESCRIPTOR_DIGEST_MISMATCH"),
+                )
+                .await;
         };
         if let Err(error) = self
             .client
@@ -149,7 +172,12 @@ impl WasiClaimRunner {
                 cancellation.cancel();
                 return TerminalEvidence::from_code("EXECUTION_CANCELLED");
             }
-            return TerminalEvidence::from_code("RUNNER_EVIDENCE_UNAVAILABLE");
+            return self
+                .finalize_before_execution(
+                    &bundle.claim,
+                    TerminalEvidence::from_code("RUNNER_EVIDENCE_UNAVAILABLE"),
+                )
+                .await;
         }
 
         let supervisor = match LeaseSupervisor::with_config(
@@ -159,7 +187,14 @@ impl WasiClaimRunner {
             self.config.lease.clone(),
         ) {
             Ok(supervisor) => supervisor,
-            Err(_) => return TerminalEvidence::from_code("RUNNER_LEASE_CONFIGURATION_INVALID"),
+            Err(_) => {
+                return self
+                    .finalize_before_execution(
+                        &bundle.claim,
+                        TerminalEvidence::from_code("RUNNER_LEASE_CONFIGURATION_INVALID"),
+                    )
+                    .await;
+            }
         };
         let authority = supervisor.authority();
         let supervisor_stop = CancellationToken::new();
@@ -194,6 +229,17 @@ impl WasiClaimRunner {
                 self.finalize_with_retry(&bundle.claim, deadline, &evidence)
                     .await;
             }
+        }
+        evidence
+    }
+
+    async fn finalize_before_execution(
+        &self,
+        claim: &VerifiedClaim,
+        evidence: TerminalEvidence,
+    ) -> TerminalEvidence {
+        if let Some(deadline) = claim_deadline(claim) {
+            self.finalize_with_retry(claim, deadline, &evidence).await;
         }
         evidence
     }

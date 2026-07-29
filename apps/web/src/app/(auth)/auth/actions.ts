@@ -77,6 +77,88 @@ function emailRedirectUrl({
   return url.toString();
 }
 
+type RegistrationPolicyVersions = {
+  terms: string;
+  privacy: string;
+  acceptableUse: string;
+};
+
+type RegistrationPreflight = {
+  decisionToken: string;
+  policyVersions: RegistrationPolicyVersions;
+};
+
+const REGISTRATION_UNAVAILABLE = {
+  message: 'Registration is temporarily unavailable. Please try again.',
+} as const;
+
+function registrationPolicyVersions(formData: FormData): RegistrationPolicyVersions | null {
+  const terms = formData.get('policyTermsVersion');
+  const privacy = formData.get('policyPrivacyVersion');
+  const acceptableUse = formData.get('policyAcceptableUseVersion');
+  if (
+    typeof terms !== 'string' ||
+    !terms ||
+    typeof privacy !== 'string' ||
+    !privacy ||
+    typeof acceptableUse !== 'string' ||
+    !acceptableUse
+  ) {
+    return null;
+  }
+  return { terms, privacy, acceptableUse };
+}
+
+async function requestRegistrationPreflight(
+  formData: FormData,
+  email: string,
+): Promise<RegistrationPreflight | null> {
+  const challengeToken = formData.get('challengeToken');
+  const deviceId = formData.get('deviceId');
+  const policyVersions = registrationPolicyVersions(formData);
+  if (
+    typeof challengeToken !== 'string' ||
+    !challengeToken ||
+    typeof deviceId !== 'string' ||
+    !deviceId ||
+    !policyVersions
+  ) {
+    return null;
+  }
+
+  try {
+    const backendUrl = getServerPublicEnv().BACKEND_URL || 'http://localhost:8008/v1';
+    const response = await fetch(`${backendUrl.replace(/\/$/, '')}/access/registration/preflight`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        challengeToken,
+        deviceId,
+        action: 'signup',
+        policyVersions,
+      }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return null;
+    const value: unknown = await response.json();
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+    const decision = value as Record<string, unknown>;
+    if (
+      decision.allowed !== true ||
+      typeof decision.decisionToken !== 'string' ||
+      !decision.decisionToken ||
+      typeof decision.expiresAt !== 'string' ||
+      !Number.isFinite(Date.parse(decision.expiresAt))
+    ) {
+      return null;
+    }
+    return { decisionToken: decision.decisionToken, policyVersions };
+  } catch {
+    return null;
+  }
+}
+
 export async function signIn(prevState: any, formData: FormData) {
   const email = formData.get('email') as string;
   const returnUrl = sanitizeAuthReturnUrl(formData.get('returnUrl') as string | undefined);
@@ -152,28 +234,8 @@ export async function signUp(prevState: any, formData: FormData) {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-
-  // Check access control — if signups are closed and email isn't allowlisted, block
-  let shouldCreateUser = true;
-  try {
-    const backendUrl = getServerPublicEnv().BACKEND_URL || 'http://localhost:8008/v1';
-    const res = await fetch(`${backendUrl}/access/check-email`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: normalizedEmail }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      shouldCreateUser = data.allowed;
-    }
-    // If fetch fails, fail-open (allow signup)
-  } catch {
-    // Fail open — allow signup if access control service is unreachable
-  }
-
-  if (!shouldCreateUser) {
-    return { signupClosed: true, message: 'Signups are currently closed. Request access below.' };
-  }
+  const registration = await requestRegistrationPreflight(formData, normalizedEmail);
+  if (!registration) return REGISTRATION_UNAVAILABLE;
 
   const supabase = await createClient();
 
@@ -200,11 +262,11 @@ export async function signUp(prevState: any, formData: FormData) {
     options: {
       emailRedirectTo,
       shouldCreateUser: true,
-      data: referralCode
-        ? {
-            referral_code: referralCode.trim().toUpperCase(),
-          }
-        : undefined,
+      data: {
+        registration_decision_token: registration.decisionToken,
+        registration_policy_versions: registration.policyVersions,
+        ...(referralCode ? { referral_code: referralCode.trim().toUpperCase() } : {}),
+      },
     },
   });
 
@@ -474,6 +536,7 @@ export async function signUpWithPassword(prevState: any, formData: FormData) {
   const returnUrl = sanitizeAuthReturnUrl(formData.get('returnUrl') as string | undefined);
   const origin = formData.get('origin') as string;
   const mobileState = mobileCallbackState(formData);
+  const acceptedTerms = formData.get('acceptedTerms') === 'true';
 
   if (!email || !email.includes('@')) {
     return { message: 'Please enter a valid email address' };
@@ -484,6 +547,12 @@ export async function signUpWithPassword(prevState: any, formData: FormData) {
   if (password !== confirmPassword) {
     return { message: 'Passwords do not match' };
   }
+  if (!acceptedTerms) {
+    return { message: 'Please accept the terms and conditions' };
+  }
+
+  const registration = await requestRegistrationPreflight(formData, email);
+  if (!registration) return REGISTRATION_UNAVAILABLE;
 
   const supabase = await createClient();
   const emailRedirectTo = emailRedirectUrl({
@@ -496,7 +565,13 @@ export async function signUpWithPassword(prevState: any, formData: FormData) {
   const { error: signUpError } = await supabase.auth.signUp({
     email,
     password,
-    options: { emailRedirectTo },
+    options: {
+      emailRedirectTo,
+      data: {
+        registration_decision_token: registration.decisionToken,
+        registration_policy_versions: registration.policyVersions,
+      },
+    },
   });
 
   const alreadyExists =

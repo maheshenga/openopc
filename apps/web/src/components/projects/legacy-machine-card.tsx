@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EntityAvatar } from '@/components/ui/entity-avatar';
 import { type LegacyMachine } from '@/hooks/legacy/use-legacy-machine-migration';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 const SUPPORT_EMAIL = 'support@kortix.com';
 
@@ -19,7 +20,7 @@ export function LegacyMachineCard({ machine }: { machine: LegacyMachine }) {
 
   const subject = encodeURIComponent(`Restore legacy machine: ${machine.name}`);
   const body = encodeURIComponent(
-    `Hi Kortix support,\n\nI'd like to restore a legacy machine.\n\n` +
+    `Hi ${PRODUCT_BRAND.displayName} support,\n\nI'd like to restore a legacy machine.\n\n` +
       `Name: ${machine.name}\nSandbox ID: ${machine.sandbox_id}\nProvider: ${machine.provider}\n` +
       (created ? `Created: ${created}\n` : ''),
   );

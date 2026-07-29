@@ -8,6 +8,9 @@ import remarkGfm from 'remark-gfm';
 import { Reveal } from '@/components/home/reveal';
 import { Badge } from '@/components/ui/badge';
 import { LocalTime } from '@/components/ui/local-time';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
+
+const BRAND_NAME = PRODUCT_BRAND.displayName;
 
 const RELEASE_DATE_FORMAT: Intl.DateTimeFormatOptions = {
   year: 'numeric',
@@ -18,16 +21,16 @@ const RELEASE_DATE_FORMAT: Intl.DateTimeFormatOptions = {
 export const metadata: Metadata = {
   title: 'Changelog',
   description:
-    'Every Kortix release, straight from the source. New features, fixes, and improvements — versioned and dated.',
+    `Every ${BRAND_NAME} release, straight from the source. New features, fixes, and improvements — versioned and dated.`,
   openGraph: {
-    title: 'Kortix Changelog',
-    description: 'Every Kortix release, straight from the source.',
+    title: `${BRAND_NAME} Changelog`,
+    description: `Every ${BRAND_NAME} release, straight from the source.`,
     url: `${CANONICAL_ORIGIN}/changelog`,
   },
   twitter: {
     card: 'summary',
-    title: 'Kortix Changelog',
-    description: 'Every Kortix release, straight from the source.',
+    title: `${BRAND_NAME} Changelog`,
+    description: `Every ${BRAND_NAME} release, straight from the source.`,
   },
   alternates: { canonical: `${CANONICAL_ORIGIN}/changelog` },
 };

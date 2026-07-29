@@ -170,7 +170,7 @@ function AgentEditorModal({
           <div className="space-y-6">
             <LayerHeader
               icon={Layers}
-              label="Kortix"
+              label="OpenOPC"
               tone="kortix"
               description="Identity, model, and platform-enforced governance. Works the same no matter what runtime executes this agent."
             />

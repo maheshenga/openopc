@@ -90,6 +90,10 @@ export interface AuthVariables {
   sessionId?: string;
   /** PAT token identity for the IAM engine (token-as-principal evaluation). */
   iamTokenId?: string;
+  /** Supabase assurance level from the verified JWT (`aal2` means MFA/passkey step-up). */
+  mfaAal?: string;
+  /** Platform role set only by the requireAdmin middleware. */
+  platformRole?: string;
   /** Per-agent authorization grant — non-null only for agent-session tokens.
    *  Read by assertAgentScope() to gate Kortix CLI/API actions on top of the
    *  user's own role (net = userRole ∩ agentGrant). Null = full access. */

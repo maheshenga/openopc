@@ -84,12 +84,12 @@ describe('buildReviewCardBlocks', () => {
     expect(actions.elements[0].action_id).toContain('_approve_');
   });
 
-  test('includes a deep-link "View in Kortix" button when a webUrl is given', () => {
+  test('includes a deep-link "View in OpenOPC" button when a webUrl is given', () => {
     const blocks = buildReviewCardBlocks(item, { webUrl: 'https://app.kortix.ai/x' });
     const actions = blocks.find((b) => b.type === 'actions') as {
       elements: Array<{ url?: string; text: { text: string } }>;
     };
-    const view = actions.elements.find((e) => e.text.text === 'View in Kortix');
+    const view = actions.elements.find((e) => e.text.text === 'View in OpenOPC');
     expect(view?.url).toBe('https://app.kortix.ai/x');
   });
 });

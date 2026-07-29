@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openopc.example/schemas/public-beta-release-artifacts.v1.schema.json",
+  "title": "OpenOPC Public-Beta Artifact Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "commit", "artifacts", "manifestDigest"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "commit": { "$ref": "#/$defs/commit" },
+    "artifacts": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "uniqueItems": true,
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "web" },
+              "mediaType": { "const": "application/vnd.oci.image.manifest.v1+json" }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "admin" },
+              "mediaType": { "const": "application/vnd.oci.image.manifest.v1+json" }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "api" },
+              "mediaType": { "const": "application/vnd.oci.image.manifest.v1+json" }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "module-host" },
+              "mediaType": { "const": "application/vnd.oci.image.manifest.v1+json" }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "studio-worker" },
+              "mediaType": { "const": "application/vnd.oci.image.manifest.v1+json" }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "developer-trust-worker" },
+              "mediaType": { "const": "application/vnd.oci.image.manifest.v1+json" }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "automation-browser-worker" },
+              "mediaType": { "const": "application/vnd.oci.image.manifest.v1+json" }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "module-ledger-worker" },
+              "mediaType": { "const": "application/vnd.oci.image.manifest.v1+json" }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "wasi-runner" },
+              "mediaType": {
+                "const": "application/vnd.openopc.linux-service-bundle.v1+zstd"
+              }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "oci-runner" },
+              "mediaType": {
+                "const": "application/vnd.openopc.linux-service-bundle.v1+zstd"
+              }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "desktop" },
+              "mediaType": {
+                "const": "application/vnd.openopc.windows-update-bundle.v1+zstd"
+              }
+            },
+            "required": ["name", "mediaType"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "digest", "sbomDigest", "provenanceDigest", "mediaType"],
+        "properties": {
+          "name": {
+            "enum": [
+              "web",
+              "admin",
+              "api",
+              "module-host",
+              "studio-worker",
+              "developer-trust-worker",
+              "automation-browser-worker",
+              "module-ledger-worker",
+              "wasi-runner",
+              "oci-runner",
+              "desktop"
+            ]
+          },
+          "digest": { "$ref": "#/$defs/digest" },
+          "sbomDigest": { "$ref": "#/$defs/digest" },
+          "provenanceDigest": { "$ref": "#/$defs/digest" },
+          "mediaType": { "$ref": "#/$defs/mediaType" }
+        }
+      }
+    },
+    "manifestDigest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "mediaType": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 255,
+      "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*(?:\\+[a-z0-9][a-z0-9!#$&^_.+-]*)?$"
+    }
+  }
+}

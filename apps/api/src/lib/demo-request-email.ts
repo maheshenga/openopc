@@ -5,6 +5,7 @@
 // invite transport in ../accounts/email.ts. If MAILTRAP_API_TOKEN is not set the
 // send is skipped gracefully so lead capture never fails on account of email.
 import { config } from '../config';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 const MAILTRAP_SEND_URL = 'https://send.api.mailtrap.io/api/send';
 
@@ -71,7 +72,7 @@ function renderHtml(lead: DemoRequestLead): string {
             </table>
           </div>
           <div style="padding:16px 28px;text-align:center;border-top:1px solid #e5e7eb;background:#ffffff;">
-            <p style="font-size:12px;color:#9ca3af;margin:0;">Kortix — automated lead notification</p>
+            <p style="font-size:12px;color:#9ca3af;margin:0;">${PRODUCT_BRAND.displayName} — automated lead notification</p>
           </div>
         </div>
       </td></tr>

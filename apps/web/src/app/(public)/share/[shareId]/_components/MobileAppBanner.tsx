@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { KortixLogo } from '@/components/sidebar/kortix-logo';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 function isMobileDevice(): boolean {
   if (typeof window === 'undefined') return false;
@@ -92,7 +93,7 @@ export function MobileAppBanner({ shareId }: MobileAppBannerProps) {
           {/* Content */}
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-foreground text-sm leading-tight">
-              Kortix
+              {PRODUCT_BRAND.displayName}
             </h3>
             <p className="text-xs text-muted-foreground leading-tight">{tHardcodedUi.raw('appShareShareidComponentsMobileappbanner.line94JsxTextOpenThisContentInApp')}</p>
           </div>

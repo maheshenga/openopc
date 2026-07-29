@@ -129,6 +129,35 @@ test('binding digest includes canonical input and trusted runtime artifact metad
   ).not.toBe(baseline);
 });
 
+test('binding digest canonicalizes equivalent execution deadline representations', async () => {
+  const binding: ModuleExecutionBinding = {
+    ...executionBinding(),
+    runtimeArtifactDigest: `sha256:${'8'.repeat(64)}`,
+    runtimeArtifactBytes: 4096,
+  };
+  const inputDigest = `sha256:${'9'.repeat(64)}` as const;
+  const iso = await computeModuleExecutionBindingDigest(
+    binding,
+    '2026-07-27T09:00:00.000Z',
+    inputDigest,
+  );
+
+  expect(
+    await computeModuleExecutionBindingDigest(
+      binding,
+      '2026-07-27T17:00:00.000+08:00',
+      inputDigest,
+    ),
+  ).toBe(iso);
+  expect(
+    await computeModuleExecutionBindingDigest(
+      binding,
+      '2026-07-27 09:00:00+00',
+      inputDigest,
+    ),
+  ).toBe(iso);
+});
+
 test('claim-next selects the oldest compatible execution through the active Runner profile', async () => {
   const accountId = '20000000-0000-4000-8000-000000000001';
   const runnerId = '90000000-0000-4000-8000-000000000001';

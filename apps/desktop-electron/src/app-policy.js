@@ -1,8 +1,14 @@
 const URL_SCHEME = 'kortix';
+const LOCAL_GRANT_OPERATIONS = new Set([
+  'requestLocalGrant',
+  'listLocalGrants',
+  'revokeLocalGrant',
+]);
 
 const APP_PATH_PREFIXES = [
   '/projects',
   '/accounts',
+  '/developer',
   '/invites',
   '/admin',
   '/setup',
@@ -14,6 +20,8 @@ const APP_PATH_PREFIXES = [
   '/cli',
   '/templates',
   '/maintenance',
+  '/review',
+  '/legacy-machines',
   '/countryerror',
   '/debug',
 ];
@@ -38,7 +46,7 @@ function isAppPath(pathname) {
   );
 }
 
-function shouldLoadInApp(urlStr) {
+function shouldLoadInApp(urlStr, configuredUrl) {
   let url;
   try {
     url = new URL(urlStr);
@@ -48,11 +56,28 @@ function shouldLoadInApp(urlStr) {
   if (url.protocol === `${URL_SCHEME}:`) return true;
   if (url.pathname.startsWith('/auth/v1/')) return false;
   if (isPreviewHost(url.hostname)) return true;
+  if (configuredUrl && isTrustedAppSender(configuredUrl, urlStr)) return true;
   return isMainAppHost(url.hostname) && isAppPath(url.pathname);
 }
 
 function shouldRegisterProtocol(env = process.env) {
   return env.KORTIX_E2E_DISABLE_PROTOCOL_REGISTRATION !== '1';
+}
+
+function isLocalGrantOperation(value) {
+  return typeof value === 'string' && LOCAL_GRANT_OPERATIONS.has(value);
+}
+
+function isTrustedAppSender(configuredUrl, senderUrl) {
+  try {
+    const configured = new URL(configuredUrl);
+    const sender = new URL(senderUrl);
+    if (!['http:', 'https:'].includes(configured.protocol)) return false;
+    if (!['http:', 'https:'].includes(sender.protocol)) return false;
+    return configured.origin === sender.origin && isAppPath(sender.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function isLoopbackHost(hostname) {
@@ -87,6 +112,8 @@ function downloadFromWebContents(webContents, value) {
 module.exports = {
   downloadFromWebContents,
   isMainAppHost,
+  isLocalGrantOperation,
+  isTrustedAppSender,
   normalizeDownloadUrl,
   shouldLoadInApp,
   shouldRegisterProtocol,

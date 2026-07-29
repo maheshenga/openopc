@@ -653,7 +653,7 @@ function LogoCard({ asset, fmt }: { asset: LogoAsset; fmt: LogoFormat }) {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={asset.svgSrc}
-          alt={`Kortix ${asset.label} ${asset.variant}`}
+          alt={`OpenOPC ${asset.label} ${asset.variant}`}
           className={cn(
             'object-contain',
             isWide ? 'max-h-8 w-full md:max-h-10' : 'max-h-10 w-auto md:max-h-12',
@@ -693,7 +693,7 @@ function SocialCard({ asset }: { asset: SocialAsset }) {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={asset.pngSrc}
-          alt={`Kortix avatar ${asset.variant}`}
+          alt={`OpenOPC avatar ${asset.variant}`}
           className="size-full object-cover"
         />
 
@@ -3279,7 +3279,7 @@ export default function BrandPage() {
                       )}
                       size="sm"
                     />
-                    <EntityAvatar label="Kortix" />
+                    <EntityAvatar label="OpenOPC" />
                     <EntityAvatar icon={FolderGit2} />
                     <EntityAvatar icon={Users} size="lg" />
                   </div>

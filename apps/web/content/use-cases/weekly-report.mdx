@@ -1,6 +1,6 @@
 ---
 title: "How we auto-generate the weekly metrics report"
-description: The reporting agent we run on Kortix — connected to our Postgres database and Slack. Every Monday it queries the metrics, writes the report with commentary on what moved, and posts it.
+description: The reporting agent we run on OpenOPC — connected to our Postgres database and Slack. Every Monday it queries the metrics, writes the report with commentary on what moved, and posts it.
 date: "2026-05-20"
 author: team
 tags:
@@ -14,14 +14,14 @@ building it: running the same queries, dropping the numbers into a template, and
 writing a line or two about what changed. It's routine, it's on a schedule, and
 it's exactly the kind of thing that gets skipped the week it's most needed.
 
-We run a reporting agent on Kortix that builds it. A Monday cron queries the
+We run a reporting agent on OpenOPC that builds it. A Monday cron queries the
 metrics from our Postgres database, writes the weekly report with commentary on
 what moved and why, and posts it to Slack. Access to the database is read-only.
 This write-up covers how the setup works: the trigger, the session model, and the
 guardrails.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">A Monday cron</Fact>
   <Fact label="Connected systems">Postgres · Slack</Fact>
   <Fact label="Mode">Cron-driven · read-only database access</Fact>
@@ -42,7 +42,7 @@ part that gets dropped.
 
 ## What we built
 
-On Kortix, a Monday cron triggers a reporting agent. Each run spawns an isolated
+On OpenOPC, a Monday cron triggers a reporting agent. Each run spawns an isolated
 session (a cloud sandbox) with scoped, read-only access to the Postgres database
 and permission to post to one Slack channel. The agent runs the metric queries,
 compares them against the prior weeks, writes commentary on what moved, and posts

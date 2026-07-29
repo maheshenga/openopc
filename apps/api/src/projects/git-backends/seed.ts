@@ -13,6 +13,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import type { SeedFile } from './types';
 
 const execFileAsync = promisify(execFile);
@@ -36,7 +37,7 @@ export async function seedRepoViaGitPush(input: {
   baseFiles?: SeedFile[];
 }): Promise<void> {
   const branch = input.branch || 'main';
-  const name = input.authorName || 'Kortix';
+  const name = input.authorName || PRODUCT_BRAND.displayName;
   const email = input.authorEmail || 'noreply@kortix.ai';
   const dir = await mkdtemp(join(tmpdir(), 'kortix-seed-'));
 
@@ -53,8 +54,8 @@ export async function seedRepoViaGitPush(input: {
   };
   // Pinned identity + dates → deterministic commit SHA across projects.
   const PINNED = {
-    GIT_AUTHOR_NAME: 'Kortix', GIT_AUTHOR_EMAIL: 'noreply@kortix.ai',
-    GIT_COMMITTER_NAME: 'Kortix', GIT_COMMITTER_EMAIL: 'noreply@kortix.ai',
+    GIT_AUTHOR_NAME: PRODUCT_BRAND.displayName, GIT_AUTHOR_EMAIL: 'noreply@kortix.ai',
+    GIT_COMMITTER_NAME: PRODUCT_BRAND.displayName, GIT_COMMITTER_EMAIL: 'noreply@kortix.ai',
     GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z',
   };
 
@@ -65,7 +66,7 @@ export async function seedRepoViaGitPush(input: {
     if (input.baseFiles?.length) {
       await writeFiles(input.baseFiles);
       await run(['add', '-A']);
-      await execFileAsync('git', ['commit', '-m', 'chore: scaffold Kortix project'],
+      await execFileAsync('git', ['commit', '-m', `chore: scaffold ${PRODUCT_BRAND.displayName} project`],
         { cwd: dir, timeout: 60_000, env: { ...env, ...PINNED } });
     }
     await writeFiles(input.files);
@@ -74,9 +75,9 @@ export async function seedRepoViaGitPush(input: {
     // empty second commit when baseFiles === files).
     const status = await run(['status', '--porcelain']);
     if (status.stdout.toString().trim().length > 0) {
-      await run(['commit', '-m', input.baseFiles?.length ? 'chore: project setup' : (input.commitMessage || 'chore: scaffold Kortix project')]);
+      await run(['commit', '-m', input.baseFiles?.length ? 'chore: project setup' : (input.commitMessage || `chore: scaffold ${PRODUCT_BRAND.displayName} project`)]);
     } else if (!input.baseFiles?.length) {
-      await run(['commit', '-m', input.commitMessage || 'chore: scaffold Kortix project']);
+      await run(['commit', '-m', input.commitMessage || `chore: scaffold ${PRODUCT_BRAND.displayName} project`]);
     }
 
     const host = new URL(input.upstreamUrl).host;

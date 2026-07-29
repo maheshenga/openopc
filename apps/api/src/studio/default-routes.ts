@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import type { Database } from '@kortix/db';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import {
   type StudioAdapterEnvironment,
   createS3StudioObjectStore,
@@ -306,7 +307,7 @@ export function createDefaultIntelligenceProjectRoutes(
         buildProjectAgentCard({
           projectId,
           agentId: 'kortix-studio',
-          displayName: 'Kortix Studio',
+          displayName: `${PRODUCT_BRAND.displayName} Studio`,
           capabilities,
           protocols: ['mcp', 'a2a'],
           authKind: 'kortix-project-token',

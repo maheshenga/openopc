@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { AnimatedThinkingText } from '@/components/ui/animated-thinking-text';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { formatDuration } from '@kortix/sdk/turns';
 import { cn } from '@/lib/utils';
 
@@ -45,7 +46,7 @@ export function AssistantPendingRow({
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src="/kortix-logomark-white.svg"
-        alt="Kortix"
+        alt={PRODUCT_BRAND.displayName}
         className="dark:invert-0 h-[14px] w-auto flex-shrink-0 invert"
       />
       {/* Regular assistant-waiting row: pulsing dot + thinking text + elapsed —

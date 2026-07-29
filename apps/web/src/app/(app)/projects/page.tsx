@@ -28,6 +28,7 @@ import { invalidateAccountState, useAccountState } from '@/hooks/billing';
 import { useLegacyMachines } from '@/hooks/legacy/use-legacy-machine-migration';
 import { billingApi } from '@/lib/api/billing';
 import { isBillingEnabled } from '@/lib/config';
+import { getSubscriptionActivatedDescription } from '@/lib/runtime-brand-copy';
 import {
   ensureFirstProject,
   hasFirstProjectBootstrapSignal,
@@ -136,7 +137,7 @@ export default function ProjectsPage() {
         if (cancelled) return;
         await invalidateAccountState(queryClient);
         successToast('Subscription activated', {
-          description: 'Your team is on Kortix Team. Compute and LLM credits are ready.',
+          description: getSubscriptionActivatedDescription(),
         });
       } catch {
         invalidateAccountState(queryClient);

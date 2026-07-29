@@ -85,6 +85,17 @@ function redirectLocation(res: Response): string {
 }
 
 describe('Slack OAuth callback', () => {
+  test('publishes an OpenOPC dashboard redirect description', () => {
+    const spec = slackOauthApp.getOpenAPIDocument({
+      openapi: '3.0.0',
+      info: { title: 'Slack OAuth test', version: '1.0.0' },
+    });
+    const description = spec.paths?.['/callback']?.get?.responses?.['302']?.description;
+
+    expect(description).toBe('Redirect to the OpenOPC dashboard');
+    expect(description).not.toContain('Kortix');
+  });
+
   test('saves a project-scoped install and redirects to the project connectors page', async () => {
     const res = await slackOauthApp.request(`/callback?code=code-1&state=${stateFromInstallUrl()}`);
 

@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { projects } from '@kortix/db';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { db } from '../shared/db';
 
 export interface MeetVoice {
@@ -51,7 +52,7 @@ export async function setProjectVoice(projectId: string, voiceId: string): Promi
   return voice;
 }
 
-export const DEFAULT_MEET_BOT_NAME = 'Kortix Notetaker';
+export const DEFAULT_MEET_BOT_NAME = `${PRODUCT_BRAND.displayName} Notetaker`;
 
 export async function resolveProjectBotName(projectId: string): Promise<string> {
   const [row] = await db
@@ -71,7 +72,7 @@ export async function setProjectBotName(projectId: string, name: string): Promis
 
 export function deriveWakeWord(botName: string): string {
   const first = botName.trim().split(/\s+/)[0]?.toLowerCase().replace(/[^a-z0-9]/g, '') ?? '';
-  return first || 'kortix';
+  return first || PRODUCT_BRAND.displayName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'openopc';
 }
 
 async function mergeMeetMetadata(projectId: string, patch: Record<string, unknown>): Promise<void> {

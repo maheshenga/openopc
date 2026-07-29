@@ -1,5 +1,6 @@
 import { getServerPublicEnv } from '@/lib/public-env-server';
-import { Metadata } from 'next';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
+import type { Metadata } from 'next';
 
 export async function generateMetadata({
   params,
@@ -8,9 +9,10 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { shareId } = await params;
 
-  const title = 'Shared Conversation | Kortix';
-  const description = 'Replay this Worker conversation on Kortix';
+  const title = `Shared Conversation | ${PRODUCT_BRAND.displayName}`;
+  const description = `Replay this Worker conversation on ${PRODUCT_BRAND.displayName}`;
   const url = getServerPublicEnv().APP_URL || 'https://kortix.com';
+  const socialImage = `${url}/brandkit/Profile%20Picture/Avatar%20Black.png`;
 
   return {
     title,
@@ -21,12 +23,12 @@ export async function generateMetadata({
     openGraph: {
       title,
       description,
-      images: [`${url}/share-page/og-fallback.png`],
+      images: [socialImage],
     },
     twitter: {
       title,
       description,
-      images: `${url}/share-page/og-fallback.png`,
+      images: socialImage,
       card: 'summary_large_image',
     },
     robots: {

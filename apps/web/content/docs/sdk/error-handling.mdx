@@ -6,7 +6,7 @@ description: "The typed error hierarchy — ApiError, AuthError, BillingError, S
 Every REST call made through `createKortix(...)` or `backendApi` rejects with a
 real `Error` subclass — never a plain object. `catch` it, `instanceof` it, and
 branch on `.status`/`.code`. These are the **same classes** on every host: a
-server-side "Kortix as a backend" wrapper and the React UI both import from the
+server-side "OpenOPC as a backend" wrapper and the React UI both import from the
 one module.
 
 ```ts
@@ -134,7 +134,7 @@ boot `phase` instead of an exception).
 
 <Callout type="warn">
   One `instanceof` trap: if a page somehow loads **two copies** of the SDK (the
-  ESM build *and* the CDN `window.Kortix` global), each copy has its own
+  ESM build *and* the CDN `window.OpenOPC` global), each copy has its own
   `ApiError` class and `instanceof` across the boundary silently returns
   `false`. Pick one distribution per page — see
   [Distribution](/docs/sdk/distribution#cdn--no-build-step).

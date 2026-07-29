@@ -122,6 +122,8 @@ describe('initiateTeamsUpload', () => {
     expect(r.ok).toBe(true);
     expect(dbWrites.some((w) => w.op === 'insert.values')).toBe(true);
     expect(apiCalls.map((c) => c.fn)).toEqual(['sendActivity']);
+    expect(JSON.stringify(apiCalls[0]?.args)).toContain('OpenOPC wants to send you r.pdf.');
+    expect(JSON.stringify(apiCalls[0]?.args)).not.toContain('Kortix');
   });
 });
 

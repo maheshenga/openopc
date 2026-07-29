@@ -5,6 +5,7 @@ import {
   type PublicContentKind,
 } from '@/lib/seo/public-content';
 import { siteMetadata } from '@/lib/site-metadata';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 const SECTION_LABELS: Record<PublicContentKind, string> = {
   marketing: 'Core pages',
@@ -30,7 +31,7 @@ export function renderLlmsTxt(): string {
   }
 
   return [
-    '# Kortix',
+    `# ${PRODUCT_BRAND.displayName}`,
     '',
     `> ${siteMetadata.description}`,
     '',
@@ -53,7 +54,7 @@ export function renderLlmsFullTxt(): string {
   });
 
   return [
-    '# Kortix full public content corpus',
+    `# ${PRODUCT_BRAND.displayName} full public content corpus`,
     '',
     `> ${siteMetadata.description}`,
     '',

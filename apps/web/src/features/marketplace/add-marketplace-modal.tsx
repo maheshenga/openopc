@@ -26,11 +26,12 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { errorToast, successToast } from '@/components/ui/toast';
 import { useAddMarketplaceSource, useFeaturedMarketplaces } from '@/hooks/marketplace';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { MarketplaceAvatar } from './marketplace-avatar';
 import { displayCompanyLabel } from './marketplace-company-filter';
 
 /**
- * "Add a source" — pointing Kortix at any git registry is the primary action
+ * "Add a source" — pointing the product at any git registry is the primary action
  * (it's just git: a repo with SKILL.md / marketplace.json). Below that, a
  * searchable list of curated, one-click featured registries. Enabled items
  * merge into the catalog.
@@ -117,7 +118,8 @@ export function AddMarketplaceModal({
         <ModalHeader>
           <ModalTitle>Add a source</ModalTitle>
           <ModalDescription>
-            Point Kortix at any git repo with a <span className="font-mono">SKILL.md</span> /{' '}
+            Point {PRODUCT_BRAND.displayName} at any git repo with a{' '}
+            <span className="font-mono">SKILL.md</span> /{' '}
             <span className="font-mono">marketplace.json</span> — or enable a curated one below.
           </ModalDescription>
         </ModalHeader>

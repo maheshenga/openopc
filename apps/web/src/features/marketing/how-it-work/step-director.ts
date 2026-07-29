@@ -61,7 +61,7 @@ function step1ScaffoldLines(runtime: RuntimeOption): Line[] {
     ok(t('Using '), t(runtime.label, 'fg'), t(' runtime')),
     [],
     [
-      t('Initialized Kortix project '),
+      t('Initialized OpenOPC project '),
       t(`"${STEP1_PROJECT}"`, 'fg'),
       t(' in '),
       t(`~/${STEP1_PROJECT}`, 'faded'),
@@ -83,7 +83,7 @@ function step1StaticBlocks(): StepCliBlock[] {
   return [
     {
       cmd: cmdLine(`kortix init ${STEP1_PROJECT}`),
-      out: [[], [t('Creating a new Kortix project…', 'dim')], ...step1ScaffoldLines(RUNTIMES[0])],
+      out: [[], [t('Creating a new OpenOPC project…', 'dim')], ...step1ScaffoldLines(RUNTIMES[0])],
     },
   ];
 }
@@ -168,7 +168,7 @@ export function useStep1Director(): Step1Director {
         if (cancelled) return;
 
         appendLine([]);
-        appendLine([t('Creating a new Kortix project…', 'dim')]);
+        appendLine([t('Creating a new OpenOPC project…', 'dim')]);
         await sleep(STEP1_SPEED.line);
 
         setMenu({ selected: 0, chosen: null });

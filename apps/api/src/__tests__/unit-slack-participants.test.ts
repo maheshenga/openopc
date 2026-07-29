@@ -137,7 +137,7 @@ describe('Slack thread participants', () => {
       decision: 'approved',
     });
 
-    expect(result).toEqual({ ok: true, text: 'Approved requester-user@example.com for this Kortix session.' });
+    expect(result).toEqual({ ok: true, text: 'Approved requester-user@example.com for this OpenOPC session.' });
     expect(inserts[0]).toMatchObject({ status: 'approved', sessionId: 'sess-1' });
     expect(inserts[1]).toMatchObject({ sessionId: 'sess-1', principalType: 'member', principalId: 'requester-user' });
     expect(ephemerals[0]?.user).toBe('Urequester');
@@ -164,7 +164,7 @@ describe('Slack thread participants', () => {
     expect(ephemerals[0]).toMatchObject({
       channel: 'C1',
       user: 'Urequester',
-      text: 'This Kortix session is owner-only.',
+      text: 'This OpenOPC session is owner-only.',
       threadTs: '90.0',
     });
   });

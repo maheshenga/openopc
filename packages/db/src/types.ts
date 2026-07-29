@@ -2,6 +2,7 @@ import type {
   accountGithubInstallations,
   accountInvitations,
   accountMembers,
+  accountRequests,
   accounts,
   auditEvents,
   automationApprovals,
@@ -16,6 +17,7 @@ import type {
   chatThreads,
   creditAccounts,
   developerInvitations,
+  developerApplications,
   developerModuleArtifactUploads,
   developerModuleArtifacts,
   developerModuleReleaseDistributionEvents,
@@ -60,6 +62,7 @@ import type {
   projectSessions,
   projectSnapshotBuilds,
   projects,
+  policyAcceptances,
   sandboxTemplates,
   sandboxes,
   sessionSandboxes,
@@ -151,6 +154,14 @@ export type AutomationBrowserProfile = typeof automationBrowserProfiles.$inferSe
 export type NewAutomationBrowserProfile = typeof automationBrowserProfiles.$inferInsert;
 export type AutomationKillSwitch = typeof automationKillSwitches.$inferSelect;
 export type NewAutomationKillSwitch = typeof automationKillSwitches.$inferInsert;
+
+// Public beta identity and account requests
+export type PolicyAcceptance = typeof policyAcceptances.$inferSelect;
+export type NewPolicyAcceptance = typeof policyAcceptances.$inferInsert;
+export type AccountRequest = typeof accountRequests.$inferSelect;
+export type NewAccountRequest = typeof accountRequests.$inferInsert;
+export type DeveloperApplication = typeof developerApplications.$inferSelect;
+export type NewDeveloperApplication = typeof developerApplications.$inferInsert;
 
 // OpenOPC Developer Center
 export type DeveloperInvitation = typeof developerInvitations.$inferSelect;

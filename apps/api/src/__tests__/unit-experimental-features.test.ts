@@ -114,6 +114,18 @@ describe('resolveExperimentalFeatures', () => {
 });
 
 describe('buildExperimentalCatalog', () => {
+  test('uses the product display name in customer-visible feature descriptions', () => {
+    const agentMail = findCatalogFeature('agentmail_email');
+    const llmGateway = findCatalogFeature('llm_gateway');
+
+    expect(agentMail.description).toBe(
+      'Assign AgentMail inbox profiles to the agent so inbound email threads can start and continue OpenOPC sessions. Native email channels are still experimental.',
+    );
+    expect(llmGateway.description).toBe(
+      'Route this project through the managed OpenOPC LLM gateway. Toggling it refreshes active sandboxes so provider mode follows the project setting.',
+    );
+  });
+
   test('describes each feature with effective + overridden flags', () => {
     const catalog = buildExperimentalCatalog({ experimental: { review_center: true } });
     expect(catalog.length).toBeGreaterThan(0);

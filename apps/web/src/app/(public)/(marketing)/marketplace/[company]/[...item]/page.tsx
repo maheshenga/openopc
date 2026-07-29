@@ -38,14 +38,14 @@ export async function generateMetadata({
   const id = pathPartsToItemId(company, item);
   try {
     const detail = await getPublicMarketplaceItem(id);
-    const description = detail.description ?? `${detail.title} on the Kortix Marketplace.`;
+    const description = detail.description ?? `${detail.title} on the OpenOPC Marketplace.`;
     return {
-      title: `${detail.title} — Kortix Marketplace`,
+      title: `${detail.title} — OpenOPC Marketplace`,
       description,
-      openGraph: { title: `${detail.title} — Kortix Marketplace`, description },
+      openGraph: { title: `${detail.title} — OpenOPC Marketplace`, description },
     };
   } catch {
-    return { title: 'Marketplace — Kortix' };
+    return { title: 'Marketplace — OpenOPC' };
   }
 }
 

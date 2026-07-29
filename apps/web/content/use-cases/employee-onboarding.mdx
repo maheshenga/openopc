@@ -17,11 +17,11 @@ setup is rarely the person who owns every system. Steps get missed, and a new
 hire waits on access they should have had on their first morning.
 
 We handle this by tying the setup to the event that starts it: a new record in
-our HR system. This writes up how we run that on Kortix — the connections, the
+our HR system. This writes up how we run that on OpenOPC — the connections, the
 steps, and the guardrails — so you can set up the same flow for your own team.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Trigger">A new-hire record</Fact>
   <Fact label="Connected systems">Google Workspace · Slack · Linear</Fact>
   <Fact label="Mode">Trigger-driven · Approval-gated</Fact>
@@ -41,7 +41,7 @@ person to confirm.
 
 ## What we built
 
-On Kortix, a new-hire record triggers an agent. Each new hire runs in its own
+On OpenOPC, a new-hire record triggers an agent. Each new hire runs in its own
 isolated session — a cloud sandbox — with scoped access to what onboarding needs:
 Google Workspace, Slack, and Linear. The agent reads the role, prepares the
 account, the group and channel memberships, and a first-week onboarding
@@ -113,7 +113,7 @@ Slack channels, and a Linear onboarding project, ready on day one.
 ## Guardrails
 
 Giving an agent the ability to create accounts and grant access is a trust
-question. The relevant controls on Kortix:
+question. The relevant controls on OpenOPC:
 
 - **Isolation.** Every new hire runs in its own microVM sandbox on its own
   branch. The session can reach only the systems it's scoped to, and only what

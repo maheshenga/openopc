@@ -1,6 +1,6 @@
 ---
 title: "How we chase down overdue invoices"
-description: An accounts-receivable agent we run on Kortix — connected to Stripe, email, and the accounting ledger. It finds overdue invoices, sends the right reminder, logs every touch, and reconciles when payment lands.
+description: An accounts-receivable agent we run on OpenOPC — connected to Stripe, email, and the accounting ledger. It finds overdue invoices, sends the right reminder, logs every touch, and reconciles when payment lands.
 date: "2026-02-11"
 author: team
 tags:
@@ -16,12 +16,12 @@ the customer pays. But the timing, the tone, and the escalation depend on how la
 the balance is and how large it is, and some accounts are sensitive enough that no
 automated email should go out without a person looking first.
 
-We run an accounts-receivable agent on Kortix that does this chasing on a daily
+We run an accounts-receivable agent on OpenOPC that does this chasing on a daily
 schedule. This is how we collect on our own invoices, including the connections
 and guardrails involved.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">A daily cron</Fact>
   <Fact label="Connected systems">Stripe · Email · Accounting ledger</Fact>
   <Fact label="Mode">Read-mostly · reminders and status notes gate-able</Fact>
@@ -43,7 +43,7 @@ sends the same email to everyone and has no way to hold the risky ones back.
 
 ## What we built
 
-On Kortix, a daily cron triggers an agent. Each morning it spawns an isolated
+On OpenOPC, a daily cron triggers an agent. Each morning it spawns an isolated
 session (a cloud sandbox) with scoped access to Stripe, our email, and the
 accounting ledger. It finds every invoice that's overdue or coming due soon,
 decides the right reminder for each based on how late and how large the balance

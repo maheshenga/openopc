@@ -6,6 +6,10 @@ import { HTTPException } from 'hono/http-exception';
 import { ACCOUNT_ACTIONS } from '../iam/actions';
 import { type DeveloperAppDependencies, createDeveloperApp } from './app';
 import {
+  DeveloperApplicationService,
+  createMemoryDeveloperApplicationRepository,
+} from './applications';
+import {
   DeveloperModuleArtifactService,
   createMemoryDeveloperArtifactStore,
   createMemoryDeveloperModuleArtifactRepository,
@@ -73,6 +77,13 @@ function emptyPublisherService() {
   });
 }
 
+function emptyApplicationService() {
+  return new DeveloperApplicationService({
+    repository: createMemoryDeveloperApplicationRepository(),
+    currentPolicyVersions: { moduleRules: '2026-07-28', acceptableUse: '2026-07-28' },
+  });
+}
+
 const authenticatedApp = (
   input: {
     accountId?: string;
@@ -83,6 +94,7 @@ const authenticatedApp = (
     publisherService?: DeveloperAppDependencies['publisherService'];
     resolvedSources?: Array<'body' | 'query'>;
     authorizeAccount?: DeveloperAppDependencies['authorizeAccount'];
+    applicationService?: DeveloperAppDependencies['applicationService'];
   } = {},
 ) => {
   const artifacts = createMemoryDeveloperModuleArtifactRepository();
@@ -102,6 +114,7 @@ const authenticatedApp = (
       input.resolvedSources?.push(source);
       return input.accountId ?? ACCOUNT_ID;
     },
+    applicationService: input.applicationService ?? emptyApplicationService(),
     artifactService: input.artifactService ?? artifactService,
     releaseService:
       input.releaseService ??
@@ -179,6 +192,7 @@ describe('developer module validation API', () => {
         throw new HTTPException(401, { message: 'Unauthorized' });
       },
       resolveAccountId: async () => ACCOUNT_ID,
+      applicationService: emptyApplicationService(),
       artifactService: new DeveloperModuleArtifactService({
         repository: artifacts,
         store: createMemoryDeveloperArtifactStore().store,
@@ -266,6 +280,7 @@ describe('developer module validation API', () => {
         throw new HTTPException(401, { message: 'Unauthorized' });
       },
       resolveAccountId: async () => ACCOUNT_ID,
+      applicationService: emptyApplicationService(),
       artifactService: new DeveloperModuleArtifactService({
         repository: artifacts,
         store: createMemoryDeveloperArtifactStore().store,
@@ -366,6 +381,7 @@ describe('developer module validation API', () => {
       authorizeAccount: async () => {
         order.push('authorize');
       },
+      applicationService: emptyApplicationService(),
       artifactService,
       releaseService: {
         async submit(input) {
@@ -785,6 +801,7 @@ describe('developer Publisher API', () => {
           updated_at: '2026-07-26T00:00:00.000Z',
         },
       ],
+      applicationStates: [{ accountId: ACCOUNT_ID, organizationId, state: 'approved' }],
     });
     const publisherService = new DeveloperPublisherService({
       repository,

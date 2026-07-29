@@ -6,6 +6,7 @@ import { MarketplaceAvatar } from '@/features/marketplace/marketplace-avatar';
 import type { MarketplaceSummary } from '@/lib/marketplace-client';
 import { companySlugFromId, marketplaceCompanyHref } from '@/lib/marketplace-slug';
 import { cn } from '@/lib/utils';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 export function MarketplaceCompanyFilter({
   marketplaces,
@@ -71,7 +72,7 @@ function CompanyChip({
 }
 
 const KNOWN_COMPANY_LABELS: Record<string, string> = {
-  kortix: 'Kortix',
+  kortix: PRODUCT_BRAND.displayName,
   'anthropics/skills': 'Anthropic Skills',
   'anthropics/knowledge-work-plugins': 'Anthropic Knowledge Work',
 };

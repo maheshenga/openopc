@@ -1,5 +1,5 @@
 ---
-title: How Kortix works
+title: How OpenOPC works
 description: The architecture — repo-as-project, the control plane, ephemeral sandboxes on branches, and change requests.
 ---
 
@@ -11,7 +11,7 @@ default branch only via a merged **[change request](/docs/concepts/change-reques
 
 ## The pieces
 
-- **[Projects](/docs/concepts/projects)** — a git repo (Kortix-managed or
+- **[Projects](/docs/concepts/projects)** — a git repo (OpenOPC-managed or
   imported GitHub, pinned to one branch) plus its manifest.
 - **[Sessions](/docs/concepts/sessions)** — isolated sandbox VMs, each on
   its own branch. Many run at once without interfering.
@@ -36,7 +36,7 @@ default branch only via a merged **[change request](/docs/concepts/change-reques
 2. It resolves a content-addressed **snapshot** — the platform's default image
    (or your own Dockerfile, if the manifest declares a
    [`sandbox.templates`](/docs/reference/manifest) entry for it) plus the
-    Kortix runtime layer, built by the configured sandbox provider.
+    OpenOPC runtime layer, built by the configured sandbox provider.
    Unchanged projects reuse the cached image.
 3. The sandbox provider boots the VM. The `kortix-agent` daemon clones the repo to
    `/workspace`, fetches git credentials just-in-time, and launches OpenCode.
@@ -55,14 +55,14 @@ change request makes it permanent on the default branch.
 
 ## Two config surfaces
 
-The manifest (`kortix.yaml`) + `.kortix/Dockerfile` are Kortix-owned;
+The manifest (`kortix.yaml`) + `.kortix/Dockerfile` are OpenOPC-owned;
 `.kortix/opencode/` is OpenCode-native runtime behavior. `agents:` is a
 name-keyed map that is governance only — `connectors`, `secrets`, `kortix_cli`,
 `skills`, which agent names are launchable, and what each may touch. Everything
 about how an agent behaves (prompt, mode, tools, permissions) lives in that
 agent's own `.kortix/opencode/agents/<name>.md`, a stock OpenCode agent file.
 `default_agent` is required and must name a declared, enabled agent. See
-[Kortix vs OpenCode config](/docs/reference/config-boundary). Drive any of it
+[OpenOPC vs OpenCode config](/docs/reference/config-boundary). Drive any of it
 from a terminal with the [CLI](/docs/reference/cli) — it controls the cloud, it
 doesn't run the agent locally.
 

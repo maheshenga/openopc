@@ -261,7 +261,7 @@ update.mutate({ permission: { edit: 'allow' } });
 ## PTY terminal
 
 A live terminal into the session's sandbox — list/create/remove/resize PTYs, then
-open a WebSocket for the byte stream. Backed by Kortix's own PTY implementation
+open a WebSocket for the byte stream. Backed by OpenOPC's own PTY implementation
 in the sandbox daemon (`/kortix/pty`), independent of whatever agent runtime is
 running — the hook names/shapes below are unchanged from before that move.
 
@@ -344,7 +344,7 @@ The `opencodeKeys` query-key factory is exported too, for targeted
 `@kortix/sdk/react` also re-exports the full **Kortix Master** React Query layer
 — the hooks behind a project's task board, ticket/kanban system, credentials
 vault, and project/team management. This is the same hook set `apps/web`'s
-Kortix UI runs on end to end; it's exported from the SDK so any host can build
+OpenOPC UI runs on end to end; it's exported from the SDK so any host can build
 the same surface.
 
 These hooks talk to the `/kortix/*` daemon routes and are otherwise plain
@@ -390,10 +390,10 @@ upsert.mutate({ projectId, name: 'STRIPE_KEY', value: 'sk_...', description: 'St
 | `useRevealCredential()`                                              | decrypt + return one value (audit-logged as a read)         |
 | `useDeleteCredential()`                                              | remove a credential                                         |
 
-### Kortix projects
+### OpenOPC projects
 
 The project registry itself (`/kortix/projects`) — distinct from an SDK
-`Project` (a sandbox/session container); a Kortix project is the
+`Project` (a sandbox/session container); a OpenOPC project is the
 task/ticket/credentials workspace layered on top.
 
 ```tsx
@@ -406,7 +406,7 @@ const { data: project } = useKortixProject(identity, projectId);
 | hook                                                             | purpose                                                          |
 | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `useKortixProjects(identity)` · `useKortixProject(identity, id)` | list · one project                                               |
-| `useKortixProjectForSession(identity, sessionId)`                | resolve the Kortix project a session belongs to (`null` if none) |
+| `useKortixProjectForSession(identity, sessionId)`                | resolve the OpenOPC project a session belongs to (`null` if none) |
 | `useKortixProjectSessions(identity, projectId)`                  | OpenCode sessions linked to a project                            |
 | `usePatchProject()`                                              | update name / description / `user_handle`                        |
 | `useDeleteProject()`                                             | delete a project                                                 |

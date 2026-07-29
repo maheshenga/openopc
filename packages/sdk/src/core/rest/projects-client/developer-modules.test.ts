@@ -67,6 +67,45 @@ test('createKortix exposes developer module validation', async () => {
   ).resolves.toEqual({ valid: true, issues: [] });
 });
 
+test('developer application SDK reads current policy state and submits exact accepted versions', async () => {
+  const sdk = (await import('./developer-modules')) as Record<string, unknown>;
+  expect(sdk.getCurrentDeveloperApplication).toBeFunction();
+  expect(sdk.submitDeveloperApplication).toBeFunction();
+
+  const getCurrentDeveloperApplication = sdk.getCurrentDeveloperApplication as (options: {
+    accountId: string;
+  }) => Promise<unknown>;
+  const submitDeveloperApplication = sdk.submitDeveloperApplication as (input: {
+    accountId: string;
+    organizationName: string;
+    policyVersions: { moduleRules: string; acceptableUse: string };
+  }) => Promise<unknown>;
+
+  await getCurrentDeveloperApplication({ accountId: 'acc-1' });
+  await submitDeveloperApplication({
+    accountId: 'acc-1',
+    organizationName: 'Acme Studio',
+    policyVersions: { moduleRules: '2026-07-28', acceptableUse: '2026-07-28' },
+  });
+
+  expect(calls).toEqual([
+    {
+      url: 'http://test.local/developer/applications/current?account_id=acc-1',
+      method: 'GET',
+      body: undefined,
+    },
+    {
+      url: 'http://test.local/developer/applications',
+      method: 'POST',
+      body: {
+        account_id: 'acc-1',
+        organization_name: 'Acme Studio',
+        policy_versions: { moduleRules: '2026-07-28', acceptableUse: '2026-07-28' },
+      },
+    },
+  ]);
+});
+
 test('developer Publisher SDK maps access, invitation, creation, list, and role updates', async () => {
   await getDeveloperAccess({ accountId: 'acc-1' });
   await acceptDeveloperInvitation('one-time-token', { accountId: 'acc-1' });

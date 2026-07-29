@@ -43,7 +43,7 @@ export function SessionTerminalConnectBar({ projectSessionId }: { projectSession
         <div className="space-y-2.5 px-3 pb-3 pt-0.5">
           <p className="text-xs leading-relaxed text-white/45">
             Attach your local OpenCode TUI straight to this session&apos;s sandbox. The CLI opens a
-            local proxy, injects your Kortix token, then runs{' '}
+            local proxy, injects your OpenOPC token, then runs{' '}
             <span className="font-mono text-white/60">opencode attach</span>.
           </p>
           <CommandRow label="1. Install the CLI (once)" command={installCmd} />

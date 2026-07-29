@@ -5,6 +5,7 @@
  * that isn't actually in the list.
  */
 import { describe, expect, test } from 'bun:test';
+import { config } from '../config';
 import {
   DEFAULT_MEET_BOT_NAME,
   DEFAULT_MEET_VOICE,
@@ -14,6 +15,7 @@ import {
   getMeetVoice,
   isMeetVoice,
 } from '../channels/meet-voices';
+import { previewVoiceB64 } from '../channels/meet-tts';
 
 describe('MEET_VOICES catalog', () => {
   test('every voice has a unique slug + name + a non-empty ElevenLabs id', () => {
@@ -42,8 +44,8 @@ describe('MEET_VOICES catalog', () => {
 });
 
 describe('bot name + wake word', () => {
-  test('default bot name is Kortix Notetaker', () => {
-    expect(DEFAULT_MEET_BOT_NAME).toBe('Kortix Notetaker');
+  test('default bot name is OpenOPC Notetaker', () => {
+    expect(DEFAULT_MEET_BOT_NAME).toBe('OpenOPC Notetaker');
   });
 
   test('wake word is the first word of the bot name, lowercased', () => {
@@ -52,9 +54,31 @@ describe('bot name + wake word', () => {
     expect(deriveWakeWord('Jarvis')).toBe('jarvis');
   });
 
-  test('empty / whitespace name falls back to kortix', () => {
-    expect(deriveWakeWord('   ')).toBe('kortix');
-    expect(deriveWakeWord('')).toBe('kortix');
+  test('empty / whitespace name falls back to the product wake word', () => {
+    expect(deriveWakeWord('   ')).toBe('openopc');
+    expect(deriveWakeWord('')).toBe('openopc');
+  });
+});
+
+describe('Meet voice preview brand', () => {
+  test('introduces the notetaker as OpenOPC in synthesized preview speech', async () => {
+    const originalApiKey = config.ELEVENLABS_API_KEY;
+    const originalFetch = globalThis.fetch;
+    let synthesizedText = '';
+    try {
+      (config as { ELEVENLABS_API_KEY: string | undefined }).ELEVENLABS_API_KEY = 'test-key';
+      globalThis.fetch = (async (_url, init) => {
+        synthesizedText = (JSON.parse(String(init?.body ?? '{}')) as { text?: string }).text ?? '';
+        return new Response(new Uint8Array([0xff, 0xfb]), { status: 200 });
+      }) as typeof fetch;
+
+      expect((await previewVoiceB64('sarah')).ok).toBe(true);
+      expect(synthesizedText).toContain("I'm your OpenOPC notetaker");
+      expect(synthesizedText).not.toContain('Kortix');
+    } finally {
+      globalThis.fetch = originalFetch;
+      (config as { ELEVENLABS_API_KEY: string | undefined }).ELEVENLABS_API_KEY = originalApiKey;
+    }
   });
 });
 

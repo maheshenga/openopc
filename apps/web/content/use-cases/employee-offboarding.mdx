@@ -15,12 +15,12 @@ to change hands, and their licenses have to come back. Miss a step and a former
 employee keeps a login, a shared drive loses its owner, or a paid seat sits
 unused. The steps are simple; the risk is in the ones that get skipped.
 
-We run offboarding through an agent on Kortix. When HR marks a departure, the
+We run offboarding through an agent on OpenOPC. When HR marks a departure, the
 agent works the checklist across every connected tool and posts what it did and
 what is still pending. This is the security counterpart to how we onboard.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">HR departure event</Fact>
   <Fact label="Connected systems">Okta/SSO · Google Workspace · Slack · GitHub</Fact>
   <Fact label="Mode">Trigger-driven · irreversible steps gated</Fact>
@@ -41,7 +41,7 @@ forget are exactly the ones that matter for security.
 
 ## What we built
 
-On Kortix, a departure marked in HR triggers an agent. It spawns an isolated
+On OpenOPC, a departure marked in HR triggers an agent. It spawns an isolated
 session (a cloud sandbox) with scoped access to Okta, Google Workspace, Slack, and
 GitHub, and works the offboarding checklist: revoke SSO and app access, remove the
 person from the Slack and GitHub orgs, transfer document and repository ownership,

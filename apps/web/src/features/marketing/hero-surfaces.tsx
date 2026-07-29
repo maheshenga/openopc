@@ -1,14 +1,16 @@
 'use client';
 
 import { InteractiveDemoSection } from '@/components/home/interactive-demo-section';
-import { KortixLogo } from '@/components/sidebar/kortix-logo';
 import { Badge } from '@/components/ui/badge';
 import { Icon } from '@/features/icon/icon';
 import { cn } from '@/lib/utils';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { ArrowUpRight, Code2, Monitor, Smartphone, Terminal } from 'lucide-react';
 import Link from 'next/link';
 import type { ComponentType, ReactNode } from 'react';
 import { useState } from 'react';
+
+const BRAND_NAME = PRODUCT_BRAND.displayName;
 
 type SurfaceId = 'web' | 'slack' | 'teams' | 'mobile' | 'cli' | 'sdk';
 
@@ -96,10 +98,13 @@ function ChatBubble({
   );
 }
 
-function KortixAvatar() {
+function ProductAvatar() {
   return (
-    <span className="bg-primary flex size-8 shrink-0 items-center justify-center rounded-md">
-      <KortixLogo size={15} className="text-background" />
+    <span
+      aria-hidden
+      className="bg-primary text-primary-foreground flex size-8 shrink-0 items-center justify-center rounded-md font-mono text-[8px] font-bold tracking-[-0.08em]"
+    >
+      OPC
     </span>
   );
 }
@@ -134,7 +139,7 @@ function ChatSurface({ brand }: { brand: 'slack' | 'teams' }) {
       <div className="border-border flex items-center justify-between border-b px-4 py-3">
         <div className="flex items-center gap-2.5">
           <BrandIcon className="size-5" />
-          <span className="text-foreground text-sm font-semibold">Kortix</span>
+          <span className="text-foreground text-sm font-semibold">{BRAND_NAME}</span>
           {brand === 'teams' && (
             <Badge variant="kortix" size="sm" className="rounded">
               Coming soon
@@ -146,16 +151,16 @@ function ChatSurface({ brand }: { brand: 'slack' | 'teams' }) {
 
       <div className="flex flex-1 flex-col justify-end gap-5 overflow-y-auto p-5">
         <ChatBubble name="Marko" avatar={<PersonAvatar initial="M" />}>
-          @Kortix what changed in our repo since Monday?
+          {`@${BRAND_NAME} what changed in our repo since Monday?`}
         </ChatBubble>
-        <ChatBubble name="Kortix" app avatar={<KortixAvatar />}>
+        <ChatBubble name={BRAND_NAME} app avatar={<ProductAvatar />}>
           <MorningBrief />
         </ChatBubble>
       </div>
 
       <div className="border-border border-t p-3">
         <div className="border-border text-muted-foreground/70 rounded-lg border px-3 py-2 text-sm">
-          Message Kortix…
+          Message {BRAND_NAME}…
         </div>
       </div>
     </div>
@@ -183,7 +188,11 @@ function MobileSurface() {
           )}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={src} alt="Kortix mobile app" className="block h-full w-auto object-contain" />
+          <img
+            src={src}
+            alt={`${BRAND_NAME} mobile app`}
+            className="block h-full w-auto object-contain"
+          />
         </div>
       ))}
     </div>
@@ -192,7 +201,7 @@ function MobileSurface() {
 
 const CLI_LINES = [
   '$ kortix init acme-ops',
-  '✓ Initialized Kortix project "acme-ops"  # everything is files',
+  `✓ Initialized ${BRAND_NAME} project "acme-ops"  # everything is files`,
   '',
   '$ kortix run "draft the renewal for Acme"',
   '✓ session/renewal-acme · sandbox booted   # isolated branch',
@@ -205,7 +214,7 @@ const CLI_LINES = [
 const SDK_LINES = [
   'import { createKortix, generateSessionId } from "@kortix/sdk";',
   '',
-  '// one typed client for the Kortix API + the agent runtime',
+  `// one typed client for the ${BRAND_NAME} API + the agent runtime`,
   'const kortix = createKortix({',
   '  backendUrl: "https://api.kortix.com/v1",',
   '  getToken: () => process.env.KORTIX_API_KEY!,',

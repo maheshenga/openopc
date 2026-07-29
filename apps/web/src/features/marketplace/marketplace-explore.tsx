@@ -215,7 +215,7 @@ export function MarketplaceExplore({
               Install a project, or add a skill
             </h1>
             <p className="text-muted-foreground text-sm leading-relaxed text-pretty">
-              Install a full, working Kortix project in one click — or add skills from every source
+              Install a full, working OpenOPC project in one click — or add skills from every source
               into a project you already have.
             </p>
           </div>
@@ -285,7 +285,7 @@ export function MarketplaceExplore({
           <section className="scroll-mt-28">
             <SectionHeading
               title="Install a project"
-              subtitle="A full, working Kortix project — spun up as its own project and set up for you in one session."
+              subtitle="A full, working OpenOPC project — spun up as its own project and set up for you in one session."
             />
             <MarketplaceProjectsGrid items={projectItems} query={debounced} size="featured" />
           </section>

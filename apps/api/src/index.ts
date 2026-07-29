@@ -52,6 +52,7 @@ import { initModelPricing, stopModelPricing } from './router/config/model-pricin
 import { runtimeModelCatalog } from './llm-gateway/models/runtime-catalog';
 import { tunnelApp, wsHandlers as tunnelWsHandlers, startTunnelService, stopTunnelService, getTunnelServiceStatus } from './tunnel';
 import { accessControlApp } from './access-control';
+import { accountRequestsApp } from './account-requests/app';
 import { startAccessControlCache, stopAccessControlCache } from './shared/access-control-cache';
 import { startTmpReaper, stopTmpReaper } from './snapshots/tmp-reaper';
 import { startLeaderElection, stopLeaderElection, isLeader, runsSingletonWorkers } from './shared/leader-election';
@@ -699,6 +700,7 @@ app.route('/v1/router', router);        // /v1/router/chat/completions, /v1/rout
 
 app.route('/v1/billing', billingApp);   // /v1/billing/account-state, /v1/billing/webhooks/*
 app.route('/v1/account', accountDeletionApp); // account deletion status/request/cancel/immediate
+app.route('/v1/account', accountRequestsApp); // member-owned export/deletion/security/module requests
 app.route('/v1/platform', platformApp); // /v1/platform, /v1/platform/sandbox/version
 app.route('/v1', moduleRuntimeApp); // Project module executions + private mTLS Runner protocol
 registerSunaMigrationRoutes(projectsApp); // /v1/projects/suna-migration/* (OG Suna → opencode, user-triggered)

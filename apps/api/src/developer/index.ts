@@ -11,6 +11,8 @@ import { resolveScopedAccountId } from '../shared/resolve-account';
 import { getDefaultStudioApiRuntime } from '../studio/default-routes';
 import type { AppEnv } from '../types';
 import { createDeveloperApp } from './app';
+import { DeveloperApplicationService } from './applications';
+import { createDrizzleDeveloperApplicationRepository } from './applications.drizzle';
 import {
   type DeveloperModuleArtifactRepository,
   DeveloperModuleArtifactService,
@@ -48,6 +50,8 @@ import { DeveloperModuleVerificationService } from './verification';
 import { createDrizzleDeveloperModuleVerificationRepository } from './verification.drizzle';
 
 export { createDeveloperApp, type DeveloperAppDependencies } from './app';
+export * from './applications';
+export { createDrizzleDeveloperApplicationRepository } from './applications.drizzle';
 export * from './artifacts';
 export { createDrizzleDeveloperModuleArtifactRepository } from './artifacts.drizzle';
 export { createDeveloperModuleS3ArtifactStore } from './artifacts.s3';
@@ -100,6 +104,13 @@ async function resolveDeveloperAccountId(
 
 const artifactRepository: DeveloperModuleArtifactRepository =
   createDrizzleDeveloperModuleArtifactRepository(db);
+export const developerApplicationService = new DeveloperApplicationService({
+  repository: createDrizzleDeveloperApplicationRepository(db),
+  currentPolicyVersions: {
+    moduleRules: process.env.OPENOPC_DEVELOPER_MODULE_RULES_VERSION ?? '2026-07-28',
+    acceptableUse: process.env.OPENOPC_ACCEPTABLE_USE_VERSION ?? '2026-07-28',
+  },
+});
 export const developerPublisherService = new DeveloperPublisherService({
   repository: createDrizzleDeveloperPublisherRepository(db),
 });
@@ -196,6 +207,7 @@ export const developerApp = createDeveloperApp({
       { type: 'account' },
       context.get('iamTokenId'),
     ),
+  applicationService: developerApplicationService,
   artifactService: developerModuleArtifactService,
   releaseService,
   reviewService: developerModuleReviewService,

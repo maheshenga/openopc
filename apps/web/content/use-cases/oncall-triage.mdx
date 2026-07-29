@@ -1,6 +1,6 @@
 ---
 title: "How we triage on-call alerts before paging a human"
-description: The triage agent we run on Kortix — connected to Sentry, our logs, and GitHub. It works up a first-pass diagnosis on every alert and only pages a human when it can't resolve it.
+description: The triage agent we run on OpenOPC — connected to Sentry, our logs, and GitHub. It works up a first-pass diagnosis on every alert and only pages a human when it can't resolve it.
 date: "2026-02-25"
 author: team
 tags:
@@ -15,14 +15,14 @@ whether this is a real incident or noise. Most of that is mechanical, and most o
 it happens before the human has any context — which is the worst time to be doing
 it.
 
-We run a triage agent on Kortix that does the first pass. When an alert fires, the
+We run a triage agent on OpenOPC that does the first pass. When an alert fires, the
 agent gathers the stack trace, the recent deploys, and the correlated logs, posts
 a first-pass diagnosis to the incident channel, and only pages a human when it
 can't resolve the alert or the severity is high. This write-up covers how the
 setup works: the trigger, the session model, and the guardrails.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">Every alert, as it fires</Fact>
   <Fact label="Connected systems">Sentry · Logs · GitHub</Fact>
   <Fact label="Mode">Trigger-driven · pages a human only when needed</Fact>
@@ -42,7 +42,7 @@ awake to follow it. None of it does the gathering for you.
 
 ## What we built
 
-On Kortix, each alert triggers an agent. When Sentry fires, the alert spawns an
+On OpenOPC, each alert triggers an agent. When Sentry fires, the alert spawns an
 isolated session (a cloud sandbox) with scoped, read-only access to Sentry, the
 logs, and GitHub. The agent pulls the stack trace, lists the deploys since the
 error first appeared, correlates the logs around the spike, and posts a first-pass

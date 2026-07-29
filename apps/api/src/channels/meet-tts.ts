@@ -1,3 +1,4 @@
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { config } from '../config';
 import { channelApiBase, channelAuth } from '../executor/channels';
 import { type FetchImpl, executeCall } from '../executor/execute';
@@ -6,7 +7,7 @@ import { loadMeetTokenForProject } from './install-store';
 import { getMeetVoice, resolveProjectVoice } from './meet-voices';
 
 const PREVIEW_LINE =
-  "Hi, I'm your Kortix notetaker. I'll take notes during the call and answer when you call my name.";
+  `Hi, I'm your ${PRODUCT_BRAND.displayName} notetaker. I'll take notes during the call and answer when you call my name.`;
 
 const ACK_LINES = [
   'Sure, one sec.',

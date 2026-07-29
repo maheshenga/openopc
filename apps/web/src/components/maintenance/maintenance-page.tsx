@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { RefreshCw, ArrowRight } from 'lucide-react';
 import { KortixLoader } from '@/components/ui/kortix-loader';
 import { useApiHealth } from '@/hooks/usage/use-health';
-import { useAdminRole } from '@/hooks/admin/use-admin-role';
+import { usePlatformOperatorRole } from '@/hooks/platform/use-platform-operator-role';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { AnimatedBg } from '@/components/ui/animated-bg';
@@ -16,7 +16,7 @@ export function MaintenancePage() {
   const tHardcodedUi = useTranslations('hardcodedUi');
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
 
-  const { data: adminRole } = useAdminRole();
+  const { data: adminRole } = usePlatformOperatorRole();
   const [isBypassing, setIsBypassing] = useState(false);
 
   const { data: healthData, isLoading: isCheckingHealth, refetch } = useApiHealth();

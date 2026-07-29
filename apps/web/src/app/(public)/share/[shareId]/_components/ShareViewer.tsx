@@ -1,6 +1,7 @@
 'use client';
 
 import { useTranslations } from 'next-intl';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 import { cn } from '@/lib/utils';
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
@@ -249,7 +250,7 @@ function AssistantBlock({ text }: { text: string }) {
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/kortix-logomark-white.svg"
-          alt="Kortix"
+          alt={PRODUCT_BRAND.displayName}
           className="dark:invert-0 invert flex-shrink-0"
           style={{ height: '12px', width: 'auto' }}
         />

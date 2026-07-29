@@ -596,7 +596,7 @@ describe('Studio API runtime assembly', () => {
     const cardBody = await card.text();
     expect(JSON.parse(cardBody)).toMatchObject({
       id: 'kortix-studio',
-      display_name: 'Kortix Studio',
+      display_name: 'OpenOPC Studio',
       capabilities: ['studio.image.generate'],
       protocols: ['a2a', 'mcp'],
       trust_tier: 'project',

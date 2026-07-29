@@ -189,13 +189,13 @@ export async function createOrJoinTeamsConversationSession(input: {
 
 function startErrorMessage(status: number | undefined): string {
   if (status === 402) {
-    return "This workspace is out of credits, so I can't start a session. Top up in the Kortix dashboard and send your message again.";
+    return "This workspace is out of credits, so I can't start a session. Top up in the OpenOPC dashboard and send your message again.";
   }
   if (status === 429) {
     return 'This workspace is at its concurrent-session limit right now. Close or finish a running session, then send your message again.';
   }
   if (status === 404) {
-    return "I couldn't find this project to start a session — it may have been moved or deleted. Reconnect Kortix to this team and try again.";
+    return "I couldn't find this project to start a session — it may have been moved or deleted. Reconnect OpenOPC to this team and try again.";
   }
   return "I couldn't start a session just now. Give it a moment and send your message again — I'll reply right here.";
 }

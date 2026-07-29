@@ -202,7 +202,7 @@ export function useSlides(): SlideDef[] {
                 </Button>
               </div>
             </div>
-            <Shot src={`${SHOT}/01-command-center.png`} alt="The Kortix command center" />
+            <Shot src={`${SHOT}/01-command-center.png`} alt="The OpenOPC command center" />
           </div>
         </Slide>
       ),
@@ -648,7 +648,7 @@ export function useSlides(): SlideDef[] {
                 ))}
               </div>
             </div>
-            <Shot src={`${SHOT}/01-command-center.png`} alt="The Kortix command center" />
+            <Shot src={`${SHOT}/01-command-center.png`} alt="The OpenOPC command center" />
           </div>
         </Slide>
       ),
@@ -752,7 +752,7 @@ export function useSlides(): SlideDef[] {
               <Bullets
                 items={[
                   'Your API keys never enter a sandbox',
-                  'Agents act through a single scoped Kortix token',
+                  'Agents act through a single scoped OpenOPC token',
                   'Allow, ask-first, or block — network rules you control',
                 ]}
               />

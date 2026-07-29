@@ -15,12 +15,12 @@ signals are there, but they sit in different systems, and no one is watching all
 of them at once. By the time an account cancels, the warning signs had been
 accumulating for weeks.
 
-We run a churn-risk agent on Kortix that reads those signals every day and posts a
+We run a churn-risk agent on OpenOPC that reads those signals every day and posts a
 ranked at-risk list to our customer-success Slack channel. It only reads customer
 data; the single output is the Slack post. This is how we watch our own accounts.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">Daily cron</Fact>
   <Fact label="Connected systems">Postgres · Plain · Stripe · Slack</Fact>
   <Fact label="Mode">Read-only · one Slack post per day</Fact>
@@ -41,7 +41,7 @@ long after the signals first appeared, and depend on someone remembering to look
 
 ## What we built
 
-On Kortix, a daily cron triggers an agent. It spawns an isolated session (a cloud
+On OpenOPC, a daily cron triggers an agent. It spawns an isolated session (a cloud
 sandbox) with read-only access to Postgres, Plain, and Stripe, scores every
 account on leading churn signals — declining usage, rising support friction,
 missed or failed payments, an upcoming renewal — and posts a ranked at-risk list

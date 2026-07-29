@@ -150,7 +150,7 @@ already authenticate for you.
 
 ## `@kortix/sdk/projects-client`
 
-The raw, flat REST functions for the Kortix platform API — `listProjects`,
+The raw, flat REST functions for the OpenOPC platform API — `listProjects`,
 `getProjectDetail`, `createProjectSession`, `startProjectSession`,
 `listProjectSecrets`, `listChangeRequests`, and the rest. The facade's
 `kortix.projects` / `kortix.project(id)` / `kortix.session(...)` handles are
@@ -164,7 +164,7 @@ const detail = await getProjectDetail(projectId);
 ```
 
 `createProjectSession` accepts bounded non-secret scalar `runtime_context` for
-wrapper metadata. Kortix persists it across replacement runtimes and injects
+wrapper metadata. OpenOPC persists it across replacement runtimes and injects
 one JSON envelope (`KORTIX_SESSION_CONTEXT`), never one env var per key:
 
 ```ts
@@ -295,7 +295,7 @@ the platform config — including the bearer-token getter — in a single
 process-wide global, which is unsafe for a server handling concurrent requests
 for different users (two in-flight requests can clobber each other's token).
 `createScopedKortix` and `runWithKortix` isolate that config per request using
-Node's `AsyncLocalStorage`, for a third-party backend that wraps Kortix on
+Node's `AsyncLocalStorage`, for a third-party backend that wraps OpenOPC on
 behalf of multiple tenants at once ("Kortix as a Backend").
 
 ```ts
@@ -313,7 +313,7 @@ export async function handler(req: Request) {
   runtime.
 </Callout>
 
-**When to use:** a Node/Bun server process proxying Kortix for multiple
+**When to use:** a Node/Bun server process proxying OpenOPC for multiple
 end users concurrently. A single-tenant server, a CLI, or a browser host should
 use the root `@kortix/sdk` config seam instead.
 

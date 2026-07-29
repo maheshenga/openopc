@@ -1,5 +1,7 @@
 'use client';
 
+import { PRODUCT_BRAND } from '@kortix/product-brand';
+
 import { UnifiedMarkdown } from '@/components/markdown/unified-markdown';
 import { SandboxImage } from '@/features/session/sandbox-image';
 import { detectCommandFromText } from '@/features/session/detect-command';
@@ -2849,7 +2851,7 @@ function SessionTurn({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/kortix-logomark-white.svg"
-            alt="Kortix"
+            alt={PRODUCT_BRAND.displayName}
             className="h-[14px] w-auto flex-shrink-0 invert dark:invert-0"
           />
         </div>
@@ -3115,7 +3117,7 @@ function SessionTurn({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/kortix-logomark-white.svg"
-              alt="Kortix"
+              alt={PRODUCT_BRAND.displayName}
               className="h-[14px] w-auto flex-shrink-0 invert dark:invert-0"
             />
           </div>
@@ -5120,7 +5122,7 @@ export function SessionChat({
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src="/kortix-logomark-white.svg"
-                        alt="Kortix"
+                        alt={PRODUCT_BRAND.displayName}
                         className="h-[14px] w-auto flex-shrink-0 invert dark:invert-0"
                       />
                       <div className="text-muted-foreground text-sm">

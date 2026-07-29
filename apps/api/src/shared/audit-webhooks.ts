@@ -5,6 +5,7 @@
 
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { auditWebhooks } from '@kortix/db';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { and, eq } from 'drizzle-orm';
 import { accountHasEntitlement } from '../billing/services/entitlements';
 import { assertAllowedSourceAddress } from '../marketplace/catalog';
@@ -199,7 +200,7 @@ export async function deliverTestEvent(
       before: null,
       after: {
         message:
-          'Test delivery from Kortix. If your endpoint received this, audit events will stream here.',
+          `Test delivery from ${PRODUCT_BRAND.displayName}. If your endpoint received this, audit events will stream here.`,
       },
       ip: null,
       user_agent: null,

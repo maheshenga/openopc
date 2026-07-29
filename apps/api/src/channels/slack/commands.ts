@@ -120,15 +120,15 @@ function slashHelp(ctx: SlashCtx): SlashResponse {
     { cmd: `${command} sessions`, desc: 'Recent sessions started in this workspace.' },
     ...(config.SLACK_REQUIRE_USER_IDENTITY
       ? [
-          { cmd: `${command} login`,  desc: 'Connect your own Kortix account so the agent runs as you.' },
-          { cmd: `${command} logout`, desc: 'Disconnect your Kortix account.' },
+          { cmd: `${command} login`,  desc: 'Connect your own OpenOPC account so the agent runs as you.' },
+          { cmd: `${command} logout`, desc: 'Disconnect your OpenOPC account.' },
         ]
       : []),
   ];
   return {
     response_type: 'ephemeral',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: '⚡  Kortix', emoji: true } },
+      { type: 'header', text: { type: 'plain_text', text: '⚡  OpenOPC', emoji: true } },
       {
         type: 'section',
         text: {
@@ -164,7 +164,7 @@ async function slashProjectScopedInfo(ctx: SlashCtx): Promise<SlashResponse> {
           type: 'mrkdwn',
           text: project
             ? `This Slack app is already tied to *${escapeMrkdwn(project.name)}*.\nUse \`${ctx.command} agents\`, \`${ctx.command} models\`, or \`${ctx.command} policy\` to configure this channel.`
-            : `This Slack app is already tied to one Kortix project.\nUse \`${ctx.command} agents\`, \`${ctx.command} models\`, or \`${ctx.command} policy\` to configure this channel.`,
+            : `This Slack app is already tied to one OpenOPC project.\nUse \`${ctx.command} agents\`, \`${ctx.command} models\`, or \`${ctx.command} policy\` to configure this channel.`,
         },
       },
     ],
@@ -181,7 +181,7 @@ async function slashProjects(ctx: { teamId: string; channelId: string }): Promis
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: '*No Kortix projects connected yet.*\nHead to your Kortix dashboard to link one to this workspace.',
+            text: '*No OpenOPC projects connected yet.*\nHead to your OpenOPC dashboard to link one to this workspace.',
           },
           accessory: {
             type: 'button',
@@ -273,7 +273,7 @@ async function slashSwitch(ctx: { teamId: string; channelId: string }): Promise<
       blocks: [
         {
           type: 'section',
-          text: { type: 'mrkdwn', text: '*No projects to switch to.*\nLink a project to this workspace from your Kortix dashboard first.' },
+          text: { type: 'mrkdwn', text: '*No projects to switch to.*\nLink a project to this workspace from your OpenOPC dashboard first.' },
           accessory: {
             type: 'button',
             text: { type: 'plain_text', text: 'Open dashboard', emoji: true },
@@ -374,7 +374,7 @@ async function slashSessions(ctx: { teamId: string; channelId: string }): Promis
     return {
       response_type: 'ephemeral',
       blocks: [
-        { type: 'section', text: { type: 'mrkdwn', text: '*No recent Kortix sessions in this workspace.*\n`@`-mention me in any channel to start one.' } },
+        { type: 'section', text: { type: 'mrkdwn', text: '*No recent OpenOPC sessions in this workspace.*\n`@`-mention me in any channel to start one.' } },
       ],
     };
   }
@@ -416,13 +416,13 @@ async function buildIdentityContext(ctx: SlashCtx): Promise<Record<string, unkno
   if (!identity) {
     return {
       type: 'context',
-      elements: [{ type: 'mrkdwn', text: `🔌  Not connected — run \`${ctx.command} login\` to run as your own Kortix account.` }],
+      elements: [{ type: 'mrkdwn', text: `🔌  Not connected — run \`${ctx.command} login\` to run as your own OpenOPC account.` }],
     };
   }
   const email = (await lookupEmailsByUserIds([identity.userId])).get(identity.userId);
   return {
     type: 'context',
-    elements: [{ type: 'mrkdwn', text: `🔗  Connected as *${email ? escapeMrkdwn(email) : 'your Kortix account'}*` }],
+    elements: [{ type: 'mrkdwn', text: `🔗  Connected as *${email ? escapeMrkdwn(email) : 'your OpenOPC account'}*` }],
   };
 }
 
@@ -579,7 +579,7 @@ async function slashPanel(ctx: SlashCtx): Promise<SlashResponse> {
           },
           {
             type: 'button',
-            text: { type: 'plain_text', text: 'Open in Kortix ↗', emoji: true },
+            text: { type: 'plain_text', text: 'Open in OpenOPC ↗', emoji: true },
             style: 'primary',
             url: `${dashboardBase}/projects/${p.projectId}`,
             action_id: `panel_open_${p.projectId}`,
@@ -666,7 +666,7 @@ async function slashPolicy(ctx: SlashCtx, arg: string): Promise<SlashResponse> {
   if (!(await canManageSlackPolicy(ctx, selection.projectId))) {
     return {
       response_type: 'ephemeral',
-      text: 'Only a linked Kortix account owner or admin for this project can change the Slack session policy.',
+      text: 'Only a linked OpenOPC account owner or admin for this project can change the Slack session policy.',
     };
   }
   const ok = await setChannelConversationPolicy(ctx, next);
@@ -697,8 +697,8 @@ async function slashLogin(ctx: SlashCtx): Promise<SlashResponse> {
         text: {
           type: 'mrkdwn',
           text: existing
-            ? '*Your Slack is already connected to a Kortix account.*\nClick below to re-connect (e.g. to switch accounts). The link expires in 10 minutes.'
-            : '*Connect your Kortix account.*\nKortix needs access to your account before it can run from Slack. The link expires in 10 minutes and is private to you.',
+            ? '*Your Slack is already connected to an OpenOPC account.*\nClick below to re-connect (e.g. to switch accounts). The link expires in 10 minutes.'
+            : '*Connect your OpenOPC account.*\nOpenOPC needs access to your account before it can run from Slack. The link expires in 10 minutes and is private to you.',
         },
       },
       {
@@ -706,7 +706,7 @@ async function slashLogin(ctx: SlashCtx): Promise<SlashResponse> {
         elements: [
           {
           type: 'button',
-            text: { type: 'plain_text', text: existing ? 'Re-connect Kortix' : 'Connect or create account', emoji: true },
+            text: { type: 'plain_text', text: existing ? 'Re-connect OpenOPC' : 'Connect or create account', emoji: true },
             style: 'primary',
             url,
             action_id: 'slack_login_connect',
@@ -725,8 +725,8 @@ async function slashLogout(ctx: SlashCtx): Promise<SlashResponse> {
   return {
     response_type: 'ephemeral',
     text: revoked
-      ? "Disconnected. Kortix will ask you to connect again before it runs on your behalf. Run `/kortix login` anytime."
-      : "You weren't connected. Run `/kortix login` to connect your Kortix account.",
+      ? "Disconnected. OpenOPC will ask you to connect again before it runs on your behalf. Run `/kortix login` anytime."
+      : "You weren't connected. Run `/kortix login` to connect your OpenOPC account.",
   };
 }
 
@@ -1070,7 +1070,7 @@ async function slashSetModel(ctx: SlashCtx, arg: string): Promise<SlashResponse>
   if (!servable) {
     return {
       response_type: 'ephemeral',
-      text: `\`${escapeMrkdwn(id)}\` isn't available for this workspace. Pick one from \`${ctx.command} models\`, or connect that provider's API key in Kortix first.`,
+      text: `\`${escapeMrkdwn(id)}\` isn't available for this workspace. Pick one from \`${ctx.command} models\`, or connect that provider's API key in OpenOPC first.`,
     };
   }
   const stored = toOpencodeModelRef(id);

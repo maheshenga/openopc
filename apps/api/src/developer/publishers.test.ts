@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
+import type { DeveloperApplicationState } from './applications';
 import {
   type DeveloperOrganization,
   type DeveloperPublisher,
@@ -87,12 +88,20 @@ function actor(
 
 function harness(input?: {
   verificationState?: DeveloperOrganization['verification_state'];
+  applicationState?: DeveloperApplicationState;
   publisherStatus?: DeveloperPublisher['status'];
   members?: DeveloperPublisherMember[];
 }) {
   let id = 10;
   const repository = createMemoryDeveloperPublisherRepository({
     organizations: [organization(input?.verificationState)],
+    applicationStates: [
+      {
+        accountId: ACCOUNT_ID,
+        organizationId: ORGANIZATION_ID,
+        state: input?.applicationState ?? 'approved',
+      },
+    ],
     publishers: [publisher(input?.publisherStatus)],
     members: input?.members ?? [member(OWNER_ID, 'owner')],
     createId: () => `90000000-0000-4000-a000-${String(++id).padStart(12, '0')}`,
@@ -162,9 +171,28 @@ describe('DeveloperPublisherService', () => {
     });
   });
 
+  test('verified organization cannot create a Publisher before its application is approved', async () => {
+    const { service } = harness({ applicationState: 'submitted' });
+
+    await expect(
+      service.createPublisher({
+        actor: actor(),
+        organizationId: ORGANIZATION_ID,
+        slug: 'new-publisher',
+        displayName: 'New Publisher',
+      }),
+    ).rejects.toMatchObject({
+      code: 'DEVELOPER_APPLICATION_APPROVAL_REQUIRED',
+      status: 403,
+    });
+  });
+
   test('creates a verified Publisher with its first owner and immutable audit history', async () => {
     const repository = createMemoryDeveloperPublisherRepository({
       organizations: [organization()],
+      applicationStates: [
+        { accountId: ACCOUNT_ID, organizationId: ORGANIZATION_ID, state: 'approved' },
+      ],
     });
     const service = new DeveloperPublisherService({ repository, now: () => NOW });
 

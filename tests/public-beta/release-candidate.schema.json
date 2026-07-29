@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openopc.example/schemas/public-beta-release-candidate.v1.schema.json",
+  "title": "OpenOPC Public-Beta Release Candidate Manifest v1",
+  "$comment": "Semantic constraints enforced outside JSON Schema: the parser requires unique regionalEvidence.id values, a rollbackTarget.commit different from the candidate commit, and RFC3339 values that round-trip to real calendar instants; the readiness evaluator binds approval to the canonical pre-approval manifest and artifact manifest digest; and the CLI verifier requires every remote content-addressed reference's embedded digest to equal artifact.digest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "candidateId",
+    "commit",
+    "environment",
+    "artifacts",
+    "artifactManifestPath",
+    "artifactManifestDigest",
+    "evidencePath",
+    "evidenceDigest",
+    "rollbackTarget",
+    "policyVersions",
+    "regionalEvidence",
+    "approval"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "candidateId": { "$ref": "#/$defs/identifier" },
+    "commit": { "$ref": "#/$defs/commit" },
+    "environment": { "const": "openopc-public-beta-staging" },
+    "artifacts": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/artifact" },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "web" },
+              "imageOrPath": {
+                "pattern": "^oci://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/openopc/web@sha256:[0-9a-f]{64}$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "admin" },
+              "imageOrPath": {
+                "pattern": "^oci://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/openopc/admin@sha256:[0-9a-f]{64}$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "api" },
+              "imageOrPath": {
+                "pattern": "^oci://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/openopc/api@sha256:[0-9a-f]{64}$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "module-host" },
+              "imageOrPath": {
+                "pattern": "^oci://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/openopc/module-host@sha256:[0-9a-f]{64}$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "studio-worker" },
+              "imageOrPath": {
+                "pattern": "^oci://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/openopc/studio-worker@sha256:[0-9a-f]{64}$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "developer-trust-worker" },
+              "imageOrPath": {
+                "pattern": "^oci://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/openopc/developer-trust-worker@sha256:[0-9a-f]{64}$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "automation-browser-worker" },
+              "imageOrPath": {
+                "pattern": "^oci://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/openopc/automation-browser-worker@sha256:[0-9a-f]{64}$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "module-ledger-worker" },
+              "imageOrPath": {
+                "pattern": "^oci://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/openopc/module-ledger-worker@sha256:[0-9a-f]{64}$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "wasi-runner" },
+              "imageOrPath": {
+                "pattern": "^(?:(?:[A-Za-z0-9][A-Za-z0-9._-]{0,254}/)*wasi-runner(?:-[A-Za-z0-9._-]+)?\\.tar\\.zst|https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,254}/)*wasi-runner(?:-[A-Za-z0-9._-]+)?\\.tar\\.zst@sha256:[0-9a-f]{64})$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "oci-runner" },
+              "imageOrPath": {
+                "pattern": "^(?:(?:[A-Za-z0-9][A-Za-z0-9._-]{0,254}/)*oci-runner(?:-[A-Za-z0-9._-]+)?\\.tar\\.zst|https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,254}/)*oci-runner(?:-[A-Za-z0-9._-]+)?\\.tar\\.zst@sha256:[0-9a-f]{64})$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "properties": {
+              "name": { "const": "desktop" },
+              "imageOrPath": {
+                "pattern": "^(?:(?:[A-Za-z0-9][A-Za-z0-9._-]{0,254}/)*desktop(?:-[A-Za-z0-9._-]+)?\\.tar\\.zst|https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/(?:[A-Za-z0-9][A-Za-z0-9._-]{0,254}/)*desktop(?:-[A-Za-z0-9._-]+)?\\.tar\\.zst@sha256:[0-9a-f]{64})$"
+              }
+            },
+            "required": ["name", "imageOrPath"]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "artifactManifestPath": { "$ref": "#/$defs/relativePath" },
+    "artifactManifestDigest": { "$ref": "#/$defs/digest" },
+    "evidencePath": { "$ref": "#/$defs/relativePath" },
+    "evidenceDigest": { "$ref": "#/$defs/digest" },
+    "rollbackTarget": { "$ref": "#/$defs/rollbackTarget" },
+    "policyVersions": { "$ref": "#/$defs/policyVersions" },
+    "regionalEvidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/regionalEvidence" }
+    },
+    "approval": {
+      "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/approval" }]
+    }
+  },
+  "$defs": {
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,254}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,254}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,254})*$"
+    },
+    "artifactPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,254}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,254})*$"
+    },
+    "contentAddressedReference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^(?:https|oci)://[A-Za-z0-9.-]+(?::[0-9]{1,5})?/[A-Za-z0-9][A-Za-z0-9._-]{0,254}(?:/[A-Za-z0-9][A-Za-z0-9._-]{0,254})*@sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "digest", "imageOrPath"],
+      "properties": {
+        "name": {
+          "enum": [
+            "web",
+            "admin",
+            "api",
+            "module-host",
+            "studio-worker",
+            "developer-trust-worker",
+            "automation-browser-worker",
+            "module-ledger-worker",
+            "wasi-runner",
+            "oci-runner",
+            "desktop"
+          ]
+        },
+        "digest": { "$ref": "#/$defs/digest" },
+        "imageOrPath": {
+          "anyOf": [
+            { "$ref": "#/$defs/artifactPath" },
+            { "$ref": "#/$defs/contentAddressedReference" }
+          ]
+        }
+      }
+    },
+    "rollbackTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "manifestDigest"],
+      "properties": {
+        "commit": { "$ref": "#/$defs/commit" },
+        "manifestDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "policyVersions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terms", "privacy", "acceptableUse", "moduleRules"],
+      "properties": {
+        "terms": { "$ref": "#/$defs/policyVersion" },
+        "privacy": { "$ref": "#/$defs/policyVersion" },
+        "acceptableUse": { "$ref": "#/$defs/policyVersion" },
+        "moduleRules": { "$ref": "#/$defs/policyVersion" }
+      }
+    },
+    "policyVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?!.*[\\u0000-\\u001F\\u007F])\\S(?:.*\\S)?$"
+    },
+    "regionalEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "artifactDigest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "status": { "enum": ["satisfied", "not_applicable"] },
+        "artifactDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environment", "actor", "approvedAt", "manifestDigest"],
+      "properties": {
+        "environment": { "const": "production" },
+        "actor": { "$ref": "#/$defs/identifier" },
+        "approvedAt": { "$ref": "#/$defs/timestamp" },
+        "manifestDigest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

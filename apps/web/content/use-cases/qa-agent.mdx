@@ -1,6 +1,6 @@
 ---
 title: "How we QA every pull request automatically"
-description: The QA agent we run on Kortix — connected to GitHub and our test environment. It checks out each PR, runs the suite, exercises the change, and posts the result.
+description: The QA agent we run on OpenOPC — connected to GitHub and our test environment. It checks out each PR, runs the suite, exercises the change, and posts the result.
 date: "2026-07-05"
 author: team
 tags:
@@ -15,11 +15,11 @@ in CI, a path that works in the happy case and 500s on an edge case, a migration
 that reads fine but locks a table under load. These tend to surface in staging or
 production, after the PR is approved.
 
-We run a QA agent on Kortix that does this checking when the PR opens. This is how
+We run a QA agent on OpenOPC that does this checking when the PR opens. This is how
 we QA our own changes, including the connections and guardrails involved.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">Every PR, on open and on push</Fact>
   <Fact label="Connected systems">GitHub · Test environment · Cloudflare</Fact>
   <Fact label="Mode">Trigger-driven · result posted on the PR</Fact>
@@ -39,7 +39,7 @@ misses failures that only appear at runtime.
 
 ## What we built
 
-On Kortix, each PR triggers an agent. On open and on every push, the PR spawns an
+On OpenOPC, each PR triggers an agent. On open and on every push, the PR spawns an
 isolated session (a cloud sandbox) with scoped access to the branch, the test
 suite, a deployable test environment, and the Cloudflare edge in front of it. The
 agent checks out the change, runs the suite, exercises the new behavior on a live

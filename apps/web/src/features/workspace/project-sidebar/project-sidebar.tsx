@@ -43,7 +43,6 @@ import { ProjectSandboxAlert } from '@/features/workspace/project-sidebar/footer
 import { ProjectStudioNavItem } from '@/features/workspace/project-sidebar/footer/project-studio-nav';
 import { ProjectSessionList } from '@/features/workspace/project-sidebar/project-session-list';
 import { ProjectSwitcher } from '@/features/workspace/project-sidebar/project-switcher';
-import { useAdminRole } from '@/hooks/admin';
 import { useNewProjectSession } from '@/hooks/projects/use-new-project-session';
 import { useIsMobile } from '@/hooks/utils';
 import { beginSessionTiming, markSessionClick, sessionMark } from '@/lib/session-timing';
@@ -113,9 +112,6 @@ export function ProjectSidebar({ projectId }: { projectId: string }) {
     SESSION_FILTER_OPTIONS.find((option) => option.value === sessionFilter) ??
     SESSION_FILTER_OPTIONS[0];
 
-  const { data: adminRoleData } = useAdminRole();
-  const isAdmin = adminRoleData?.isAdmin ?? false;
-
   const accountId = useBillingAccountId();
 
   const { user: authUser } = useAuth();
@@ -124,9 +120,8 @@ export function ProjectSidebar({ projectId }: { projectId: string }) {
       name: authUser?.user_metadata?.name || authUser?.email?.split('@')[0] || 'User',
       email: authUser?.email ?? '',
       avatar: authUser?.user_metadata?.avatar_url || authUser?.user_metadata?.picture || '',
-      isAdmin,
     }),
-    [authUser, isAdmin],
+    [authUser],
   );
 
   // Optimistic + shared with every other entry point (see useNewProjectSession).

@@ -18,6 +18,7 @@ import {
 import { makeOpenApiApp } from '../openapi';
 import type { AuditEventInput } from '../shared/audit';
 import type { AppEnv } from '../types';
+import { createAdminDecisionAuthorizer } from './admin-authorization';
 import { registerAdminDeveloperReviewRoutes } from './developer-reviews';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
@@ -130,6 +131,7 @@ function appHarness(input: {
   distributionService?: DeveloperModuleDistributionService;
   recordAuditEvent?: (event: AuditEventInput) => Promise<unknown>;
   verificationService?: DeveloperModuleVerificationService;
+  authorizationAudits?: AuditEventInput[];
 }) {
   const app = makeOpenApiApp<AppEnv>();
   app.use('*', async (context, next) => {
@@ -137,6 +139,17 @@ function appHarness(input: {
     if (!userId) throw new HTTPException(401, { message: 'Authentication required' });
     context.set('userId', userId);
     context.set('userEmail', 'admin@example.com');
+    const permissions = context.req.header('x-test-permissions');
+    const stepUp = context.req.header('x-test-step-up') !== 'missing';
+    (context as unknown as { set(key: string, value: unknown): void }).set('adminSession', {
+      userId,
+      permissions:
+        permissions === undefined
+          ? ['developer.module.review', 'developer.module.distribute']
+          : permissions.split(',').filter(Boolean),
+      stepUpAt: stepUp ? '2026-07-24T14:55:00.000Z' : null,
+      stepUpExpiresAt: stepUp ? '2026-07-24T15:05:00.000Z' : null,
+    });
     await next();
   });
   app.use('*', async (context, next) => {
@@ -165,6 +178,12 @@ function appHarness(input: {
         },
       }),
     recordAuditEvent: input.recordAuditEvent ?? (async () => undefined),
+    authorizeAdminDecision: createAdminDecisionAuthorizer({
+      now: () => NOW,
+      recordAuditEvent: async (event) => {
+        input.authorizationAudits?.push(structuredClone(event));
+      },
+    }),
   });
   return app;
 }
@@ -172,6 +191,7 @@ function appHarness(input: {
 const adminHeaders = {
   'x-test-user-id': ADMIN_ID,
   'x-test-platform-role': 'admin',
+  'x-openopc-admin-reason': 'Reviewing a verified developer module release',
 };
 
 describe('admin developer module review API', () => {
@@ -278,6 +298,7 @@ describe('admin developer module review API', () => {
         headers: {
           'x-test-user-id': MEMBER_ADMIN_ID,
           'x-test-platform-role': 'admin',
+          'x-openopc-admin-reason': 'Reviewing a verified developer module release',
           'content-type': 'application/json',
         },
         body: JSON.stringify(body),

@@ -119,7 +119,7 @@ export function buildReviewCardBlocks(
   if (opts.webUrl) {
     elements.push({
       type: 'button',
-      text: { type: 'plain_text', text: 'View in Kortix' },
+      text: { type: 'plain_text', text: 'View in OpenOPC' },
       action_id: reviewActionId(item.review_item_id, 'view'),
       url: opts.webUrl,
     });

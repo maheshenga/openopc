@@ -29,6 +29,9 @@ import { resolveAuthor } from '@/lib/blog';
 import { getAllUseCases } from '@/lib/use-cases';
 import { useCasesSource } from '@/lib/use-cases-source';
 import { siteMetadata } from '@/lib/site-metadata';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
+
+const BRAND_NAME = PRODUCT_BRAND.displayName;
 
 // Render plain HTML elements so BlogProse owns all typography — no docs chrome.
 // Internal links route client-side; external links open safely in a new tab.
@@ -86,7 +89,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
       title: data.title,
       description: data.description,
       url,
-      siteName: 'Kortix',
+      siteName: BRAND_NAME,
       publishedTime: data.date,
       modifiedTime: data.date,
       authors: [author.name],
@@ -142,7 +145,7 @@ export default async function UseCasePage(props: PageProps) {
         author: { '@type': 'Person', name: author.name },
         publisher: {
           '@type': 'Organization',
-          name: 'Kortix',
+          name: BRAND_NAME,
           logo: { '@type': 'ImageObject', url: `${siteMetadata.url}/favicon.png` },
         },
         image: data.cover ? `${siteMetadata.url}${data.cover}` : `${siteMetadata.url}/banner.png`,

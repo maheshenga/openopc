@@ -72,6 +72,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY ${SERVICE} ./${SERVICE}
 COPY apps/studio-worker ./apps/studio-worker
 COPY packages/api-contract ./packages/api-contract
+COPY packages/product-brand ./packages/product-brand
 COPY packages/shared ./packages/shared
 COPY packages/llm-catalog ./packages/llm-catalog
 COPY packages/db ./packages/db
@@ -134,6 +135,7 @@ COPY --from=deps /app/node_modules ./node_modules
 # which may contain stale symlinks to the .pnpm store.
 # Full dirs (not src-only): the API and @kortix/llm-gateway resolve @kortix/llm-catalog
 # (and @kortix/shared's subpaths) at runtime, which needs package-resolution intact.
+COPY --from=deps /app/packages/product-brand ./packages/product-brand
 COPY --from=deps /app/packages/shared ./packages/shared
 COPY --from=deps /app/packages/llm-catalog ./packages/llm-catalog
 COPY --from=deps /app/packages/llm-gateway ./packages/llm-gateway

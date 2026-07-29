@@ -12,6 +12,7 @@ import { createCheckoutSession } from '@/lib/api/billing';
 import { isBillingEnabled } from '@/lib/config';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { ArrowRight, Check, Loader2, X } from 'lucide-react';
 import Image from 'next/image';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -117,7 +118,7 @@ export function NewInstanceModal({ open, onOpenChange, returnUrl, title }: NewIn
         return;
       }
       if (response.status === 'subscription_created' || response.status === 'no_change') {
-        toast.success(response.message || 'Your Kortix is on its way');
+        toast.success(response.message || `${PRODUCT_BRAND.localNodeName} is on its way`);
         onOpenChange(false);
         window.location.href = '/projects?subscription=success';
         return;
@@ -172,14 +173,14 @@ export function NewInstanceModal({ open, onOpenChange, returnUrl, title }: NewIn
           <div className="border-border flex flex-col items-center border-b bg-neutral-50/50 px-6 pt-7 pb-5 dark:bg-neutral-950/50">
             <Image
               src="/kortix-computer.png"
-              alt="Kortix Computer"
+              alt={PRODUCT_BRAND.localNodeName}
               width={140}
               height={140}
               className="mb-4 object-contain"
               priority
             />
             <h2 className="text-foreground text-center text-xl font-semibold tracking-tight">
-              {title || 'Your Kortix'}
+              {title || `Your ${PRODUCT_BRAND.localNodeName}`}
             </h2>
             <p className="text-muted-foreground mt-1 max-w-[280px] text-center text-sm">
               {tHardcodedUi.raw(

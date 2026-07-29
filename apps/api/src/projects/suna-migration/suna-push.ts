@@ -8,6 +8,7 @@
  */
 import { dirname, join } from 'node:path';
 import { mkdirSync, writeFileSync, rmSync, readdirSync, statSync } from 'node:fs';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { getDefaultManagedBackend } from '../git-backends/registry';
 import type { GitConnectionRef } from '../git-backends/types';
 import { buildStarterFiles } from '../starter';
@@ -20,6 +21,11 @@ function git(args: string[], cwd: string, secret = false): void {
     const err = new TextDecoder().decode(r.stderr);
     throw new Error(`git ${secret ? args[0] : args.join(' ')} failed: ${err.slice(0, 400)}`);
   }
+}
+
+export function configureMigrationGitIdentity(repoPath: string): void {
+  git(['config', 'user.email', 'migration@kortix.com'], repoPath);
+  git(['config', 'user.name', `${PRODUCT_BRAND.displayName} Migration`], repoPath);
 }
 
 export interface PushedRepo {
@@ -109,8 +115,7 @@ export async function pushBundleAsRepo(accountId: string, bundleDir: string): Pr
 
   rmSync(join(bundleDir, '.git'), { recursive: true, force: true });
   git(['init', '-b', repo.defaultBranch], bundleDir);
-  git(['config', 'user.email', 'migration@kortix.com'], bundleDir);
-  git(['config', 'user.name', 'Kortix Migration'], bundleDir);
+  configureMigrationGitIdentity(bundleDir);
   git(['add', '-A'], bundleDir);
   git(['commit', '-m', 'Import Suna legacy projects (chats restored as sessions; files under legacy/)'], bundleDir);
   git(['push', pushUrl, `HEAD:${repo.defaultBranch}`], bundleDir, true);

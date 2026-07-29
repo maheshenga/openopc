@@ -3,7 +3,7 @@ title: Authentication
 description: Two concepts only — an API key (account-wide or project-scoped) for anything programmatic, or a Supabase JWT for web apps.
 ---
 
-Kortix has exactly two ways to authenticate: a **session** (you logged in) and an
+OpenOPC has exactly two ways to authenticate: a **session** (you logged in) and an
 **API key** (everything programmatic — the SDK, the CLI, your backend, CI). The SDK
 takes one via `getToken`, which it sends as `Authorization: Bearer <token>`.
 
@@ -44,9 +44,9 @@ revoking the old one.
   the key locally. Same credential, nothing special — there's no separate "CLI token."
 </Callout>
 
-## Supabase JWT — web apps on Kortix login
+## Supabase JWT — web apps on OpenOPC login
 
-Only if you're building a web app on Kortix's own auth. Return the user's live
+Only if you're building a web app on OpenOPC's own auth. Return the user's live
 session token; it refreshes itself, so `getToken` re-reads it each call:
 
 ```ts
@@ -60,7 +60,7 @@ getToken: async () =>
 | ------------------------- | ------------------------------------------------------- |
 | a backend, script, or CI  | an **API key** (account-wide, or project-scoped for CI) |
 | the Kortix CLI            | `kortix login` (mints an API key for you)               |
-| a web app on Kortix login | a **Supabase JWT**                                      |
+| a web app on OpenOPC login | a **Supabase JWT**                                      |
 
 <Callout>
   API keys are bearer credentials — treat them like passwords. Keep them in a secret manager, never

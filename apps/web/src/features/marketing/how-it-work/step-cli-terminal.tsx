@@ -9,6 +9,7 @@ import {
 } from '@/components/home/interactive-demo/cli/terminal';
 import { KortixLogo } from '@/components/sidebar/kortix-logo';
 import { cn } from '@/lib/utils';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { useTranslations } from 'next-intl';
 import { useEffect, useRef, type HTMLAttributes } from 'react';
 
@@ -62,7 +63,7 @@ export function StepCliTerminal({
       >
         <span className="text-muted-foreground ml-1.5 inline-flex items-center gap-1 text-[11px] font-medium">
           <KortixLogo size={12} />
-          Kortix
+          {PRODUCT_BRAND.displayName}
         </span>
       </div>
 

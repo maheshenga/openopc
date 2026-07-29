@@ -4,6 +4,7 @@ import {
   ReconcileConnectionProfileInputSchema,
   UpdateConnectionProfileCredentialInputSchema,
 } from '@kortix/api-contract';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import {
   executorConnectionProfiles,
   executorConnectors,
@@ -1256,7 +1257,7 @@ projectsApp.openapi(
       body.display_name ??
       body.displayName ??
       loaded.row.name ??
-      'Kortix Agent'
+      `${PRODUCT_BRAND.displayName} Agent`
     ).trim();
     const username = normalizeAgentMailUsername(body.username ?? loaded.row.name);
     const existingInboxId =

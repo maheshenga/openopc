@@ -1,6 +1,6 @@
 ---
 title: "How we triage a shared inbox with an AI agent"
-description: The inbox agent we run on Kortix — connected to Gmail, a help doc, and Linear. It labels every inbound email, drafts a reply, or files a task, and stops for approval before anything goes to a customer.
+description: The inbox agent we run on OpenOPC — connected to Gmail, a help doc, and Linear. It labels every inbound email, drafts a reply, or files a task, and stops for approval before anything goes to a customer.
 date: "2026-03-04"
 author: team
 tags:
@@ -17,10 +17,10 @@ was ignored.
 
 We handle this by putting an agent on the inbox. Every inbound email gets read,
 labelled, and either drafted a reply or turned into a task. This writes up how we
-run that on Kortix — the connections, the steps, and the guardrails.
+run that on OpenOPC — the connections, the steps, and the guardrails.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Connected systems">Gmail · Help doc · Linear</Fact>
   <Fact label="Trigger">New inbound email</Fact>
   <Fact label="Mode">Trigger-driven · human-gated</Fact>
@@ -41,7 +41,7 @@ take time.
 
 ## What we built
 
-Our shared inbox in **Gmail** is connected to an agent running on Kortix. Every
+Our shared inbox in **Gmail** is connected to an agent running on OpenOPC. Every
 inbound email spawns its own isolated session — a cloud sandbox — with scoped
 access to what triage needs: the message, our help doc, and Linear. It reads the
 email, applies a label, and then either drafts a reply in Gmail or files a task
@@ -111,7 +111,7 @@ becomes a ticket. A sales ping becomes a label the right person can pick up.
 ## Guardrails
 
 Giving an agent access to the shared inbox is a trust question as much as a
-convenience one. The relevant controls on Kortix:
+convenience one. The relevant controls on OpenOPC:
 
 - **Isolation.** Each email runs in its own microVM sandbox. The session can read
   the thread and the help doc it needs, and only the draft or ticket it produces

@@ -708,7 +708,9 @@ impl RuntimeArtifactClient {
         {
             return Err(RunnerClientError::ArtifactMetadata);
         }
-        if response.content_length != Some(artifact.bytes)
+        if response
+            .content_length
+            .is_some_and(|content_length| content_length != artifact.bytes)
             || response.bytes_written != artifact.bytes
             || fs::metadata(&path)
                 .map_err(|_| RunnerClientError::ArtifactIo)?

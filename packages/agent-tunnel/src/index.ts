@@ -52,6 +52,7 @@ export type { TunnelToolDefinition, TunnelToolParameter } from './client';
 
 // ─── Agent: Local Machine ───────────────────────────────────────────────────
 export { TunnelAgent } from './agent';
+export type { TunnelAgentLifecycleEvent, TunnelAgentOptions } from './agent';
 export { loadConfig, type TunnelConfig } from './agent';
 export { CapabilityRegistry } from './agent';
 export type { Capability, RpcHandler } from './agent';

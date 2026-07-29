@@ -53,6 +53,7 @@ import { Input } from '@/components/ui/input';
 import { KortixAsterisk } from '@/components/ui/kortix-asterisk';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { DemoQualifierModal } from '@/features/contact/demo-qualifier-modal';
 import { useAuth } from '@/features/providers/auth-provider';
 import { flattenModels } from '@/features/session/session-chat-input';
@@ -357,7 +358,8 @@ function WelcomeStep({
             Let&apos;s get your command center set up
           </h1>
           <p className="text-muted-foreground max-w-lg text-[15px] leading-7">
-            I&apos;m Marko, founder of Kortix. Book a quick 20-minute call and we&apos;ll set up
+            I&apos;m Marko, founder of {PRODUCT_BRAND.displayName}. Book a quick 20-minute call and
+            we&apos;ll set up
             your company&apos;s AI command center together — or jump straight in and connect your
             tools below.
           </p>
@@ -379,7 +381,7 @@ function WelcomeStep({
       <KortixAsterisk index={0} parentClass="size-9" />
       <div className="space-y-2.5">
         <h1 className="text-foreground text-[26px] leading-tight font-semibold tracking-tight">
-          Welcome to Kortix
+          Welcome to {PRODUCT_BRAND.displayName}
         </h1>
         <p className="text-muted-foreground max-w-lg text-[15px] leading-7">
           A few quick steps and your agent will be wired into the tools your team already runs on.
@@ -625,11 +627,11 @@ function SlackStep({ projectId }: { projectId: string }) {
     <div className="flex flex-col gap-5">
       <div className="space-y-2">
         <h1 className="text-foreground text-[26px] leading-tight font-semibold tracking-tight">
-          Install Kortix into Slack
+          Install {PRODUCT_BRAND.displayName} into Slack
         </h1>
         <p className="text-muted-foreground max-w-lg text-[15px] leading-7">
-          This is where most teams actually use Kortix. Install the app and you can @mention your
-          agent, kick off tasks, and get results right inside Slack.
+          This is where most teams actually use {PRODUCT_BRAND.displayName}. Install the app and
+          you can @mention your agent, kick off tasks, and get results right inside Slack.
         </p>
       </div>
 
@@ -661,7 +663,8 @@ function SlackStep({ projectId }: { projectId: string }) {
           ) : (
             <div className="flex flex-col items-center gap-3">
               <p className="text-muted-foreground max-w-sm text-sm leading-6">
-                One click — authorize Kortix in your workspace, no setup required.
+                One click — authorize {PRODUCT_BRAND.displayName} in your workspace, no setup
+                required.
               </p>
               <Button
                 size="lg"
@@ -737,8 +740,8 @@ function ModelStep() {
           Connect a model
         </h1>
         <p className="text-muted-foreground max-w-lg text-[15px] leading-7">
-          Your agent needs an LLM to think with. Upgrade to a Kortix plan for instant access, or
-          bring your own API key from Anthropic, OpenAI, or any other provider.
+          Your agent needs an LLM to think with. Upgrade to an {PRODUCT_BRAND.displayName} plan for
+          instant access, or bring your own API key from Anthropic, OpenAI, or any other provider.
         </p>
       </div>
 

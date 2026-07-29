@@ -13,11 +13,13 @@
 
 import { createRoute, z } from '@hono/zod-openapi';
 import { eq, and, gt } from 'drizzle-orm';
+import { HTTPException } from 'hono/http-exception';
 import { tunnelConnections, tunnelDeviceAuthRequests, tunnelPermissions } from '@kortix/db';
 import { db } from '../../shared/db';
 import { generateDeviceCode, generateTunnelToken, hashSecretKey, verifySecretKey, randomAlphanumeric } from '../../shared/crypto';
 import { tunnelRateLimiter } from '../core/rate-limiter';
-import { resolveAccountId } from '../../shared/resolve-account';
+import { resolveAccountId, resolveScopedAccountId } from '../../shared/resolve-account';
+import { ACCOUNT_ACTIONS, assertAuthorized } from '../../iam';
 import { config } from '../../config';
 import type { AppEnv } from '../../types';
 import { makeOpenApiApp, json, errors } from '../../openapi';
@@ -78,7 +80,10 @@ export function createDeviceAuthPublicRouter() {
           required: false,
           content: {
             'application/json': {
-              schema: z.object({ machineHostname: z.string().optional() }),
+              schema: z.object({
+                account_id: z.string().uuid().optional(),
+                machineHostname: z.string().optional(),
+              }),
             },
           },
         },
@@ -109,6 +114,10 @@ export function createDeviceAuthPublicRouter() {
       }
 
       const body = await c.req.json().catch(() => ({}));
+      const requestedAccountId =
+        typeof body.account_id === 'string' && body.account_id.length > 0
+          ? body.account_id
+          : null;
       const machineHostname = (body.machineHostname as string)?.slice(0, 255) || null;
 
       // Generate code + secret
@@ -121,6 +130,7 @@ export function createDeviceAuthPublicRouter() {
         deviceCode,
         deviceSecretHash,
         machineHostname,
+        accountId: requestedAccountId,
         expiresAt,
       });
 
@@ -148,6 +158,7 @@ export function createDeviceAuthPublicRouter() {
         200: json(
           z.object({
             status: z.string(),
+            accountId: z.string().optional(),
             tunnelId: z.string().optional(),
             token: z.string().optional(),
           }),
@@ -195,6 +206,7 @@ export function createDeviceAuthPublicRouter() {
       if (row.status === 'approved' && row.tunnelId && row.setupToken) {
         return c.json({
           status: 'approved',
+          accountId: row.accountId ?? undefined,
           tunnelId: row.tunnelId,
           token: row.setupToken,
         });
@@ -203,6 +215,7 @@ export function createDeviceAuthPublicRouter() {
       if (row.status === 'approved' && row.tunnelId) {
         return c.json({
           status: 'approved',
+          accountId: row.accountId ?? undefined,
           tunnelId: row.tunnelId,
         });
       }
@@ -253,6 +266,7 @@ export function createDeviceAuthRouter() {
         .select({
           deviceCode: tunnelDeviceAuthRequests.deviceCode,
           machineHostname: tunnelDeviceAuthRequests.machineHostname,
+          accountId: tunnelDeviceAuthRequests.accountId,
           status: tunnelDeviceAuthRequests.status,
           expiresAt: tunnelDeviceAuthRequests.expiresAt,
           createdAt: tunnelDeviceAuthRequests.createdAt,
@@ -287,6 +301,7 @@ export function createDeviceAuthRouter() {
           content: {
             'application/json': {
               schema: z.object({
+                account_id: z.string().uuid().optional(),
                 name: z.string().optional(),
                 capabilities: z.array(z.string()).optional(),
               }),
@@ -299,7 +314,7 @@ export function createDeviceAuthRouter() {
           z.object({ success: z.boolean(), tunnelId: z.string() }),
           'The created tunnel id',
         ),
-        ...errors(401, 403, 404),
+        ...errors(401, 403, 404, 409),
       },
     }),
     async (c: any) => {
@@ -309,7 +324,6 @@ export function createDeviceAuthRouter() {
         return c.json({ error: 'Too many requests', retryAfterMs: rl.retryAfterMs }, 429);
       }
       const userId = c.get('userId') as string;
-      const accountId = await resolveAccountId(userId);
       const code = c.req.param('code');
       const body = await c.req.json().catch(() => ({}));
 
@@ -328,51 +342,80 @@ export function createDeviceAuthRouter() {
         return c.json({ error: 'Device auth request not found or expired' }, 404);
       }
 
+      const selectedAccountId =
+        typeof body.account_id === 'string' && body.account_id.length > 0
+          ? body.account_id
+          : null;
+      const accountId = selectedAccountId
+        ? await resolveScopedAccountId(c, 'body')
+        : await resolveAccountId(userId);
+      if (row.accountId && (!selectedAccountId || row.accountId !== accountId)) {
+        throw new HTTPException(409, {
+          message: 'Device auth request account no longer matches the selected account',
+        });
+      }
+      await assertAuthorized(userId, accountId, ACCOUNT_ACTIONS.ACCOUNT_WRITE);
+
       const name = (body.name as string) || row.machineHostname || 'Unnamed';
       const capabilities = (body.capabilities as string[]) || [];
 
       // Create tunnel connection (same as POST /connections)
       const setupToken = generateTunnelToken();
       const setupTokenHash = hashSecretKey(setupToken);
-
-      const [connection] = await db
-        .insert(tunnelConnections)
-        .values({
-          accountId,
-          name,
-          capabilities,
-          status: 'offline',
-          setupTokenHash,
-        })
-        .returning();
-
-      // Grant the same granular scopes shown in the Computers UI so approval
-      // state and the permission toggles start in sync.
-      if (capabilities.length > 0) {
-        const grants = capabilities.flatMap((cap: string) => {
-          const scopes = DEFAULT_PERMISSION_SCOPES[cap] ?? [{}];
-          return scopes.map((scope) => ({
-            tunnelId: connection.tunnelId,
+      const approvedAt = new Date();
+      const connection = await db.transaction(async (tx) => {
+        const [created] = await tx
+          .insert(tunnelConnections)
+          .values({
             accountId,
-            capability: cap as any,
-            scope,
-            status: 'active' as const,
-          }));
-        });
-        await db.insert(tunnelPermissions).values(grants);
-      }
+            name,
+            capabilities,
+            status: 'offline',
+            setupTokenHash,
+          })
+          .returning();
 
-      // Update device auth row with approval + token
-      await db
-        .update(tunnelDeviceAuthRequests)
-        .set({
-          status: 'approved',
-          accountId,
-          tunnelId: connection.tunnelId,
-          setupToken,
-          updatedAt: new Date(),
-        })
-        .where(eq(tunnelDeviceAuthRequests.id, row.id));
+        // Grant the same granular scopes shown in the Computers UI so approval
+        // state and the permission toggles start in sync.
+        if (capabilities.length > 0) {
+          const grants = capabilities.flatMap((cap: string) => {
+            const scopes = DEFAULT_PERMISSION_SCOPES[cap] ?? [{}];
+            return scopes.map((scope) => ({
+              tunnelId: created.tunnelId,
+              accountId,
+              capability: cap as any,
+              scope,
+              status: 'active' as const,
+            }));
+          });
+          await tx.insert(tunnelPermissions).values(grants);
+        }
+
+        const [approved] = await tx
+          .update(tunnelDeviceAuthRequests)
+          .set({
+            status: 'approved',
+            accountId,
+            tunnelId: created.tunnelId,
+            setupToken,
+            updatedAt: approvedAt,
+          })
+          .where(
+            and(
+              eq(tunnelDeviceAuthRequests.id, row.id),
+              eq(tunnelDeviceAuthRequests.status, 'pending'),
+              gt(tunnelDeviceAuthRequests.expiresAt, approvedAt),
+            ),
+          )
+          .returning({ id: tunnelDeviceAuthRequests.id });
+        if (!approved) {
+          throw new HTTPException(409, {
+            message: 'Device auth request was already resolved',
+          });
+        }
+
+        return created;
+      });
 
       // Materialize the account's `computer` Executor connector (first machine).
       void reconcileComputerConnectors(accountId);

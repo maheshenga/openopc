@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/marketing/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import {
   AtSign,
   BarChart3,
@@ -329,7 +330,9 @@ function SlackSurfaceCard({
           <div className="flex items-center justify-between border-b-[1.5px] px-5 py-3.5">
             <div className="flex items-center justify-center gap-4">
               <Icon.Slack className="size-6" />
-              <span className="text-foreground text-lg font-semibold">Kortix</span>
+              <span className="text-foreground text-lg font-semibold">
+                {PRODUCT_BRAND.displayName}
+              </span>
             </div>
             <div>
               <Button variant="ghost" size="icon-sm" aria-label="More options">
@@ -346,7 +349,7 @@ function SlackSurfaceCard({
               {visibleChatMessages >= 1 ? (
                 <SlackChatMessage
                   key="chat-message-1"
-                  name="Kortix"
+                  name={PRODUCT_BRAND.displayName}
                   isApp
                   avatar={
                     <span className="bg-primary flex size-[2.1rem] shrink-0 items-center justify-center rounded-md">
@@ -388,7 +391,7 @@ function SlackSurfaceCard({
               {visibleChatMessages >= 3 ? (
                 <SlackChatMessage
                   key="chat-message-3"
-                  name="Kortix"
+                  name={PRODUCT_BRAND.displayName}
                   isApp
                   avatar={
                     <span className="bg-primary flex size-[2.1rem] shrink-0 items-center justify-center rounded-md">
@@ -484,7 +487,9 @@ function TeamsSurfaceCard({
           <div className="flex items-center justify-between border-b px-5 py-3.5">
             <div className="flex items-center justify-center gap-4">
               <Icon.MicrosoftTeams className="size-6" />
-              <span className="text-foreground text-lg font-semibold">Kortix</span>
+              <span className="text-foreground text-lg font-semibold">
+                {PRODUCT_BRAND.displayName}
+              </span>
             </div>
             <div>
               <Button variant="ghost" size="icon-sm" aria-label="More options">

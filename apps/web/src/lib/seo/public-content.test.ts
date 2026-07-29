@@ -11,6 +11,7 @@ import { SEO_COVERAGE_MANIFEST } from '@/lib/seo/coverage-manifest';
 import { renderLlmsTxt } from '@/lib/seo/llms';
 import {
   absoluteUrl,
+  getMarketingRecord,
   getPublicContentRecords,
   renderPlainMarkdownFromMdx,
   resolvePublicMarkdown,
@@ -49,6 +50,33 @@ afterEach(() => {
 });
 
 describe('public SEO/AEO content coverage', () => {
+  test('publishes the OpenOPC brand across current public records', () => {
+    expect(getMarketingRecord('/contact')).toMatchObject({
+      title: 'Contact OpenOPC',
+      description: 'Request a tailored OpenOPC walkthrough for cloud, VPC, or on-prem deployment.',
+    });
+
+    const currentRecords = getPublicContentRecords({ includeUseCases: true }).filter(
+      (record) =>
+        record.kind === 'marketing' ||
+        record.kind === 'use-case' ||
+        (record.kind === 'docs' && record.slug === 'index'),
+    );
+    const legacyMetadata = currentRecords
+      .filter((record) => /\bKortix\b/.test(`${record.title}\n${record.description ?? ''}`))
+      .map((record) => `${record.kind}:${record.slug}`);
+    expect(legacyMetadata).toEqual([]);
+
+    const legacyMarkdown = currentRecords
+      .filter((record) => record.markdownPath)
+      .filter((record) => {
+        const pathSegments = record.markdownPath!.replace(/^\/markdown\//, '').split('/');
+        return /\bKortix\b/.test(resolvePublicMarkdown(pathSegments)?.markdown ?? '');
+      })
+      .map((record) => record.markdownPath);
+    expect(legacyMarkdown).toEqual([]);
+  });
+
   test('uses one non-www canonical origin and no hardcoded canonical tag', () => {
     expect(CANONICAL_ORIGIN).toBe(SEO_COVERAGE_MANIFEST.canonicalOrigin);
     const appRoot = path.join(process.cwd(), 'src', 'app');

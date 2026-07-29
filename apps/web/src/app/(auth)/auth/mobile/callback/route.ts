@@ -1,7 +1,12 @@
 import { buildMobileBounceHtml } from '@/lib/auth/desktop-bounce';
 import { createClient } from '@/lib/supabase/server';
+import { getServerPublicEnv } from '@/lib/public-env-server';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import {
+  completeRegistrationFromSession,
+  registrationMetadataAfterCompletion,
+} from '../../complete-registration';
 
 function authError(request: NextRequest, message: string): NextResponse {
   const url = new URL('/auth', request.url);
@@ -31,6 +36,23 @@ export async function GET(request: NextRequest) {
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
   if (error || !data.session?.access_token || !data.session.refresh_token) {
     return authError(request, error?.message || 'auth_exchange_failed');
+  }
+
+  const userMetadata = (data.user?.user_metadata || {}) as Record<string, unknown>;
+  const runtimeEnv = getServerPublicEnv();
+  const registrationCompletion = await completeRegistrationFromSession({
+    backendUrl: process.env.BACKEND_URL || runtimeEnv.BACKEND_URL || '',
+    accessToken: data.session.access_token,
+    userMetadata,
+  });
+  if (!registrationCompletion.completed) {
+    return authError(request, 'registration_completion_failed');
+  }
+  if (registrationCompletion.required) {
+    const { error: metadataError } = await supabase.auth.updateUser({
+      data: registrationMetadataAfterCompletion(userMetadata),
+    });
+    if (metadataError) return authError(request, 'registration_completion_failed');
   }
 
   const handoffParams = new URLSearchParams();

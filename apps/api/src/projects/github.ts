@@ -1,4 +1,5 @@
 import { createHmac, createSign, timingSafeEqual } from 'node:crypto';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { getTraceHeaders } from '../lib/request-context';
 
 const GITHUB_API = 'https://api.github.com';
@@ -535,10 +536,10 @@ export async function commitFile(opts: {
   // Pin the commit identity explicitly. Without an `author`/`committer` the
   // Contents API attributes the commit to whoever owns the token — which, on a
   // server-side PAT, surfaces a personal GitHub user (e.g. "markokraemer
-  // committed") instead of Kortix. Defaulting here mirrors the identity used by
+  // committed") instead of the product. Defaulting here mirrors the identity used by
   // every git-CLI commit path (branches.ts / merge.ts / seed.ts).
   const ident = {
-    name: opts.authorName || 'Kortix',
+    name: opts.authorName || PRODUCT_BRAND.displayName,
     email: opts.authorEmail || 'noreply@kortix.ai',
   };
   const body: Record<string, unknown> = {

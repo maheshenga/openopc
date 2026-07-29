@@ -5,6 +5,7 @@ import { useAccountSettingsModalStore } from '@/stores/account-settings-modal-st
 import { usePricingModalStore } from '@/stores/pricing-modal-store';
 import { useUpgradeDialogStore } from '@/stores/upgrade-dialog-store';
 import * as Sentry from '@sentry/nextjs';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { BillingError, formatBillingErrorForUI, isBillingError } from '@kortix/sdk/react';
 
 const TOP_UP_LABEL = 'Top up';
@@ -272,7 +273,7 @@ export const handleApiError = (error: any, context?: ErrorContext): void => {
     if (!shouldSuppressDuplicate(v2Status, title)) {
       warningToast(title, {
         description:
-          'Upgrade your plan for a higher limit, or contact the Kortix team to raise it for your account.',
+          `Upgrade your plan for a higher limit, or contact the ${PRODUCT_BRAND.displayName} team to raise it for your account.`,
         duration: 6000,
         button: (
           <Button

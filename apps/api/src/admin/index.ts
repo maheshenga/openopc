@@ -15,23 +15,33 @@ import { createRoute, z } from '@hono/zod-openapi';
 import {
   developerModuleDistributionEnabled,
   developerModuleDistributionService,
+  developerApplicationService,
   developerPublisherService,
   developerModuleReviewService,
   developerModuleVerificationService,
 } from '../developer';
 import type { AppEnv } from '../types';
-import { supabaseAuth } from '../middleware/auth';
-import { requireAdmin } from '../middleware/require-admin';
 import { makeOpenApiApp, json, errors, auth } from '../openapi';
 import { recordAuditEvent } from '../shared/audit';
+import {
+  adminRequestAuthorization,
+  adminSessionAuth,
+  registerAdminSessionRoute,
+} from './admin-authorization';
 import { registerAdminDeveloperDistributionRoutes } from './developer-distribution';
+import { registerAdminDeveloperApplicationRoutes } from './developer-applications';
 import { registerAdminDeveloperPublisherRoutes } from './developer-publishers';
 import { registerAdminDeveloperReviewRoutes } from './developer-reviews';
 
 export const adminApp = makeOpenApiApp<AppEnv>();
 
-// Every admin route requires a logged-in platform admin.
-adminApp.use('*', supabaseAuth, requireAdmin);
+// Every admin route requires a host-only Admin session (or the legacy direct
+// bearer token), verified by Supabase and resolved to server-owned permissions.
+adminApp.use('*', adminSessionAuth, adminRequestAuthorization);
+registerAdminSessionRoute(adminApp);
+registerAdminDeveloperApplicationRoutes(adminApp, {
+  applicationService: developerApplicationService,
+});
 registerAdminDeveloperDistributionRoutes(adminApp, {
   distributionService: developerModuleDistributionService,
   enabled: developerModuleDistributionEnabled,

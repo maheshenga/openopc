@@ -5,12 +5,12 @@
  *   SOLUTION_HERO → /solutions/[slug]  (personas live in narrative.ts USE_CASES)
  *   INTEGRATIONS  → /integrations/[slug]
  *
- * Copy is original to Kortix. Competitor descriptions are neutral and factual —
+ * Copy is original to OpenOPC. Competitor descriptions are neutral and factual —
  * "different, not worse" — and trace back to POSITIONING.md.
  */
 
-/** Which side a comparison row favors. The Kortix column stays brand-tinted either
- *  way — the icon communicates the honest lean, never a blanket "Kortix wins". */
+/** Which side a comparison row favors. The OpenOPC column stays brand-tinted either
+ *  way — the icon communicates the honest lean, never a blanket "OpenOPC wins". */
 export type RowLean = 'kortix' | 'them' | 'both';
 
 export type CompareRow = {
@@ -32,7 +32,7 @@ export type Competitor = {
   relation: 'adjacent' | 'direct';
 
   /** Hero */
-  headline: string; // H1 — "Kortix vs X"
+  headline: string; // H1 — "OpenOPC vs X"
   sub: string; // hero subhead (also the hub card description)
 
   /** SEO */
@@ -46,7 +46,7 @@ export type Competitor = {
 
   /** The verdict (TL;DR) */
   verdictThem: string; // "Choose X if…"
-  verdictKortix: string; // "Choose Kortix if…"
+  verdictKortix: string; // "Choose OpenOPC if…"
 
   /** Comparison table */
   rows: CompareRow[];
@@ -55,7 +55,7 @@ export type Competitor = {
   builtForThem: string;
   builtForKortix: string;
 
-  /** Where Kortix is different */
+  /** Where OpenOPC is different */
   differentiators: Differentiator[];
 
   /** When to choose which */
@@ -77,21 +77,21 @@ export const COMPETITORS: Competitor[] = [
     slug: 'chatgpt',
     name: 'ChatGPT',
     relation: 'adjacent',
-    headline: 'Kortix vs ChatGPT',
-    sub: 'ChatGPT is brilliant at answering questions and drafting text. Kortix builds AI agents that actually do the work — and run on infrastructure you own.',
+    headline: 'OpenOPC vs ChatGPT',
+    sub: 'ChatGPT is brilliant at answering questions and drafting text. OpenOPC builds AI agents that actually do the work — and run on infrastructure you own.',
     seo: {
-      title: 'Kortix vs ChatGPT — From answering questions to doing the work',
+      title: 'OpenOPC vs ChatGPT — From answering questions to doing the work',
       description:
-        'ChatGPT answers and drafts. Kortix builds AI agents that actually do the work across your tools — open-source, self-hosted, and fully yours. See the difference.',
+        'ChatGPT answers and drafts. OpenOPC builds AI agents that actually do the work across your tools — open-source, self-hosted, and fully yours. See the difference.',
       keywords: [
-        'kortix vs chatgpt',
+        'openopc vs chatgpt',
         'chatgpt alternative',
         'ai agent vs chatgpt',
         'open source chatgpt alternative',
         'self-hosted ai agent',
       ],
-      ogTitle: 'Kortix vs ChatGPT',
-      ogDescription: 'ChatGPT talks. Kortix gets it done — and you own it.',
+      ogTitle: 'OpenOPC vs ChatGPT',
+      ogDescription: 'ChatGPT talks. OpenOPC gets it done — and you own it.',
     },
     verdictThem:
       'you want a fast, all-purpose assistant to write, brainstorm, summarize, and answer questions in a chat window.',
@@ -137,19 +137,19 @@ export const COMPETITORS: Competitor[] = [
     builtForThem:
       "ChatGPT is the best-known AI assistant in the world for good reason — it's fast, capable, and great at the things you'd ask a sharp helper to do: write a draft, explain something, brainstorm, clean up a message. That's where most people meet AI, and for a lot of day-to-day questions it's all you need.",
     builtForKortix:
-      'Kortix is a different kind of product. It builds agents that take action — pulling data, running research, working through files, and completing tasks from start to finish without you copy-pasting between a chat window and your real tools. And because Kortix is open-source, those agents run where you choose, on your terms.',
+      'OpenOPC is a different kind of product. It builds agents that take action — pulling data, running research, working through files, and completing tasks from start to finish without you copy-pasting between a chat window and your real tools. And because OpenOPC is open-source, those agents run where you choose, on your terms.',
     differentiators: [
       {
         title: 'It does the work, not just the talking.',
-        body: 'Asking ChatGPT to "analyze last quarter\'s numbers" gets you a thoughtful answer you then have to act on yourself. A Kortix agent can go get the numbers, run the analysis, and hand you the finished output — so the work is actually done, not just described.',
+        body: 'Asking ChatGPT to "analyze last quarter\'s numbers" gets you a thoughtful answer you then have to act on yourself. An OpenOPC agent can go get the numbers, run the analysis, and hand you the finished output — so the work is actually done, not just described.',
       },
       {
         title: 'Your data and your AI stay yours.',
-        body: "Everything you put into ChatGPT goes to OpenAI's servers. With Kortix, you can run agents on your own cloud or servers, so sensitive information never leaves your control. For anyone in a regulated or privacy-conscious business, that's the whole ballgame.",
+        body: "Everything you put into ChatGPT goes to OpenAI's servers. With OpenOPC, you can run agents on your own cloud or servers, so sensitive information never leaves your control. For anyone in a regulated or privacy-conscious business, that's the whole ballgame.",
       },
       {
         title: 'No lock-in, no per-seat tax.',
-        body: "ChatGPT ties you to one company's platform and pricing. Kortix is open-source — you're never locked in, never at the mercy of a price change, and never rationing access seat by seat as your team grows.",
+        body: "ChatGPT ties you to one company's platform and pricing. OpenOPC is open-source — you're never locked in, never at the mercy of a price change, and never rationing access seat by seat as your team grows.",
       },
     ],
     scenarios: [
@@ -160,46 +160,46 @@ export const COMPETITORS: Competitor[] = [
     ],
     faqs: [
       {
-        q: 'Is Kortix a replacement for ChatGPT?',
-        a: 'Not exactly — they overlap but aim at different jobs. ChatGPT is a general assistant for answers and drafting. Kortix builds agents that complete real work and that you own and host. Many teams use a chat assistant for quick questions and Kortix for the work that needs to get done automatically.',
+        q: 'Is OpenOPC a replacement for ChatGPT?',
+        a: 'Not exactly — they overlap but aim at different jobs. ChatGPT is a general assistant for answers and drafting. OpenOPC builds agents that complete real work and that you own and host. Many teams use a chat assistant for quick questions and OpenOPC for the work that needs to get done automatically.',
       },
       {
-        q: 'Can I keep my data private with Kortix?',
-        a: 'Yes. Kortix is self-hostable, so you can run it on your own cloud or servers and keep your data inside your own walls.',
+        q: 'Can I keep my data private with OpenOPC?',
+        a: 'Yes. OpenOPC is self-hostable, so you can run it on your own cloud or servers and keep your data inside your own walls.',
       },
       {
-        q: 'Do I need to be technical to use Kortix?',
+        q: 'Do I need to be technical to use OpenOPC?',
         a: 'You describe what you want in plain language and the agents do the work. Setting up self-hosting is more technical, but using the agents day to day is not.',
       },
       {
-        q: 'Is Kortix free?',
-        a: 'Kortix is open-source. There’s no per-seat subscription — you mainly pay for the AI usage your agents consume.',
+        q: 'Is OpenOPC free?',
+        a: 'OpenOPC is open-source. There’s no per-seat subscription — you mainly pay for the AI usage your agents consume.',
       },
     ],
     ctaTitle: 'Stop copy-pasting from a chat window. Put your AI to work.',
     ctaBody:
-      'Connect your tools and hand a Kortix agent a real task. Free to start, free to self-host.',
+      'Connect your tools and hand an OpenOPC agent a real task. Free to start, free to self-host.',
     trademark:
-      'ChatGPT and OpenAI are trademarks of OpenAI, L.L.C. Kortix is not affiliated with, endorsed by, or sponsored by OpenAI. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
+      'ChatGPT and OpenAI are trademarks of OpenAI, L.L.C. OpenOPC is not affiliated with, endorsed by, or sponsored by OpenAI. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
   },
   {
     slug: 'claude-cowork',
     name: 'Claude Cowork',
     relation: 'direct',
-    headline: 'Kortix vs Claude Cowork',
-    sub: "Claude Cowork is the strongest agent on the desktop — but it's one assistant per person, locked to Anthropic's models, with your data on their cloud. Kortix runs a whole company's agents in parallel, on any model, on infrastructure you own.",
+    headline: 'OpenOPC vs Claude Cowork',
+    sub: "Claude Cowork is the strongest agent on the desktop — but it's one assistant per person, locked to Anthropic's models, with your data on their cloud. OpenOPC runs a whole company's agents in parallel, on any model, on infrastructure you own.",
     seo: {
-      title: 'Kortix vs Claude Cowork — One desktop assistant, or a company-wide agent platform?',
+      title: 'OpenOPC vs Claude Cowork — One desktop assistant, or a company-wide agent platform?',
       description:
-        'Claude Cowork does real agentic work on your desktop — for one person, on Anthropic models, on their cloud. Kortix is the open, self-hostable platform for running a fleet of agents across your company, on any model. Compare.',
+        'Claude Cowork does real agentic work on your desktop — for one person, on Anthropic models, on their cloud. OpenOPC is the open, self-hostable platform for running a fleet of agents across your company, on any model. Compare.',
       keywords: [
-        'kortix vs claude cowork',
+        'openopc vs claude cowork',
         'claude cowork alternative',
         'open source claude cowork alternative',
         'self-hosted ai agent platform',
         'multi-tenant ai agents',
       ],
-      ogTitle: 'Kortix vs Claude Cowork',
+      ogTitle: 'OpenOPC vs Claude Cowork',
       ogDescription:
         'One desktop assistant on one lab’s models — or a company-wide agent fleet you own.',
     },
@@ -253,23 +253,23 @@ export const COMPETITORS: Competitor[] = [
     builtForThem:
       "Claude Cowork is the most capable mainstream agent for individual knowledge work — it inherits Claude Code's engine, genuinely does multi-step work on your files and apps, shows a plan before acting, and has a clean approval model. For one person who lives on Claude and wants a brilliant agent on their desktop, it's outstanding.",
     builtForKortix:
-      "Kortix is built for the next scale up: a company running agents as part of how it operates. Instead of one assistant on one machine tied to one lab's models, you get a multi-tenant platform where a fleet of agents runs in parallel — each in its own isolated sandbox, on whatever model you choose, with the whole setup versioned in a repo you own.",
+      "OpenOPC is built for the next scale up: a company running agents as part of how it operates. Instead of one assistant on one machine tied to one lab's models, you get a multi-tenant platform where a fleet of agents runs in parallel — each in its own isolated sandbox, on whatever model you choose, with the whole setup versioned in a repo you own.",
     differentiators: [
       {
         title: 'A fleet, not one desktop assistant.',
-        body: 'Cowork is one assistant per person, running on that person’s machine. Kortix runs a whole workforce — hundreds of thousands of agents in parallel, each in its own isolated sandbox — so the work scales past a single desktop and a single user.',
+        body: 'Cowork is one assistant per person, running on that person’s machine. OpenOPC runs a whole workforce — hundreds of thousands of agents in parallel, each in its own isolated sandbox — so the work scales past a single desktop and a single user.',
       },
       {
         title: 'Any model, your keys — never one lab.',
-        body: 'Cowork only runs on Anthropic’s models. Kortix is model-agnostic: bring Claude, GPT, Gemini, open weights, or your own endpoint, and route per agent. You’re never locked to a single vendor’s roadmap, pricing, or outages.',
+        body: 'Cowork only runs on Anthropic’s models. OpenOPC is model-agnostic: bring Claude, GPT, Gemini, open weights, or your own endpoint, and route per agent. You’re never locked to a single vendor’s roadmap, pricing, or outages.',
       },
       {
         title: 'Own it and run it yourself.',
-        body: 'Cowork is closed and runs through Anthropic, so your data flows to their cloud. Kortix is open-source and self-hostable — run it on your own cloud, VPC, or on-prem, and keep every byte inside your walls.',
+        body: 'Cowork is closed and runs through Anthropic, so your data flows to their cloud. OpenOPC is open-source and self-hostable — run it on your own cloud, VPC, or on-prem, and keep every byte inside your walls.',
       },
       {
         title: 'Built for a company, governed as code.',
-        body: 'Multi-tenant with real departments, users, and roles; scoped policies on every connector; isolated sandboxes with network-egress control; and agents, skills, memory and policies kept as versioned files you can diff, review, and roll back. Cowork customizes one assistant with plugins — Kortix governs an entire org.',
+        body: 'Multi-tenant with real departments, users, and roles; scoped policies on every connector; isolated sandboxes with network-egress control; and agents, skills, memory and policies kept as versioned files you can diff, review, and roll back. Cowork customizes one assistant with plugins — OpenOPC governs an entire org.',
       },
     ],
     scenarios: [
@@ -281,45 +281,45 @@ export const COMPETITORS: Competitor[] = [
     faqs: [
       {
         q: 'Is Claude Cowork not already an agent that does the work?',
-        a: 'Yes — Cowork genuinely does multi-step work, and it’s excellent at it. The difference is architecture and ownership: Cowork is one closed, Claude-only assistant per person running on your desktop and Anthropic’s cloud. Kortix is an open, self-hostable, multi-tenant platform that runs a fleet of agents on any model, with everything versioned as code you own.',
+        a: 'Yes — Cowork genuinely does multi-step work, and it’s excellent at it. The difference is architecture and ownership: Cowork is one closed, Claude-only assistant per person running on your desktop and Anthropic’s cloud. OpenOPC is an open, self-hostable, multi-tenant platform that runs a fleet of agents on any model, with everything versioned as code you own.',
       },
       {
-        q: 'Can I use Claude models with Kortix?',
-        a: 'Yes. Kortix is model-agnostic — Claude is fully supported, alongside GPT, Gemini, open-weight models, or your own endpoint. You bring your own keys and choose per agent.',
+        q: 'Can I use Claude models with OpenOPC?',
+        a: 'Yes. OpenOPC is model-agnostic — Claude is fully supported, alongside GPT, Gemini, open-weight models, or your own endpoint. You bring your own keys and choose per agent.',
       },
       {
         q: 'Can Cowork run a fleet of agents for a whole company?',
-        a: 'It’s designed as one desktop assistant per person, customized with plugins. Running governed agents across departments — with roles, isolation, and audit — is what Kortix is built for.',
+        a: 'It’s designed as one desktop assistant per person, customized with plugins. Running governed agents across departments — with roles, isolation, and audit — is what OpenOPC is built for.',
       },
       {
-        q: 'Can I self-host Kortix?',
-        a: 'Yes. Kortix is open-source and runs on your own cloud, VPC, or on-prem, so your data and agents stay inside your infrastructure.',
+        q: 'Can I self-host OpenOPC?',
+        a: 'Yes. OpenOPC is open-source and runs on your own cloud, VPC, or on-prem, so your data and agents stay inside your infrastructure.',
       },
     ],
     ctaTitle: 'Love agents that do the work? Run a whole fleet — on your own terms.',
     ctaBody:
-      'Connect your tools and hand a Kortix agent a real task. Free to start, free to self-host.',
+      'Connect your tools and hand an OpenOPC agent a real task. Free to start, free to self-host.',
     trademark:
-      'Claude and Claude Cowork are trademarks of Anthropic, PBC. Kortix is not affiliated with, endorsed by, or sponsored by Anthropic. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
+      'Claude and Claude Cowork are trademarks of Anthropic, PBC. OpenOPC is not affiliated with, endorsed by, or sponsored by Anthropic. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
   },
   {
     slug: 'hermes',
     name: 'Hermes',
     relation: 'direct',
-    headline: 'Kortix vs Hermes',
-    sub: 'Hermes is a beautiful open-source personal agent — self-hosted, bring-your-own-model, living in your chat apps. Like every great personal agent, it’s built for one operator. Kortix is the same open spirit, built for a whole company.',
+    headline: 'OpenOPC vs Hermes',
+    sub: 'Hermes is a beautiful open-source personal agent — self-hosted, bring-your-own-model, living in your chat apps. Like every great personal agent, it’s built for one operator. OpenOPC is the same open spirit, built for a whole company.',
     seo: {
-      title: 'Kortix vs Hermes — A personal agent, or a company-wide platform?',
+      title: 'OpenOPC vs Hermes — A personal agent, or a company-wide platform?',
       description:
-        'Hermes is an excellent open-source personal AI agent for one operator. Kortix is the open-source, multi-tenant platform for running governed AI agents across a whole company. Compare the two.',
+        'Hermes is an excellent open-source personal AI agent for one operator. OpenOPC is the open-source, multi-tenant platform for running governed AI agents across a whole company. Compare the two.',
       keywords: [
-        'kortix vs hermes',
+        'openopc vs hermes',
         'hermes agent alternative',
         'open source ai agent for teams',
         'self-hosted ai agent platform',
         'multi-tenant ai agents',
       ],
-      ogTitle: 'Kortix vs Hermes',
+      ogTitle: 'OpenOPC vs Hermes',
       ogDescription:
         'Both open-source and self-hosted — one’s a personal agent, one’s built for a company.',
     },
@@ -366,25 +366,25 @@ export const COMPETITORS: Competitor[] = [
       },
     ],
     builtForThem:
-      'Hermes (from Nous Research) is a genuinely great personal agent: open-source and MIT-licensed, it lives on your own infrastructure, remembers context over time, builds its own reusable skills, and reaches you across CLI, Telegram, Slack, WhatsApp and more. As a single-operator "agent that grows with you," it’s excellent — and it shares Kortix’s core values: open, self-hosted, your models, your data.',
+      'Hermes (from Nous Research) is a genuinely great personal agent: open-source and MIT-licensed, it lives on your own infrastructure, remembers context over time, builds its own reusable skills, and reaches you across CLI, Telegram, Slack, WhatsApp and more. As a single-operator "agent that grows with you," it’s excellent — and it shares OpenOPC’s core values: open, self-hosted, your models, your data.',
     builtForKortix:
-      'Kortix takes those same values and builds for a different scale: a company running agents as part of how it operates. The shift from one person’s assistant to a team’s shared, governed, multi-tenant workforce — with per-connector policies, isolation, roles, and a Git-backed audit trail — is where the two diverge.',
+      'OpenOPC takes those same values and builds for a different scale: a company running agents as part of how it operates. The shift from one person’s assistant to a team’s shared, governed, multi-tenant workforce — with per-connector policies, isolation, roles, and a Git-backed audit trail — is where the two diverge.',
     differentiators: [
       {
         title: 'Built for a company, not one operator.',
-        body: 'Hermes is designed around a single personal agent. Kortix is multi-tenant by default: many agents, many people, departments and roles, each with their own scoped permissions — a shared workforce, not a personal sidekick.',
+        body: 'Hermes is designed around a single personal agent. OpenOPC is multi-tenant by default: many agents, many people, departments and roles, each with their own scoped permissions — a shared workforce, not a personal sidekick.',
       },
       {
         title: 'Governance that scales past trust.',
-        body: 'A personal agent can assume one trusted user. The moment many employees and connectors are involved, you need least-privilege: Kortix gives every connector allow/ask/block policies, runs each task in an isolated microVM sandbox with network-egress control, and keeps every change versioned and reversible.',
+        body: 'A personal agent can assume one trusted user. The moment many employees and connectors are involved, you need least-privilege: OpenOPC gives every connector allow/ask/block policies, runs each task in an isolated microVM sandbox with network-egress control, and keeps every change versioned and reversible.',
       },
       {
         title: 'A real runtime for parallel work.',
-        body: 'Hermes can spawn the occasional subagent. Kortix is a runtime built to run hundreds of thousands of agents in parallel, each isolated, all landing their work back into one shared, Git-backed main.',
+        body: 'Hermes can spawn the occasional subagent. OpenOPC is a runtime built to run hundreds of thousands of agents in parallel, each isolated, all landing their work back into one shared, Git-backed main.',
       },
       {
         title: 'Same open-source freedom — without the DIY safety burden.',
-        body: 'You keep everything you love about a great open agent — open-source, self-hosted, bring-your-own-model, no lock-in — but you don’t have to hand-assemble the org-level guardrails. Kortix ships the isolation, scoped policies, roles, and audit trail already in place.',
+        body: 'You keep everything you love about a great open agent — open-source, self-hosted, bring-your-own-model, no lock-in — but you don’t have to hand-assemble the org-level guardrails. OpenOPC ships the isolation, scoped policies, roles, and audit trail already in place.',
       },
     ],
     scenarios: [
@@ -395,46 +395,46 @@ export const COMPETITORS: Competitor[] = [
     ],
     faqs: [
       {
-        q: 'Aren’t Kortix and Hermes both open-source and self-hosted?',
-        a: 'Yes — they share those values, and Hermes is a great single-player agent. The difference is scale and governance: Hermes is built for one operator; Kortix is built for a company, with multi-tenancy, scoped per-connector policies, isolated sandboxes, roles, and a Git-backed audit trail.',
+        q: 'Aren’t OpenOPC and Hermes both open-source and self-hosted?',
+        a: 'Yes — they share those values, and Hermes is a great single-player agent. The difference is scale and governance: Hermes is built for one operator; OpenOPC is built for a company, with multi-tenancy, scoped per-connector policies, isolated sandboxes, roles, and a Git-backed audit trail.',
       },
       {
         q: 'Can Hermes be used by a whole team?',
-        a: 'It can spawn subagents and run on shared infrastructure, but it’s designed and documented for a single operator, so team roles, tenant isolation, and org-wide audit are largely something you’d build yourself. Kortix is built for that from the start.',
+        a: 'It can spawn subagents and run on shared infrastructure, but it’s designed and documented for a single operator, so team roles, tenant isolation, and org-wide audit are largely something you’d build yourself. OpenOPC is built for that from the start.',
       },
       {
-        q: 'Do I keep bring-your-own-model with Kortix?',
-        a: 'Yes. Like Hermes, Kortix is model-agnostic — bring any provider and your own keys, and choose per agent.',
+        q: 'Do I keep bring-your-own-model with OpenOPC?',
+        a: 'Yes. Like Hermes, OpenOPC is model-agnostic — bring any provider and your own keys, and choose per agent.',
       },
       {
-        q: 'Is Kortix harder to run than Hermes?',
-        a: 'Both are self-hosted. Kortix includes far more team-grade structure out of the box — isolation, scoped policies, roles, audit — which is exactly what you want once agents are doing real work for a company.',
+        q: 'Is OpenOPC harder to run than Hermes?',
+        a: 'Both are self-hosted. OpenOPC includes far more team-grade structure out of the box — isolation, scoped policies, roles, audit — which is exactly what you want once agents are doing real work for a company.',
       },
     ],
     ctaTitle: 'Love a great open-source agent? Get one built for your whole company.',
     ctaBody:
-      'Connect your tools and hand a Kortix agent a real task. Free to start, free to self-host.',
+      'Connect your tools and hand an OpenOPC agent a real task. Free to start, free to self-host.',
     trademark:
-      'Hermes is a product of Nous Research. Kortix is not affiliated with, endorsed by, or sponsored by Nous Research. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
+      'Hermes is a product of Nous Research. OpenOPC is not affiliated with, endorsed by, or sponsored by Nous Research. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
   },
   {
     slug: 'openclaw',
     name: 'OpenClaw',
     relation: 'direct',
-    headline: 'Kortix vs OpenClaw',
-    sub: 'Both are open-source and self-hosted — but OpenClaw is built as a personal "Jarvis" on your own machine. Kortix is the team-grade platform for running AI agents across a business, with the control that requires.',
+    headline: 'OpenOPC vs OpenClaw',
+    sub: 'Both are open-source and self-hosted — but OpenClaw is built as a personal "Jarvis" on your own machine. OpenOPC is the team-grade platform for running AI agents across a business, with the control that requires.',
     seo: {
-      title: 'Kortix vs OpenClaw — A personal Jarvis, or a team-grade platform?',
+      title: 'OpenOPC vs OpenClaw — A personal Jarvis, or a team-grade platform?',
       description:
-        'OpenClaw is a brilliant personal AI assistant for your own machine. Kortix is the open-source, team-grade platform for running governed AI agents across your business.',
+        'OpenClaw is a brilliant personal AI assistant for your own machine. OpenOPC is the open-source, team-grade platform for running governed AI agents across your business.',
       keywords: [
-        'kortix vs openclaw',
+        'openopc vs openclaw',
         'openclaw alternative',
         'open source ai agent for teams',
         'self-hosted ai agent platform',
         'business ai agents',
       ],
-      ogTitle: 'Kortix vs OpenClaw',
+      ogTitle: 'OpenOPC vs OpenClaw',
       ogDescription:
         "Both open-source and self-hosted — one's a personal Jarvis, one's built for teams.",
     },
@@ -481,25 +481,25 @@ export const COMPETITORS: Competitor[] = [
       },
     ],
     builtForThem:
-      'OpenClaw is a genuine open-source phenomenon — it earned its huge following by giving individuals a private, always-on assistant that lives on their own hardware and connects to the messaging apps they already use. As a personal "Jarvis," it\'s excellent, and it shares Kortix\'s core values: open-source, self-hosted, your data stays yours.',
+      'OpenClaw is a genuine open-source phenomenon — it earned its huge following by giving individuals a private, always-on assistant that lives on their own hardware and connects to the messaging apps they already use. As a personal "Jarvis," it\'s excellent, and it shares OpenOPC\'s core values: open-source, self-hosted, your data stays yours.',
     builtForKortix:
-      "Kortix takes those same values and builds for a different scale: a business running AI agents as part of how it operates. That shift — from one person's assistant to a team's shared, governed workforce — is where the two diverge.",
+      "OpenOPC takes those same values and builds for a different scale: a business running AI agents as part of how it operates. That shift — from one person's assistant to a team's shared, governed workforce — is where the two diverge.",
     differentiators: [
       {
         title: 'Built for a team, not just one person.',
-        body: 'OpenClaw is designed around a single personal assistant. Kortix lets you run a whole fleet of agents — different ones for different jobs — managed together as part of how your business works.',
+        body: 'OpenClaw is designed around a single personal assistant. OpenOPC lets you run a whole fleet of agents — different ones for different jobs — managed together as part of how your business works.',
       },
       {
         title: 'Control that a business actually needs.',
-        body: 'When AI is doing real work for a company, "it just runs on my laptop" isn\'t enough. Kortix lets you decide exactly what each agent can access, runs each task in its own sealed workspace so nothing collides, and keeps every change tracked and reversible — so a mistake is easy to undo and nothing happens silently.',
+        body: 'When AI is doing real work for a company, "it just runs on my laptop" isn\'t enough. OpenOPC lets you decide exactly what each agent can access, runs each task in its own sealed workspace so nothing collides, and keeps every change tracked and reversible — so a mistake is easy to undo and nothing happens silently.',
       },
       {
         title: 'Runs where a business runs.',
-        body: 'OpenClaw typically lives on a personal machine or a single server. Kortix is built to run on your company cloud, private network, or on-premises — the environments a business needs for security and scale.',
+        body: 'OpenClaw typically lives on a personal machine or a single server. OpenOPC is built to run on your company cloud, private network, or on-premises — the environments a business needs for security and scale.',
       },
       {
         title: 'Same open-source freedom — without the DIY safety burden.',
-        body: "You keep everything you love about OpenClaw — open-source, self-hosted, no lock-in — but you don't have to hand-build the guardrails. Kortix brings the access controls, isolation, and change tracking already in place.",
+        body: "You keep everything you love about OpenClaw — open-source, self-hosted, no lock-in — but you don't have to hand-build the guardrails. OpenOPC brings the access controls, isolation, and change tracking already in place.",
       },
     ],
     scenarios: [
@@ -510,46 +510,46 @@ export const COMPETITORS: Competitor[] = [
     ],
     faqs: [
       {
-        q: "Aren't Kortix and OpenClaw both open-source and self-hosted?",
-        a: 'Yes — they share those values. The difference is focus: OpenClaw is built as a personal assistant for one person; Kortix is built for teams, with the management, access control, and governance a business needs.',
+        q: "Aren't OpenOPC and OpenClaw both open-source and self-hosted?",
+        a: 'Yes — they share those values. The difference is focus: OpenClaw is built as a personal assistant for one person; OpenOPC is built for teams, with the management, access control, and governance a business needs.',
       },
       {
         q: 'Can OpenClaw be used by a team?',
-        a: "It can be configured for more than one person, but it's designed and documented primarily for personal use, so team governance and control are largely something you build yourself. Kortix is built for that from the start.",
+        a: "It can be configured for more than one person, but it's designed and documented primarily for personal use, so team governance and control are largely something you build yourself. OpenOPC is built for that from the start.",
       },
       {
-        q: 'Is Kortix harder to run than OpenClaw?',
-        a: 'Both are self-hosted. Kortix includes more team-grade structure out of the box — controls, isolation, change tracking — which is exactly what you want once AI is doing real work for a business.',
+        q: 'Is OpenOPC harder to run than OpenClaw?',
+        a: 'Both are self-hosted. OpenOPC includes more team-grade structure out of the box — controls, isolation, change tracking — which is exactly what you want once AI is doing real work for a business.',
       },
       {
         q: 'Will I lose the freedom OpenClaw gives me?',
-        a: 'No. Kortix is also open-source with no vendor lock-in — you keep ownership and portability, and gain the controls a team needs.',
+        a: 'No. OpenOPC is also open-source with no vendor lock-in — you keep ownership and portability, and gain the controls a team needs.',
       },
     ],
     ctaTitle: 'Love the open-source freedom of OpenClaw? Get it built for teams.',
     ctaBody:
-      'Connect your tools and hand a Kortix agent a real task. Free to start, free to self-host.',
+      'Connect your tools and hand an OpenOPC agent a real task. Free to start, free to self-host.',
     trademark:
-      'OpenClaw is a trademark of its respective owner. Kortix is not affiliated with, endorsed by, or sponsored by OpenClaw or its maintainers. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
+      'OpenClaw is a trademark of its respective owner. OpenOPC is not affiliated with, endorsed by, or sponsored by OpenClaw or its maintainers. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
   },
   {
     slug: 'glean',
     name: 'Glean',
     relation: 'adjacent',
-    headline: 'Kortix vs Glean',
-    sub: 'Glean is best-in-class enterprise search and assistant — but it’s a closed, seat-priced platform you query, not own. Kortix is the open runtime where you build and run the agents that do the work, on infrastructure you own.',
+    headline: 'OpenOPC vs Glean',
+    sub: 'Glean is best-in-class enterprise search and assistant — but it’s a closed, seat-priced platform you query, not own. OpenOPC is the open runtime where you build and run the agents that do the work, on infrastructure you own.',
     seo: {
-      title: 'Kortix vs Glean — Search your knowledge, or run agents that do the work?',
+      title: 'OpenOPC vs Glean — Search your knowledge, or run agents that do the work?',
       description:
-        'Glean is a closed, seat-priced enterprise search & assistant you query. Kortix is the open-source, self-hostable runtime where you build and run a fleet of agents that take action — agents, skills and policies as code you own. Compare.',
+        'Glean is a closed, seat-priced enterprise search & assistant you query. OpenOPC is the open-source, self-hostable runtime where you build and run a fleet of agents that take action — agents, skills and policies as code you own. Compare.',
       keywords: [
-        'kortix vs glean',
+        'openopc vs glean',
         'glean alternative',
         'open source glean alternative',
         'enterprise ai agents',
         'self-hosted ai platform',
       ],
-      ogTitle: 'Kortix vs Glean',
+      ogTitle: 'OpenOPC vs Glean',
       ogDescription:
         'Query your knowledge — or build and run the agents that do the work, and own them.',
     },
@@ -598,23 +598,23 @@ export const COMPETITORS: Competitor[] = [
     builtForThem:
       'Glean is the leader in permission-aware enterprise search: a knowledge graph that mirrors your source permissions, a mature catalog of connectors, a capable assistant over all of it, and serious enterprise security and compliance. If your primary need is finding and synthesizing what your company already knows, Glean is excellent at it.',
     builtForKortix:
-      'Kortix is a different layer: not a place to search your knowledge, but a runtime to build and run the agents that do the work. Where Glean is closed and configured inside its console, Kortix is open-source and self-hostable, model-agnostic, and defined as code — agents, skills, connectors and policies are files in a repo you own.',
+      'OpenOPC is a different layer: not a place to search your knowledge, but a runtime to build and run the agents that do the work. Where Glean is closed and configured inside its console, OpenOPC is open-source and self-hostable, model-agnostic, and defined as code — agents, skills, connectors and policies are files in a repo you own.',
     differentiators: [
       {
         title: 'Do the work — don’t just find it.',
-        body: 'Glean’s heritage is retrieval: it finds answers and assists, with an agent layer added on top. Kortix is built from the ground up to take action — agents that pull data, run analysis, work through files, and return finished output across your tools.',
+        body: 'Glean’s heritage is retrieval: it finds answers and assists, with an agent layer added on top. OpenOPC is built from the ground up to take action — agents that pull data, run analysis, work through files, and return finished output across your tools.',
       },
       {
         title: 'Own the runtime, don’t rent the index.',
-        body: 'Glean is proprietary — SaaS, or a vendor-managed instance in your cloud you still don’t own. Kortix is open-source and self-hostable: run it on your cloud, VPC, or on-prem, fork it, and keep your data and agents entirely yours.',
+        body: 'Glean is proprietary — SaaS, or a vendor-managed instance in your cloud you still don’t own. OpenOPC is open-source and self-hostable: run it on your cloud, VPC, or on-prem, fork it, and keep your data and agents entirely yours.',
       },
       {
         title: 'As code, not console.',
-        body: 'In Glean, agents and configuration live inside Glean’s console. In Kortix, the whole company — agents, skills, memory, connectors, scoped policies — is version-controlled files you can diff, review, and roll back.',
+        body: 'In Glean, agents and configuration live inside Glean’s console. In OpenOPC, the whole company — agents, skills, memory, connectors, scoped policies — is version-controlled files you can diff, review, and roll back.',
       },
       {
         title: 'For teams of any size, not just 100-seat deals.',
-        body: 'Glean is enterprise-only, sales-led, and seat-priced with a high floor. Kortix is open-source — start free, self-host, and pay only for the AI usage you run, whether you’re five people or five thousand.',
+        body: 'Glean is enterprise-only, sales-led, and seat-priced with a high floor. OpenOPC is open-source — start free, self-host, and pay only for the AI usage you run, whether you’re five people or five thousand.',
       },
     ],
     scenarios: [
@@ -625,46 +625,46 @@ export const COMPETITORS: Competitor[] = [
     ],
     faqs: [
       {
-        q: 'Is Kortix an enterprise search tool like Glean?',
-        a: 'No — that’s the key difference. Glean is built around permission-aware search and an assistant over your knowledge. Kortix is a runtime for building and running agents that take action. They can be complementary: search finds, agents do.',
+        q: 'Is OpenOPC an enterprise search tool like Glean?',
+        a: 'No — that’s the key difference. Glean is built around permission-aware search and an assistant over your knowledge. OpenOPC is a runtime for building and running agents that take action. They can be complementary: search finds, agents do.',
       },
       {
-        q: 'Can I self-host Kortix instead of a vendor-managed cloud?',
-        a: 'Yes. Kortix is open-source and runs on your own cloud, VPC, or on-prem — you own and operate it, rather than querying a vendor-managed platform.',
+        q: 'Can I self-host OpenOPC instead of a vendor-managed cloud?',
+        a: 'Yes. OpenOPC is open-source and runs on your own cloud, VPC, or on-prem — you own and operate it, rather than querying a vendor-managed platform.',
       },
       {
-        q: 'Does Kortix let me bring my own models like Glean’s model hub?',
-        a: 'Yes — Kortix is model-agnostic. Bring any provider and your own keys, and choose per agent.',
+        q: 'Does OpenOPC let me bring my own models like Glean’s model hub?',
+        a: 'Yes — OpenOPC is model-agnostic. Bring any provider and your own keys, and choose per agent.',
       },
       {
-        q: 'Is Kortix only for large enterprises?',
-        a: 'No. Glean is effectively gated to large, sales-led deals; Kortix is open-source and starts free, so teams of any size can run it.',
+        q: 'Is OpenOPC only for large enterprises?',
+        a: 'No. Glean is effectively gated to large, sales-led deals; OpenOPC is open-source and starts free, so teams of any size can run it.',
       },
     ],
     ctaTitle: 'Go from searching your knowledge to running the agents that do the work.',
     ctaBody:
-      'Connect your tools and hand a Kortix agent a real task. Free to start, free to self-host.',
+      'Connect your tools and hand an OpenOPC agent a real task. Free to start, free to self-host.',
     trademark:
-      'Glean is a trademark of Glean Technologies, Inc. Kortix is not affiliated with, endorsed by, or sponsored by Glean. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
+      'Glean is a trademark of Glean Technologies, Inc. OpenOPC is not affiliated with, endorsed by, or sponsored by Glean. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
   },
   {
     slug: 'tasklet',
     name: 'Tasklet',
     relation: 'direct',
-    headline: 'Kortix vs Tasklet',
-    sub: 'Tasklet is a slick cloud tool for always-on agents that take action — but it’s closed, cloud-only, and locked to its model stack. Kortix gives you the same autonomous agents as open, self-hostable code you own, on any model.',
+    headline: 'OpenOPC vs Tasklet',
+    sub: 'Tasklet is a slick cloud tool for always-on agents that take action — but it’s closed, cloud-only, and locked to its model stack. OpenOPC gives you the same autonomous agents as open, self-hostable code you own, on any model.',
     seo: {
-      title: 'Kortix vs Tasklet — Cloud-only automation, or agents you own?',
+      title: 'OpenOPC vs Tasklet — Cloud-only automation, or agents you own?',
       description:
-        'Tasklet runs always-on agents in its cloud, on its model stack. Kortix gives you the same autonomous agents as open-source, self-hostable code — bring your own models, isolated sandboxes, everything versioned and owned by you. Compare.',
+        'Tasklet runs always-on agents in its cloud, on its model stack. OpenOPC gives you the same autonomous agents as open-source, self-hostable code — bring your own models, isolated sandboxes, everything versioned and owned by you. Compare.',
       keywords: [
-        'kortix vs tasklet',
+        'openopc vs tasklet',
         'tasklet alternative',
         'open source tasklet alternative',
         'self-hosted ai agents',
         'ai automation you own',
       ],
-      ogTitle: 'Kortix vs Tasklet',
+      ogTitle: 'OpenOPC vs Tasklet',
       ogDescription:
         'Same always-on agents — but open-source, self-hostable, any model, owned by you.',
     },
@@ -713,23 +713,23 @@ export const COMPETITORS: Competitor[] = [
     builtForThem:
       'Tasklet nails a real insight: people want agents that own the work, not another chatbot. You describe a task in plain English and always-on agents execute it across thousands of integrations — even driving apps through a built-in computer-use browser when there’s no API. The setup is delightfully simple and the pricing is transparent and self-serve.',
     builtForKortix:
-      'Kortix delivers the same autonomous, always-on agents — but as something you own. Where Tasklet is cloud-only, closed, and locked to its managed models, Kortix is open-source and self-hostable, model-agnostic, and defined as code, with isolation and governance built for running agents across a whole company.',
+      'OpenOPC delivers the same autonomous, always-on agents — but as something you own. Where Tasklet is cloud-only, closed, and locked to its managed models, OpenOPC is open-source and self-hostable, model-agnostic, and defined as code, with isolation and governance built for running agents across a whole company.',
     differentiators: [
       {
         title: 'Own it and run it yourself.',
-        body: 'Tasklet runs only in Tasklet’s cloud. Kortix is open-source and self-hostable — run it on your own cloud, VPC, or on-prem, so your agents and your data stay inside your walls.',
+        body: 'Tasklet runs only in Tasklet’s cloud. OpenOPC is open-source and self-hostable — run it on your own cloud, VPC, or on-prem, so your agents and your data stay inside your walls.',
       },
       {
         title: 'Any model, your keys.',
-        body: 'Tasklet routes to its own managed model stack with no bring-your-own option. Kortix is model-agnostic: bring any provider and your own keys, and pick per agent — better control, and often far cheaper.',
+        body: 'Tasklet routes to its own managed model stack with no bring-your-own option. OpenOPC is model-agnostic: bring any provider and your own keys, and pick per agent — better control, and often far cheaper.',
       },
       {
         title: 'Governed, and versioned as code.',
-        body: 'Tasklet’s agents are built by chat and live in its managed runtime. Kortix keeps agents, skills, memory, connectors and scoped policies as versioned files, runs each task in an isolated microVM sandbox with network-egress control, and makes every change reviewable and reversible.',
+        body: 'Tasklet’s agents are built by chat and live in its managed runtime. OpenOPC keeps agents, skills, memory, connectors and scoped policies as versioned files, runs each task in an isolated microVM sandbox with network-egress control, and makes every change reviewable and reversible.',
       },
       {
         title: 'Built for a company, not just a team account.',
-        body: 'Kortix is multi-tenant by default — real departments, users, and roles, each scoped to exactly what they should touch — so the same platform runs a five-person team or hundreds of thousands of agents in parallel.',
+        body: 'OpenOPC is multi-tenant by default — real departments, users, and roles, each scoped to exactly what they should touch — so the same platform runs a five-person team or hundreds of thousands of agents in parallel.',
       },
     ],
     scenarios: [
@@ -740,27 +740,27 @@ export const COMPETITORS: Competitor[] = [
     ],
     faqs: [
       {
-        q: 'Does Kortix run always-on agents like Tasklet?',
-        a: 'Yes — both run autonomous, always-on agents that take real action across your tools (Kortix via cron and webhook triggers). The difference is ownership and architecture: Kortix is open-source, self-hostable, model-agnostic, and defined as code.',
+        q: 'Does OpenOPC run always-on agents like Tasklet?',
+        a: 'Yes — both run autonomous, always-on agents that take real action across your tools (OpenOPC via cron and webhook triggers). The difference is ownership and architecture: OpenOPC is open-source, self-hostable, model-agnostic, and defined as code.',
       },
       {
         q: 'Can I keep my data off a third-party cloud?',
-        a: 'Yes — that’s a core reason teams choose Kortix. Self-host it and your agents and data stay entirely within your own infrastructure. Tasklet is cloud-only.',
+        a: 'Yes — that’s a core reason teams choose OpenOPC. Self-host it and your agents and data stay entirely within your own infrastructure. Tasklet is cloud-only.',
       },
       {
         q: 'Can I use my own models and keys?',
-        a: 'Yes. Kortix is model-agnostic with bring-your-own-keys. Tasklet routes to its own managed model stack.',
+        a: 'Yes. OpenOPC is model-agnostic with bring-your-own-keys. Tasklet routes to its own managed model stack.',
       },
       {
-        q: 'Is Kortix harder to set up than Tasklet?',
-        a: 'Tasklet wins on instant, no-setup cloud convenience. Kortix asks a bit more upfront — especially self-hosting — in exchange for ownership, any-model flexibility, isolation, and governance.',
+        q: 'Is OpenOPC harder to set up than Tasklet?',
+        a: 'Tasklet wins on instant, no-setup cloud convenience. OpenOPC asks a bit more upfront — especially self-hosting — in exchange for ownership, any-model flexibility, isolation, and governance.',
       },
     ],
     ctaTitle: 'Same always-on agents — open-source, any model, and yours to keep.',
     ctaBody:
-      'Connect your tools and hand a Kortix agent a real task. Free to start, free to self-host.',
+      'Connect your tools and hand an OpenOPC agent a real task. Free to start, free to self-host.',
     trademark:
-      'Tasklet is a trademark of its respective owner. Kortix is not affiliated with, endorsed by, or sponsored by Tasklet. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
+      'Tasklet is a trademark of its respective owner. OpenOPC is not affiliated with, endorsed by, or sponsored by Tasklet. All product names, logos, and brands are the property of their respective owners and are used here for identification and comparison only. Comparisons reflect publicly available information as of June 2026 and may change.',
   },
 ];
 

@@ -361,7 +361,7 @@ export const MOCK_ITEMS: ReviewItem[] = [
     id: 'rv-decision-2',
     kind: 'decision',
     title: 'Brand accent color for the new dashboard',
-    summary: 'You chose “Kortix blue”',
+    summary: 'You chose “OpenOPC blue”',
     risk: 'none',
     status: 'done',
     source: 'web',
@@ -373,7 +373,7 @@ export const MOCK_ITEMS: ReviewItem[] = [
     detail: {
       question: 'Pick the dashboard accent color.',
       options: [
-        { id: 'c1', label: 'Kortix blue', recommended: true },
+        { id: 'c1', label: 'OpenOPC blue', recommended: true },
         { id: 'c2', label: 'Emerald' },
         { id: 'c3', label: 'Violet' },
       ],

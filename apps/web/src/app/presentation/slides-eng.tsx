@@ -189,7 +189,7 @@ export function useSlides(): SlideDef[] {
     /* 3 — WHAT IS KORTIX TODAY ───────────────────────────────────────────── */
     {
       id: 'what',
-      label: 'What is Kortix',
+      label: 'What is OpenOPC',
       node: (
         <Slide>
           <div className="grid items-center gap-12 lg:grid-cols-2">
@@ -213,7 +213,7 @@ export function useSlides(): SlideDef[] {
                 ]}
               />
             </div>
-            <Shot src={`${SHOT}/01-command-center.png`} alt="The Kortix command center" />
+            <Shot src={`${SHOT}/01-command-center.png`} alt="The OpenOPC command center" />
           </div>
         </Slide>
       ),
@@ -414,7 +414,7 @@ export function useSlides(): SlideDef[] {
     /* 8 — WHERE KORTIX LIVES ────────────────────────────────────────────── */
     {
       id: 'lives',
-      label: 'Where Kortix lives',
+      label: 'Where OpenOPC lives',
       node: (
         <Slide>
           <div className="grid items-center gap-12 lg:grid-cols-2">
@@ -440,7 +440,7 @@ export function useSlides(): SlideDef[] {
                 </Pill>
               </div>
             </div>
-            <Shot src={`${SHOT}/06-channels.png`} alt="Kortix inside Slack and Teams" />
+            <Shot src={`${SHOT}/06-channels.png`} alt="OpenOPC inside Slack and Teams" />
           </div>
         </Slide>
       ),

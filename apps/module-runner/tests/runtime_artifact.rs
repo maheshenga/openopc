@@ -253,6 +253,27 @@ async fn streams_a_full_32_mib_artifact_without_the_control_plane_body_limit() {
 }
 
 #[tokio::test]
+async fn accepts_a_streamed_artifact_without_content_length_when_body_and_digest_match() {
+    let bytes = vec![0, 97, 115, 109];
+    let digest = sha256(&bytes);
+    let transport = Arc::new(RecordingTransport::complete(
+        vec![bytes],
+        Some("application/wasm"),
+        None,
+        Some(digest.clone()),
+    ));
+
+    let artifact = client(transport)
+        .fetch(&bundle(digest, 4))
+        .await
+        .expect("streaming responses may omit Content-Length");
+    let path = artifact.path().to_owned();
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 4);
+    drop(artifact);
+    assert!(!path.exists());
+}
+
+#[tokio::test]
 async fn rejects_artifact_limits_metadata_lengths_statuses_and_transport_failures() {
     let exact = vec![0, 97, 115, 109];
     let digest = sha256(&exact);
@@ -288,7 +309,7 @@ async fn rejects_artifact_limits_metadata_lengths_statuses_and_transport_failure
             Arc::new(RecordingTransport::complete(
                 vec![exact.clone()],
                 Some("application/wasm"),
-                None,
+                Some(5),
                 Some(digest.clone()),
             )),
             "content-length",

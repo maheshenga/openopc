@@ -109,7 +109,7 @@ export async function initiateTeamsUpload(
       {
         contentType: 'application/vnd.microsoft.teams.card.file.consent',
         content: {
-          description: args.description ?? `Kortix wants to send you ${args.filename}.`,
+          description: args.description ?? `OpenOPC wants to send you ${args.filename}.`,
           sizeInBytes: size,
           acceptContext: { uploadId },
           declineContext: { uploadId },

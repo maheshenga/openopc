@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation';
 
 import { ChatIdentityConnect } from '@/features/auth/chat-identity-connect';
 import { teamsIdentityApi } from '@/lib/api/teams-identity';
+import { buildChatIdentityMissingLinkMessage } from '@/lib/auth/auth-brand-copy';
 
 /**
  * Teams bind page — the Teams twin of `/slack/login/<token>`. The bot sends a
@@ -20,7 +21,7 @@ export default function TeamsLoginPage() {
       token={token}
       loginPath={`/teams/login/${token}`}
       bind={(t) => teamsIdentityApi.bind(t)}
-      missingLinkMessage="This page is opened from a Kortix message in Teams. Start the login from Teams to get a fresh link."
+      missingLinkMessage={buildChatIdentityMissingLinkMessage('Teams')}
       disconnectNote={
         <>
           Disconnect anytime with the <span className="text-foreground font-mono">logout</span>{' '}

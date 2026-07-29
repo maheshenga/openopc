@@ -5,6 +5,7 @@ import { loadSlackTokenForProject } from '../install-store';
 import { publishHomeView } from '../slack-api';
 import { config } from '../../config';
 import { escapeMrkdwn, formatRelativeTime, repoLabel, repoOgImage } from './util';
+import { SLACK_HOME_COPY } from './home-copy';
 import type { HomeProjectRow, HomeRecentRow } from './types';
 
 export async function publishHomeForUser(teamId: string, userId: string): Promise<void> {
@@ -38,13 +39,6 @@ export async function publishHomeForUser(teamId: string, userId: string): Promis
   await publishHomeView(token, userId, view);
 }
 
-const HOME_EXAMPLES: Array<{ emoji: string; prompt: string }> = [
-  { emoji: '🔍', prompt: '@Kortix scan this codebase and write me a one-pager' },
-  { emoji: '🔧', prompt: '@Kortix open a PR that switches our logger to pino' },
-  { emoji: '📊', prompt: '@Kortix what changed on main this week?' },
-  { emoji: '📦', prompt: '@Kortix pull yesterday\'s sign-ups, group them by source, drop the CSV here' },
-];
-
 const PROJECT_COVERS = [
   '1517694712202-14dd9538aa97',
   '1555066931-4365d14bab8c',
@@ -73,11 +67,11 @@ function buildHomeView(input: { projects: HomeProjectRow[]; recent: HomeRecentRo
   blocks.push({
     type: 'image',
     image_url: heroUrl,
-    alt_text: 'Kortix — AI command center for your company',
+    alt_text: SLACK_HOME_COPY.heroAlt,
   });
   blocks.push({
     type: 'header',
-    text: { type: 'plain_text', text: '👋  Welcome to Kortix', emoji: true },
+    text: { type: 'plain_text', text: SLACK_HOME_COPY.welcome, emoji: true },
   });
   blocks.push({
     type: 'section',
@@ -105,7 +99,7 @@ function buildHomeView(input: { projects: HomeProjectRow[]; recent: HomeRecentRo
   if (input.projects.length === 0) {
     blocks.push({
       type: 'section',
-      text: { type: 'mrkdwn', text: '*No projects connected yet.*\nHead to your Kortix dashboard to link a project to this workspace.' },
+      text: { type: 'mrkdwn', text: SLACK_HOME_COPY.noProjects },
       accessory: {
         type: 'button',
         text: { type: 'plain_text', text: 'Open dashboard' },
@@ -174,7 +168,7 @@ function buildHomeView(input: { projects: HomeProjectRow[]; recent: HomeRecentRo
     type: 'section',
     text: { type: 'mrkdwn', text: '_Paste any of these into a channel I\'m in:_' },
   });
-  for (const ex of HOME_EXAMPLES) {
+  for (const ex of SLACK_HOME_COPY.examples) {
     blocks.push({
       type: 'section',
       text: { type: 'mrkdwn', text: `${ex.emoji}  \`${ex.prompt}\`` },
@@ -204,7 +198,7 @@ function buildHomeView(input: { projects: HomeProjectRow[]; recent: HomeRecentRo
   blocks.push({
     type: 'context',
     elements: [
-      { type: 'mrkdwn', text: `🪐  Managed by Kortix  ·  <${dashboardBase}|kortix.com>  ·  <${dashboardBase}/docs|Docs>  ·  <${dashboardBase}/settings|Settings>` },
+      { type: 'mrkdwn', text: `🪐  Managed by ${SLACK_HOME_COPY.managedBy}  ·  <${dashboardBase}|kortix.com>  ·  <${dashboardBase}/docs|Docs>  ·  <${dashboardBase}/settings|Settings>` },
     ],
   });
 

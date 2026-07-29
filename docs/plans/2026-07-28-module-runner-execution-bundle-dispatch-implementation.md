@@ -18,14 +18,15 @@ while the signed execution authority remains live.
 **Tech Stack:** TypeScript, Hono, Zod, Ajv 2020, Bun test, Drizzle ORM, PostgreSQL 16, Docker,
 `pnpm.cmd`, Rust 1.97.1, Tokio 1.48, Reqwest 0.13, Wasmtime 47.0.2, Ed25519, SHA-256.
 
-**Plan Status:** Tasks 1-6 implemented; focused verification passed. Task 1 contract and Runner
-gates passed; Task 2 schema, real PostgreSQL, migration lint, and DB typecheck gates passed. Task 3
-passed 30 API tests, 8 Runner protocol tests, 14 contract tests, 1 SDK targeted test, the full
-1,166-test SDK suite, API/SDK typechecks, SDK packed-install, and targeted Biome. Task 4 passed 57
-focused tests, 38 supplemental tests, API typecheck, and targeted Biome. Task 5 passed 55 API tests,
-12 contract tests, 22 real PostgreSQL tests, the production artifact-store tests, both typechecks,
-and migration lint. Task 6 passed 25 focused Runner tests, Rustfmt, and Clippy with warnings denied.
-Tasks 7-8 remain.
+**Plan Status:** Tasks 1-8 implemented; 59/59 plan steps complete and focused verification passed.
+Task 8 passed the real PostgreSQL/API/two-Runner integration three consecutive times (40,851.07 ms,
+37,628.13 ms, and 40,329.49 ms), plus 98 API tests, 22 runtime-contract tests, 1 SDK test,
+8 database schema tests, and three consecutive 22-test real PostgreSQL migration runs. API,
+runtime-contracts, SDK, and database typechecks passed; all 81 migrations passed lint with
+7 pre-existing destructive operation warnings. Rustfmt, the complete Runner suite (51 passed,
+1 live test ignored because the
+Bun harness runs it separately), and Clippy with warnings denied passed. Protected files remained
+unchanged, both integration-container prefixes had zero residue, and `git diff --check` was clean.
 
 ## Global Constraints
 
@@ -1037,7 +1038,7 @@ impl RunnerState {
 - Dropping `CapacityPermit` restores exactly one unit and cannot exceed total capacity.
 - The dispatcher starts exactly `OPENOPC_RUNNER_CAPACITY` workers and never spawns per-claim tasks.
 
-- [ ] **Step 1: Add lease supervisor RED tests**
+- [x] **Step 1: Add lease supervisor RED tests**
 
 With an injected clock and heartbeat transport, assert:
 
@@ -1047,7 +1048,7 @@ With an injected clock and heartbeat transport, assert:
 - transport failure is tolerated only before the last confirmed deadline;
 - after lease loss, the execution path suppresses evidence and finalize.
 
-- [ ] **Step 2: Add dispatcher RED tests**
+- [x] **Step 2: Add dispatcher RED tests**
 
 Start with capacity 3 and a recording execution runner. Assert exactly three worker loops exist,
 concurrent accepted work never exceeds three, capacity decrements only after a verified bundle, and
@@ -1062,7 +1063,7 @@ For no work, assert deterministic jittered delays remain within these caps and r
 Set drain and assert workers finish leased jobs but make no new claim-next request. Deliver an
 invalid signature and assert protocol readiness becomes false and all claim loops stop.
 
-- [ ] **Step 3: Run dispatcher tests for RED**
+- [x] **Step 3: Run dispatcher tests for RED**
 
 ```powershell
 cd apps/module-runner
@@ -1072,7 +1073,7 @@ cargo +1.97.1 test --test lease_supervisor --test dispatcher --test wasi_executi
 Expected: the current binary has only node heartbeat and health endpoints; no execution lifecycle
 exists.
 
-- [ ] **Step 4: Implement capacity permits and lease supervision**
+- [x] **Step 4: Implement capacity permits and lease supervision**
 
 Use an atomic compare-exchange loop for capacity acquisition. `CapacityPermit::drop` increments once
 with a debug assertion that the result is not above `capacity_total`.
@@ -1082,7 +1083,7 @@ the observed deadline only from a valid typed response, and cancels the shared `
 on server-owned cancellation/terminal state/fence loss or when authority cannot be re-established
 before the last confirmed deadline.
 
-- [ ] **Step 5: Implement one complete worker lifecycle**
+- [x] **Step 5: Implement one complete worker lifecycle**
 
 Each fixed worker performs this exact sequence:
 
@@ -1097,21 +1098,21 @@ codes from the specification. Convert `TerminalEvidence` into sanitized evidence
 finalize only for transport/5xx with 250 ms to 5 s bounded backoff and never beyond
 `execution_deadline`. Do not append or finalize after lease authority is lost.
 
-- [ ] **Step 6: Wire the production Wasmtime runner**
+- [x] **Step 6: Wire the production Wasmtime runner**
 
 `WasiClaimRunner` accepts the verified descriptor, canonical input, downloaded artifact, cancellation
 token, and capability bridge. Keep HTTP, scheduling, and database types out of `WasiExecutor`.
 Hold the temporary artifact handle until execution completes, then allow drop-based deletion on all
 paths.
 
-- [ ] **Step 7: Wire dispatcher and shutdown in `main.rs`**
+- [x] **Step 7: Wire dispatcher and shutdown in `main.rs`**
 
 Construct one shared `RunnerClient`, `RunnerState`, runtime artifact client, and dispatcher. Start
 node heartbeat, dispatcher workers, and Axum health server. On Ctrl+C, set drain, signal dispatcher
 shutdown, wait for leased work up to the configured process shutdown window, then stop the server.
 Node heartbeat failure changes registration readiness but does not kill already leased work.
 
-- [ ] **Step 8: Run all Runner gates for GREEN**
+- [x] **Step 8: Run all Runner gates for GREEN**
 
 ```powershell
 cargo +1.97.1 fmt --all -- --check
@@ -1146,7 +1147,7 @@ availability unless explicitly marked as the Task 8 live integration.
 - The live test uses the existing `echo.component.wasm` fixture and canonical JSON input
   `{"message":"dispatch-e2e"}`.
 
-- [ ] **Step 1: Build the real integration harness**
+- [x] **Step 1: Build the real integration harness**
 
 The Bun test must:
 
@@ -1162,7 +1163,7 @@ The Bun test must:
    with the server URL, Runner coordinates, public key, and a 120-second deadline.
 7. Always stop the Hono server and remove only its own container in `finally`.
 
-- [ ] **Step 2: Assert exclusive execution and exact-once terminal truth**
+- [x] **Step 2: Assert exclusive execution and exact-once terminal truth**
 
 After both dispatchers exit, one query must prove:
 
@@ -1181,7 +1182,7 @@ The winning Runner must experience one injected transient finalize 503 followed 
 successful retry. Scan captured structured logs and evidence JSON for forbidden keys/values,
 including the raw input string and component bytes.
 
-- [ ] **Step 3: Run the live integration three consecutive times**
+- [x] **Step 3: Run the live integration three consecutive times**
 
 ```powershell
 cd packages/db
@@ -1193,7 +1194,7 @@ bun test scripts/module-runner-dispatch.integration.test.ts
 Expected: all three runs pass. Preserve the complete first failure if any run fails; diagnose before
 another attempt instead of retrying until green.
 
-- [ ] **Step 4: Run focused TypeScript and PostgreSQL gates**
+- [x] **Step 4: Run focused TypeScript and PostgreSQL gates**
 
 ```powershell
 cd apps/api
@@ -1209,7 +1210,7 @@ bun test scripts/module-runtime-migration.integration.test.ts
 
 Expected: all focused suites pass with zero failures.
 
-- [ ] **Step 5: Run focused package, migration, and Rust gates**
+- [x] **Step 5: Run focused package, migration, and Rust gates**
 
 ```powershell
 cd ../..
@@ -1226,7 +1227,7 @@ cargo +1.97.1 clippy --all-targets --all-features -- -D warnings
 
 Expected: all commands exit 0. Do not substitute a full workspace test.
 
-- [ ] **Step 6: Run hygiene and protected-file checks**
+- [x] **Step 6: Run hygiene and protected-file checks**
 
 ```powershell
 cd ../..
@@ -1239,7 +1240,7 @@ git status --porcelain --untracked-files=all
 Expected: `git diff --check` is clean, protected-file output is empty, container output is empty,
 and status contains only intended work plus pre-existing user changes.
 
-- [ ] **Step 7: Update status and produce the Chinese implementation report**
+- [x] **Step 7: Update status and produce the Chinese implementation report**
 
 Only after every required gate passes, set the specification status to:
 

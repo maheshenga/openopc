@@ -164,7 +164,7 @@ async function handleReviewAction(
   if (isAdaptedId(parsed.id)) {
     await respondViaUrl(payload.response_url, {
       response_type: 'ephemeral',
-      text: 'Open this item in Kortix to act on it.',
+      text: 'Open this item in OpenOPC to act on it.',
     });
     return;
   }
@@ -199,7 +199,7 @@ async function handleReviewAction(
       response_type: 'ephemeral',
       text:
         actor.reason === 'unlinked'
-          ? 'Connect your Kortix account first (`/kortix login`) to act on reviews.'
+          ? 'Connect your OpenOPC account first (`/kortix login`) to act on reviews.'
           : "You don't have access to act on this project's reviews.",
     });
     return;
@@ -361,7 +361,7 @@ async function handleSetSelection(
       await respondViaUrl(payload.response_url, {
         response_type: 'ephemeral',
         replace_original: true,
-        text: `⚠️ \`${escapeMrkdwn(requested)}\` isn't available for this workspace. Pick another, or connect that provider's API key in Kortix.`,
+        text: `⚠️ \`${escapeMrkdwn(requested)}\` isn't available for this workspace. Pick another, or connect that provider's API key in OpenOPC.`,
       });
       return;
     }
@@ -430,7 +430,7 @@ export async function handleMessageShortcut(payload: SlackInteractionPayload): P
   if (!thread) {
     await respondViaUrl(payload.response_url, {
       response_type: 'ephemeral',
-      text: 'No Kortix session is attached to this thread yet. `@`-mention me to start one.',
+      text: 'No OpenOPC session is attached to this thread yet. `@`-mention me to start one.',
     });
     return;
   }
@@ -439,7 +439,7 @@ export async function handleMessageShortcut(payload: SlackInteractionPayload): P
   await respondViaUrl(payload.response_url, {
     response_type: 'ephemeral',
     blocks: [
-      { type: 'section', text: { type: 'mrkdwn', text: '*This thread\'s Kortix session*' } },
+      { type: 'section', text: { type: 'mrkdwn', text: '*This thread\'s OpenOPC session*' } },
       {
         type: 'actions',
         elements: [
@@ -479,7 +479,7 @@ async function handleRequestAccess(payload: SlackInteractionPayload, value: stri
         ? "You've already requested access — it's pending an admin's review."
         : result.status === 'already-member'
           ? 'You already have access — send your message again and I’ll get on it.'
-          : 'I couldn’t request access — connect your Kortix account first, then try again.';
+          : 'I couldn’t request access — connect your OpenOPC account first, then try again.';
   await respondViaUrl(payload.response_url, { replace_original: true, text: message });
 
   if (result.status === 'created') {
@@ -586,15 +586,15 @@ async function handleSlackLoginConnect(
   await respondViaUrl(payload.response_url, {
     response_type: 'ephemeral',
     replace_original: true,
-    text: 'Opening Kortix to connect your account...',
+    text: 'Opening OpenOPC to connect your account...',
     blocks: [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
           text: login.url
-            ? `*Open Kortix to connect your account.*\n<${login.url}|Continue in Kortix>. This message will update when the connection is complete.`
-            : '*Open Kortix to connect your account.*\nRun `/kortix login` if this button expired.',
+            ? `*Continue in OpenOPC to connect your account.*\n<${login.url}|Continue in OpenOPC>. This message will update when the connection is complete.`
+            : '*Continue in OpenOPC to connect your account.*\nRun `/kortix login` if this button expired.',
         },
       },
       ...(login.url
@@ -602,7 +602,7 @@ async function handleSlackLoginConnect(
           type: 'actions',
           elements: [{
             type: 'button',
-            text: { type: 'plain_text', text: 'Open Kortix', emoji: true },
+            text: { type: 'plain_text', text: 'Continue in OpenOPC', emoji: true },
             style: 'primary',
             url: login.url,
             action_id: 'slack_login_open',

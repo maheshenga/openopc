@@ -14,6 +14,7 @@ import { getServerPublicEnv } from '@/lib/public-env-server';
 import { siteMetadata } from '@/lib/site-metadata';
 import { cn } from '@/lib/utils';
 import { featureFlags } from '@kortix/sdk/feature-flags';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import type { Metadata, Viewport } from 'next';
 import { headers } from 'next/headers';
 import { connection } from 'next/server';
@@ -89,9 +90,9 @@ export const metadata: Metadata = {
   },
   description: siteMetadata.description,
   keywords: siteMetadata.keywords,
-  authors: [{ name: 'Kortix Team', url: siteMetadata.url }],
-  creator: 'Kortix Team',
-  publisher: 'Kortix Team',
+  authors: [{ name: `${PRODUCT_BRAND.displayName} Team`, url: siteMetadata.url }],
+  creator: `${PRODUCT_BRAND.displayName} Team`,
+  publisher: `${PRODUCT_BRAND.displayName} Team`,
   applicationName: siteMetadata.name,
   robots: {
     index: true,
@@ -252,9 +253,10 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
               '@type': 'Organization',
               name: siteMetadata.name,
               alternateName: [
+                PRODUCT_BRAND.displayName,
+                'OpenOPC AI',
+                `${PRODUCT_BRAND.displayName} – The AI Command Center for Your Company`,
                 'Kortix',
-                'Kortix AI',
-                'Kortix – The AI Command Center for Your Company',
               ],
               url: siteMetadata.url,
               logo: `${siteMetadata.url}/favicon.png`,

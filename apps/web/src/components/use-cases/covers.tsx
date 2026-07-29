@@ -33,6 +33,7 @@ import type { ComponentType, ReactNode } from 'react';
 
 import type { Post } from '@/lib/blog';
 import { cn } from '@/lib/utils';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 export type UseCaseCoverProps = { post: Post; featured?: boolean };
 
@@ -98,7 +99,24 @@ function IconTile({ children, className }: { children: ReactNode; className?: st
   return <div className={cn(TILE, 'bg-card', className)}>{children}</div>;
 }
 
-const Kortix = () => <Avatar src="/usecases/logos/kortix.png" alt="Kortix" />;
+function OpenOPCMark({ className }: { className?: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={PRODUCT_BRAND.displayName}
+      className={cn(
+        'grid place-items-center bg-neutral-950 text-xl text-white dark:bg-white dark:text-neutral-950',
+        className,
+      )}
+    >
+      <span aria-hidden className="font-mono text-[0.5em] font-bold tracking-[-0.08em]">
+        OPC
+      </span>
+    </span>
+  );
+}
+
+const OpenOPC = () => <OpenOPCMark className={TILE} />;
 const Plain = () => <Avatar src="/usecases/logos/plain.png" alt="Plain" />;
 const Slack = () => <Mark src="/usecases/logos/slack.webp" alt="Slack" />;
 const GitHub = () => <Mark src="/usecases/logos/github.svg" alt="GitHub" />;
@@ -151,11 +169,7 @@ function HeroCover({ children }: { children: ReactNode }) {
             {children}
           </div>
           <div className="absolute -right-1.5 -bottom-1.5 overflow-hidden rounded-lg shadow-md ring-[3px] ring-white">
-            <img
-              src="/usecases/logos/kortix.png"
-              alt="Kortix"
-              className="size-7 object-cover sm:size-8"
-            />
+            <OpenOPCMark className="size-7 sm:size-8" />
           </div>
         </div>
       </div>
@@ -192,14 +206,14 @@ const big = 'size-8 sm:size-9';
 export const USE_CASE_COVERS: Record<string, ComponentType<UseCaseCoverProps>> = {
   'customer-support': () => (
     <RowCover>
-      <Kortix />
+      <OpenOPC />
       <Plain />
-      <Kortix />
+      <OpenOPC />
     </RowCover>
   ),
   'slack-control-pane': () => (
     <OrbitCover
-      center={<Kortix />}
+      center={<OpenOPC />}
       satellites={[
         <Slack key="s" />,
         <GitHub key="g" />,
@@ -215,7 +229,7 @@ export const USE_CASE_COVERS: Record<string, ComponentType<UseCaseCoverProps>> =
       <IconTile>
         <GitMerge className={cn(ic, 'text-foreground/70')} />
       </IconTile>
-      <Kortix />
+      <OpenOPC />
       <IconTile>
         <FileText className={cn(ic, 'text-foreground/70')} />
       </IconTile>
@@ -226,7 +240,7 @@ export const USE_CASE_COVERS: Record<string, ComponentType<UseCaseCoverProps>> =
       <IconTile>
         <GitPullRequest className={cn(ic, 'text-foreground/70')} />
       </IconTile>
-      <Kortix />
+      <OpenOPC />
       <div className={cn(TILE, 'bg-emerald-500 text-white')}>
         <CheckCircle2 className={ic} />
       </div>
@@ -242,7 +256,7 @@ export const USE_CASE_COVERS: Record<string, ComponentType<UseCaseCoverProps>> =
   'release-notes': () => (
     <RowCover>
       <GitHub />
-      <Kortix />
+      <OpenOPC />
       <IconTile>
         <Tag className={cn(ic, 'text-foreground/70')} />
       </IconTile>
@@ -253,13 +267,13 @@ export const USE_CASE_COVERS: Record<string, ComponentType<UseCaseCoverProps>> =
       <IconTile>
         <CalendarClock className={cn(ic, 'text-foreground/70')} />
       </IconTile>
-      <Kortix />
+      <OpenOPC />
       <Linear />
     </RowCover>
   ),
   'employee-onboarding': () => (
     <OrbitCover
-      center={<Kortix />}
+      center={<OpenOPC />}
       satellites={[
         <Slack key="s" />,
         <Linear key="l" />,

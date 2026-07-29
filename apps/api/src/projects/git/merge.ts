@@ -1,6 +1,7 @@
 // Branch diffing & merging (powers the change-request layer) + diffStat.
 
 import { validateRef, validateSha } from '../git-ref';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import {
   hostFromRepoUrl,
   refreshMirror,
@@ -344,7 +345,7 @@ export async function mergeBranches(
   }
 
   const message = options.message || `Merge branch '${headRef}' into '${baseRef}'`;
-  const authorName = options.authorName || 'Kortix';
+  const authorName = options.authorName || PRODUCT_BRAND.displayName;
   const authorEmail = options.authorEmail || 'noreply@kortix.ai';
 
   const commitResult = await runGit(

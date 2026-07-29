@@ -14,13 +14,13 @@ questions that came up, update the CRM, and file whatever the team committed to.
 It's an hour of work that usually happens late, half-remembered, or not at all.
 The deal stalls not because the call went badly but because the follow-up slipped.
 
-We run an agent on Kortix that does the follow-up the moment a call ends. It reads
+We run an agent on OpenOPC that does the follow-up the moment a call ends. It reads
 the transcript, writes the recap, updates the HubSpot deal, and files the tasks in
 Linear, then holds the outbound email at an approval gate so the rep reviews and
 sends it. This is how we handle our own post-call follow-up.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">Every sales call, when the recording ends</Fact>
   <Fact label="Connected systems">Call transcript · HubSpot · Linear</Fact>
   <Fact label="Mode">Trigger-driven · email held for the rep</Fact>
@@ -41,7 +41,7 @@ email is fast but generic, and it still needs the account context filled in.
 
 ## What we built
 
-On Kortix, the end of a call triggers an agent. When the recording finishes, the
+On OpenOPC, the end of a call triggers an agent. When the recording finishes, the
 transcript spawns an isolated session (a cloud sandbox) with scoped access to
 HubSpot and Linear. The agent reads the transcript, drafts the recap email with
 the answers and next steps, updates the deal stage, notes, and contacts, and files

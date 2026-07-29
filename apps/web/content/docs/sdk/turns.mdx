@@ -128,7 +128,7 @@ humanizeToolName('session_spawn'); // 'Session Spawn'
 
 `ToolCategory` is `'shell' | 'files' | 'search' | 'edit' | 'web' | 'task' |
 'other'`. Unknown tool names never throw — the built-in registry covers
-opencode's native tools plus Kortix's plugin tool families (`agent_*`,
+opencode's native tools plus OpenOPC's plugin tool families (`agent_*`,
 `session_*`, `task_*`, `trigger_*`, `project_*`, `pty_*`, matched by prefix so
 a new tool in an existing family is categorized correctly without a registry
 update); anything else falls back to `humanizeToolName(name)` with category

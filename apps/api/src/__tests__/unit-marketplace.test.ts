@@ -26,10 +26,32 @@ describe('marketplace catalog', () => {
     expect(DEFAULT_MARKETPLACES).not.toContain('anthropics/skills');
   });
 
+  test('brands first-party marketplace copy as OpenOPC while retaining stable kortix ids', async () => {
+    const marketplaces = await listMarketplaces();
+    const firstParty = marketplaces.find((marketplace) => marketplace.id === 'kortix');
+    expect(firstParty?.label).toBe('OpenOPC');
+
+    const all = await listCatalogItems({ source: 'kortix' });
+    const starter = all.find((item) => item.id === 'kortix-projects:starter');
+    expect(starter?.marketplaceId).toBe('kortix');
+    expect(starter?.title).toBe('OpenOPC Starter');
+    expect(starter?.description).toContain('The default OpenOPC project');
+
+    const pdf = all.find((item) => item.id === 'kortix-starter:pdf');
+    expect(pdf?.partOfProject).toEqual({
+      id: 'kortix-projects:starter',
+      title: 'OpenOPC Starter',
+    });
+
+    const detail = await getCatalogItemDetail('kortix-projects:starter');
+    expect(detail?.readme).toContain('# OpenOPC Starter');
+    expect(detail?.readme).not.toMatch(/\bKortix\b/);
+  });
+
   test('surfaces the starter project and its skills through browse; support types stay internal', async () => {
     const all = await listCatalogItems();
 
-    // The marketplace leads with the "Kortix Starter" project as the hero, but
+    // The marketplace leads with the branded Starter project as the hero, but
     // individual kortix-starter skills are ALSO browseable top-level tiles
     // (each one also ships inside the project). Support types (bundles/tools/
     // files) stay internal for dependency handling.
@@ -42,7 +64,7 @@ describe('marketplace catalog', () => {
     // Browseable: a starter skill like `pdf` is a top-level browse tile again…
     const pdf = all.find((i) => i.name === 'pdf');
     expect(pdf).toBeTruthy();
-    expect(pdf!.partOfProject).toEqual({ id: 'kortix-projects:starter', title: 'Kortix Starter' });
+    expect(pdf!.partOfProject).toEqual({ id: 'kortix-projects:starter', title: 'OpenOPC Starter' });
 
     // …and it's still resolvable by id and shows up typed inside the starter
     // project's "what's inside" list.
@@ -174,9 +196,9 @@ describe('marketplace catalog', () => {
     const mkts = await listMarketplaces();
     const kortix = mkts.find((m) => m.id === 'kortix')!;
     expect(kortix).toBeTruthy();
-    expect(kortix.label).toBe('Kortix');
+    expect(kortix.label).toBe('OpenOPC');
     expect(kortix.external).toBe(false);
-    // Kortix browses as the "Kortix Starter" project PLUS every individual
+    // The first-party source browses as the branded Starter project PLUS every individual
     // kortix-starter skill as its own top-level browse tile — so the facet
     // count is back to the full browseable kortix set, not the folded model's
     // single hero tile (1).
@@ -208,7 +230,7 @@ describe('marketplace catalog', () => {
   test('item detail carries files + a readme', async () => {
     const all = await listCatalogItems({ source: 'kortix' });
     const pdf = all.find((i) => i.name === 'pdf')!;
-    expect(pdf.partOfProject?.title).toBe('Kortix Starter');
+    expect(pdf.partOfProject?.title).toBe('OpenOPC Starter');
     const detail = (await getCatalogItemDetail(pdf.id))!;
     expect(detail.files.length).toBeGreaterThan(1);
     expect(detail.files.every((f) => f.target.startsWith('@skills/'))).toBe(true);

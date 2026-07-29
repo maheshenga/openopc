@@ -7,6 +7,7 @@ export type NavLink =
   { id: number; name: string; href: string } | { id: number; name: string; href: NavSubLink[] };
 
 import { CANONICAL_ORIGIN } from '@/lib/site-metadata';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 export const siteConfig = {
   url: CANONICAL_ORIGIN,
@@ -20,7 +21,7 @@ export const siteConfig = {
     ] as NavLink[],
   },
   hero: {
-    description: 'Kortix – the open AI command center for your company.',
+    description: `${PRODUCT_BRAND.displayName} – the open AI command center for your company.`,
   },
   footerLinks: [
     {

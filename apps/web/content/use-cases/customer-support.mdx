@@ -1,6 +1,6 @@
 ---
 title: "How we run customer support with an AI agent"
-description: The support agent we run on Kortix — connected to Plain, our codebase, and Stripe. It triages and resolves inbound threads, and stops for human approval on anything sensitive.
+description: The support agent we run on OpenOPC — connected to Plain, our codebase, and Stripe. It triages and resolves inbound threads, and stops for human approval on anything sensitive.
 date: "2026-07-03"
 author: team
 tags:
@@ -10,7 +10,7 @@ tags:
 template: customer-support
 ---
 
-We run our own customer support on Kortix with an AI agent connected to Plain
+We run our own customer support on OpenOPC with an AI agent connected to Plain
 (our support tool), our codebase, and Stripe. Most support questions need
 product knowledge, engineering context, and billing data at the same time: a
 help-center chatbot can quote documentation but can't read the code behind a
@@ -21,7 +21,7 @@ This write-up covers how the setup works: the connections, the session model,
 and the guardrails.
 
 <KeyFacts>
-  <Fact label="Team">Kortix — the company behind this platform</Fact>
+  <Fact label="Team">OpenOPC — the company behind this platform</Fact>
   <Fact label="Support stack">Plain.com</Fact>
   <Fact label="Connected systems">Codebase · Stripe · Plain</Fact>
   <Fact label="Mode">Trigger-driven · human-gated</Fact>
@@ -41,7 +41,7 @@ systems is hard to justify in a security review.
 
 ## What we built
 
-Our support inbox in **Plain** is connected to an agent running on Kortix. Every
+Our support inbox in **Plain** is connected to an agent running on OpenOPC. Every
 inbound thread spawns its own isolated session with scoped access to the systems
 a support issue can touch: the product's knowledge, the codebase, and Stripe. It
 investigates, resolves what it can, and stops at a human for sensitive actions.
@@ -111,7 +111,7 @@ behavior or files a bug report for engineering.
 ## Guardrails
 
 Giving an agent access to the codebase, Stripe, and the support inbox is a
-security question as much as a product one. The controls on Kortix:
+security question as much as a product one. The controls on OpenOPC:
 
 - **Isolation.** Each thread runs in its own microVM sandbox on its own branch. A
   session can install, run, and experiment to reproduce a bug, and only what it's

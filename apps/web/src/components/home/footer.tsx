@@ -1,6 +1,7 @@
 'use client';
 
 import { cn } from '@/lib/utils';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { useTranslations } from 'next-intl';
 import Link from 'next/link';
 import { ThemeToggle } from './theme-toggle';
@@ -114,7 +115,7 @@ const Footer = () => {
         <div className="text-muted-foreground flex items-center gap-3 text-base">
           <small>
             {tI18nHardcoded.raw('autoComponentsHomeFooterJsxTextCopye99743e8')}
-            {currentYear} Kortix
+            {currentYear} {PRODUCT_BRAND.displayName}
           </small>
         </div>
 

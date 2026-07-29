@@ -17,11 +17,11 @@ mechanical but time-consuming, and it's the step that stands between a contract
 arriving and a lawyer being able to focus on what actually matters in it.
 
 We handle this by tying the first pass to the event that starts it: a new file in
-the folder. This writes up how we run that on Kortix — the connections, the
+the folder. This writes up how we run that on OpenOPC — the connections, the
 steps, and the guardrails — so you can set up the same review.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Trigger">A new contract in a Drive folder</Fact>
   <Fact label="Connected systems">Google Drive · Slack</Fact>
   <Fact label="Mode">Trigger-driven · Lawyer-gated</Fact>
@@ -41,7 +41,7 @@ a lawyer to sign off.
 
 ## What we built
 
-On Kortix, a new contract in a Drive folder triggers an agent. Each contract runs
+On OpenOPC, a new contract in a Drive folder triggers an agent. Each contract runs
 in its own isolated session — a cloud sandbox — with scoped access to Drive and
 Slack. The agent reads the contract, summarizes it, flags clauses that deviate
 from our playbook, and posts the summary to the legal channel. It drafts redlines
@@ -113,7 +113,7 @@ a blank read.
 ## Guardrails
 
 Giving an agent a first pass on contracts is a trust question. The relevant
-controls on Kortix:
+controls on OpenOPC:
 
 - **Isolation.** Every contract runs in its own microVM sandbox on its own
   branch. The session can reach only what it's scoped to, and only the summary

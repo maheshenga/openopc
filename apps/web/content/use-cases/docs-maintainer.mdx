@@ -1,6 +1,6 @@
 ---
 title: "How we keep our docs in sync with the code"
-description: The docs agent we run on Kortix — connected to GitHub and our codebase. When a PR merges, it updates the docs the change affected and opens a PR for review.
+description: The docs agent we run on OpenOPC — connected to GitHub and our codebase. When a PR merges, it updates the docs the change affected and opens a PR for review.
 date: "2026-07-05"
 author: team
 tags:
@@ -17,11 +17,11 @@ environment variable, a new setup step, or a removed endpoint is a small code
 change and a docs change that often goes unmade.
 
 We handle this by tying docs updates to the event that changes the code: the
-merge. This writes up how we run that on Kortix — the connections, the steps, and
+merge. This writes up how we run that on OpenOPC — the connections, the steps, and
 the guardrails — so you can set up the same thing for your own repo.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Source of truth">The codebase</Fact>
   <Fact label="Connected systems">GitHub · Codebase · Docs site</Fact>
   <Fact label="Mode">Trigger-driven · PR-gated</Fact>
@@ -39,7 +39,7 @@ merge rather than in periodic cleanups.
 
 ## What we built
 
-On Kortix, every merge to our repo triggers an agent. Each merged PR runs in its
+On OpenOPC, every merge to our repo triggers an agent. Each merged PR runs in its
 own isolated session — a cloud sandbox — with scoped access to what a docs update
 needs: the diff that landed, the codebase for context, and the docs. It
 determines what changed, rewrites the affected pages, and opens a docs PR for
@@ -112,7 +112,7 @@ that strips the stale section.
 ## Guardrails
 
 Giving an agent write access to documentation is a trust question. The relevant
-controls on Kortix:
+controls on OpenOPC:
 
 - **Isolation.** Every merge runs in its own microVM sandbox on its own branch.
   The session can read the whole repo to understand a change, and only the docs

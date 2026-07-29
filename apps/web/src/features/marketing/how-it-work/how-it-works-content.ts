@@ -28,7 +28,7 @@ export const STEPS: Step[] = [
       'Wire up Slack, docs, tickets, CRM, databases, and code with scoped access — once, for the whole company.',
     bullets: [
       '3,000+ apps, plus MCP, OpenAPI, GraphQL, and HTTP',
-      'Credentials stay brokered by Kortix, never copied into a session',
+      'Credentials stay brokered by OpenOPC, never copied into a session',
       'Scope each tool per project, per agent, per person',
       'Admins set what can run, what asks first, and what stays blocked',
     ],
@@ -67,7 +67,7 @@ export const STEPS: Step[] = [
     label: 'Review',
     title: 'Review what comes back.',
     description:
-      'Kortix returns finished work — a report, deck, dashboard, app, reply, or a change request you approve.',
+      'OpenOPC returns finished work — a report, deck, dashboard, app, reply, or a change request you approve.',
     bullets: [
       'People stay in control before anything important ships',
       'Files, diffs, and results open right in the workspace',

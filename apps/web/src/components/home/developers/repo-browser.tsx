@@ -13,7 +13,7 @@ import { useMemo, useState } from 'react';
 /* -------------------------------------------------------------------------- */
 
 const FILES: Record<string, string> = {
-  'kortix.yaml': `# Kortix project manifest — the source of truth for project-wide
+  'kortix.yaml': `# OpenOPC project manifest — the source of truth for project-wide
 # config, versioned in git. kortix_version pins the schema.
 kortix_version: 2
 
@@ -21,13 +21,13 @@ project:
   name: acme
   description: Acme's AI workforce.
 
-# Env the runtime needs. Required values must be set in the Kortix
+# Env the runtime needs. Required values must be set in the OpenOPC
 # Secrets Manager before a session can start.
 env:
   required: []
   optional: [STRIPE_API_KEY]
 
-# Sessions boot from a sandbox image; the Kortix runtime layer is
+# Sessions boot from a sandbox image; the OpenOPC runtime layer is
 # always added on top of the base.
 sandbox:
   default: agent-box
@@ -171,7 +171,7 @@ and updated as the company learns.
 - Voice: plain, direct, never hype. Founder-grade.
 `,
 
-  '.kortix/Dockerfile': `# The image every session boots into. The Kortix runtime layer is
+  '.kortix/Dockerfile': `# The image every session boots into. The OpenOPC runtime layer is
 # added on top automatically — you just declare the tools you need.
 FROM ubuntu:24.04
 

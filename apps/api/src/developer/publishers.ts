@@ -1,5 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
+import type { DeveloperApplicationState } from './applications';
+
 export const DEVELOPER_PUBLISHER_ROLES = [
   'owner',
   'developer',
@@ -128,6 +130,7 @@ export type DeveloperPublisherMutationFailure =
   | 'expired'
   | 'email_mismatch'
   | 'verification_required'
+  | 'application_required'
   | 'forbidden';
 
 export type DeveloperPublisherMutation<T> =
@@ -213,6 +216,7 @@ export type DeveloperPublisherErrorCode =
   | 'DEVELOPER_PUBLISHER_FORBIDDEN'
   | 'DEVELOPER_PUBLISHER_SUSPENDED'
   | 'DEVELOPER_VERIFICATION_REQUIRED'
+  | 'DEVELOPER_APPLICATION_APPROVAL_REQUIRED'
   | 'DEVELOPER_SEGREGATION_OF_DUTIES_REQUIRED'
   | 'DEVELOPER_AUTHORITY_CONFLICT';
 
@@ -293,7 +297,11 @@ function mutationValue<T>(
   if (result.ok) return result.value;
   const code = mapping[result.reason] ?? 'DEVELOPER_AUTHORITY_CONFLICT';
   if (code.endsWith('_NOT_FOUND') || code === 'DEVELOPER_INVITATION_INVALID') fail(code, 404);
-  if (code === 'DEVELOPER_PUBLISHER_FORBIDDEN' || code === 'DEVELOPER_VERIFICATION_REQUIRED') {
+  if (
+    code === 'DEVELOPER_PUBLISHER_FORBIDDEN' ||
+    code === 'DEVELOPER_VERIFICATION_REQUIRED' ||
+    code === 'DEVELOPER_APPLICATION_APPROVAL_REQUIRED'
+  ) {
     fail(code, 403);
   }
   fail(code, 409);
@@ -439,6 +447,7 @@ export class DeveloperPublisherService implements DeveloperPublisherPermissionPo
       {
         not_found: 'DEVELOPER_ORGANIZATION_NOT_FOUND',
         verification_required: 'DEVELOPER_VERIFICATION_REQUIRED',
+        application_required: 'DEVELOPER_APPLICATION_APPROVAL_REQUIRED',
       },
     );
   }
@@ -587,6 +596,11 @@ export function createMemoryDeveloperPublisherRepository(input?: {
   publishers?: readonly DeveloperPublisher[];
   members?: readonly DeveloperPublisherMember[];
   auditEvents?: readonly DeveloperPublisherAuditEvent[];
+  applicationStates?: readonly {
+    accountId: string;
+    organizationId: string;
+    state: DeveloperApplicationState;
+  }[];
   createId?: () => string;
 }): DeveloperPublisherRepository {
   const organizations = new Map(
@@ -608,6 +622,12 @@ export function createMemoryDeveloperPublisherRepository(input?: {
     ]),
   );
   const audits = (input?.auditEvents ?? []).map(clone);
+  const applicationStates = new Map(
+    (input?.applicationStates ?? []).map((application) => [
+      `${application.accountId}\0${application.organizationId}`,
+      application.state,
+    ]),
+  );
   const createId = input?.createId ?? randomUUID;
 
   const publicInvitation = (
@@ -798,6 +818,9 @@ export function createMemoryDeveloperPublisherRepository(input?: {
       }
       if (organization.verification_state !== 'verified') {
         return { ok: false, reason: 'verification_required' };
+      }
+      if (applicationStates.get(`${command.accountId}\0${command.organizationId}`) !== 'approved') {
+        return { ok: false, reason: 'application_required' };
       }
       if (publishers.has(command.slug)) return { ok: false, reason: 'conflict' };
       const publisher: DeveloperPublisher = {

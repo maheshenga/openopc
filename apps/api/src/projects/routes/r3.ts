@@ -15,6 +15,7 @@ import { isGatewayManagedEnv } from '../../llm-gateway/sandbox-credentials';
 import { seedProjectDefaultModelOnConnect } from '../../llm-gateway/models/seed-default';
 import { createRoute, z } from '@hono/zod-openapi';
 import { projectSecrets, projects, sessionSandboxes } from '@kortix/db';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { loadProjectForUser, assertProjectCapability } from '../lib/access';
 import { AnyObject, SecretSchema, projectsApp } from '../lib/app';
@@ -340,7 +341,7 @@ projectsApp.openapi(
   await assertProjectCapability(c, loaded.userId, loaded.row.accountId, projectId, PROJECT_ACTIONS.PROJECT_CONNECTOR_WRITE);
 
   if (await hasServerManagedGitAuth(loaded.row)) {
-    return c.json({ error: 'Git auth is already managed by Kortix for this project' }, 409);
+    return c.json({ error: `Git auth is already managed by ${PRODUCT_BRAND.displayName} for this project` }, 409);
   }
 
   const token =
@@ -968,7 +969,7 @@ projectsApp.openapi(
   // manifest never lets a human create one), so this alone protects it — no
   // DB read needed before the delete.
   if (isSystemProjectSecretName(identifier)) {
-    return c.json({ error: `${identifier} is managed by Kortix and cannot be removed` }, 403);
+    return c.json({ error: `${identifier} is managed by ${PRODUCT_BRAND.displayName} and cannot be removed` }, 403);
   }
 
   // Only the shared row — members' personal overrides for this identifier are

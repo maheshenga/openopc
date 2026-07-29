@@ -1,6 +1,6 @@
 ---
 title: "How we draft our monthly investor update"
-description: A monthly agent we run on Kortix — connected to Postgres, Stripe, and last month's update. It pulls the core metrics, compares them to last month and to plan, and drafts the update in our format for a founder to finalize.
+description: A monthly agent we run on OpenOPC — connected to Postgres, Stripe, and last month's update. It pulls the core metrics, compares them to last month and to plan, and drafts the update in our format for a founder to finalize.
 date: "2026-03-04"
 author: team
 tags:
@@ -15,12 +15,12 @@ last month and to plan, and then the whole thing has to be written up in a
 consistent format. None of it is hard; it's just an hour or two of gathering and
 formatting that comes around every month.
 
-We run an agent on Kortix that does the gathering and the first draft. This is how
+We run an agent on OpenOPC that does the gathering and the first draft. This is how
 we draft our own investor update, including the connections and guardrails
 involved.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">A monthly cron</Fact>
   <Fact label="Connected systems">Postgres · Stripe · Last month's update</Fact>
   <Fact label="Mode">Read-only · a founder finalizes and sends</Fact>
@@ -42,7 +42,7 @@ commentary that actually matters.
 
 ## What we built
 
-On Kortix, a monthly cron triggers an agent. It spawns an isolated session (a
+On OpenOPC, a monthly cron triggers an agent. It spawns an isolated session (a
 cloud sandbox) with read-only access to the product database, Stripe, and last
 month's update. It pulls the core metrics — MRR, growth, burn, runway, active
 accounts — compares them to last month and to plan, and drafts the update in our

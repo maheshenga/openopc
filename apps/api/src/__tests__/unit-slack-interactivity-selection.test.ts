@@ -14,6 +14,7 @@ mock.module('../shared/db', () => ({ db: { select: () => makeChain() }, hasDatab
 
 // Stub the dispatch graph so importing interactivity stays light.
 mock.module('../channels/slack/dispatch', () => ({
+  backfillChannelName: async () => {},
   dispatchSlackEvent: async () => {},
   pendingPickers: new Map(),
   spawnAgentTurn: async () => {},
@@ -161,7 +162,8 @@ describe('Open in Kortix message shortcut', () => {
       message: { ts: '5.5' },
       response_url: 'https://hooks.slack/response',
     } as any);
-    expect(posts[0]?.body.text).toContain('No Kortix session is attached');
+    expect(posts[0]?.body.text).toContain('No OpenOPC session is attached');
+    expect(JSON.stringify(posts[0]?.body)).not.toContain('Kortix');
   });
 
   test('ignores unrelated callback_ids', async () => {

@@ -46,7 +46,7 @@ export function CompareSwitcher({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={`Comparing Kortix with ${current.name}. Change competitor`}
+          aria-label={`Comparing OpenOPC with ${current.name}. Change competitor`}
           className="group inline-flex items-center gap-2 px-3 py-1 transition-colors outline-none focus-within:ring-0 focus-within:outline-none focus:outline-none focus-visible:ring-0 focus-visible:outline-none sm:gap-3 sm:px-4 sm:py-1.5"
         >
           <span className="[&_svg]:size-16">{compareIcon(current.slug)}</span>

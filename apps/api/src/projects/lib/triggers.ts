@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { TriggerList } from '@kortix/api-contract';
 import { projectSessions, projectTriggerRuntime, projects } from '@kortix/db';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { Cron } from 'croner';
 import { and, desc, eq, ne, sql } from 'drizzle-orm';
 import type { Context } from 'hono';
@@ -1403,7 +1404,7 @@ export async function commitRepoFile(
       content,
       message,
       branch,
-      authorName: 'Kortix',
+      authorName: PRODUCT_BRAND.displayName,
       authorEmail: 'noreply@kortix.ai',
     });
   } catch (err) {

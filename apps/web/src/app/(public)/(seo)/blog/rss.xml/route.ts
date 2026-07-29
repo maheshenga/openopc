@@ -41,7 +41,7 @@ export function GET() {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Kortix Blog</title>
+    <title>${escape(siteMetadata.name)} Blog</title>
     <link>${base}/blog</link>
     <description>Field notes on building, running, and governing AI agents that do real work.</description>
     <language>en</language>

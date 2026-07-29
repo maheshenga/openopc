@@ -18,6 +18,14 @@ mock.module('../identity', () => ({
 mock.module('../../../accounts/core/app', () => ({
   lookupEmailsByUserIds: async () => new Map(),
 }));
+mock.module('../../../llm-gateway/models/picker', () => ({
+  listPickerModels: async () => ({ models: [], projectDefault: {} }),
+  labelForModelRef: (ref: string) => ref,
+}));
+mock.module('../../../llm-gateway/resolution/default-model', () => ({
+  isModelServableForAccount: async () => true,
+  resolveEffectiveModel: async () => ({ model: 'test/model', source: 'project' }),
+}));
 mock.module('../selection', () => ({
   currentChannelSelection: async () => null,
   setChannelAgent: async () => true,
@@ -49,15 +57,20 @@ describe('identity feature gated ON', () => {
   test('/login returns a connect prompt', async () => {
     const resp = await handleSlashCommand('login', '', ctx);
     expect(actionIds(resp)).toContain('slack_login_connect');
+    expect(JSON.stringify(resp)).toContain('OpenOPC');
+    expect(JSON.stringify(resp)).not.toContain('Kortix');
   });
 
   test('/logout revokes the binding', async () => {
     const resp = await handleSlashCommand('logout', '', ctx);
     expect(resp.text).toContain('Disconnected');
+    expect(resp.text).toContain('OpenOPC');
+    expect(resp.text).not.toContain('Kortix');
   });
 
   test('help advertises login', async () => {
     const resp = await handleSlashCommand('help', '', ctx);
     expect(JSON.stringify(resp.blocks ?? '')).toContain('runs as you');
+    expect(JSON.stringify(resp)).not.toContain('Kortix');
   });
 });

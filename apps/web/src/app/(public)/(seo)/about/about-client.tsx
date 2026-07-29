@@ -12,7 +12,7 @@ const paragraphs: ParagraphItem[] = [
   "We build self-driving companies.",
   "We're building the number one team in the world for autonomous operations. 76% agents, 24% humans — where humans verify, steer, and govern. Agents do the work.",
   "We take process-heavy companies and turn them into AI-operated ones. Full agent teams doing engineering, product, operations, finance, support, and growth. We run our own companies on it. Highest conviction comes from highest exposure.",
-  "Kortix is the foundation. But the platform isn't the point. What matters is the migration — from human-operated to AI-operated. We're proving it works by doing it ourselves, every day.",
+  "OpenOPC is the foundation. But the platform isn't the point. What matters is the migration — from human-operated to AI-operated. We're proving it works by doing it ourselves, every day.",
   { text: "Come build with us. ", linkText: "We're hiring.", linkHref: "/careers" }
 ];
 
@@ -26,7 +26,7 @@ export default function AboutPageClient() {
           <div className="relative aspect-[16/9] w-full overflow-hidden rounded-lg mb-14">
             <Image
               src="/images/team.webp"
-              alt="The Kortix team"
+              alt="The OpenOPC team"
               fill
               className="object-cover object-top"
               priority

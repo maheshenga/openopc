@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { SLACK_BOT_SCOPES } from './channels/slack-manifest';
 import {
   DEFAULT_LLM_GATEWAY_FALLBACK_POLICIES,
@@ -273,7 +274,7 @@ const envSchema = z.object({
   MICROSOFT_BOT_OPENID_METADATA: optUrl('https://login.botframework.com/v1/.well-known/openidconfiguration'),
   TEAMS_REQUIRE_USER_IDENTITY: optBoolTrue,
   TEAMS_CHANNEL_ENABLED: optBoolFalse,
-  TEAMS_APP_NAME: optStrDefault('Kortix'),
+  TEAMS_APP_NAME: optStrDefault(PRODUCT_BRAND.displayName),
 
   // ── LLM Providers (optional — only needed in cloud mode) ─────────────────
   OPENROUTER_API_URL:          optUrl('https://openrouter.ai/api/v1'),
@@ -481,7 +482,7 @@ const envSchema = z.object({
   // ── Mailtrap (optional — provisioning email notifications) ────────────────
   MAILTRAP_API_TOKEN:          optStr,
   MAILTRAP_FROM_EMAIL:         optStrDefault('noreply@kortix.com'),
-  MAILTRAP_FROM_NAME:          optStrDefault('Kortix'),
+  MAILTRAP_FROM_NAME:          optStrDefault(PRODUCT_BRAND.displayName),
   // Where public demo-request / "book a demo" lead notifications are sent.
   DEMO_LEAD_NOTIFY_EMAIL:      optStrDefault('marko@kortix.ai'),
 

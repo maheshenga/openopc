@@ -293,6 +293,46 @@ export interface DeveloperOrganization {
   updated_at: string;
 }
 
+export type DeveloperApplicationState =
+  | 'draft'
+  | 'submitted'
+  | 'under_review'
+  | 'approved'
+  | 'rejected'
+  | 'suspended';
+
+export interface DeveloperApplicationPolicyVersions {
+  moduleRules: string;
+  acceptableUse: string;
+}
+
+export interface DeveloperApplication {
+  application_id: string;
+  account_id: string;
+  organization_id: string;
+  state: DeveloperApplicationState;
+  revision: number;
+  policy_versions: DeveloperApplicationPolicyVersions;
+  submitted_at: string | null;
+  decided_at: string | null;
+  suspended_at: string | null;
+  decision_reason: string | null;
+  created_by: string;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeveloperApplicationCurrent {
+  application: DeveloperApplication | null;
+  current_policy_versions: DeveloperApplicationPolicyVersions;
+}
+
+export interface DeveloperApplicationSubmission extends DeveloperApplicationCurrent {
+  application: DeveloperApplication;
+  created: boolean;
+}
+
 export interface DeveloperInvitation {
   invitation_id: string;
   account_id: string;
@@ -354,6 +394,11 @@ export interface CreateDeveloperPublisherInput extends DeveloperModuleReleaseAcc
   displayName: string;
 }
 
+export interface SubmitDeveloperApplicationInput extends DeveloperModuleReleaseAccountOptions {
+  organizationName: string;
+  policyVersions: DeveloperApplicationPolicyVersions;
+}
+
 export interface UpdateDeveloperPublisherMemberInput extends DeveloperModuleReleaseAccountOptions {
   role: DeveloperPublisherRole;
   expectedRevision: number | null;
@@ -375,6 +420,32 @@ function releaseQuery(options?: ListDeveloperModuleReleasesOptions): string {
   if (options?.limit !== undefined) search.set('limit', String(options.limit));
   const query = search.toString();
   return query ? `?${query}` : '';
+}
+
+/** Read the current account's application and the exact policy versions required to submit. */
+export async function getCurrentDeveloperApplication(
+  options?: DeveloperModuleReleaseAccountOptions,
+): Promise<DeveloperApplicationCurrent> {
+  return unwrap(
+    await backendApi.get<DeveloperApplicationCurrent>(
+      `/developer/applications/current${releaseQuery(options)}`,
+    ),
+    'Failed to read developer application',
+  );
+}
+
+/** Submit a self-service developer application without granting Publisher authority. */
+export async function submitDeveloperApplication(
+  input: SubmitDeveloperApplicationInput,
+): Promise<DeveloperApplicationSubmission> {
+  return unwrap(
+    await backendApi.post<DeveloperApplicationSubmission>('/developer/applications', {
+      ...(input.accountId ? { account_id: input.accountId } : {}),
+      organization_name: input.organizationName,
+      policy_versions: input.policyVersions,
+    }),
+    'Failed to submit developer application',
+  );
 }
 
 /** Read the current organization's invitations, Publishers, and memberships. */

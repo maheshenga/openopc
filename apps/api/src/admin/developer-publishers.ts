@@ -9,6 +9,11 @@ import {
 } from '../developer/publishers';
 import { auth, errors, json } from '../openapi';
 import type { AppEnv } from '../types';
+import {
+  authorizeAdminDecision,
+  authorizeAdminTarget,
+  type AdminDecisionAuthorizer,
+} from './admin-authorization';
 
 const InvitationSchema = z.object({
   invitation_id: z.string().uuid(),
@@ -78,6 +83,26 @@ export interface AdminDeveloperPublisherRouteDependencies {
     DeveloperPublisherService,
     'invite' | 'setVerification' | 'suspend' | 'reinstate'
   >;
+  authorizeAdminDecision?: AdminDecisionAuthorizer;
+}
+
+const PUBLISHER_REQUIREMENT = {
+  permission: 'developer.publisher.manage',
+  stepUp: true,
+  crossTenantAudit: true,
+} as const;
+
+async function authorizePublisherMutation(
+  context: Context<AppEnv>,
+  dependencies: AdminDeveloperPublisherRouteDependencies,
+  accountId: string,
+): Promise<void> {
+  await authorizeAdminTarget(
+    context,
+    accountId,
+    PUBLISHER_REQUIREMENT,
+    dependencies.authorizeAdminDecision ?? authorizeAdminDecision,
+  );
 }
 
 function actor(context: Context<AppEnv>) {
@@ -124,6 +149,7 @@ export function registerAdminDeveloperPublisherRoutes(
       const body = context.req.valid('json');
       context.set('accountId', body.account_id);
       try {
+        await authorizePublisherMutation(context, dependencies, body.account_id);
         const result = await dependencies.publisherService.invite({
           actor: actor(context),
           accountId: body.account_id,
@@ -162,6 +188,7 @@ export function registerAdminDeveloperPublisherRoutes(
       const body = context.req.valid('json');
       context.set('accountId', body.account_id);
       try {
+        await authorizePublisherMutation(context, dependencies, body.account_id);
         const organization = await dependencies.publisherService.setVerification({
           actor: actor(context),
           accountId: body.account_id,
@@ -200,6 +227,7 @@ export function registerAdminDeveloperPublisherRoutes(
       const body = context.req.valid('json');
       context.set('accountId', body.account_id);
       try {
+        await authorizePublisherMutation(context, dependencies, body.account_id);
         const publisher = await dependencies.publisherService.suspend({
           actor: actor(context),
           accountId: body.account_id,
@@ -237,6 +265,7 @@ export function registerAdminDeveloperPublisherRoutes(
       const body = context.req.valid('json');
       context.set('accountId', body.account_id);
       try {
+        await authorizePublisherMutation(context, dependencies, body.account_id);
         const publisher = await dependencies.publisherService.reinstate({
           actor: actor(context),
           accountId: body.account_id,

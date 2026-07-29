@@ -30,6 +30,12 @@ import { useServerStore } from '@/stores/server-store';
 import { isBillingEnabled } from '@/lib/config';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import {
+  getCreditsLabel,
+  getIncludedCreditsDescription,
+  getManagedKeysOverrideDescription,
+  getModelSetupDescription,
+} from '@/lib/runtime-brand-copy';
 import { useProviderModalStore } from '@/stores/provider-modal-store';
 import {
   ArrowLeft,
@@ -147,7 +153,7 @@ function CloudBadge({ text }: { text?: string }) {
   return (
     <div className="mx-auto flex w-fit items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
       <Zap className="h-3 w-3" />
-      {text || 'Included with your Kortix credits'}
+      {text || getIncludedCreditsDescription()}
     </div>
   );
 }
@@ -416,7 +422,7 @@ function ProvidersPane({ onNext, onBack }: { onNext: () => void; onBack: () => v
           <p className="text-muted-foreground/50 mx-auto max-w-xs text-sm leading-relaxed">
             {hasLLM
               ? 'Your agent is ready to use these models.'
-              : 'Log in with your coding subscription, paste an API key, or skip to use Kortix credits.'}
+              : getModelSetupDescription()}
           </p>
         </div>
       </div>
@@ -813,7 +819,7 @@ function ToolKeysPane({ onNext, onBack }: { onNext: () => void; onBack: () => vo
         <div className="space-y-4">
           <p className="text-muted-foreground/50 text-xs leading-relaxed">
             {isCloud
-              ? 'These keys will override the default Kortix-managed keys for these tools.'
+              ? getManagedKeysOverrideDescription()
               : 'Paste your API keys below. All fields are optional.'}
           </p>
           <div className="space-y-2">
@@ -935,7 +941,7 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
     () => [
       { label: 'How It Works', icon: Key },
       { label: 'Providers', icon: Sparkles },
-      ...(showBilling ? [{ label: 'Kortix Credits', icon: CreditCard }] : []),
+      ...(showBilling ? [{ label: getCreditsLabel(), icon: CreditCard }] : []),
       { label: 'Default Model', icon: Bot },
       { label: 'Tools', icon: Wrench },
       { label: 'Get Started', icon: MessageSquare },

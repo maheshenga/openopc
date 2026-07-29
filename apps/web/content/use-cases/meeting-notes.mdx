@@ -1,6 +1,6 @@
 ---
 title: "How we turn meetings into notes and action items"
-description: The meeting agent we run on Kortix — connected to Google Calendar, the call transcript, and Linear. After each call it writes structured notes and files action items as tickets assigned to the right people.
+description: The meeting agent we run on OpenOPC — connected to Google Calendar, the call transcript, and Linear. After each call it writes structured notes and files action items as tickets assigned to the right people.
 date: "2026-04-01"
 author: team
 tags:
@@ -16,11 +16,11 @@ the step that gets skipped when the next meeting starts.
 
 We handle this by putting an agent on the calendar. After each call it writes
 structured notes and files the action items as tickets, assigned to the people
-who own them. This writes up how we run that on Kortix — the connections, the
+who own them. This writes up how we run that on OpenOPC — the connections, the
 steps, and the guardrails.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Connected systems">Google Calendar · Transcript · Linear</Fact>
   <Fact label="Trigger">Meeting ends</Fact>
   <Fact label="Mode">Trigger-driven · assignee-routed</Fact>
@@ -41,7 +41,7 @@ falls off.
 
 ## What we built
 
-Our calendar in **Google Calendar** is connected to an agent running on Kortix.
+Our calendar in **Google Calendar** is connected to an agent running on OpenOPC.
 When a call ends, it spawns its own isolated session — a cloud sandbox — with
 scoped access to what note-taking needs: the event, the transcript, and Linear.
 It writes structured notes, pulls out the action items, and files each one as a
@@ -114,7 +114,7 @@ notes. The follow-up exists as tasks instead of as a memory that fades.
 ## Guardrails
 
 Giving an agent the ability to file tickets and assign work is a trust question.
-The relevant controls on Kortix:
+The relevant controls on OpenOPC:
 
 - **Isolation.** Each meeting runs in its own microVM sandbox. The session can
   read the transcript and context it needs, and only the notes and tickets it

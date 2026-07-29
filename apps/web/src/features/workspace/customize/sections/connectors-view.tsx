@@ -1399,7 +1399,7 @@ export function EmailConnectForm({
 }) {
   const mode = useEmailMode(projectId);
   const connect = useConnectEmail();
-  const [displayName, setDisplayName] = useState('Kortix Agent');
+  const [displayName, setDisplayName] = useState('OpenOPC Agent');
   const [username, setUsername] = useState(() =>
     connectorSlug
       .replace(/^email_/, '')
@@ -1473,7 +1473,7 @@ export function EmailConnectForm({
         title={managedAvailable ? 'Create managed Email inbox' : 'Managed Email is not configured'}
       >
         {managedAvailable
-          ? 'Kortix will create and manage the AgentMail inbox for this profile.'
+          ? 'OpenOPC will create and manage the AgentMail inbox for this profile.'
           : 'This deployment needs a project-specific AgentMail key before it can create an inbox.'}
       </InfoBanner>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -1484,7 +1484,7 @@ export function EmailConnectForm({
             aria-label="Email display name"
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
-            placeholder="Kortix Agent"
+            placeholder="OpenOPC Agent"
           />
         </Field>
         {attachExisting ? (
@@ -1535,7 +1535,7 @@ export function EmailConnectForm({
               <Label htmlFor="email-channel-existing-inbox">Attach existing AgentMail inbox</Label>
               <p className="text-muted-foreground mt-1 text-xs">
                 Use this when the mailbox already exists or the AgentMail account has reached its
-                inbox limit. Kortix will still create the webhook for this profile.
+                inbox limit. OpenOPC will still create the webhook for this profile.
               </p>
             </div>
             {attachExisting ? (
@@ -1796,7 +1796,7 @@ export function SlackConnectForm({
         <InfoBanner
           tone="info"
           icon={<SlackLogo />}
-          title="Add Kortix to your Slack workspace"
+          title="Add OpenOPC to your Slack workspace"
           action={
             <Button size="sm" className="shrink-0 gap-1.5" asChild>
               <a href={installUrl}>
@@ -1806,7 +1806,7 @@ export function SlackConnectForm({
             </Button>
           }
         >
-          One-click install - authorize Kortix in your workspace, no setup required.
+          One-click install - authorize OpenOPC in your workspace, no setup required.
         </InfoBanner>
       ) : (
         <InfoBanner
@@ -3016,13 +3016,13 @@ function AddSlackProfileCard({
           </div>
         </div>
         <p className="text-muted-foreground mt-2 line-clamp-2 min-h-[2rem] text-xs leading-relaxed">
-          Add Kortix to Slack so mentions and threaded replies route into Kortix agent sessions.
+          Add OpenOPC to Slack so mentions and threaded replies route into OpenOPC agent sessions.
         </p>
       </button>
       <Modal open={open} onOpenChange={setOpen}>
         <ModalContent className="lg:max-w-2xl">
           <ModalHeader>
-            <ModalTitle>Add Kortix to Slack</ModalTitle>
+            <ModalTitle>Add OpenOPC to Slack</ModalTitle>
             <ModalDescription>
               Connect the built-in Slack channel. The connector profile appears automatically after
               installation.

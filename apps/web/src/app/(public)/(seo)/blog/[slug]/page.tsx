@@ -39,7 +39,7 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
       title: entry.title,
       description: entry.description,
       url,
-      siteName: 'Kortix',
+      siteName: 'OpenOPC',
       publishedTime: entry.date,
       modifiedTime: entry.date,
       authors: [author.name],
@@ -85,7 +85,7 @@ export default async function BlogPostPage(props: PageProps) {
         author: { '@type': 'Person', name: author.name },
         publisher: {
           '@type': 'Organization',
-          name: 'Kortix',
+          name: 'OpenOPC',
           logo: { '@type': 'ImageObject', url: `${siteMetadata.url}/favicon.png` },
         },
         image: entry.cover ? `${siteMetadata.url}${entry.cover}` : `${siteMetadata.url}/banner.png`,

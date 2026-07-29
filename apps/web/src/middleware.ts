@@ -6,6 +6,15 @@ import { createServerClient } from '@supabase/ssr';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
+const ADMIN_ONLY_PATH_PREFIXES = ['/admin', '/admin-assets/', '/_openopc-admin/'] as const;
+const ADMIN_CHUNK_PREFIX = '/_next/static/chunks/admin-';
+
+export function isAdminOnlyWebPath(pathname: string): boolean {
+  if (pathname === '/admin' || pathname.startsWith('/admin/')) return true;
+  if (pathname.startsWith(ADMIN_CHUNK_PREFIX)) return true;
+  return ADMIN_ONLY_PATH_PREFIXES.slice(1).some((prefix) => pathname.startsWith(prefix));
+}
+
 // Marketing pages that support locale routing for SEO (/de, /it, etc.)
 const MARKETING_ROUTES = ['/', '/legal', '/support'];
 
@@ -99,6 +108,13 @@ const DESKTOP_ALLOWED_ROUTES = [
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Admin is an independently deployed application and hostname. Reject every
+  // operator-only surface before static-file shortcuts, maintenance checks, or
+  // Supabase authentication so Web can never disclose or serve Admin assets.
+  if (isAdminOnlyWebPath(pathname)) {
+    return new NextResponse(null, { status: 404 });
+  }
 
   // Skip middleware for static files, API routes, and telemetry endpoints.
   if (
@@ -334,13 +350,14 @@ export const config = {
   matcher: [
     /*
      * Match all request paths except:
-     * - _next/static (static files)
+     * - _next/static (handled by the fast path below, after Admin-only chunk
+     *   rejection)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      * - public folder assets
      * - monitoring (Sentry/Better Stack error tracking tunnel)
      * - _betterstack (Better Stack browser telemetry proxy)
      */
-    '/((?!_next/static|_next/image|favicon.ico|monitoring|_betterstack|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/image|favicon.ico|monitoring|_betterstack|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };

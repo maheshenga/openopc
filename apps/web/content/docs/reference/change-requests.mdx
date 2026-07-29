@@ -3,9 +3,9 @@ title: Change requests
 description: The CR data model, lifecycle, diff/merge semantics, CLI surface, and REST API.
 ---
 
-Kortix's pull-request equivalent — the path session work takes to reach `main`. For the plain-language version see [Change requests](/docs/concepts/change-requests); for a review walkthrough see [Reviewing and merging](/docs/quickstart).
+OpenOPC's pull-request equivalent — the path session work takes to reach `main`. For the plain-language version see [Change requests](/docs/concepts/change-requests); for a review walkthrough see [Reviewing and merging](/docs/quickstart).
 
-A CR proposes merging one branch (`head_ref`) into another (`base_ref`) inside a single Kortix project. The layer is Kortix-native — it works on any git host (GitHub, GitLab, plain git) without per-host integration. The CR row is metadata; the git operations (fetch, diff, three-way merge, fast-forward) run inside the Kortix API against the project's `repo_url` backend.
+A CR proposes merging one branch (`head_ref`) into another (`base_ref`) inside a single OpenOPC project. The layer is OpenOPC-native — it works on any git host (GitHub, GitLab, plain git) without per-host integration. The CR row is metadata; the git operations (fetch, diff, three-way merge, fast-forward) run inside the Kortix API against the project's `repo_url` backend.
 
 ## The agent mandate
 
@@ -108,7 +108,7 @@ For open CRs, the API refreshes `head_commit_sha` and `base_commit_sha` against 
 
 0. **Manifest gate.** Before touching git, the route reads `kortix.yaml` (or legacy `kortix.toml`) from the CR's `head_ref` — the version about to be merged — and validates it against the canonical manifest schema (the same validator `kortix ship` runs pre-flight). A branch with no manifest at all is fine. A branch whose manifest fails to validate is not: 422 with `code: "MANIFEST_INVALID"` and an `issues` array, and the merge never runs.
 1. Fast-forward if `head_ref` is strictly ahead of `base_ref`.
-2. Otherwise create a merge commit (three-way merge). Default message `Merge CR #<n>: <title>`; override with `--message`. Author is `Kortix <noreply@kortix.ai>`.
+2. Otherwise create a merge commit (three-way merge). Default message `Merge CR #<n>: <title>`; override with `--message`. Author is `OpenOPC <noreply@kortix.ai>`.
 3. On success: update the `change_requests` row to `merged`, capture SHAs, invalidate the project's mirror cache.
 4. On conflict: 409 with `error: <specific message from the merge, e.g. "Merge conflicts detected — resolve before merging">` and the conflict list available via `GET /merge-preview`.
 
@@ -210,13 +210,13 @@ Validation on `POST /`:
 | **Skills** | New `.kortix/opencode/skills/<name>/SKILL.md` files reach future sessions **only** after a CR that contains them merges to `main`. Until then, only the originating session sees them. |
 | **Agents** | Same: new `.kortix/opencode/agents/<agent>.md` files need to land via CR. |
 | **Triggers** | Edits to `triggers:` (v2) or `[[triggers]]` (legacy v1) only reach the scheduler after the CR merges. The scheduler reads the manifest on `main`. |
-| **Secrets** | Decoupled. Secrets live in the Kortix Secrets Manager, not the manifest; CRs don't move secrets. |
+| **Secrets** | Decoupled. Secrets live in the OpenOPC Secrets Manager, not the manifest; CRs don't move secrets. |
 | **Dashboard** | Renders CR list / detail / diff / merge button. Same data as the CLI sees. |
 | **Triggers firing inside a session** | A trigger-spawned session can itself open a CR — same flow. |
 
 ## Gotchas
 
-- **Merge is `Kortix <noreply@kortix.ai>`-authored.** If you want the user's name on the merge commit, that's a dashboard-side option, not a CLI flag today.
+- **Merge is `OpenOPC <noreply@kortix.ai>`-authored.** If you want the user's name on the merge commit, that's a dashboard-side option, not a CLI flag today.
 - **You cannot close a `merged` CR.** It's the terminal state.
 - **You cannot reopen a `merged` CR.** Open a new one against the post-merge tip.
 - **Branch deletion is not automatic.** After a CR merges, the head branch still exists in the git backend. If the project policy is to clean up session branches, that's a separate sweep — not part of the CR merge.

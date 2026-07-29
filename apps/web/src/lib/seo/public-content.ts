@@ -5,6 +5,7 @@ import type { Block } from '@/components/blog/blog-content';
 import { PRICING_PLANS } from '@/features/billing/pricing-plans';
 import { BLOG_POSTS } from '@/lib/blog-posts';
 import { CANONICAL_ORIGIN, siteMetadata } from '@/lib/site-metadata';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 export type PublicContentKind = 'marketing' | 'blog' | 'docs' | 'use-case';
 
@@ -49,14 +50,14 @@ const MARKETING_RECORDS: PublicContentRecord[] = [
   {
     kind: 'marketing',
     slug: 'contact',
-    title: 'Contact Kortix',
-    description: 'Request a tailored Kortix walkthrough for cloud, VPC, or on-prem deployment.',
+    title: `Contact ${PRODUCT_BRAND.displayName}`,
+    description: `Request a tailored ${PRODUCT_BRAND.displayName} walkthrough for cloud, VPC, or on-prem deployment.`,
     htmlPath: '/contact',
   },
   {
     kind: 'marketing',
     slug: 'about',
-    title: 'About Kortix',
+    title: `About ${PRODUCT_BRAND.displayName}`,
     description:
       'We build self-driving companies. Humans verify, steer, and govern while agent teams do work across engineering, product, operations, finance, support, and growth.',
     htmlPath: '/about',
@@ -65,22 +66,22 @@ const MARKETING_RECORDS: PublicContentRecord[] = [
   {
     kind: 'marketing',
     slug: 'legal',
-    title: 'Kortix legal',
-    description: 'Kortix terms of service and privacy policy.',
+    title: `${PRODUCT_BRAND.displayName} legal`,
+    description: `${PRODUCT_BRAND.displayName} terms of service and privacy policy.`,
     htmlPath: '/legal',
   },
   {
     kind: 'marketing',
     slug: 'marketplace',
-    title: 'Kortix Marketplace',
+    title: `${PRODUCT_BRAND.displayName} Marketplace`,
     description:
-      'Browse skills, agents, and commands from every source. Add them to a Kortix project in one click.',
+      `Browse skills, agents, and commands from every source. Add them to an ${PRODUCT_BRAND.displayName} project in one click.`,
     htmlPath: '/marketplace',
   },
   {
     kind: 'marketing',
     slug: 'developers',
-    title: 'Kortix for developers',
+    title: `${PRODUCT_BRAND.displayName} for developers`,
     description: siteMetadata.description,
     htmlPath: '/developers',
     markdownPath: '/markdown/developers.md',
@@ -88,7 +89,7 @@ const MARKETING_RECORDS: PublicContentRecord[] = [
   {
     kind: 'marketing',
     slug: 'enterprise',
-    title: 'Kortix Enterprise',
+    title: `${PRODUCT_BRAND.displayName} Enterprise`,
     description: PRICING_PLANS.find((plan) => plan.id === 'enterprise')?.note,
     htmlPath: '/enterprise',
     markdownPath: '/markdown/enterprise.md',
@@ -96,7 +97,7 @@ const MARKETING_RECORDS: PublicContentRecord[] = [
   {
     kind: 'marketing',
     slug: 'pricing',
-    title: 'Kortix pricing',
+    title: `${PRODUCT_BRAND.displayName} pricing`,
     description: 'Current plans and included features.',
     htmlPath: '/pricing',
     markdownPath: '/markdown/pricing.md',
@@ -104,8 +105,8 @@ const MARKETING_RECORDS: PublicContentRecord[] = [
   {
     kind: 'marketing',
     slug: 'support',
-    title: 'Kortix support',
-    description: 'Support resources and contact information for Kortix.',
+    title: `${PRODUCT_BRAND.displayName} support`,
+    description: `Support resources and contact information for ${PRODUCT_BRAND.displayName}.`,
     htmlPath: '/support',
   },
 ];
@@ -402,11 +403,11 @@ function blocksToMarkdown(blocks: Block[]): string {
             .map((item) => `- ${item.name} (${item.domain})`)
             .join('\n')}`;
         case 'verdict':
-          return `### Choose ${block.themLabel} if\n\n${block.them}\n\n### Choose Kortix if\n\n${block.kortix}`;
+          return `### Choose ${block.themLabel} if\n\n${block.them}\n\n### Choose ${PRODUCT_BRAND.displayName} if\n\n${block.kortix}`;
         case 'compare': {
           const escapeCell = (value: string) => value.replaceAll('|', '\\|').replaceAll('\n', ' ');
           return [
-            `| Dimension | ${escapeCell(block.them)} | Kortix |`,
+            `| Dimension | ${escapeCell(block.them)} | ${PRODUCT_BRAND.displayName} |`,
             '| --- | --- | --- |',
             ...block.rows.map(
               (row) =>

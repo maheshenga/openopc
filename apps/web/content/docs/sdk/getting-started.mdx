@@ -16,12 +16,12 @@ Workers — see **[Streaming & runtime support](/docs/sdk/streaming)** for the f
 matrix (React Native is REST-only today; live streaming is not supported there).
 
 No build step? The SDK also ships **CDN bundles** — an ESM module and a
-`window.Kortix` `<script>` global — see **[Distribution](/docs/sdk/distribution)**.
+`window.OpenOPC` `<script>` global — see **[Distribution](/docs/sdk/distribution)**.
 
 ## Create a client
 
 `createKortix(config)` wires the platform seam once and returns one client. The
-only required config is `backendUrl` and a `getToken` that returns your Kortix
+only required config is `backendUrl` and a `getToken` that returns your OpenOPC
 token.
 
 ```ts
@@ -66,7 +66,7 @@ const kortix = createKortix({
 ```
 
 The key acts only on that project (rejected `403` elsewhere). Building a web app on
-Kortix's own login instead? Return the user's Supabase session token. Full detail —
+OpenOPC's own login instead? Return the user's Supabase session token. Full detail —
 scopes, rotation, web vs backend — is on the **[Authentication](/docs/sdk/auth)**
 page.
 

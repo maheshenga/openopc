@@ -550,6 +550,25 @@ async fn retries_transient_finalize_without_reexecuting_the_component() {
 }
 
 #[tokio::test]
+async fn finalizes_a_trusted_claim_when_the_downloaded_artifact_digest_mismatches() {
+    let component = fixture("echo.component.wasm");
+    let mut corrupted = component.clone();
+    corrupted[0] ^= 0xff;
+    let transport = LifecycleTransport::new(corrupted, [response(200)]);
+    let runner = lifecycle_runner(transport.clone(), Duration::from_secs(60));
+
+    let evidence = runner
+        .run(
+            execution_bundle("echo.component.wasm", &component),
+            CancellationToken::new(),
+        )
+        .await;
+
+    assert_eq!(evidence.code, "RUNNER_ARTIFACT_DIGEST_MISMATCH");
+    assert_eq!(transport.paths(), ["module-runtime/finalize"]);
+}
+
+#[tokio::test]
 async fn a_stalled_finalize_request_cannot_outlive_the_signed_deadline() {
     let component = fixture("echo.component.wasm");
     let transport = LifecycleTransport::stalled_finalize(component.clone());

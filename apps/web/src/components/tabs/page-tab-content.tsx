@@ -55,19 +55,6 @@ const FilesPage = lazy(() =>
 
 const BoardPage = lazy(() => import('@/components/pages/board/page'));
 
-// Admin pages (currently live under the dashboard route group)
-const AdminAnalyticsPage = lazy(() =>
-	import('@/components/pages/admin/analytics/page'),
-);
-const AdminFeedbackPage = lazy(() =>
-	import('@/components/pages/admin/feedback/page'),
-);
-const AdminNotificationsPage = lazy(() =>
-	import('@/components/pages/admin/notifications/page'),
-);
-const AdminStressTestPage = lazy(() =>
-	import('@/components/pages/admin/stress-test/page'),
-);
 const LegacyThreadPage = lazy(() =>
 	import('@/components/pages/legacy/page'),
 );
@@ -96,11 +83,6 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
 	'/scheduled-tasks': TriggersPage,
 	'/files': FilesPage,
 	'/board': BoardPage,
-	// Admin
-	'/admin/analytics': AdminAnalyticsPage,
-	'/admin/feedback': AdminFeedbackPage,
-	'/admin/notifications': AdminNotificationsPage,
-	'/admin/stress-test': AdminStressTestPage,
 };
 
 function resolveComponent(routeKey: string): { Component: ComponentType<any>; params?: Record<string, string> } | null {

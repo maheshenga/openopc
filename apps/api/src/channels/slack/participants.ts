@@ -109,7 +109,7 @@ function threadJoinRequestBlocks(input: {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `*${escapeMrkdwn(input.requesterLabel)}* wants to join this Kortix session.\nThis Slack thread is private until you approve them.`,
+        text: `*${escapeMrkdwn(input.requesterLabel)}* wants to join this OpenOPC session.\nThis Slack thread is private until you approve them.`,
       },
     },
     {
@@ -167,7 +167,7 @@ async function postJoinRequest(input: {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*This Kortix session is private.*\n${requesterText}`,
+          text: `*This OpenOPC session is private.*\n${requesterText}`,
         },
       },
     ],
@@ -182,7 +182,7 @@ async function postJoinRequest(input: {
     token,
     input.channel,
     ownerSlackUserId,
-    `${label} wants to join this Kortix session.`,
+    `${label} wants to join this OpenOPC session.`,
     threadJoinRequestBlocks({
       requesterLabel: label,
       projectId: input.projectId,
@@ -225,13 +225,13 @@ export async function ensureSlackThreadParticipant(input: {
         token,
         input.channel,
         input.slackUserId,
-        'This Kortix session is owner-only.',
+        'This OpenOPC session is owner-only.',
         [
           {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: '*This Kortix session is owner-only.*\nStart a new thread if you want Kortix to work with you separately.',
+              text: '*This OpenOPC session is owner-only.*\nStart a new thread if you want OpenOPC to work with you separately.',
             },
           },
         ],
@@ -259,7 +259,7 @@ export async function ensureSlackThreadParticipant(input: {
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text: "*You don't have access to this Kortix session.*\nThe owner declined your request. Start a new thread to work with Kortix separately.",
+              text: "*You don't have access to this OpenOPC session.*\nThe owner declined your request. Start a new thread to work with OpenOPC separately.",
             },
           },
         ],
@@ -376,14 +376,14 @@ export async function decideSlackThreadJoin(input: {
   decision: 'approved' | 'denied';
 }): Promise<{ ok: true; text: string } | { ok: false; text: string }> {
   const decider = await lookupSlackIdentity(input.teamId, input.deciderSlackUserId);
-  if (!decider) return { ok: false, text: 'Connect your Kortix account before approving session access.' };
+  if (!decider) return { ok: false, text: 'Connect your OpenOPC account before approving session access.' };
 
   const [session] = await db
     .select({ createdBy: projectSessions.createdBy })
     .from(projectSessions)
     .where(eq(projectSessions.sessionId, input.sessionId))
     .limit(1);
-  if (!session) return { ok: false, text: 'This Kortix session no longer exists.' };
+  if (!session) return { ok: false, text: 'This OpenOPC session no longer exists.' };
   if (!session.createdBy || session.createdBy !== decider.userId) {
     return { ok: false, text: 'Only the session owner can approve people for this thread.' };
   }
@@ -428,8 +428,8 @@ export async function decideSlackThreadJoin(input: {
   const sessionUrl = sessionWebUrl(config.FRONTEND_URL, input.projectId, input.sessionId);
   if (token) {
     const text = input.decision === 'approved'
-      ? `You've been approved for this Kortix session. Send your message again and I'll continue.`
-      : 'The session owner declined your request for this Kortix session.';
+      ? `You've been approved for this OpenOPC session. Send your message again and I'll continue.`
+      : 'The session owner declined your request for this OpenOPC session.';
     await postEphemeral(
       token,
       input.channelId,
@@ -441,8 +441,8 @@ export async function decideSlackThreadJoin(input: {
           text: {
             type: 'mrkdwn',
             text: input.decision === 'approved'
-              ? `*Approved.*\nSend your message again in this thread. You can also <${sessionUrl}|open the session in Kortix>.`
-              : '*Request declined.*\nStart a new thread if you want Kortix to work with you separately.',
+              ? `*Approved.*\nSend your message again in this thread. You can also <${sessionUrl}|open the session in OpenOPC>.`
+              : '*Request declined.*\nStart a new thread if you want OpenOPC to work with you separately.',
           },
         },
       ],
@@ -454,7 +454,7 @@ export async function decideSlackThreadJoin(input: {
   return {
     ok: true,
     text: input.decision === 'approved'
-      ? `Approved ${label} for this Kortix session.`
-      : `Denied ${label} for this Kortix session.`,
+      ? `Approved ${label} for this OpenOPC session.`
+      : `Denied ${label} for this OpenOPC session.`,
   };
 }

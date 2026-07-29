@@ -4,6 +4,7 @@ import { UnifiedMarkdown } from '@/components/markdown/unified-markdown';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { AnimatedThinkingText } from '@/components/ui/animated-thinking-text';
 import { Badge } from '@/components/ui/badge';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { AnimatePresence, motion } from 'motion/react';
 import { useTranslations } from 'next-intl';
 import { Reveal } from '../../reveal';
@@ -41,7 +42,7 @@ export function AssistantTurn({
     <Reveal>
       <div className="mb-2 flex items-center gap-2">
         <AgentAvatar isDefault size={22} />
-        <span className="text-foreground text-sm font-medium">Kortix</span>
+        <span className="text-foreground text-sm font-medium">{PRODUCT_BRAND.displayName}</span>
         <AnimatePresence mode="wait" initial={false}>
           <motion.span
             key={isDone ? 'done' : 'working'}

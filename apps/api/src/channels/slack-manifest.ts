@@ -1,3 +1,5 @@
+import { PRODUCT_BRAND } from '@kortix/product-brand';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // THE single source of truth for the Kortix Slack app manifest.
 //
@@ -142,10 +144,10 @@ const BOT_EVENTS = [
 
 const SHORTCUTS = [
   {
-    name: 'Open in Kortix',
+    name: `Open in ${PRODUCT_BRAND.displayName}`,
     type: 'message',
     callback_id: 'open_session',
-    description: "Open this thread's Kortix session on the web",
+    description: `Open this thread's ${PRODUCT_BRAND.displayName} session on the web`,
   },
 ] as const;
 
@@ -157,7 +159,7 @@ const APP_HOME = {
 
 const ASSISTANT_VIEW = {
   assistant_description:
-    'Your AI workforce in Slack — give Kortix a task and an agent does the real work across your tools, then replies right here.',
+    `Your AI workforce in Slack — give ${PRODUCT_BRAND.displayName} a task and an agent does the real work across your tools, then replies right here.`,
   suggested_prompts: [] as string[],
 } as const;
 
@@ -167,7 +169,7 @@ const SHORT_DESCRIPTION =
   'Your AI workforce, in Slack — @-mention an agent and it does the real work.';
 
 const LONG_DESCRIPTION =
-  'Kortix is the AI command center for your company — your agents, integrations, automations, and memory in one place, with a workforce of AI agents that does real work across your tools, around the clock. This app brings that workforce into Slack.\n\nInvite the bot to a channel, @-mention it with a task, and an agent gets on it: working across your connected tools and replying in the thread as it goes. Follow-ups stay in the same conversation — Kortix keeps the full context.\n\n*What it can do*\n• Research, search your tools, and summarize threads or documents\n• Pull data, analyze it, and drop reports, decks, and CSVs back into the thread\n• Draft replies, docs, and updates — then post them or hand them off\n• Run multi-step work across thousands of connected integrations\n• Kick off and check on automations that run on a schedule or a trigger\n• Read repos, edit files, and open PRs too — when that\'s the job\n\n*A few things teammates ask it*\n• `@Kortix pull yesterday\'s sign-ups, group them by source, and drop the CSV here`\n• `@Kortix summarize this thread and draft a reply to the customer`\n• `@Kortix build me a one-pager on our Q2 numbers`\n• `@Kortix what changed across our tools this week?`\n\nConnect a Kortix project once, then talk to Kortix like you\'d talk to anyone else on the team. No slash commands. No copy-paste. Just @-mention and reply.\n\n*AI Disclaimer*\nKortix uses AI to generate responses and perform tasks. While we strive for accuracy, AI-generated content may occasionally contain errors. Review important outputs before acting on them.\n\nManaged by Kortix · https://kortix.com';
+  'OpenOPC is the AI command center for your company — your agents, integrations, automations, and memory in one place, with a workforce of AI agents that does real work across your tools, around the clock. This app brings that workforce into Slack.\n\nInvite the bot to a channel, @-mention it with a task, and an agent gets on it: working across your connected tools and replying in the thread as it goes. Follow-ups stay in the same conversation — OpenOPC keeps the full context.\n\n*What it can do*\n• Research, search your tools, and summarize threads or documents\n• Pull data, analyze it, and drop reports, decks, and CSVs back into the thread\n• Draft replies, docs, and updates — then post them or hand them off\n• Run multi-step work across thousands of connected integrations\n• Kick off and check on automations that run on a schedule or a trigger\n• Read repos, edit files, and open PRs too — when that\'s the job\n\n*A few things teammates ask it*\n• `@OpenOPC pull yesterday\'s sign-ups, group them by source, and drop the CSV here`\n• `@OpenOPC summarize this thread and draft a reply to the customer`\n• `@OpenOPC build me a one-pager on our Q2 numbers`\n• `@OpenOPC what changed across our tools this week?`\n\nConnect an OpenOPC project once, then talk to OpenOPC like you\'d talk to anyone else on the team. No slash commands. No copy-paste. Just @-mention and reply.\n\n*AI Disclaimer*\nOpenOPC uses AI to generate responses and perform tasks. While we strive for accuracy, AI-generated content may occasionally contain errors. Review important outputs before acting on them.\n\nManaged by OpenOPC · https://kortix.com';
 
 // ── The ONE builder ───────────────────────────────────────────────────────────
 
@@ -215,7 +217,7 @@ export function buildSlackManifest(cfg: BuildManifestConfig): SlackManifest {
         {
           command: cfg.command,
           url: `${webhook}/commands`,
-          description: 'Manage your Kortix project from Slack',
+          description: `Manage your ${PRODUCT_BRAND.displayName} project from Slack`,
           usage_hint: SLASH_USAGE_HINT,
           should_escape: false,
         },
@@ -245,8 +247,8 @@ export function buildSlackManifest(cfg: BuildManifestConfig): SlackManifest {
 // ── The canonical (dev/prod) configs — the committed JSON is generated from these.
 
 export const CANONICAL_DEV: BuildManifestConfig = {
-  appName: 'KortixDev',
-  botName: 'KortixDev',
+  appName: `${PRODUCT_BRAND.displayName}Dev`,
+  botName: `${PRODUCT_BRAND.displayName}Dev`,
   command: '/kortix-dev',
   baseUrl: 'https://dev-api.kortix.com',
   webhookPath: '/v1/webhooks/slack',
@@ -255,8 +257,8 @@ export const CANONICAL_DEV: BuildManifestConfig = {
 };
 
 export const CANONICAL_PROD: BuildManifestConfig = {
-  appName: 'Kortix',
-  botName: 'Kortix',
+  appName: PRODUCT_BRAND.displayName,
+  botName: PRODUCT_BRAND.displayName,
   command: '/kortix',
   baseUrl: 'https://api.kortix.com',
   webhookPath: '/v1/webhooks/slack',
@@ -277,17 +279,23 @@ export interface GenerateManifestInput {
 
 /** Per-project (BYO) manifest. Same implementation as canonical, scoped to the project. */
 export function generateSlackManifest(input: GenerateManifestInput): SlackManifest {
-  const appName = input.appName ?? 'Kortix';
-  const botName = input.botName ?? 'kortix';
+  const appName = visibleProductName(input.appName);
+  const botName = visibleProductName(input.botName);
   return buildSlackManifest({
     appName,
     botName,
-    command: normalizeSlashCommand(input.command) ?? defaultByoSlashCommand(appName, botName),
+    command:
+      normalizeSlashCommand(input.command) ??
+      defaultByoSlashCommand(input.appName ?? 'Kortix', input.botName ?? 'kortix'),
     baseUrl: input.baseUrl,
     webhookPath: `/v1/webhooks/slack/${input.projectId}`,
     oauthRedirect: false,
     description: input.description,
   });
+}
+
+function visibleProductName(name?: string): string {
+  return name?.trim().toLowerCase() === 'kortix' ? PRODUCT_BRAND.displayName : name ?? PRODUCT_BRAND.displayName;
 }
 
 export function resolveBaseUrl(reqUrl: URL, override?: string): string {

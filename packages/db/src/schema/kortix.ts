@@ -147,6 +147,7 @@ export const accountMembers = kortixSchema.table(
     // was silently skipped by push, leaving the table constraint-less and
     // every ON CONFLICT path 500ing with 42P10. See migration 105.
     primaryKey({ columns: [table.userId, table.accountId] }),
+    unique('account_members_account_user_unique').on(table.accountId, table.userId),
     index('idx_account_members_user_id').on(table.userId),
     index('idx_account_members_account_id').on(table.accountId),
     uniqueIndex('idx_account_members_user_account').on(table.userId, table.accountId),
@@ -4181,6 +4182,45 @@ export const accessRequestStatusEnum = kortixSchema.enum('access_request_status'
   'rejected',
 ]);
 
+export const policyAcceptancePolicyEnum = kortixSchema.enum('policy_acceptance_policy', [
+  'terms',
+  'privacy',
+  'acceptable_use',
+  'module_rules',
+]);
+
+export const policyAcceptanceSourceEnum = kortixSchema.enum('policy_acceptance_source', [
+  'registration',
+  'developer_application',
+  'settings',
+]);
+
+export const accountRequestKindEnum = kortixSchema.enum('account_request_kind', [
+  'data_export',
+  'account_deletion',
+  'security_report',
+  'module_report',
+]);
+
+export const accountRequestStatusEnum = kortixSchema.enum('account_request_status', [
+  'pending',
+  'cooling_off',
+  'processing',
+  'completed',
+  'cancelled',
+  'rejected',
+  'expired',
+]);
+
+export const developerApplicationStateEnum = kortixSchema.enum('developer_application_state', [
+  'draft',
+  'submitted',
+  'under_review',
+  'approved',
+  'rejected',
+  'suspended',
+]);
+
 export const platformSettings = kortixSchema.table('platform_settings', {
     key: varchar('key', { length: 255 }).primaryKey(),
     value: jsonb('value').notNull(),
@@ -4197,6 +4237,112 @@ export const accessAllowlist = kortixSchema.table(
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [uniqueIndex('idx_access_allowlist_type_value').on(table.entryType, table.value)],
+);
+
+export const publicRegistrationDecisions = kortixSchema.table(
+  'public_registration_decisions',
+  {
+    jtiHash: varchar('jti_hash', { length: 71 }).primaryKey(),
+    emailDigest: varchar('email_digest', { length: 71 }).notNull(),
+    deviceDigest: varchar('device_digest', { length: 71 }).notNull(),
+    accountDigest: varchar('account_digest', { length: 71 }),
+    action: varchar('action', { length: 20 }).notNull(),
+    policyVersions: jsonb('policy_versions')
+      .$type<{ terms: string; privacy: string; acceptableUse: string }>()
+      .notNull(),
+    issuedAt: timestamp('issued_at', { withTimezone: true, mode: 'string' }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check(
+      'public_registration_decisions_digest_check',
+      sql`${table.jtiHash} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.emailDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND ${table.deviceDigest} ~ '^sha256:[0-9a-f]{64}$'
+        AND (${table.accountDigest} IS NULL OR ${table.accountDigest} ~ '^sha256:[0-9a-f]{64}$')`,
+    ),
+    check(
+      'public_registration_decisions_action_check',
+      sql`${table.action} IN ('signup', 'magic-link')`,
+    ),
+    check(
+      'public_registration_decisions_policy_check',
+      sql`jsonb_typeof(${table.policyVersions}) = 'object'
+        AND ${table.policyVersions} = jsonb_build_object(
+          'terms', ${table.policyVersions}->'terms',
+          'privacy', ${table.policyVersions}->'privacy',
+          'acceptableUse', ${table.policyVersions}->'acceptableUse'
+        )
+        AND (${table.policyVersions}->>'terms') ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+        AND (${table.policyVersions}->>'privacy') ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+        AND (${table.policyVersions}->>'acceptableUse') ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+        AND lower(${table.policyVersions}->>'terms') NOT IN ('latest', 'current', 'draft', 'unpublished')
+        AND lower(${table.policyVersions}->>'privacy') NOT IN ('latest', 'current', 'draft', 'unpublished')
+        AND lower(${table.policyVersions}->>'acceptableUse') NOT IN ('latest', 'current', 'draft', 'unpublished')`,
+    ),
+    check(
+      'public_registration_decisions_expiry_check',
+      sql`${table.expiresAt} = ${table.issuedAt} + interval '5 minutes'`,
+    ),
+    check(
+      'public_registration_decisions_consumption_check',
+      sql`${table.consumedAt} IS NULL OR (
+        ${table.consumedAt} >= ${table.issuedAt}
+        AND ${table.consumedAt} < ${table.expiresAt}
+      )`,
+    ),
+    index('idx_public_registration_decisions_expires').on(table.expiresAt),
+    index('idx_public_registration_decisions_email_expires').on(
+      table.emailDigest,
+      table.expiresAt,
+    ),
+  ],
+);
+
+export const publicRegistrationRateBuckets = kortixSchema.table(
+  'public_registration_rate_buckets',
+  {
+    dimensionKind: varchar('dimension_kind', { length: 16 }).notNull(),
+    dimensionKeyHash: varchar('dimension_key_hash', { length: 71 }).notNull(),
+    windowStartedAt: timestamp('window_started_at', { withTimezone: true, mode: 'string' })
+      .notNull(),
+    capacityLimit: integer('capacity_limit').notNull(),
+    windowSeconds: integer('window_seconds').notNull(),
+    requestCount: integer('request_count').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: 'public_registration_rate_buckets_pkey',
+      columns: [table.dimensionKind, table.dimensionKeyHash, table.windowStartedAt],
+    }),
+    check(
+      'public_registration_rate_buckets_kind_check',
+      sql`${table.dimensionKind} IN ('ip', 'device', 'email', 'account', 'action')`,
+    ),
+    check(
+      'public_registration_rate_buckets_hash_check',
+      sql`${table.dimensionKeyHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'public_registration_rate_buckets_limits_check',
+      sql`${table.capacityLimit} BETWEEN 1 AND 10000
+        AND ${table.windowSeconds} BETWEEN 60 AND 86400
+        AND ${table.requestCount} >= 1`,
+    ),
+    check(
+      'public_registration_rate_buckets_window_check',
+      sql`${table.expiresAt} = ${table.windowStartedAt}
+        + make_interval(secs => ${table.windowSeconds})
+        AND ${table.updatedAt} >= ${table.windowStartedAt}`,
+    ),
+    index('idx_public_registration_rate_buckets_expires').on(table.expiresAt),
+  ],
 );
 
 export const accessRequests = kortixSchema.table(
@@ -7541,6 +7687,10 @@ export const projectModuleInstallations = kortixSchema.table(
       table.projectId,
       table.accountId,
     ),
+    unique('project_module_installations_installation_account_unique').on(
+      table.installationId,
+      table.accountId,
+    ),
     index('idx_project_module_installations_account_project').on(
       table.accountId,
       table.projectId,
@@ -7557,6 +7707,289 @@ export const projectModuleInstallations = kortixSchema.table(
     check(
       'project_module_installations_revision_check',
       sql`${table.installRevision} >= 0`,
+    ),
+  ],
+);
+
+export const policyAcceptances = kortixSchema.table(
+  'policy_acceptances',
+  {
+    acceptanceId: uuid('acceptance_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    userId: uuid('user_id').notNull(),
+    policy: policyAcceptancePolicyEnum('policy').notNull(),
+    version: varchar('version', { length: 64 }).notNull(),
+    source: policyAcceptanceSourceEnum('source').notNull(),
+    registrationDecisionJtiHash: varchar('registration_decision_jti_hash', {
+      length: 71,
+    }).references(() => publicRegistrationDecisions.jtiHash, { onDelete: 'restrict' }),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    metadata: jsonb('metadata')
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+  },
+  (table) => [
+    unique('policy_acceptances_acceptance_account_unique').on(
+      table.acceptanceId,
+      table.accountId,
+    ),
+    unique('policy_acceptances_account_user_policy_version_unique').on(
+      table.accountId,
+      table.userId,
+      table.policy,
+      table.version,
+    ),
+    foreignKey({
+      columns: [table.accountId, table.userId],
+      foreignColumns: [accountMembers.accountId, accountMembers.userId],
+      name: 'policy_acceptances_account_user_fk',
+    }).onDelete('cascade'),
+    index('idx_policy_acceptances_account_user_accepted').on(
+      table.accountId,
+      table.userId,
+      table.acceptedAt,
+    ),
+    uniqueIndex('idx_policy_acceptances_registration_policy_unique')
+      .on(table.registrationDecisionJtiHash, table.policy)
+      .where(sql`${table.registrationDecisionJtiHash} IS NOT NULL`),
+    check(
+      'policy_acceptances_version_check',
+      sql`${table.version} ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+        AND lower(${table.version}) NOT IN ('latest', 'current', 'draft', 'unpublished')`,
+    ),
+    check(
+      'policy_acceptances_source_check',
+      sql`(
+        ${table.source} = 'registration'
+        AND ${table.registrationDecisionJtiHash} IS NOT NULL
+        AND ${table.policy} IN ('terms', 'privacy', 'acceptable_use')
+      ) OR (
+        ${table.source} <> 'registration'
+        AND ${table.registrationDecisionJtiHash} IS NULL
+      )`,
+    ),
+    check(
+      'policy_acceptances_metadata_check',
+      sql`jsonb_typeof(${table.metadata}) = 'object'
+        AND pg_column_size(${table.metadata}) <= 4096`,
+    ),
+  ],
+);
+
+export const accountRequests = kortixSchema.table(
+  'account_requests',
+  {
+    requestId: uuid('request_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    requestedBy: uuid('requested_by').notNull(),
+    kind: accountRequestKindEnum('kind').notNull(),
+    status: accountRequestStatusEnum('status').notNull(),
+    reason: text('reason'),
+    moduleInstallationId: uuid('module_installation_id'),
+    idempotencyKey: varchar('idempotency_key', { length: 255 }).notNull(),
+    requestHash: varchar('request_hash', { length: 71 }).notNull(),
+    requestedAt: timestamp('requested_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    notBeforeAt: timestamp('not_before_at', { withTimezone: true, mode: 'string' }),
+    processingStartedAt: timestamp('processing_started_at', {
+      withTimezone: true,
+      mode: 'string',
+    }),
+    terminalAt: timestamp('terminal_at', { withTimezone: true, mode: 'string' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
+    resultMetadata: jsonb('result_metadata')
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('account_requests_request_account_unique').on(table.requestId, table.accountId),
+    unique('account_requests_account_user_idempotency_unique').on(
+      table.accountId,
+      table.requestedBy,
+      table.idempotencyKey,
+    ),
+    foreignKey({
+      columns: [table.accountId, table.requestedBy],
+      foreignColumns: [accountMembers.accountId, accountMembers.userId],
+      name: 'account_requests_account_user_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.moduleInstallationId, table.accountId],
+      foreignColumns: [projectModuleInstallations.installationId, projectModuleInstallations.accountId],
+      name: 'account_requests_module_installation_account_fk',
+    }).onDelete('restrict'),
+    index('idx_account_requests_account_user_requested').on(
+      table.accountId,
+      table.requestedBy,
+      table.requestedAt,
+    ),
+    index('idx_account_requests_pending_work')
+      .on(table.status, table.notBeforeAt, table.requestedAt)
+      .where(sql`${table.status} IN ('pending', 'cooling_off')`),
+    index('idx_account_requests_module')
+      .on(table.moduleInstallationId, table.requestedAt)
+      .where(sql`${table.moduleInstallationId} IS NOT NULL`),
+    check(
+      'account_requests_reason_check',
+      sql`${table.reason} IS NULL OR (
+        ${table.reason} = BTRIM(${table.reason})
+        AND length(${table.reason}) BETWEEN 1 AND 4000
+        AND octet_length(${table.reason}) <= 8192
+      )`,
+    ),
+    check(
+      'account_requests_idempotency_check',
+      sql`${table.idempotencyKey} ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{15,254}$'`,
+    ),
+    check('account_requests_request_hash_check', sql`${table.requestHash} ~ '^sha256:[0-9a-f]{64}$'`),
+    check(
+      'account_requests_module_check',
+      sql`(${table.kind} = 'module_report' AND ${table.moduleInstallationId} IS NOT NULL)
+        OR (${table.kind} <> 'module_report' AND ${table.moduleInstallationId} IS NULL)`,
+    ),
+    check(
+      'account_requests_expiry_check',
+      sql`(${table.kind} = 'data_export' AND ${table.expiresAt} > ${table.requestedAt})
+        OR (${table.kind} <> 'data_export' AND ${table.expiresAt} IS NULL)`,
+    ),
+    check(
+      'account_requests_state_check',
+      sql`(
+        ${table.status} = 'pending'
+        AND ${table.kind} <> 'account_deletion'
+        AND ${table.notBeforeAt} IS NULL
+        AND ${table.processingStartedAt} IS NULL
+        AND ${table.terminalAt} IS NULL
+      ) OR (
+        ${table.status} = 'cooling_off'
+        AND ${table.kind} = 'account_deletion'
+        AND ${table.notBeforeAt} > ${table.requestedAt}
+        AND ${table.processingStartedAt} IS NULL
+        AND ${table.terminalAt} IS NULL
+      ) OR (
+        ${table.status} = 'processing'
+        AND ${table.processingStartedAt} >= ${table.requestedAt}
+        AND ${table.terminalAt} IS NULL
+      ) OR (
+        ${table.status} = 'cancelled'
+        AND ${table.processingStartedAt} IS NULL
+        AND ${table.terminalAt} >= ${table.requestedAt}
+      ) OR (
+        ${table.status} IN ('completed', 'rejected', 'expired')
+        AND ${table.terminalAt} >= ${table.requestedAt}
+      )`,
+    ),
+    check(
+      'account_requests_metadata_check',
+      sql`jsonb_typeof(${table.resultMetadata}) = 'object'
+        AND pg_column_size(${table.resultMetadata}) <= 16384
+        AND ${table.updatedAt} >= ${table.requestedAt}`,
+    ),
+  ],
+);
+
+export const developerApplications = kortixSchema.table(
+  'developer_applications',
+  {
+    applicationId: uuid('application_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    organizationId: uuid('organization_id').notNull(),
+    state: developerApplicationStateEnum('state').default('draft').notNull(),
+    revision: integer('revision').default(0).notNull(),
+    policyVersions: jsonb('policy_versions')
+      .$type<{ moduleRules: string; acceptableUse: string }>()
+      .notNull(),
+    submittedAt: timestamp('submitted_at', { withTimezone: true, mode: 'string' }),
+    decidedAt: timestamp('decided_at', { withTimezone: true, mode: 'string' }),
+    suspendedAt: timestamp('suspended_at', { withTimezone: true, mode: 'string' }),
+    decisionReason: text('decision_reason'),
+    createdBy: uuid('created_by').notNull(),
+    updatedBy: uuid('updated_by'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('developer_applications_application_account_unique').on(
+      table.applicationId,
+      table.accountId,
+    ),
+    unique('developer_applications_account_unique').on(table.accountId),
+    foreignKey({
+      columns: [table.organizationId, table.accountId],
+      foreignColumns: [developerOrganizations.organizationId, developerOrganizations.accountId],
+      name: 'developer_applications_organization_account_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.accountId, table.createdBy],
+      foreignColumns: [accountMembers.accountId, accountMembers.userId],
+      name: 'developer_applications_account_creator_fk',
+    }).onDelete('restrict'),
+    index('idx_developer_applications_state_updated').on(table.state, table.updatedAt),
+    index('idx_developer_applications_organization').on(table.organizationId, table.updatedAt),
+    check('developer_applications_revision_check', sql`${table.revision} >= 0`),
+    check(
+      'developer_applications_policy_check',
+      sql`jsonb_typeof(${table.policyVersions}) = 'object'
+        AND ${table.policyVersions} = jsonb_build_object(
+          'moduleRules', ${table.policyVersions}->'moduleRules',
+          'acceptableUse', ${table.policyVersions}->'acceptableUse'
+        )
+        AND ${table.policyVersions} ?& ARRAY['moduleRules', 'acceptableUse']
+        AND (${table.policyVersions}->>'moduleRules') ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+        AND (${table.policyVersions}->>'acceptableUse') ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+        AND lower(${table.policyVersions}->>'moduleRules') NOT IN ('latest', 'current', 'draft', 'unpublished')
+        AND lower(${table.policyVersions}->>'acceptableUse') NOT IN ('latest', 'current', 'draft', 'unpublished')`,
+    ),
+    check(
+      'developer_applications_state_check',
+      sql`(
+        ${table.state} = 'draft'
+        AND ${table.submittedAt} IS NULL
+        AND ${table.decidedAt} IS NULL
+        AND ${table.suspendedAt} IS NULL
+      ) OR (
+        ${table.state} IN ('submitted', 'under_review')
+        AND ${table.submittedAt} IS NOT NULL
+        AND ${table.decidedAt} IS NULL
+        AND ${table.suspendedAt} IS NULL
+      ) OR (
+        ${table.state} IN ('approved', 'rejected')
+        AND ${table.submittedAt} IS NOT NULL
+        AND ${table.decidedAt} IS NOT NULL
+        AND ${table.suspendedAt} IS NULL
+      ) OR (
+        ${table.state} = 'suspended'
+        AND ${table.submittedAt} IS NOT NULL
+        AND ${table.decidedAt} IS NOT NULL
+        AND ${table.suspendedAt} IS NOT NULL
+      )`,
+    ),
+    check(
+      'developer_applications_reason_check',
+      sql`(
+        ${table.decisionReason} IS NULL
+        OR (
+          ${table.decisionReason} = BTRIM(${table.decisionReason})
+          AND length(${table.decisionReason}) BETWEEN 1 AND 4000
+          AND octet_length(${table.decisionReason}) <= 8192
+        )
+      ) AND (${table.state} NOT IN ('rejected', 'suspended') OR ${table.decisionReason} IS NOT NULL)`,
+    ),
+    check(
+      'developer_applications_updated_check',
+      sql`${table.updatedAt} >= ${table.createdAt}`,
     ),
   ],
 );

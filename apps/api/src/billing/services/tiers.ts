@@ -1,3 +1,4 @@
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { config } from '../../config';
 import type { DailyCreditConfig, TierConfig, TierEntitlements } from '../../types';
 
@@ -141,12 +142,12 @@ export function getComputeDisplayPriceCents(serverType: string): number | null {
 
 /**
  * Human-readable line for Stripe checkout / invoice descriptions.
- * Example: "Kortix Computer · Pro — 8 vCPU, 16 GB RAM, 320 GB SSD"
+ * Example: "OpenOPC Local Execution · Pro — 8 vCPU, 16 GB RAM, 320 GB SSD"
  */
 export function getComputeDescription(serverType: string): string {
   const t = COMPUTE_TIERS[serverType];
-  if (!t) return 'Kortix Computer';
-  return `Kortix Computer · ${t.label} — ${t.cores} vCPU, ${t.memoryGb} GB RAM, ${t.diskGb} GB SSD`;
+  if (!t) return PRODUCT_BRAND.localNodeName;
+  return `${PRODUCT_BRAND.localNodeName} · ${t.label} — ${t.cores} vCPU, ${t.memoryGb} GB RAM, ${t.diskGb} GB SSD`;
 }
 
 // ─── Tiers ──────────────────────────────────────────────────────────────────

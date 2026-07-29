@@ -1,5 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { changeRequests } from '@kortix/db';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { eq } from 'drizzle-orm';
 import { PROJECT_ACTIONS } from '../../iam';
 import { assertAgentScope } from '../../iam/agent-scope';
@@ -102,7 +103,7 @@ projectsApp.openapi(
     try {
       result = await mergeBranches(projectForGit, cr.baseRef, cr.headRef, {
         message: customMessage ?? `Merge CR #${cr.number}: ${cr.title}`,
-        authorName: 'Kortix',
+        authorName: PRODUCT_BRAND.displayName,
         authorEmail: 'noreply@kortix.ai',
       });
     } catch (error) {

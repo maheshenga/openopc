@@ -1,6 +1,6 @@
 # @kortix/desktop-electron
 
-An **Electron** build of the Kortix desktop shell, built as a 1:1 behavioral
+An **Electron** build of the OpenOPC desktop shell, built as a 1:1 behavioral
 port of the Tauri shell (`apps/desktop`). It exists so we can compare the two
 side by side and pick whichever is less quirky to maintain.
 
@@ -41,10 +41,12 @@ Point it at a different backend without a rebuild:
 pnpm --filter @kortix/desktop-electron dev:dev-env    # https://dev.kortix.com
 pnpm --filter @kortix/desktop-electron dev:prod-env   # https://kortix.com
 # or:
-KORTIX_DESKTOP_URL=https://kortix.com/projects pnpm --filter @kortix/desktop-electron dev
+OPENOPC_DESKTOP_URL=https://kortix.com/projects pnpm --filter @kortix/desktop-electron dev
 ```
 
-At runtime you can also switch via the native **Kortix → Frontend URL** menu
+The legacy `KORTIX_DESKTOP_URL` variable remains accepted for existing installations.
+
+At runtime you can also switch via the native **OpenOPC → Frontend URL** menu
 (Production / Dev / Local / Custom… / Reset). The choice is remembered across
 launches (stored in `userData/frontend_url`).
 
@@ -87,7 +89,7 @@ Flow (`src/updater.js`, wired from `src/main.js`):
    never block on the download.
 3. Once staged, a native **"Restart to update"** dialog appears. Declining keeps
    the update; it installs on the next quit (`autoInstallOnAppQuit`). A 6-hour
-   re-check covers long sessions, and **Kortix → Check for Updates…** runs it on
+   re-check covers long sessions, and **OpenOPC → Check for Updates…** runs it on
    demand with explicit feedback.
 
 For this to work the release must carry the electron-updater **metadata** —

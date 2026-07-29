@@ -36,6 +36,7 @@ import {
   type RegistryJson,
   type RegistryRef,
 } from "@kortix/registry";
+import { PRODUCT_BRAND } from "@kortix/product-brand";
 import type { MarketplaceSource } from "./sources-store";
 
 export interface ItemCapabilities {
@@ -235,7 +236,7 @@ let marketplaceLabelsCache: Map<string, string> | null = null;
 function marketplaceLabels(): Map<string, string> {
   if (marketplaceLabelsCache) return marketplaceLabelsCache;
   const labels = new Map<string, string>([
-    ["kortix", "Kortix"],
+    ["kortix", PRODUCT_BRAND.displayName],
     ["anthropics/skills", "Anthropic Skills"],
     ["anthropics/knowledge-work-plugins", "Anthropic Knowledge Work"],
   ]);
@@ -244,10 +245,10 @@ function marketplaceLabels(): Map<string, string> {
   return labels;
 }
 
-/** Display label for a registry/marketplace (base → "Kortix", external → curated name). */
+/** Display label for a registry/marketplace (base → product brand, external → curated name). */
 export function marketplaceLabelOf(registry: string): string {
   const id = marketplaceIdOf(registry);
-  return marketplaceLabels().get(id) ?? (id === "kortix" ? "Kortix" : id);
+  return marketplaceLabels().get(id) ?? (id === "kortix" ? PRODUCT_BRAND.displayName : id);
 }
 
 /** GitHub owner from a marketplace id, when it looks like `owner/repo` (for avatars). */
@@ -337,7 +338,7 @@ function memSource(map: Map<string, string>): BuildSource {
 function buildStarterRegistry(): RegistryJson {
   const files = [
     ...getStarterFiles({
-      projectName: "Kortix Starter",
+      projectName: `${PRODUCT_BRAND.displayName} Starter`,
       template: "general-knowledge-worker",
     }),
     ...getMarketplaceFiles(),
@@ -359,11 +360,14 @@ function buildStarterRegistry(): RegistryJson {
       };
     } else if (item.type === "registry:skill") {
       // A browsable starter skill: it stands on its own in the catalog AND ships
-      // inside the Kortix Starter project, so tag it so the UI can badge it
-      // "Part of Kortix Starter" and link back to the whole project.
+      // inside the first-party Starter project, so tag it so the UI can badge it
+      // and link back to the whole project.
       item.meta = {
         ...(item.meta ?? {}),
-        partOfProject: { id: STARTER_KIT_ITEM_ID, title: "Kortix Starter" },
+        partOfProject: {
+          id: STARTER_KIT_ITEM_ID,
+          title: `${PRODUCT_BRAND.displayName} Starter`,
+        },
       };
     }
     for (const f of item.files ?? []) {
@@ -436,7 +440,7 @@ function buildProjectTemplateRegistry(): RegistryItem[] {
   return items;
 }
 
-// The marketplace hero: one synthetic "Kortix Starter" project. Its contents
+// The marketplace hero: one synthetic first-party Starter project. Its contents
 // (`what's inside`) are every browseable starter skill — resolved typed from the
 // catalog by name — and its files are the whole starter kit (file browser +
 // clone). This is the single project we lead the marketplace with; individual
@@ -444,12 +448,12 @@ function buildProjectTemplateRegistry(): RegistryItem[] {
 export const STARTER_KIT_ITEM_NAME = "starter";
 export const STARTER_KIT_ITEM_ID = `kortix-projects:${STARTER_KIT_ITEM_NAME}`;
 
-const STARTER_KIT_README = `# Kortix Starter
+const STARTER_KIT_README = `# ${PRODUCT_BRAND.displayName} Starter
 
-The default Kortix project — a general knowledge worker that's ready to do real
+The default ${PRODUCT_BRAND.displayName} project — a general knowledge worker that's ready to do real
 work from the very first message.
 
-It comes preloaded with the full Kortix skill kit: research and the web,
+It comes preloaded with the full ${PRODUCT_BRAND.displayName} skill kit: research and the web,
 documents (PDF, DOCX, XLSX) and slides, coding and web apps, browser automation,
 and a set of editable persona starters (recruiting, marketing, accounting,
 support, product, legal) you can shape into your own operations.
@@ -478,7 +482,7 @@ function buildStarterKitProjectItem(): RegistryItem {
     .map((it) => it.name)
     .sort((a, b) => a.localeCompare(b));
   const files = getStarterFiles({
-    projectName: "Kortix Starter",
+    projectName: `${PRODUCT_BRAND.displayName} Starter`,
     template: "general-knowledge-worker",
   }).map((f) => ({ path: f.path, type: "registry:file" as const, content: f.content }));
   // Give the project a proper, curated marketplace README (the base template's
@@ -490,9 +494,9 @@ function buildStarterKitProjectItem(): RegistryItem {
   return {
     name: STARTER_KIT_ITEM_NAME,
     type: "registry:project",
-    title: "Kortix Starter",
+    title: `${PRODUCT_BRAND.displayName} Starter`,
     description:
-      "The default Kortix project — a general knowledge worker preloaded with the full skill kit (research, documents, slides, spreadsheets, the web, and more), ready to work from the first session.",
+      `The default ${PRODUCT_BRAND.displayName} project — a general knowledge worker preloaded with the full skill kit (research, documents, slides, spreadsheets, the web, and more), ready to work from the first session.`,
     categories: ["project", "starter"],
     registryDependencies: skillNames,
     files,

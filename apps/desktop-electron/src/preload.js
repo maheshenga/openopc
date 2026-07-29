@@ -1,4 +1,4 @@
-// Kortix desktop shell — Electron preload.
+// OpenOPC desktop shell — Electron preload.
 //
 // Exposes a `window.__TAURI__` object with the shape the web app's desktop
 // bridge expects (the previous shell set Tauri's `withGlobalTauri`). The web
@@ -19,6 +19,15 @@ const invoke = (cmd, args) => ipcRenderer.invoke('kortix:invoke', cmd, args);
 
 /** Tauri `getCurrentWindow().<action>()` → window-control funnel. */
 const winCall = (action) => ipcRenderer.invoke('kortix:window', action);
+
+// Local grants deliberately use a separate fixed channel. The renderer can
+// request, inspect, or revoke a grant, but it never receives a generic IPC
+// primitive, a filesystem handle, or the native confirmation token.
+const requestLocalGrant = (request) =>
+  ipcRenderer.invoke('openopc:local-grants', 'requestLocalGrant', request);
+const listLocalGrants = () => ipcRenderer.invoke('openopc:local-grants', 'listLocalGrants', {});
+const revokeLocalGrant = (request) =>
+  ipcRenderer.invoke('openopc:local-grants', 'revokeLocalGrant', request);
 
 const currentWindow = {
   minimize: () => winCall('minimize'),
@@ -46,4 +55,7 @@ contextBridge.exposeInMainWorld('__TAURI__', {
 contextBridge.exposeInMainWorld('kortixDesktop', {
   shell: 'electron',
   version: '0.1.0',
+  requestLocalGrant,
+  listLocalGrants,
+  revokeLocalGrant,
 });

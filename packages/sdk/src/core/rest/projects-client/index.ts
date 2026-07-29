@@ -3,6 +3,7 @@
 // byte-identical. The `unwrap` helper in `./shared` stays internal.
 
 export * from './accounts';
+export * from './account-requests';
 export * from './projects';
 export * from './github';
 export * from './access';

@@ -37,7 +37,7 @@ const CREDIT_EXAMPLES: { label: string; body: string }[] = [
   { label: 'Free start', body: '200 credits covers sandbox runtime for early projects and demos.' },
   {
     label: 'Bring your model',
-    body: 'Use BYOK or ChatGPT subscription when you want premium models without using Kortix credits.',
+    body: 'Use BYOK or ChatGPT subscription when you want premium models without using OpenOPC credits.',
   },
   {
     label: 'Team scale',
@@ -48,7 +48,7 @@ const CREDIT_EXAMPLES: { label: string; body: string }[] = [
 const FAQ: [string, string][] = [
   [
     'What does Free include?',
-    'Free includes 200 credits each month for sandbox compute and 3 projects. Bring your own API key or connect your ChatGPT subscription for premium access. Managed Claude, GPT, and Gemini on Kortix keys are paid.',
+    'Free includes 200 credits each month for sandbox compute and 3 projects. Bring your own API key or connect your ChatGPT subscription for premium access. Managed Claude, GPT, and Gemini on OpenOPC keys are paid.',
   ],
   [
     'What does a Team seat include?',

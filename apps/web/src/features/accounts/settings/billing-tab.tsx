@@ -19,6 +19,7 @@ import {
 } from '@/hooks/billing';
 import { AccountState, billingApi } from '@/lib/api/billing';
 import { isBillingEnabled } from '@/lib/config';
+import { getTeamPlanLabel } from '@/lib/runtime-brand-copy';
 import { cn } from '@/lib/utils';
 import { useBillingAccountId } from '@/stores/billing-account-context';
 import { useUpgradeDialogStore } from '@/stores/upgrade-dialog-store';
@@ -148,7 +149,7 @@ export function BillingTab({ returnUrl, isActive }: { returnUrl: string; isActiv
       {showTeamCheckout ? (
         <section className="space-y-4">
           <div className="space-y-1">
-            <Label>Kortix Team</Label>
+            <Label>{getTeamPlanLabel()}</Label>
             <p className="text-muted-foreground text-xs">
               {tI18nHardcoded.raw(
                 'autoFeaturesAccountsSettingsBillingTabJsxTextSubscribeToPut67032571',

@@ -13,12 +13,12 @@ import {
 import { sendCard } from '../teams-api';
 import {
   buildConnectAccountCard,
-  buildHelpCard,
   buildNoticeCard,
   buildPanelCard,
   buildSelectCard,
   type SelectOption,
 } from './cards';
+import { buildTeamsHelpCard } from './help';
 import {
   ensureTeamsConversationBinding,
   listTenantProjects,
@@ -84,7 +84,7 @@ export async function handleTeamsCommand(input: {
         await post(await buildWhoamiCard(ctx, input.tenantId, conversationId, userId, input.projectId));
         return true;
       case 'help':
-        await post(helpCard());
+        await post(buildTeamsHelpCard());
         return true;
       case 'status':
       case 'config':
@@ -126,19 +126,6 @@ export async function handleTeamsCommand(input: {
 
 async function ensureBinding(tenantId: string, conversationId: string, projectId: string): Promise<void> {
   await ensureTeamsConversationBinding({ tenantId, conversationId, projectId });
-}
-
-function helpCard() {
-  return buildHelpCard([
-    { cmd: '/login', desc: 'connect your Kortix account' },
-    { cmd: '/logout', desc: 'disconnect your account' },
-    { cmd: '/whoami', desc: 'show who you are linked as' },
-    { cmd: '/status', desc: 'show the effective project, agent and model' },
-    { cmd: '/models', desc: 'pick the model for this conversation' },
-    { cmd: '/agents', desc: 'pick the agent for this conversation' },
-    { cmd: '/projects', desc: 'list connected projects' },
-    { cmd: '/use <name>', desc: 'point this conversation at another project' },
-  ]);
 }
 
 async function buildStatusCard(
@@ -220,7 +207,7 @@ async function buildModelsCard(ctx: ReturnType<typeof teamsChannelCtx>) {
     subtitle: current ? `Currently ${labelForModelRef(current)}` : 'Currently the project default',
     verb: 'teams_set_model',
     options,
-    footer: 'Or set any provider/model-id you have connected in Kortix: `/model anthropic/claude-sonnet-4.6`.',
+    footer: 'Or set any provider/model-id you have connected in OpenOPC: `/model anthropic/claude-sonnet-4.6`.',
   });
 }
 
@@ -241,7 +228,7 @@ async function setModel(ctx: ReturnType<typeof teamsChannelCtx>, arg: string) {
     model: id,
   });
   if (!servable) {
-    return buildNoticeCard(`\`${id}\` isn't available here. Pick one with /models or connect that provider in Kortix.`);
+    return buildNoticeCard(`\`${id}\` isn't available here. Pick one with /models or connect that provider in OpenOPC.`);
   }
   const stored = toOpencodeModelRef(id);
   await setChannelModel(ctx, stored);
@@ -296,7 +283,7 @@ async function setAgent(ctx: ReturnType<typeof teamsChannelCtx>, arg: string) {
 async function buildProjectsCard(tenantId: string, currentProjectId: string) {
   const projects = await listTenantProjects(tenantId);
   if (projects.length === 0) {
-    return buildNoticeCard('No Kortix projects are connected to this Teams tenant yet.', '📁');
+    return buildNoticeCard('No OpenOPC projects are connected to this Teams tenant yet.', '📁');
   }
   const options: SelectOption[] = projects.slice(0, 8).map((p) => ({
     label: p.name,

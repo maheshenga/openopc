@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { createGzip } from 'node:zlib';
 import { AGENT_BROWSER_VERSION, OPENCODE_VERSION } from '@kortix/shared';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { gatewayModelCatalog } from '../llm-gateway/models/catalog-models';
 import { tmpdir } from 'node:os';
 import { buildLayeredDockerfile } from './dockerfile-layer';
@@ -332,16 +333,16 @@ async function stageScaffoldRepo(contextDir: string): Promise<void> {
   }
   const env = {
     ...process.env, GIT_TERMINAL_PROMPT: '0',
-    GIT_AUTHOR_NAME: 'Kortix', GIT_AUTHOR_EMAIL: 'noreply@kortix.ai',
-    GIT_COMMITTER_NAME: 'Kortix', GIT_COMMITTER_EMAIL: 'noreply@kortix.ai',
+    GIT_AUTHOR_NAME: PRODUCT_BRAND.displayName, GIT_AUTHOR_EMAIL: 'noreply@kortix.ai',
+    GIT_COMMITTER_NAME: PRODUCT_BRAND.displayName, GIT_COMMITTER_EMAIL: 'noreply@kortix.ai',
     GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z',
   };
   const g = (args: string[], cwd: string) => execFileAsyncBC('git', args, { cwd, env, timeout: 60_000 });
   await g(['init', '-b', 'main'], work);
-  await g(['config', 'user.name', 'Kortix'], work);
+  await g(['config', 'user.name', PRODUCT_BRAND.displayName], work);
   await g(['config', 'user.email', 'noreply@kortix.ai'], work);
   await g(['add', '-A'], work);
-  await g(['commit', '-m', 'chore: scaffold Kortix project'], work);
+  await g(['commit', '-m', `chore: scaffold ${PRODUCT_BRAND.displayName} project`], work);
   await g(['clone', '--bare', '-q', work, join(contextDir, 'scaffold.git')], contextDir);
   await rm(work, { recursive: true, force: true });
 }

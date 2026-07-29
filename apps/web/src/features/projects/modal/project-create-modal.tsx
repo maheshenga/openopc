@@ -944,7 +944,7 @@ function TemplatePicker({
               icon={Boxes}
               size="sm"
               title="No templates yet"
-              description="Ready-to-clone Kortix projects will show up here."
+              description="Ready-to-clone OpenOPC projects will show up here."
             />
           ) : (
             templates.map((item) => (

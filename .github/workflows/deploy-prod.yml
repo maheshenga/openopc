@@ -438,11 +438,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
       - name: Install pnpm
         run: corepack enable pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --filter @kortix/desktop-electron
+        run: pnpm install --frozen-lockfile --filter "@kortix/desktop-electron..."
         env:
           npm_config_engine_strict: "false"
 
@@ -480,8 +485,8 @@ jobs:
             echo "APPLE_API_KEY=$KEY_PATH" >> "$GITHUB_ENV"
           fi
 
-      - name: Ensure Electron runtime
-        run: pnpm --filter @kortix/desktop-electron exec node scripts/ensure-runtime.js
+      - name: Prepare Electron runtime and sidecar
+        run: pnpm --filter @kortix/desktop-electron run setup
 
       # electron-builder signs (+ notarizes on macOS) when CSC_*/APPLE_API_*
       # are present; empty → unsigned. Version + prod URL are baked in here.
@@ -865,7 +870,7 @@ jobs:
 
           payload="$(jq -n \
             --arg channel "$SLACK_RELEASE_CHANNEL" \
-            --arg header "🚀 Kortix ${TAG} is live (EKS)" \
+            --arg header "🚀 OpenOPC ${TAG} is live (EKS)" \
             --arg title "${TITLE:-Release $TAG}" \
             --arg notes "${NOTES:-}" \
             --arg version "$VERSION" \

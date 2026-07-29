@@ -18,6 +18,7 @@
  * Scope: `git-receive-pack` ⇒ write; `git-upload-pack` ⇒ read.
  */
 import { createRoute, z } from '@hono/zod-openapi';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import {
   authorizeGitProxy,
   resolveProjectUpstream,
@@ -69,7 +70,7 @@ const projectParam = z.object({
 
 /** Ask git to (re)authenticate via the credential helper. */
 function unauthorized(c: any, message: string) {
-  c.header('WWW-Authenticate', 'Basic realm="Kortix Git"');
+  c.header('WWW-Authenticate', `Basic realm="${PRODUCT_BRAND.displayName} Git"`);
   return c.text(message, 401);
 }
 

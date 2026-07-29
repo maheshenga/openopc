@@ -33,7 +33,8 @@ import { useGitHubStars } from '@/hooks/utils/use-github-stars';
 import { trackCtaSignup } from '@/lib/analytics/gtm';
 import { siteConfig } from '@/lib/site-config';
 import { cn } from '@/lib/utils';
-import { ChevronRight, Layers, Menu, Type, X } from 'lucide-react';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
+import { ChevronRight, Layers, Menu, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useTranslations } from 'next-intl';
 import Link from 'next/link';
@@ -174,10 +175,13 @@ export function Navbar({ isAbsolute = false }: NavbarProps) {
               <ContextMenuTrigger asChild>
                 <Link
                   href="/"
-                  aria-label="Kortix home"
-                  className="hit-area-4 flex shrink-0 items-center"
+                  aria-label={`${PRODUCT_BRAND.displayName} home`}
+                  className="hit-area-4 flex shrink-0 items-center gap-2"
                 >
-                  <KortixLogo size={18} variant="logomark" />
+                  <KortixLogo size={18} variant="symbol" />
+                  <span className="text-foreground text-base font-semibold tracking-tight">
+                    {PRODUCT_BRAND.displayName}
+                  </span>
                 </Link>
               </ContextMenuTrigger>
               <ContextMenuContent className="w-64">
@@ -207,49 +211,6 @@ export function Navbar({ isAbsolute = false }: NavbarProps) {
                         label: 'White · PNG',
                         href: '/brandkit/Logo/Brandmark/PNG/Brandmark White.png',
                         file: 'kortix-symbol-white.png',
-                      },
-                    ].map((d) => (
-                      <ContextMenuItem
-                        key={d.file}
-                        onClick={() => {
-                          const a = document.createElement('a');
-                          a.href = d.href;
-                          a.download = d.file;
-                          a.click();
-                        }}
-                        className="cursor-pointer text-sm"
-                      >
-                        {d.label}
-                      </ContextMenuItem>
-                    ))}
-                  </ContextMenuSubContent>
-                </ContextMenuSub>
-                <ContextMenuSub>
-                  <ContextMenuSubTrigger className="gap-2 text-sm">
-                    <Type className="size-3.5 shrink-0" />
-                    {tHardcodedUi.raw('componentsHomeNavbar.line239JsxTextDownloadWordmark')}
-                  </ContextMenuSubTrigger>
-                  <ContextMenuSubContent className="w-40">
-                    {[
-                      {
-                        label: 'Black · SVG',
-                        href: '/brandkit/Logo/Logomark/SVG/Logomark Black.svg',
-                        file: 'kortix-logo-black.svg',
-                      },
-                      {
-                        label: 'Black · PNG',
-                        href: '/brandkit/Logo/Logomark/PNG/Logomark Black.png',
-                        file: 'kortix-logo-black.png',
-                      },
-                      {
-                        label: 'White · SVG',
-                        href: '/brandkit/Logo/Logomark/SVG/Logomark White.svg',
-                        file: 'kortix-logo-white.svg',
-                      },
-                      {
-                        label: 'White · PNG',
-                        href: '/brandkit/Logo/Logomark/PNG/Logomark White.png',
-                        file: 'kortix-logo-white.png',
                       },
                     ].map((d) => (
                       <ContextMenuItem

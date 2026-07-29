@@ -1,9 +1,7 @@
 'use client';
 
 import {
-  type DeveloperModuleHumanReviewEvidence,
   type DeveloperModuleRelease,
-  type DeveloperModuleReleaseStatus,
   type DeveloperModuleReviewEvent,
   type DeveloperModuleTrustView,
   type ProjectModuleInstallation,
@@ -24,29 +22,6 @@ import { Button } from '@/components/ui/button';
 import { invalidateTokenCache, setBootstrapAuthToken } from '@/lib/auth-token';
 import { useCurrentAccountStore } from '@/stores/current-account-store';
 
-import {
-  type AdminDeveloperReviewDecision,
-  type AdminDeveloperReviewDetail,
-  adminDeveloperReviewErrorCode,
-  decideAdminDeveloperReview,
-  getAdminDeveloperReview,
-  getAdminDeveloperModuleTrust,
-  listAdminDeveloperReviews,
-  publishAdminDeveloperModuleRelease,
-  signAdminDeveloperModuleRelease,
-} from '@/features/developer-center/admin/client';
-import {
-  buildAdminDecisionBody,
-  createEvidenceDrafts,
-} from '@/features/developer-center/admin/evidence';
-import {
-  AdminDeveloperReviewDetailView,
-  type AdminDeveloperReviewDetailViewProps,
-} from '@/features/developer-center/admin/review-detail-page';
-import {
-  AdminDeveloperReviewQueueView,
-  type AdminReviewQueueState,
-} from '@/features/developer-center/admin/review-queue-page';
 import {
   type DeveloperModuleArtifactUploadState,
   createDeveloperModuleArtifactUploadController,
@@ -87,15 +62,12 @@ import { projectModuleErrorCode } from '@/features/project-modules/query';
 const DEBUG_ACCOUNT_ID = '21000000-0000-4000-a000-000000000001';
 const DEBUG_TEAM_ACCOUNT_ID = '21000000-0000-4000-a000-000000000002';
 const DEBUG_PUBLISHER_RELEASE_ID = '22000000-0000-4000-a000-000000000003';
-const DEBUG_ADMIN_RELEASE_ID = '22000000-0000-4000-a000-000000000001';
 const DEBUG_PROJECT_ID = '24000000-0000-4000-a000-000000000001';
 
 type DebugMode =
   | 'publisher-list'
   | 'publisher-submit'
   | 'publisher-detail'
-  | 'admin-queue'
-  | 'admin-detail'
   | 'project-modules';
 
 function modeFromSearch(): DebugMode {
@@ -103,8 +75,6 @@ function modeFromSearch(): DebugMode {
   const value = new URLSearchParams(window.location.search).get('mode');
   return value === 'publisher-submit' ||
     value === 'publisher-detail' ||
-    value === 'admin-queue' ||
-    value === 'admin-detail' ||
     value === 'project-modules'
     ? value
     : 'publisher-list';
@@ -112,11 +82,7 @@ function modeFromSearch(): DebugMode {
 
 function releaseIdFromSearch(): string {
   if (typeof window === 'undefined') return DEBUG_PUBLISHER_RELEASE_ID;
-  const search = new URLSearchParams(window.location.search);
-  return (
-    search.get('releaseId') ??
-    (search.get('mode') === 'admin-detail' ? DEBUG_ADMIN_RELEASE_ID : DEBUG_PUBLISHER_RELEASE_ID)
-  );
+  return new URLSearchParams(window.location.search).get('releaseId') ?? DEBUG_PUBLISHER_RELEASE_ID;
 }
 
 function PublisherSubmitHarness({
@@ -372,30 +338,16 @@ function DebugDeveloperCenterHarness() {
   const [mode, setMode] = useState<DebugMode>(modeFromSearch);
   const [accountId, setAccountId] = useState(DEBUG_ACCOUNT_ID);
   const [detailId, setDetailId] = useState(releaseIdFromSearch);
-  const [status, setStatus] = useState<DeveloperModuleReleaseStatus>('review_pending');
-  const [cursor, setCursor] = useState<string | null>(null);
   const [publisherReleases, setPublisherReleases] = useState<DeveloperModuleRelease[]>([]);
   const [publisherDetail, setPublisherDetail] = useState<DeveloperModuleRelease | null>(null);
   const [publisherHistory, setPublisherHistory] = useState<DeveloperModuleReviewEvent[]>([]);
   const [publisherTrust, setPublisherTrust] = useState<DeveloperModuleTrustView | null>(null);
-  const [adminDetail, setAdminDetail] = useState<AdminDeveloperReviewDetail | null>(null);
-  const [adminTrust, setAdminTrust] = useState<DeveloperModuleTrustView | null>(null);
-  const [adminReleases, setAdminReleases] = useState<DeveloperModuleRelease[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [publisherSearch, setPublisherSearch] = useState('');
   const [publisherStatus, setPublisherStatus] = useState<ReleaseStatusFilter>('all');
-  const [adminSearch, setAdminSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [publisherPending, setPublisherPending] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
-  const [adminDetailError, setAdminDetailError] = useState<string | null>(null);
-  const [adminConflict, setAdminConflict] = useState(false);
   const [publisherReason, setPublisherReason] = useState('');
-  const [adminReason, setAdminReason] = useState('');
-  const [adminEvidence, setAdminEvidence] = useState<DeveloperModuleHumanReviewEvidence[]>([]);
-  const [adminPending, setAdminPending] = useState(false);
-  const [distributionPending, setDistributionPending] = useState(false);
-  const [revokeOpen, setRevokeOpen] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   const canRead = true;
@@ -408,7 +360,6 @@ function DebugDeveloperCenterHarness() {
     const load = async () => {
       setLoading(true);
       setRequestError(null);
-      if (mode === 'admin-detail') setAdminDetailError(null);
       try {
         if (mode === 'publisher-list') {
           const result = await listDeveloperModuleReleases({
@@ -427,30 +378,10 @@ function DebugDeveloperCenterHarness() {
             setPublisherHistory(history.history);
             setPublisherTrust(trust);
           }
-        } else if (mode === 'admin-queue') {
-          const result = await listAdminDeveloperReviews({ status, cursor });
-          if (!cancelled) {
-            setAdminReleases(result.releases);
-            setNextCursor(result.next_cursor);
-          }
-        } else if (mode === 'admin-detail') {
-          const [result, trust] = await Promise.all([
-            getAdminDeveloperReview(detailId),
-            getAdminDeveloperModuleTrust(detailId),
-          ]);
-          if (!cancelled) {
-            setAdminDetail(result);
-            setAdminTrust(trust);
-          }
         }
       } catch (error) {
         if (!cancelled) {
-          const code =
-            mode === 'admin-queue' || mode === 'admin-detail'
-              ? adminDeveloperReviewErrorCode(error)
-              : developerCenterErrorCode(error);
-          setRequestError(code);
-          if (mode === 'admin-detail') setAdminDetailError(code);
+          setRequestError(developerCenterErrorCode(error));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -460,16 +391,7 @@ function DebugDeveloperCenterHarness() {
     return () => {
       cancelled = true;
     };
-  }, [accountId, cursor, detailId, mode, refreshNonce, status]);
-
-  const adminDetailRelease = adminDetail?.release;
-  useEffect(() => {
-    if (!adminDetailRelease) return;
-    setAdminEvidence(createEvidenceDrafts(adminDetailRelease.review_requirements));
-    setAdminReason('');
-    setAdminConflict(false);
-    setRevokeOpen(false);
-  }, [adminDetailRelease]);
+  }, [accountId, detailId, mode, refreshNonce]);
 
   useEffect(() => {
     const restoreLocation = () => {
@@ -482,11 +404,10 @@ function DebugDeveloperCenterHarness() {
 
   const navigate = (nextMode: DebugMode, releaseId = detailId) => {
     setRequestError(null);
-    if (nextMode !== 'admin-queue') setCursor(null);
     setDetailId(releaseId);
     setMode(nextMode);
     const query = new URLSearchParams({ mode: nextMode });
-    if (nextMode === 'publisher-detail' || nextMode === 'admin-detail') {
+    if (nextMode === 'publisher-detail') {
       query.set('releaseId', releaseId);
     }
     window.history.pushState({}, '', `/debug/developer-center?${query.toString()}`);
@@ -511,55 +432,6 @@ function DebugDeveloperCenterHarness() {
     }
   };
 
-  const decide = async (
-    decision: AdminDeveloperReviewDecision,
-    input: {
-      reason?: string;
-      evidence?: readonly DeveloperModuleHumanReviewEvidence[];
-    },
-  ) => {
-    if (!adminDetail) return;
-    setAdminPending(true);
-    try {
-      await decideAdminDeveloperReview(
-        adminDetail.release.release_id,
-        buildAdminDecisionBody(adminDetail.release, decision, input),
-      );
-      setAdminConflict(false);
-      setRefreshNonce((value) => value + 1);
-    } catch (error) {
-      const code = adminDeveloperReviewErrorCode(error);
-      setRequestError(code);
-      setAdminConflict(code === 'DEVELOPER_REVIEW_CONFLICT');
-    } finally {
-      setAdminPending(false);
-    }
-  };
-
-  const distribute = async (action: 'sign' | 'publish') => {
-    if (!adminDetail || distributionPending) return;
-    setDistributionPending(true);
-    setRequestError(null);
-    try {
-      if (action === 'sign') {
-        await signAdminDeveloperModuleRelease(adminDetail.release.release_id, {
-          expected_status: 'approved',
-          expected_revision: adminDetail.release.review_revision,
-        });
-      } else {
-        await publishAdminDeveloperModuleRelease(adminDetail.release.release_id, {
-          expected_status: 'signed',
-          expected_revision: adminDetail.release.review_revision,
-        });
-      }
-      setRefreshNonce((value) => value + 1);
-    } catch (error) {
-      setRequestError(adminDeveloperReviewErrorCode(error));
-    } finally {
-      setDistributionPending(false);
-    }
-  };
-
   const filteredPublisherReleases = filterRecentReleases(
     publisherReleases,
     publisherSearch,
@@ -577,19 +449,6 @@ function DebugDeveloperCenterHarness() {
     : requestError || !publisherDetail
       ? 'error'
       : 'ready';
-  const adminQueueState: AdminReviewQueueState = loading
-    ? 'loading'
-    : requestError
-      ? 'error'
-      : adminReleases.length === 0
-        ? 'empty'
-        : 'ready';
-  const adminDetailState: AdminDeveloperReviewDetailViewProps['state'] = loading
-    ? 'loading'
-    : adminDetailError || !adminDetail
-      ? 'error'
-      : 'ready';
-
   return (
     <main className="bg-background text-foreground min-h-svh">
       <header className="border-border bg-background/95 sticky top-0 z-10 border-b px-4 py-3 backdrop-blur">
@@ -618,22 +477,6 @@ function DebugDeveloperCenterHarness() {
             onClick={() => navigate('publisher-detail', DEBUG_PUBLISHER_RELEASE_ID)}
           >
             Publisher detail
-          </Button>
-          <Button
-            data-testid="debug-admin-queue"
-            size="xs"
-            variant={mode === 'admin-queue' ? 'secondary' : 'ghost'}
-            onClick={() => navigate('admin-queue')}
-          >
-            Admin queue
-          </Button>
-          <Button
-            data-testid="debug-admin-detail"
-            size="xs"
-            variant={mode === 'admin-detail' ? 'secondary' : 'ghost'}
-            onClick={() => navigate('admin-detail', DEBUG_ADMIN_RELEASE_ID)}
-          >
-            Admin detail
           </Button>
           <Button
             data-testid="debug-project-modules"
@@ -667,17 +510,6 @@ function DebugDeveloperCenterHarness() {
             }}
           >
             Read-only team
-          </Button>
-          <Button
-            data-testid="debug-admin-malformed-cursor"
-            size="xs"
-            variant="ghost"
-            onClick={() => {
-              setCursor('not-a-valid-cursor');
-              navigate('admin-queue');
-            }}
-          >
-            Malformed cursor
           </Button>
         </div>
         <div
@@ -725,58 +557,6 @@ function DebugDeveloperCenterHarness() {
           reason={publisherReason}
           onReasonChange={setPublisherReason}
           onRequestReview={(reason) => void submitReview(reason)}
-        />
-      ) : null}
-      {mode === 'admin-queue' ? (
-        <AdminDeveloperReviewQueueView
-          state={adminQueueState}
-          status={status}
-          releases={adminReleases}
-          search={adminSearch}
-          nextCursor={nextCursor}
-          errorCode={requestError}
-          onSearchChange={setAdminSearch}
-          onStatusChange={(nextStatus) => {
-            setStatus(nextStatus);
-            setCursor(null);
-          }}
-          onNextPage={() => {
-            if (nextCursor) setCursor(nextCursor);
-          }}
-          onResetCursor={() => setCursor(null)}
-          onOpenRelease={(releaseId) => navigate('admin-detail', releaseId)}
-        />
-      ) : null}
-      {mode === 'admin-detail' ? (
-        <AdminDeveloperReviewDetailView
-          state={adminDetailState}
-          release={adminDetail?.release ?? null}
-          history={adminDetail?.history ?? []}
-          trust={adminTrust}
-          evidence={adminEvidence}
-          reason={adminReason}
-          pending={adminPending}
-          distributionPending={distributionPending}
-          conflict={adminConflict}
-          revokeOpen={revokeOpen}
-          errorCode={requestError}
-          onReasonChange={setAdminReason}
-          onEvidenceChange={(index, patch) =>
-            setAdminEvidence((current) =>
-              current.map((entry, entryIndex) =>
-                entryIndex === index ? { ...entry, ...patch } : entry,
-              ),
-            )
-          }
-          onDecision={(decision, input) => void decide(decision, input)}
-          onDistributionAction={(action) => void distribute(action)}
-          onReload={async () => {
-            setAdminConflict(false);
-            setRequestError(null);
-            setAdminDetailError(null);
-            setRefreshNonce((value) => value + 1);
-          }}
-          onRevokeOpenChange={setRevokeOpen}
         />
       ) : null}
       {mode === 'project-modules' ? <ProjectModulesDebugHarness canWrite={canWrite} /> : null}

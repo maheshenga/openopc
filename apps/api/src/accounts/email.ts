@@ -1,11 +1,12 @@
 // Account-scoped invite email. Self-contained Mailtrap transport — formerly
 // lived under teams/services/notifications.ts (which was sandbox-scoped).
 import { config } from '../config';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 const MAILTRAP_SEND_URL = 'https://send.api.mailtrap.io/api/send';
 
-const BRAND_WORDMARK = 'Kortix';
-const BRAND_FOOTER = 'Kortix — The Autonomous Company Operating System';
+const BRAND_WORDMARK = PRODUCT_BRAND.displayName;
+const BRAND_FOOTER = `${PRODUCT_BRAND.displayName} — The AI Command Center for Your Company`;
 
 export type EmailDeliveryResult =
   | { ok: true; provider: 'mailtrap'; status: number }
@@ -179,12 +180,12 @@ export async function sendAccountInviteEmail(opts: {
 
   const body = `
     <p style="${S.p}">
-      ${inviterLine} to join ${target} on Kortix.
+      ${inviterLine} to join ${target} on ${PRODUCT_BRAND.displayName}.
     </p>
     ${roleChip}
     <a href="${escapeHtml(url)}" style="${S.btn}">Review invite</a>
     <p style="${S.smallNote}">
-      Don't have a Kortix account yet? You'll be prompted to sign up first —
+      Don't have an ${PRODUCT_BRAND.displayName} account yet? You'll be prompted to sign up first —
       ${signupTail}
     </p>
   `;
@@ -196,14 +197,14 @@ export async function sendAccountInviteEmail(opts: {
   const html = renderEmail({
     kicker: "You're invited",
     title: opts.projectName
-      ? `Join ${opts.projectName} on Kortix`
-      : `Join ${opts.accountName} on Kortix`,
+      ? `Join ${opts.projectName} on ${PRODUCT_BRAND.displayName}`
+      : `Join ${opts.accountName} on ${PRODUCT_BRAND.displayName}`,
     body,
   });
 
   return send({
     to: opts.email,
-    subject: `You're invited to ${subjectTarget} on Kortix`,
+    subject: `You're invited to ${subjectTarget} on ${PRODUCT_BRAND.displayName}`,
     html,
     category: 'account-invite',
   });
@@ -216,7 +217,7 @@ export async function sendProjectAccessRequestEmail(opts: {
   reviewUrl: string;
   message?: string | null;
 }): Promise<EmailDeliveryResult> {
-  const projectName = opts.projectName?.trim() || 'a Kortix project';
+  const projectName = opts.projectName?.trim() || `an ${PRODUCT_BRAND.displayName} project`;
   const message = opts.message?.trim();
   const messageBlock = message
     ? `<p style="${S.p}"><span style="${S.strong}">Message:</span><br />${escapeHtml(message)}</p>`

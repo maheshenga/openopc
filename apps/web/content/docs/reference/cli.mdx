@@ -46,7 +46,7 @@ The local CLI uses a user-scoped token at `~/.config/kortix/config.json` (mode 0
 
 ### Hosts
 
-A host is one Kortix API endpoint. The built-ins `cloud` (Kortix Cloud), `selfhost` (your `kortix self-host` stack), `local-dev` (a local `pnpm dev` server), and `kortix-internal-dev` are always available, and you can add more endpoints. One host is active at a time; the CLI prints the active host before operational commands so Cloud/local actions are harder to mix up.
+A host is one Kortix API endpoint. The built-ins `cloud` (OpenOPC Cloud), `selfhost` (your `kortix self-host` stack), `local-dev` (a local `pnpm dev` server), and `kortix-internal-dev` are always available, and you can add more endpoints. One host is active at a time; the CLI prints the active host before operational commands so Cloud/local actions are harder to mix up.
 
 | Command | Effect |
 | --- | --- |
@@ -61,7 +61,7 @@ A host is one Kortix API endpoint. The built-ins `cloud` (Kortix Cloud), `selfho
 
 ### Accounts
 
-One Kortix login can belong to many accounts (personal, a company account, …). Exactly one is active at a time; every account-scoped command (`projects ls`, `ship`, …) operates on it unless overridden.
+One OpenOPC login can belong to many accounts (personal, a company account, …). Exactly one is active at a time; every account-scoped command (`projects ls`, `ship`, …) operates on it unless overridden.
 
 | Command | Effect |
 | --- | --- |
@@ -150,7 +150,7 @@ If none resolve, the command errors pointing to `projects link`.
 
 1. `--host <name>` flag.
 2. Inside a session sandbox: the platform-injected `KORTIX_CLI_TOKEN` / `KORTIX_EXECUTOR_TOKEN` resolves the host directly — this wins over `.kortix/link.json`'s host field.
-3. `host` field in `.kortix/link.json` (so a repo on your laptop hits its home Kortix instance).
+3. `host` field in `.kortix/link.json` (so a repo on your laptop hits its home OpenOPC instance).
 4. The globally-active host.
 
 ### Secrets
@@ -205,7 +205,7 @@ Manages the per-project Slack connection. Tokens are stored encrypted in the pro
 | Command | Effect |
 | --- | --- |
 | `kortix channels status` | Show the current Slack connection. `--json` for machine output. |
-| `kortix channels connect` | **Connect Slack in one step.** On Kortix Cloud (or any host with the shared Slack app configured) it prints a one-click "Add to Slack" install link — open it, pick the workspace, click Allow. Add `--wait` to poll until the install lands (`--timeout <sec>`, default 300). Hosts without the shared app fall back to manual token mode automatically. |
+| `kortix channels connect` | **Connect Slack in one step.** On OpenOPC Cloud (or any host with the shared Slack app configured) it prints a one-click "Add to Slack" install link — open it, pick the workspace, click Allow. Add `--wait` to poll until the install lands (`--timeout <sec>`, default 300). Hosts without the shared app fall back to manual token mode automatically. |
 | `kortix channels connect --manual [--bot-token <xoxb-…>] [--signing-secret <…>]` | Bring-your-own-app mode: save a bot token + signing secret to project secrets. Flags (which imply `--manual`), `SLACK_BOT_TOKEN`/`SLACK_SIGNING_SECRET` env vars, or `-` to read from stdin. |
 | `kortix channels disconnect` | Drop the project's Slack secrets. |
 | `kortix channels manifest` | Print the Slack app manifest JSON for the bring-your-own-app path — paste into `api.slack.com/apps` → "From a manifest". Not needed for the one-click install. |
@@ -230,7 +230,7 @@ Options for `add`/`update`: `--image <ref>` (mutually exclusive with `--dockerfi
 
 ### Marketplace
 
-Browse and install items (skills, etc.) from the Kortix marketplace into a linked cloud project.
+Browse and install items (skills, etc.) from the OpenOPC marketplace into a linked cloud project.
 
 | Command | Effect |
 | --- | --- |
@@ -322,7 +322,7 @@ Round-trip through the manifest's `triggers:` (v2 `kortix.yaml`) or `[[triggers]
 
 ### Change requests (`cr`)
 
-Kortix-native PR layer for session work landing on `main` — merges one branch (`head_ref`) into another (`base_ref`) on any git host, no per-host integration. The only sanctioned way for an agent to land session-branch work on `main`. See [Change requests](/docs/reference/change-requests).
+OpenOPC-native PR layer for session work landing on `main` — merges one branch (`head_ref`) into another (`base_ref`) on any git host, no per-host integration. The only sanctioned way for an agent to land session-branch work on `main`. See [Change requests](/docs/reference/change-requests).
 
 | Command | Effect |
 | --- | --- |
@@ -452,13 +452,13 @@ Stage everything, commit, and push your current branch to the project's git repo
 
 Every run: (1) verify `kortix.yaml` parses + validates (skip with `--no-verify`); (2) `git add -A` + commit (skipped if nothing changed); (3) offer to set any `[env]` secret not yet set (skip with `--no-env`); (4) push the branch you're on to the same-named branch on the project's repo; (5) connect any declared connector that still needs auth (skip with `--no-connect`).
 
-The **first** ship creates the cloud project + a git repo and links the folder (`.kortix/link.json`); every ship after that just commits + pushes. Origin is inferred, never asked: an existing GitHub `origin` links directly (GitHub-backed — prints a one-click App-install link if needed, or pass `--github-token`); another existing remote is registered + pushed; no `origin` creates a managed Kortix git repo.
+The **first** ship creates the cloud project + a git repo and links the folder (`.kortix/link.json`); every ship after that just commits + pushes. Origin is inferred, never asked: an existing GitHub `origin` links directly (GitHub-backed — prints a one-click App-install link if needed, or pass `--github-token`); another existing remote is registered + pushed; no `origin` creates a managed OpenOPC git repo.
 
 | Option | Effect |
 | --- | --- |
 | `--name <project>` | Display name for a new project (default: folder name). |
 | `--account <id\|slug>` | Account to create the project under (first ship only). |
-| `--origin <value>` | Override origin choice: `managed` (force a managed Kortix repo) or a git URL to register + push to. |
+| `--origin <value>` | Override origin choice: `managed` (force a managed OpenOPC repo) or a git URL to register + push to. |
 | `--github-token <pat>` | Link a GitHub origin with this token instead of the GitHub App (needs repo Contents R/W). |
 | `-m, --message <msg>` | Commit message for the sync (default: `kortix: ship`). |
 | `--no-commit` | Don't commit — fails if the working tree is dirty. |
@@ -468,7 +468,7 @@ The **first** ship creates the cloud project + a git repo and links the folder (
 | `-y, --yes` | Don't prompt; use the active account, skip secret prompts. |
 | `-n, --dry-run` | Print what would happen, do nothing. |
 | `--project <id>` | Operate on this project id (default: linked). |
-| `--host <name>` | Operate against a non-default Kortix host. |
+| `--host <name>` | Operate against a non-default OpenOPC host. |
 
 ### Manifest validation
 
@@ -588,4 +588,4 @@ The `KORTIX_*` prefix is reserved for platform-injected values. Don't declare pr
 
 - **Not a separate runtime.** Use `kortix self-host start` for local Docker or `kortix self-host deploy --target aws-vpc` for Enterprise AWS VPC, then switch between Cloud and self-hosted APIs with `kortix hosts use`.
 - **Not a `git` replacement.** `kortix cr` composes with `git` rather than wrapping it.
-- **Not the runtime.** OpenCode executes the agent in the sandbox; the CLI is the control plane. See [Kortix vs OpenCode config](/docs/reference/config-boundary).
+- **Not the runtime.** OpenCode executes the agent in the sandbox; the CLI is the control plane. See [OpenOPC vs OpenCode config](/docs/reference/config-boundary).

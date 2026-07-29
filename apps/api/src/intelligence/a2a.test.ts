@@ -63,6 +63,7 @@ describe('A2A adapter', () => {
     const body = await response.json();
     expect(body).toMatchObject({
       name: card.display_name,
+      description: 'OpenOPC project agent content-planner',
       version: card.version,
       protocolVersion: '1.0.1',
       skills: [{ id: 'studio.image.generate' }],

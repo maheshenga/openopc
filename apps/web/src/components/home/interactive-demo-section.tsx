@@ -7,6 +7,7 @@ import { InlineMeta } from '@/components/ui/inline-meta';
 import { UserAvatar } from '@/components/ui/user-avatar';
 import { Icon } from '@/features/icon/icon';
 import { cn } from '@/lib/utils';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import {
   ArrowRight,
   Blocks,
@@ -639,7 +640,7 @@ type Provider = {
 const PROVIDERS: Provider[] = [
   {
     domain: null,
-    name: 'Kortix Gateway',
+    name: `${PRODUCT_BRAND.displayName} Gateway`,
     hint: 'Managed routing — injected into every sandbox',
     state: 'managed',
   },
@@ -890,7 +891,7 @@ function ChannelsPage({
               <p className="text-foreground text-sm font-medium">
                 {connected
                   ? `Connected to ${workspace ?? 'your workspace'}`
-                  : 'Add Kortix to your Slack workspace'}
+                  : `Add ${PRODUCT_BRAND.displayName} to your Slack workspace`}
               </p>
               <p className="text-muted-foreground mt-0.5 text-xs">
                 {connected

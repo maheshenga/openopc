@@ -180,7 +180,7 @@ export function KortixParticleMark() {
   return (
     <canvas
       ref={canvasRef}
-      aria-label="Kortix symbol rendered as hard subpixel particles"
+      aria-label="OpenOPC symbol rendered as hard subpixel particles"
       className="block h-full w-full touch-none [image-rendering:pixelated]"
     />
   );

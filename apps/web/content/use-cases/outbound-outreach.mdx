@@ -15,13 +15,13 @@ list. It's fast and it's ignored. Real personalization means researching each
 account and writing to its actual context, which is exactly the part that doesn't
 scale.
 
-We run an agent on Kortix that does the research and the writing per contact, then
+We run an agent on OpenOPC that does the research and the writing per contact, then
 holds every send behind a person. It enriches each lead, drafts a first-touch and
 follow-up grounded in the account's real context, logs every draft to the CRM, and
 sends nothing without approval, capped daily. This is how we run our own outbound.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">A new segment or lead list</Fact>
   <Fact label="Connected systems">CRM · Enrichment · Email</Fact>
   <Fact label="Mode">Every batch approved by a person · daily cap</Fact>
@@ -41,7 +41,7 @@ segment away from putting unreviewed email in front of thousands of people.
 
 ## What we built
 
-On Kortix, a new segment or lead list triggers an agent. Each contact spawns an
+On OpenOPC, a new segment or lead list triggers an agent. Each contact spawns an
 isolated session (a cloud sandbox) with scoped access to enrichment, the CRM, and
 email. The agent researches the account, drafts a first-touch and a follow-up
 sequence grounded in what it found, and logs every draft to the CRM. No message

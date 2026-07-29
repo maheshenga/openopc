@@ -1,4 +1,4 @@
-// Kortix desktop shell — auto-update (electron-updater + GitHub Releases).
+// OpenOPC desktop shell — auto-update (electron-updater + GitHub Releases).
 //
 // Until now the desktop app had NO update path: users had to notice a new
 // version and manually re-download from the web /download route. This wires up
@@ -29,6 +29,7 @@ const { autoUpdater } = require('electron-updater');
 // Pure helpers live in their own module so they're unit-testable without the
 // Electron runtime (see update-channel.test.js).
 const { resolveChannel, isUpdaterSupported } = require('./update-channel');
+const { PRODUCT_BRAND } = require('./product-brand');
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 
@@ -76,9 +77,11 @@ async function promptRestart(info) {
     defaultId: 0,
     cancelId: 1,
     title: 'Update ready',
-    message: version ? `Kortix ${version} is ready to install.` : 'A Kortix update is ready to install.',
+    message: version
+      ? `${PRODUCT_BRAND.displayName} ${version} is ready to install.`
+      : `An ${PRODUCT_BRAND.displayName} update is ready to install.`,
     detail:
-      'Restart Kortix to finish updating. It only takes a moment — your work lives on the web, so nothing is lost.',
+      `Restart ${PRODUCT_BRAND.displayName} to finish updating. It only takes a moment — your work lives on the web, so nothing is lost.`,
   };
   const { response } = win && !win.isDestroyed()
     ? await dialog.showMessageBox(win, opts)
@@ -108,7 +111,7 @@ function registerHandlers() {
         type: 'info',
         buttons: ['OK'],
         title: 'You’re up to date',
-        message: `Kortix ${app.getVersion()} is the latest version.`,
+        message: `${PRODUCT_BRAND.displayName} ${app.getVersion()} is the latest version.`,
       };
       win && !win.isDestroyed() ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts);
     }

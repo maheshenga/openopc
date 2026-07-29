@@ -247,6 +247,64 @@ describe('AgentMail provider errors', () => {
 });
 
 describe('dispatchAgentMailEvent', () => {
+  test('uses OpenOPC in both new-thread and follow-up agent prompts', async () => {
+    dbResults = [
+      [{ eventId: 'email:event:evt-1' }],
+      [{ projectId: 'proj-1' }],
+      [],
+      [{ eventId: 'email:msg:inb-1:msg-1' }],
+      [],
+      [
+        {
+          projectId: 'proj-1',
+          accountId: 'acc-1',
+          defaultBranch: 'main',
+          name: 'Support',
+        },
+      ],
+      [{ eventId: 'email:threadcreate:inb-1:thr-1' }],
+      [
+        {
+          profileId: 'profile-email-1',
+          metadata: { inbox_id: 'inb-1' },
+          status: 'active',
+        },
+      ],
+    ];
+
+    await dispatchAgentMailEvent(event);
+
+    const initialPrompt = String(createCalls[0]?.postCreate?.[1]?.text ?? '');
+    expect(initialPrompt).toContain('OpenOPC agent');
+    expect(initialPrompt).toContain('OpenOPC project');
+    expect(initialPrompt).not.toContain('Kortix');
+
+    dbResults = [
+      [{ eventId: 'email:event:evt-1' }],
+      [{ projectId: 'proj-1' }],
+      [],
+      [{ eventId: 'email:msg:inb-1:msg-1' }],
+      [{ sessionId: 'sess-1' }],
+      [
+        {
+          profileId: 'profile-email-1',
+          metadata: { inbox_id: 'inb-1' },
+          status: 'active',
+        },
+      ],
+      [{ accountId: 'acc-1', connectorId: 'conn-email' }],
+      [{ accountId: 'acc-1' }],
+      [],
+      [{ profileId: 'profile-email-1' }],
+    ];
+
+    await dispatchAgentMailEvent(event);
+
+    const followUpPrompt = continueCalls[0]?.text ?? '';
+    expect(followUpPrompt).toContain('OpenOPC project');
+    expect(followUpPrompt).not.toContain('Kortix');
+  });
+
   test('first message creates one project-visible session bound to the email thread', async () => {
     dbResults = [
       [{ eventId: 'email:event:evt-1' }],

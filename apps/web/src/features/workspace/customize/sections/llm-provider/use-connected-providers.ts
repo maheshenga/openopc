@@ -56,7 +56,7 @@ export function useConnectedProviders(projectId: string, enabled: boolean) {
       }));
     return {
       id: 'kortix',
-      label: kortix.name || 'Kortix',
+      label: kortix.name || 'OpenOPC',
       envVars: [],
       helpUrl: null,
       hint: 'Included with your plan',

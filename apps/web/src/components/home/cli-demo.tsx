@@ -122,7 +122,7 @@ function getStartedBox(): Line[] {
   lines.push([t(boxLine(''), 'faded')]);
   for (const s of [
     'Paste this prompt into your coding agent',
-    'to configure your Kortix project:',
+    'to configure your OpenOPC project:',
   ]) {
     lines.push([t('║ ', 'faded'), t(padTo(s, BW), 'dim'), t(' ║', 'faded')]);
   }
@@ -147,18 +147,18 @@ const INIT_INTRO: Line[] = [
     t('   '),
     t('The operating system for AI workers', 'fg'),
     t('   '),
-    t('·  configure your Kortix project', 'faded'),
+    t('·  configure your OpenOPC project', 'faded'),
   ],
   [],
 ];
 
 const AGENT_PICK_INTRO: Line[] = [
   [],
-  [t('  Pick your local coding agent to configure this Kortix project.', 'dim')],
+  [t('  Pick your local coding agent to configure this OpenOPC project.', 'dim')],
   [],
   [t('  It picks up the Kortix skill — ask it to scaffold triggers,', 'dim')],
   [t('  custom agents, or edit kortix.yaml for you.', 'dim')],
-  [t('  (Kortix itself runs opencode inside every sandbox session.)', 'dim')],
+  [t('  (OpenOPC itself runs opencode inside every sandbox session.)', 'dim')],
   [],
 ];
 
@@ -167,7 +167,7 @@ const PROJECT_NAME_LABEL: Line = [t('Project name '), t('(my-app)', 'dim'), t(':
 
 const initTail = (name: string): Line[] => [
   [],
-  [t('Initialized Kortix project '), t(`"${name}"`, 'fg'), t(' in '), t(`~/${name}`, 'faded')],
+  [t('Initialized OpenOPC project '), t(`"${name}"`, 'fg'), t(' in '), t(`~/${name}`, 'faded')],
   [t('Wrote 9 files:')],
   [t('  + ', 'faded'), t('kortix.yaml')],
   [t('  + ', 'faded'), t('.kortix/Dockerfile')],
@@ -200,7 +200,7 @@ const SCRIPT: Step[] = [
     out: [
       ok(t('kortix.yaml verified')),
       [],
-      [t('  '), t('kortix ship', 'kortix'), t('  new project → managed Kortix git', 'dim')],
+      [t('  '), t('kortix ship', 'kortix'), t('  new project → managed OpenOPC git', 'dim')],
       [t('  name    ', 'dim'), t('my-app')],
       [],
       ok(t('Committed: '), t('kortix: ship', 'fg')),
@@ -249,7 +249,7 @@ const STATIC_BLOCKS: Block[] = SCRIPT.map((step) => ({
 }));
 
 const PALETTE: { cmd: string; desc: string }[] = [
-  { cmd: 'kortix init', desc: 'scaffold a new Kortix project' },
+  { cmd: 'kortix init', desc: 'scaffold a new OpenOPC project' },
   { cmd: 'kortix ship', desc: 'commit, push & deploy to managed git' },
   { cmd: 'kortix sessions new', desc: 'start an agent session' },
   { cmd: 'kortix cr open', desc: 'open a change request' },

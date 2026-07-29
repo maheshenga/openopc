@@ -100,8 +100,10 @@ jobs:
               - 'tsconfig.base.json'
               - 'apps/kortix-sandbox-agent-server/**'
             desktop:
-              - '.github/workflows/ci.yml'
+              - *pnpm
               - 'apps/desktop-electron/**'
+              - 'packages/openopc-desktop-agent/**'
+              - 'packages/agent-tunnel/**'
             # self-host stack: anything that can break `kortix self-host start`'s
             # from-scratch DB bootstrap or the CLI's compose generation.
             self_host:
@@ -247,7 +249,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
 
       - name: Install pnpm
         run: |
@@ -475,16 +477,21 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Install pnpm
         run: corepack enable pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --filter @kortix/desktop-electron
+        run: pnpm install --frozen-lockfile --filter "@kortix/desktop-electron..."
         env:
           npm_config_engine_strict: "false"
 
-      - name: Ensure Electron runtime
-        run: pnpm --filter @kortix/desktop-electron exec node scripts/ensure-runtime.js
+      - name: Prepare Electron runtime and sidecar
+        run: pnpm --filter @kortix/desktop-electron run setup
 
       - name: Build Linux desktop installer (Electron, unsigned)
         run: pnpm --filter @kortix/desktop-electron exec electron-builder --linux --publish never

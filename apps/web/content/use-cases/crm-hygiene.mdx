@@ -14,13 +14,13 @@ records come in with missing fields, and deals sit untouched long after they've
 gone cold. Left alone, the pipeline reports drift away from reality and the sales
 team stops trusting the numbers.
 
-We keep our HubSpot clean with an agent that runs every night on Kortix. It
+We keep our HubSpot clean with an agent that runs every night on OpenOPC. It
 dedupes contacts, fills missing fields from enrichment data, flags stale deals,
 and posts a short data-quality summary. Bulk field updates over a threshold wait
 for a person to approve.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="CRM">HubSpot</Fact>
   <Fact label="Connected systems">HubSpot · Enrichment data · Slack</Fact>
   <Fact label="Mode">Nightly cron · human-gated</Fact>
@@ -110,7 +110,7 @@ When a bulk change is pending, the summary says what's waiting and why.
 ## Guardrails
 
 Giving an agent write access to the CRM is a data-integrity question. The controls
-on Kortix:
+on OpenOPC:
 
 - **Isolation.** Each run executes in its own microVM sandbox, and only the
   HubSpot and enrichment changes it's explicitly allowed to make leave the

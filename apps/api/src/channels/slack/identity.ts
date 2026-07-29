@@ -140,7 +140,7 @@ export function connectAccountBlocks(url: string, pendingId?: string | null): un
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: 'Kortix needs a linked Kortix account before it can run from Slack. Connect or create one to continue. _Only you can see this._',
+        text: 'OpenOPC needs a linked OpenOPC account before it can run from Slack. Connect or create one to continue. _Only you can see this._',
       },
     },
     {
@@ -164,7 +164,7 @@ export function requestAccessBlocks(projectId: string): unknown[] {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: "You're connected, but your Kortix account doesn't have access to this project yet. Request access and an admin will approve it. _Only you can see this._",
+        text: "You're connected, but your OpenOPC account doesn't have access to this project yet. Request access and an admin will approve it. _Only you can see this._",
       },
     },
     {
@@ -212,7 +212,7 @@ export async function postIdentityPrompt(input: {
       slackUserId: input.slackUserId,
       ...(pendingId ? { pendingId } : {}),
     }), pendingId);
-    fallback = 'Kortix needs a linked Kortix account to continue.';
+    fallback = 'OpenOPC needs a linked OpenOPC account to continue.';
   } else {
     blocks = requestAccessBlocks(input.projectId);
     fallback = "You're connected, but don't have access to this project yet.";
@@ -285,7 +285,7 @@ export async function createSlackAccessRequest(input: {
     projectId: input.projectId,
     requesterUserId: identity.userId,
     requesterEmail: email || identity.userId,
-    message: 'Requested from Slack. Approve as Editor so they can run Kortix from Slack.',
+    message: 'Requested from Slack. Approve as Editor so they can run OpenOPC from Slack.',
   });
   return { status: 'created', ...base };
 }
@@ -326,18 +326,18 @@ export async function notifyAdminsOfAccessRequest(input: {
   );
   const who = email ? `*${email}*` : `<@${input.requesterSlackUserId}>`;
   const projectUrl = `${dashboardBase(config.FRONTEND_URL)}/projects/${input.projectId}/customize/members`;
-  const text = `${who} requested access to a Kortix project in this workspace.`;
+  const text = `${who} requested access to an OpenOPC project in this workspace.`;
   const blocks = [
     {
       type: 'section',
-      text: { type: 'mrkdwn', text: `${text}\nOpen *Members* in Kortix to approve.` },
+      text: { type: 'mrkdwn', text: `${text}\nOpen *Members* in OpenOPC to approve.` },
     },
     {
       type: 'actions',
       elements: [
         {
           type: 'button',
-          text: { type: 'plain_text', text: 'Review in Kortix', emoji: true },
+          text: { type: 'plain_text', text: 'Review in OpenOPC', emoji: true },
           style: 'primary',
           url: projectUrl,
           action_id: 'slack_open_access_review',

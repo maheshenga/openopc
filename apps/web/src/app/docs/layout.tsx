@@ -1,7 +1,7 @@
 import { ThemeToggle } from '@/components/home/theme-toggle';
-import { KortixLogo } from '@/components/sidebar/kortix-logo';
 import { Icon } from '@/features/icon/icon';
 import { source } from '@/lib/source';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
 import { RootProvider } from 'fumadocs-ui/provider';
 import type { ReactNode } from 'react';
@@ -18,11 +18,14 @@ import {
 // contain its own anchor — a nested <a> breaks hydration.
 function DocsLogo() {
   return (
-    <span className="flex items-center gap-2.5 no-underline ml-1">
-      {/* The canonical full Kortix logo (symbol + wordmark), via the shared
-          KortixLogo component so the docs stay in lockstep with the rest of
-          the app's brand treatment. */}
-      <KortixLogo variant="logomark" size={18} />
+    <span className="ml-1 flex items-center gap-2.5 no-underline">
+      <span
+        aria-hidden
+        className="grid size-5 place-items-center rounded bg-neutral-950 font-mono text-[7px] font-bold tracking-[-0.08em] text-white dark:bg-white dark:text-neutral-950"
+      >
+        OPC
+      </span>
+      <span className="text-sm font-semibold tracking-tight">{PRODUCT_BRAND.displayName}</span>
     </span>
   );
 }

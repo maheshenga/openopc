@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { errorToast } from '@/components/ui/toast';
 import { desktopDownloadUrl, startDownload } from '@/lib/desktop';
+import { getMobileAppAlt } from '@/lib/runtime-brand-copy';
 import { cn } from '@/lib/utils';
 import { Check, Copy, Monitor, Smartphone, Terminal } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -203,7 +204,7 @@ function MobileMockup() {
           )}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={shot.src} alt="Kortix mobile app" className="block w-full" />
+          <img src={shot.src} alt={getMobileAppAlt()} className="block w-full" />
         </span>
       ))}
     </div>

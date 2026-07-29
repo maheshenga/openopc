@@ -17,10 +17,10 @@ task, so the coordination falls to a person moving between several tabs.
 
 We run these tasks through a single agent reachable from Slack, with scoped
 access to the platforms we've connected. This is how we run our own operations on
-Kortix, and the same setup works for any team.
+OpenOPC, and the same setup works for any team.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Control surface">Slack</Fact>
   <Fact label="Connected systems">Database · Stripe · Sandboxes · Linear · GitHub</Fact>
   <Fact label="Setup per platform">Connect once, then it can act</Fact>
@@ -66,7 +66,7 @@ request, one session, one disposable machine.
 </Step>
 <Step title="Connect a platform">
 
-To give the agent a new capability, you **connect the platform to Kortix once**.
+To give the agent a new capability, you **connect the platform to OpenOPC once**.
 The database, Stripe, the sandbox providers, Linear, and GitHub are each a scoped
 **connector**, brokered server-side so no raw token reaches the model. Once a
 platform is connected, the agent can act on it. There's no integration to write
@@ -109,7 +109,7 @@ needed, a follow-up PR. The work spans one thread instead of several tools.
 </Steps>
 
 <Callout title="The setup" tone="accent">
-  Connect Slack as the **channel**, connect each platform to Kortix as a scoped
+  Connect Slack as the **channel**, connect each platform to OpenOPC as a scoped
   **connector** (the only per-platform setup), and gate every sensitive action
   behind a human. One agent then runs cross-platform tasks from a thread.
 </Callout>

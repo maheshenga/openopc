@@ -25,7 +25,7 @@ export const SECTION3 = {
 
 export const FOR_YOU = {
   id: 'for-you',
-  eyebrow: 'Kortix, for you',
+  eyebrow: 'OpenOPC, for you',
   flow: 'Work flows in',
   title: ['Just ask.', ' Work comes back done.'],
   description:

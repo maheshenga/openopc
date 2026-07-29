@@ -8,13 +8,13 @@ import { CANONICAL_ORIGIN } from '@/lib/site-metadata';
 export const revalidate = 3600;
 
 export const metadata: Metadata = {
-  title: 'Marketplace — Clone a ready-made Kortix project',
+  title: 'Marketplace — Clone a ready-made OpenOPC project',
   description:
-    'Clone a full, working Kortix project in one click, or add skills from every source into your own.',
+    'Clone a full, working OpenOPC project in one click, or add skills from every source into your own.',
   openGraph: {
-    title: 'Kortix Marketplace — Clone a ready-made Kortix project',
+    title: 'OpenOPC Marketplace — Clone a ready-made OpenOPC project',
     description:
-      'Clone a full, working Kortix project in one click, or add skills from every source into your own.',
+      'Clone a full, working OpenOPC project in one click, or add skills from every source into your own.',
     url: `${CANONICAL_ORIGIN}/marketplace`,
   },
   alternates: { canonical: `${CANONICAL_ORIGIN}/marketplace` },

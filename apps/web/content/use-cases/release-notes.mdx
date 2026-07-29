@@ -1,6 +1,6 @@
 ---
 title: "How we generate release notes from merged PRs"
-description: The release-notes agent we run on Kortix — connected to GitHub. On each release it reads the merged PRs since the last one, groups them, writes the notes, and opens a changelog PR.
+description: The release-notes agent we run on OpenOPC — connected to GitHub. On each release it reads the merged PRs since the last one, groups them, writes the notes, and opens a changelog PR.
 date: "2026-05-06"
 author: team
 tags:
@@ -14,14 +14,14 @@ information is all there in the merged PRs, but turning it into something a read
 can follow — grouped by area, in plain language, with the noise dropped — is
 manual work that lands after the release is already out.
 
-We run a release-notes agent on Kortix that does it from the PR history. On each
+We run a release-notes agent on OpenOPC that does it from the PR history. On each
 release, the agent reads every PR merged since the last release, groups them by
 area, writes human-readable notes, and opens a PR to the changelog for review.
 This write-up covers how the setup works: the trigger, the session model, and the
 guardrails.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">Every tag or release</Fact>
   <Fact label="Connected systems">GitHub</Fact>
   <Fact label="Mode">Trigger-driven · changelog PR opened for review</Fact>
@@ -41,7 +41,7 @@ Either way the notes arrive after the release, if they arrive at all.
 
 ## What we built
 
-On Kortix, each release triggers an agent. When a tag is pushed, the release
+On OpenOPC, each release triggers an agent. When a tag is pushed, the release
 spawns an isolated session (a cloud sandbox) with scoped access to the repository.
 The agent finds the previous release, reads every PR merged in between, groups
 them by area, writes notes in plain language, and opens a PR to the changelog. A

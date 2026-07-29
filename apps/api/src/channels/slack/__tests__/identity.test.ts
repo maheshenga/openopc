@@ -30,7 +30,9 @@ mock.module('../../slack-api', () => ({
 mock.module('../../install-store', () => ({
   loadSlackTokenForProject: async () => 'xoxb-test',
 }));
+const { PROJECT_ACTIONS } = await import('../../../iam/actions');
 mock.module('../../../iam', () => ({
+  PROJECT_ACTIONS,
   authorize: async () => ({ allowed: authorizeAllowed }),
   assertAuthorized: async () => {},
   filterAccessibleProjectResources: async (_u: string, _a: string, _p: string, _t: string, ids: readonly string[]) => [...ids],
@@ -91,7 +93,7 @@ describe('postIdentityPrompt', () => {
     expect(ephemerals[0]).toMatchObject({
       channel: 'C1',
       user: 'U1',
-      text: 'Kortix needs a linked Kortix account to continue.',
+      text: 'OpenOPC needs a linked OpenOPC account to continue.',
     });
     expect(ephemerals[0].threadTs).toBeUndefined();
   });

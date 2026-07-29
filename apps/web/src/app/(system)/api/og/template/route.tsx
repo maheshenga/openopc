@@ -170,7 +170,7 @@ export async function GET(request: NextRequest) {
                 bottom: '40px',
               }}
             >
-              <span style={{ color: '#64748b', fontSize: '20px' }}>Kortix</span>
+              <span style={{ color: '#64748b', fontSize: '20px' }}>OpenOPC</span>
               <span style={{ color: '#334155', fontSize: '20px' }}>•</span>
               <span style={{ color: '#64748b', fontSize: '20px' }}>{tHardcodedUi.raw('appApiOgTemplateRoute.line174JsxTextAiAgentMarketplace')}</span>
             </div>

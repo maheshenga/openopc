@@ -7,6 +7,23 @@ import { startErrorMessage } from '../channels/slack/start-error';
 // deleted-agent case) collapsed into the same "give it a moment and try again"
 // line — which is actively wrong when retrying can never succeed.
 describe('startErrorMessage', () => {
+  test('uses OpenOPC branding without changing /kortix recovery commands', () => {
+    const messages = [
+      startErrorMessage(400, { code: 'UNKNOWN_SANDBOX_TEMPLATE' }),
+      startErrorMessage(503, { code: 'KORTIX_URL_UNREACHABLE' }),
+      startErrorMessage(400, {}),
+      startErrorMessage(402, {}),
+      startErrorMessage(403, {}),
+      startErrorMessage(404, {}),
+      startErrorMessage(409, {}),
+      startErrorMessage(500, {}),
+    ];
+
+    expect(messages.some((message) => message.includes('OpenOPC'))).toBe(true);
+    expect(messages.every((message) => !message.includes('Kortix'))).toBe(true);
+    expect(messages.join('\n')).toContain('/kortix');
+  });
+
   test('402 → out of credits, points to top-up', () => {
     const m = startErrorMessage(402, { error: 'insufficient credits' });
     expect(m.toLowerCase()).toContain('out of credits');

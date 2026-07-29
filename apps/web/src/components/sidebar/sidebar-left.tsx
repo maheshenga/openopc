@@ -38,6 +38,7 @@ import {
 } from '@/hooks/legacy/use-legacy-threads';
 import { useGlobalSandboxUpdate } from '@/hooks/platform/use-global-sandbox-update';
 import { useUpdateDialogStore } from '@/stores/update-dialog-store';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 import { KortixLogo } from '@/components/sidebar/kortix-logo';
 import { ThreadIcon } from '@/components/sidebar/thread-icon';
@@ -65,7 +66,6 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { useAdminRole } from '@/hooks/admin';
 import { useIsMobile } from '@/hooks/utils';
 import { cn } from '@/lib/utils';
 import { useDocumentModalStore } from '@/stores/use-document-modal-store';
@@ -88,6 +88,7 @@ import {
   type SandboxInfo,
 } from '@kortix/sdk/platform-client';
 import { createClient } from '@/lib/supabase/client';
+import { getNewVersionLabel } from '@/lib/runtime-brand-copy';
 import { toast } from '@/lib/toast';
 import { useOpenCodePendingStore } from '@/stores/opencode-pending-store';
 import { getActiveSandboxId } from '@/stores/server-store';
@@ -617,7 +618,7 @@ function SidebarUpdateIndicator({ collapsed }: { collapsed: boolean }) {
           <span className="bg-primary relative inline-flex h-2 w-2 rounded-full" />
         </span>
         <span className="text-foreground min-w-0 truncate text-xs font-semibold">
-          {currentChannel === 'dev' ? 'New dev build' : 'New Kortix version'}
+          {getNewVersionLabel(currentChannel)}
         </span>
         <span className="flex-1" />
         <span className="text-muted-foreground flex-shrink-0 text-xs">v{latestVersion}</span>
@@ -918,9 +919,6 @@ export function SidebarLeft({ ...props }: React.ComponentProps<typeof Sidebar>) 
 
   const { isOpen: isDocumentModalOpen } = useDocumentModalStore();
 
-  const { data: adminRoleData } = useAdminRole();
-  const isAdmin = adminRoleData?.isAdmin ?? false;
-
   const [user, setUser] = useState<{
     name: string;
     email: string;
@@ -938,12 +936,11 @@ export function SidebarLeft({ ...props }: React.ComponentProps<typeof Sidebar>) 
           name: data.user.user_metadata?.name || data.user.email?.split('@')[0] || 'User',
           email: data.user.email || '',
           avatar: data.user.user_metadata?.avatar_url || data.user.user_metadata?.picture || '',
-          isAdmin,
         });
       }
     };
     fetchUserData();
-  }, [isAdmin]);
+  }, []);
 
   useEffect(() => {
     setIsMac(/Mac/.test(navigator.userAgent));
@@ -1099,7 +1096,10 @@ export function SidebarLeft({ ...props }: React.ComponentProps<typeof Sidebar>) 
               }}
               className="flex items-center"
             >
-              <KortixLogo variant="logomark" size={16} className="flex-shrink-0" />
+              <KortixLogo variant="symbol" size={16} className="flex-shrink-0" />
+              <span className="text-sidebar-foreground ml-2 text-sm font-semibold tracking-tight">
+                {PRODUCT_BRAND.displayName}
+              </span>
             </Link>
           </div>
 

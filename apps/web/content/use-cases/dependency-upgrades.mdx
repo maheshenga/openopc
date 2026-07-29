@@ -1,6 +1,6 @@
 ---
 title: "How we keep dependencies up to date"
-description: The upgrade agent we run on Kortix — a weekly cron that opens dependency PRs, runs the full suite in a sandbox, and only opens the PR when it's green.
+description: The upgrade agent we run on OpenOPC — a weekly cron that opens dependency PRs, runs the full suite in a sandbox, and only opens the PR when it's green.
 date: "2026-02-11"
 author: team
 tags:
@@ -15,13 +15,13 @@ pile up, and the eventual upgrade turns into a large, risky change nobody wants
 to own. The usual bots open a PR for every bump and leave a human to work out
 whether each one is safe, which mostly means the PRs sit unreviewed.
 
-We run an upgrade agent on Kortix that does the checking before it asks for a
+We run an upgrade agent on OpenOPC that does the checking before it asks for a
 review. A weekly cron proposes upgrades, applies them in an isolated sandbox,
 runs the full suite, and only opens a PR when the change is green. This write-up
 covers how the setup works: the trigger, the session model, and the guardrails.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">A weekly cron</Fact>
   <Fact label="Connected systems">GitHub · CI</Fact>
   <Fact label="Mode">Cron-driven · PR opened only when green</Fact>
@@ -40,7 +40,7 @@ hand is reliable but slow, and it's the first thing dropped when the team is bus
 
 ## What we built
 
-On Kortix, a weekly cron triggers an upgrade agent. Each run spawns an isolated
+On OpenOPC, a weekly cron triggers an upgrade agent. Each run spawns an isolated
 session (a cloud sandbox) with scoped access to the repository and CI. The agent
 checks which dependencies are behind, applies the upgrades on a branch, installs
 clean, and runs the full suite inside the sandbox. It opens a PR only when the

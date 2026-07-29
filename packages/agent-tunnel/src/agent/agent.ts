@@ -25,6 +25,19 @@ interface JsonRpcNotification {
 
 type IncomingMessage = JsonRpcRequest | JsonRpcNotification;
 
+export type TunnelAgentLifecycleEvent =
+  | { type: 'auth_ok' }
+  | { type: 'permissions_synced'; permissions: readonly LocalPermission[] }
+  | { type: 'permission_granted'; permission: LocalPermission }
+  | { type: 'permission_revoked'; permissionId: string }
+  | { type: 'token_rotated' }
+  | { type: 'connection_closed'; code: number }
+  | { type: 'kill_switch'; generation?: number };
+
+export interface TunnelAgentOptions {
+  onEvent?: (event: TunnelAgentLifecycleEvent) => void;
+}
+
 const c = {
   reset:   '\x1b[0m',
   bold:    '\x1b[1m',
@@ -61,11 +74,21 @@ export class TunnelAgent {
   private signingKey: string | null = null;
   private lastNonce = 0;
   private responseNonce = 0;
+  private readonly onEvent: TunnelAgentOptions['onEvent'];
 
-  constructor(config: TunnelConfig, registry: CapabilityRegistry) {
+  constructor(config: TunnelConfig, registry: CapabilityRegistry, options: TunnelAgentOptions = {}) {
     this.config = config;
     this.registry = registry;
     this.permissionGuard = new PermissionGuard();
+    this.onEvent = options.onEvent;
+  }
+
+  private emitEvent(event: TunnelAgentLifecycleEvent): void {
+    try {
+      this.onEvent?.(event);
+    } catch {
+      // An observer cannot alter the Agent's authorization or transport state.
+    }
   }
 
   connect(): void {
@@ -131,6 +154,7 @@ export class TunnelAgent {
     });
 
     this.ws.addEventListener('close', (event) => {
+      this.emitEvent({ type: 'connection_closed', code: event.code });
       void this.enterStoppedState('connection_closed');
       if (this.uptimeInterval) {
         clearInterval(this.uptimeInterval);
@@ -168,6 +192,7 @@ export class TunnelAgent {
     // Handle auth_ok — server sends signing key after successful auth
     if (msg.type === 'auth_ok' && msg.signingKey) {
       this.signingKey = msg.signingKey;
+      this.emitEvent({ type: 'auth_ok' });
       log(`${c.green}●${c.reset}`, `Connected ${c.reset}${c.gray}(${this.registry.getCapabilityNames().join(', ')})${c.reset}`);
       if (this.stableConnectionTimer) clearTimeout(this.stableConnectionTimer);
       this.stableConnectionTimer = setTimeout(() => {
@@ -198,6 +223,12 @@ export class TunnelAgent {
     // ── Automation kill switch (signature verified above) ──────────
     if ('method' in msg && msg.method === 'automation.kill_switch') {
       await this.enterStoppedState('automation_kill_switch', msg.params?.generation);
+      this.emitEvent({
+        type: 'kill_switch',
+        ...(typeof msg.params?.generation === 'number'
+          ? { generation: msg.params.generation }
+          : {}),
+      });
       log(`${c.red}■${c.reset}`, 'Automation stopped locally');
       return;
     }
@@ -206,6 +237,7 @@ export class TunnelAgent {
     if ('method' in msg && msg.method === 'tunnel.permissions.sync') {
       const permissions = (msg.params?.permissions || []) as LocalPermission[];
       this.permissionGuard.syncPermissions(permissions);
+      this.emitEvent({ type: 'permissions_synced', permissions });
       log(`${c.green}●${c.reset}`, `Synced ${c.reset}${c.white}${permissions.length}${c.dim} permissions`);
       return;
     }
@@ -215,6 +247,7 @@ export class TunnelAgent {
       const p = msg.params as LocalPermission | undefined;
       if (p?.permissionId) {
         this.permissionGuard.addPermission(p);
+        this.emitEvent({ type: 'permission_granted', permission: p });
         log(`${c.green}+${c.reset}`, `Permission granted: ${p.capability} (${p.permissionId.slice(0, 12)}…)`);
       }
       return;
@@ -225,6 +258,7 @@ export class TunnelAgent {
       const permissionId = msg.params?.permissionId as string;
       if (permissionId) {
         this.permissionGuard.revokePermission(permissionId);
+        this.emitEvent({ type: 'permission_revoked', permissionId });
         log(`${c.yellow}○${c.reset}`, `Permission revoked: ${permissionId.slice(0, 12)}…`);
       }
       return;
@@ -232,6 +266,7 @@ export class TunnelAgent {
 
     // ── Token rotation notification ─────────────────────────────────
     if ('method' in msg && msg.method === 'tunnel.token.rotated') {
+      this.emitEvent({ type: 'token_rotated' });
       log(`${c.yellow}!${c.reset}`, `Token rotated — reconnecting with new token`);
       return;
     }

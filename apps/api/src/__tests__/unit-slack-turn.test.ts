@@ -165,6 +165,8 @@ describe('finalizeTurn (chat.update only — no streaming)', () => {
     // silent close invents no answer body; 'context' = the "Open session" footer
     expect(blocks.map((b) => b.type)).toEqual(['plan', 'context']);
     expect(blocks[0]!.tasks![0]!.status).toBe('complete'); // last step closed
+    expect(JSON.stringify(blocks)).toContain('OpenOPC');
+    expect(JSON.stringify(blocks)).not.toContain('Kortix');
 
     expect(calls('removeReaction').length).toBe(1);
     expect(calls('addReaction').length).toBe(0); // ✅ reserved for a real answer

@@ -1,4 +1,5 @@
 import type { ProviderListResponse as SdkProviderListResponse } from '@kortix/sdk/opencode-client';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 import type { ProjectLlmCatalogResponse } from '@kortix/sdk/projects-client';
 import { LLM_PROVIDERS } from '@/lib/llm-providers';
@@ -166,7 +167,7 @@ export function projectLlmCatalogToProviderList(
     connected: ['kortix'],
     all: [{
       id: 'kortix',
-      name: 'Kortix',
+      name: PRODUCT_BRAND.displayName,
       source: 'gateway',
       models,
     }],

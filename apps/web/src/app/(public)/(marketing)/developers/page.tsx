@@ -209,7 +209,7 @@ const CLI_GROUPS: { label: string; icon: typeof TerminalIcon; cmds: [string, str
     label: 'Operate',
     icon: KeyRound,
     cmds: [
-      ['kortix self-host', 'Run your own Kortix cloud'],
+      ['kortix self-host', 'Run your own OpenOPC cloud'],
       ['kortix hosts use', 'Switch cloud ↔ local'],
       ['kortix providers', 'Bring your own model keys'],
     ],
@@ -220,7 +220,7 @@ const RUNS_ANYWHERE = [
   {
     icon: Server,
     title: 'Self-host anywhere',
-    desc: 'A laptop, a VPS, your own VPC, or fully air-gapped — the exact same stack as Kortix cloud.',
+    desc: 'A laptop, a VPS, your own VPC, or fully air-gapped — the exact same stack as OpenOPC cloud.',
   },
   {
     icon: Cpu,
@@ -230,7 +230,7 @@ const RUNS_ANYWHERE = [
   {
     icon: KeyRound,
     title: 'Any model',
-    desc: 'Bring your own keys — Anthropic, OpenAI, or local models — or run on Kortix compute.',
+    desc: 'Bring your own keys — Anthropic, OpenAI, or local models — or run on OpenOPC compute.',
   },
 ];
 
@@ -1066,7 +1066,7 @@ export default function DevelopersPage() {
                 '3,000+ one-click apps via Pipedream — OAuth handled for you',
                 'Or bring any MCP, OpenAPI, GraphQL or HTTP endpoint — same interface',
                 'Credentials live server-side and never reach the sandbox',
-                'Agents hold one scoped Kortix token; connect once, shared org-wide, self-healing',
+                'Agents hold one scoped OpenOPC token; connect once, shared org-wide, self-healing',
               ].map((b, i) => (
                 <li
                   key={b}
@@ -1118,12 +1118,12 @@ export default function DevelopersPage() {
             {
               icon: GitPullRequest,
               title: 'Skills, git-backed and invisible',
-              body: 'Non-devs publish skills as markdown; Kortix handles the branch, PR and merge behind the scenes. Versioned, reviewable, auditable.',
+              body: 'Non-devs publish skills as markdown; OpenOPC handles the branch, PR and merge behind the scenes. Versioned, reviewable, auditable.',
             },
             {
               icon: Plug,
               title: 'Self-healing integrations',
-              body: 'When a token expires or a service blips, Kortix refreshes it or asks you to reconnect in plain language — never a cryptic error.',
+              body: 'When a token expires or a service blips, OpenOPC refreshes it or asks you to reconnect in plain language — never a cryptic error.',
             },
             {
               icon: Cpu,

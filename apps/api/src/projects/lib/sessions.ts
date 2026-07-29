@@ -4,6 +4,7 @@ import {
   projectSessionRuntimeContexts,
   projectSessions,
 } from '@kortix/db';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { checkBillingActive } from '../../billing/services/billing-gate';
@@ -127,7 +128,7 @@ export async function enforceConcurrentSessionCap(
     console.error('[projects] Failed to record session cap audit event:', error);
   });
 
-  const message = `You've reached your plan's concurrent-session limit (${limit}). Upgrade your plan for a higher limit, or contact the Kortix team to raise it for your account.`;
+  const message = getConcurrentSessionLimitMessage(limit);
   return {
     status: 429,
     headers: {
@@ -142,6 +143,10 @@ export async function enforceConcurrentSessionCap(
       active_sessions: activeSessions,
     },
   };
+}
+
+export function getConcurrentSessionLimitMessage(limit: number): string {
+  return `You've reached your plan's concurrent-session limit (${limit}). Upgrade your plan for a higher limit, or contact the ${PRODUCT_BRAND.displayName} team to raise it for your account.`;
 }
 
 export async function checkConcurrentSessionCap(

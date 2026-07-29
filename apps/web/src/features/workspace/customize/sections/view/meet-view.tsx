@@ -42,7 +42,7 @@ export function MeetView({ projectId }: { projectId: string }) {
   const selected = data?.selected ?? '';
   const selectedVoice = voices.find((v) => v.id === selected);
   const botName = draftName ?? data?.bot_name ?? '';
-  const defaultBotName = data?.default_bot_name ?? 'Kortix Notetaker';
+  const defaultBotName = data?.default_bot_name ?? 'OpenOPC Notetaker';
   const nameDirty = botName.trim().length > 0 && botName.trim() !== (data?.bot_name ?? '');
 
   async function onSaveName() {

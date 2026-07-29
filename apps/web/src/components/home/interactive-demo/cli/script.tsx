@@ -100,7 +100,7 @@ export const SCRIPT: Command[] = [
       wait(260),
       blank(),
       out([
-        t('Initialized Kortix project '),
+        t('Initialized OpenOPC project '),
         t(`"${PROJECT}"`, 'fg'),
         t(' in '),
         t(`~/${PROJECT}`, 'faded'),
@@ -128,7 +128,7 @@ export const SCRIPT: Command[] = [
       fx((a) => a.setProjectStatus(PROJECT, 'shipping')),
       okLine(t('kortix.yaml verified')),
       blank(),
-      out([t('  '), t('kortix ship', 'kortix'), t('  new project → managed Kortix git', 'dim')]),
+      out([t('  '), t('kortix ship', 'kortix'), t('  new project → managed OpenOPC git', 'dim')]),
       out(meta('name', PROJECT, 'fg')),
       blank(),
       wait(450),

@@ -15,13 +15,13 @@ worded differently each time, and never gets counted. A theme that a hundred
 people asked for looks the same as a one-off, because nothing pulls the mentions
 together.
 
-We run a feedback agent on Kortix that gathers those sources on a schedule,
+We run a feedback agent on OpenOPC that gathers those sources on a schedule,
 clusters them into themes, and keeps a Linear issue per theme up to date. It reads
 the feedback and writes to Linear; people still own prioritization. This is how we
 keep our own roadmap grounded in what users actually ask for.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">Scheduled cron</Fact>
   <Fact label="Connected systems">Plain · G2 / app stores · Slack · Linear</Fact>
   <Fact label="Mode">Reads feedback · writes Linear issues</Fact>
@@ -42,7 +42,7 @@ tell you how many people asked for the same thing.
 
 ## What we built
 
-On Kortix, a scheduled cron triggers an agent. It spawns an isolated session (a
+On OpenOPC, a scheduled cron triggers an agent. It spawns an isolated session (a
 cloud sandbox) with read access to Plain, the public review sources, and the Slack
 feedback channel, and write access to Linear. It gathers the feedback, clusters it
 into themes with representative quotes and counts, and creates or updates a Linear

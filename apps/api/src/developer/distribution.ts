@@ -184,6 +184,12 @@ export class DeveloperModuleDistributionService {
     this.verifiers = new Map(verifiers.map((verifier) => [verifier.keyId, verifier]));
   }
 
+  /** Resolve an Admin release target before a privileged transition runs. */
+  async getAdminRelease(releaseId: string): Promise<DeveloperModuleRelease | null> {
+    const release = await this.input.repository.getAdmin(releaseId);
+    return release ? cloneRelease(release) : null;
+  }
+
   private async requirePlatformReview(
     release: DeveloperModuleRelease,
     actorUserId: string,

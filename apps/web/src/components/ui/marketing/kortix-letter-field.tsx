@@ -1,12 +1,14 @@
 'use client';
 
 import { cn } from '@/lib/utils';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { AnimatePresence, motion } from 'motion/react';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-const SOURCE = '01kortixcomputer';
+const BRAND_NAME = PRODUCT_BRAND.displayName;
+const SOURCE = `01${BRAND_NAME}computer`;
 const PROPER = SOURCE.split('').join(' ');
-const KORTIX = 'kortix'.split('').join(' ');
+const BRAND = BRAND_NAME.split('').join(' ');
 
 function createRng(seed: number) {
   let a = seed >>> 0;
@@ -28,7 +30,7 @@ function shuffleWithSpaces(chars: string, rng: () => number) {
   return arr.join(' ');
 }
 
-type TokenKind = 'scrambled' | 'proper' | 'kortix';
+type TokenKind = 'scrambled' | 'proper' | 'brand';
 
 interface Token {
   text: string;
@@ -39,7 +41,7 @@ function buildTokens(count: number, seed: number): Token[] {
   const rng = createRng(seed);
   return Array.from({ length: count }, () => {
     const roll = rng();
-    if (roll < 0.06) return { text: KORTIX, kind: 'kortix' as const };
+    if (roll < 0.06) return { text: BRAND, kind: 'brand' as const };
     if (roll < 0.14) return { text: PROPER, kind: 'proper' as const };
     return { text: shuffleWithSpaces(SOURCE, rng), kind: 'scrambled' as const };
   });
@@ -59,7 +61,7 @@ function computeGrid(width: number, height: number): GridLayout {
   const innerWidth = Math.max(0, width - padding);
   const innerHeight = Math.max(0, height - padding);
 
-  // Wide enough for "k o r t i x" (smallest highlighted token) without clipping.
+  // Wide enough for the highlighted brand token without clipping.
   const minCellWidthPx = width < 640 ? 76 : width < 1024 ? 84 : 92;
 
   const cols = Math.max(1, Math.floor((innerWidth + gapX) / (minCellWidthPx + gapX)));
@@ -118,7 +120,7 @@ export function KortixLetterField({ seed = 3382, className }: KortixLetterFieldP
               key={i}
               className={cn(
                 'block min-w-0 whitespace-nowrap',
-                token.kind === 'kortix' &&
+                token.kind === 'brand' &&
                   'text-foreground/90 dark:text-foreground/50 hyper-text font-medium',
                 token.kind === 'proper' && 'text-foreground/35 overflow-hidden',
                 token.kind === 'scrambled' &&

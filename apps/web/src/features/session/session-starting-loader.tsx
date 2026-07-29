@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/stepper';
 import { TextShimmer } from '@/components/ui/text-shimmer';
 import { errorToast } from '@/components/ui/toast';
+import { getSessionStartAriaLabel } from '@/lib/runtime-brand-copy';
 import { cn } from '@/lib/utils';
 import {
   restartProjectSession,
@@ -364,7 +365,7 @@ export function SessionBootChecklistInline({
   const elapsed = formatDuration(now - startRef.current);
   return (
     <div className={cn('flex items-center gap-2', className)}>
-      <div aria-label="Starting your Kortix Computer">
+      <div aria-label={getSessionStartAriaLabel()}>
         <BootStepList active={active} />
       </div>
       {elapsed ? (

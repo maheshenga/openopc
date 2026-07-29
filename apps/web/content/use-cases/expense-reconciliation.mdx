@@ -1,6 +1,6 @@
 ---
 title: "How we reconcile expenses every month"
-description: The finance agent we run on Kortix — connected to Stripe, the bank feed, and Google Sheets. Each month it matches transactions against invoices, flags mismatches, and posts a summary, escalating anything it can't match.
+description: The finance agent we run on OpenOPC — connected to Stripe, the bank feed, and Google Sheets. Each month it matches transactions against invoices, flags mismatches, and posts a summary, escalating anything it can't match.
 date: "2026-04-15"
 author: team
 tags:
@@ -16,10 +16,10 @@ for an afternoon, and it's the same afternoon every month.
 
 We handle this with a scheduled agent. Once a month it reconciles transactions
 against invoices, flags what doesn't line up, and posts a summary. This writes up
-how we run that on Kortix — the connections, the steps, and the guardrails.
+how we run that on OpenOPC — the connections, the steps, and the guardrails.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Connected systems">Stripe · Bank feed · Google Sheets</Fact>
   <Fact label="Trigger">Monthly cron</Fact>
   <Fact label="Mode">Scheduled · human-escalated</Fact>
@@ -40,7 +40,7 @@ as often as someone has time for it.
 
 ## What we built
 
-On Kortix, a monthly **cron** triggers a reconciliation agent. Each run spawns
+On OpenOPC, a monthly **cron** triggers a reconciliation agent. Each run spawns
 its own isolated session — a cloud sandbox — with scoped access to what
 reconciliation needs: Stripe, the bank feed, and the Google Sheet we track in. It
 matches transactions against invoices, flags the mismatches, posts a summary to
@@ -111,7 +111,7 @@ sent to a person to chase, with the two records it couldn't reconcile attached.
 ## Guardrails
 
 Giving an agent access to financial systems is a security question first. The
-relevant controls on Kortix:
+relevant controls on OpenOPC:
 
 - **Isolation.** Each run happens in its own microVM sandbox. The session can
   read the accounts it needs, and only the summary it writes to the sheet leaves

@@ -139,7 +139,7 @@ function RoutingModelSelector({
   if (value && !options.some((model) => modelKeyToWire(model) === value)) {
     options.push({
       providerID: 'kortix',
-      providerName: 'Kortix',
+      providerName: 'OpenOPC',
       modelID: value,
       modelName: value,
     });
@@ -363,7 +363,7 @@ export function GatewayRouting({
       if (!wire || wire === 'auto' || byWire.has(wire)) continue;
       byWire.set(wire, {
         providerID: 'kortix',
-        providerName: 'Kortix',
+        providerName: 'OpenOPC',
         modelID: wire,
         modelName: wire,
       });

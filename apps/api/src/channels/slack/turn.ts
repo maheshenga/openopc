@@ -324,7 +324,7 @@ export async function finalizeTurn(
           body,
           [
             ...toSectionBlocks(body, truncated),
-            { type: 'context', elements: [{ type: 'mrkdwn', text: `<${url}|Open session in Kortix ↗>` }] },
+            { type: 'context', elements: [{ type: 'mrkdwn', text: `<${url}|Open session in OpenOPC ↗>` }] },
           ],
           threadRoot,
         );
@@ -387,7 +387,7 @@ function toSectionBlocks(body: string, truncated = false): Array<Record<string, 
 function plainFallback(handle: LiveTurn, body: string): string {
   if (handle.projectId && handle.sessionId) {
     const url = sessionWebUrl(config.FRONTEND_URL, handle.projectId, handle.sessionId);
-    return `${body}\n\n<${url}|Open session in Kortix ↗>`;
+    return `${body}\n\n<${url}|Open session in OpenOPC ↗>`;
   }
   return body;
 }
@@ -452,7 +452,7 @@ function buildFinalPlanBlocks(
     const url = sessionWebUrl(config.FRONTEND_URL, handle.projectId, handle.sessionId);
     blocks.push({
       type: 'context',
-      elements: [{ type: 'mrkdwn', text: `<${url}|Open session in Kortix ↗>` }],
+      elements: [{ type: 'mrkdwn', text: `<${url}|Open session in OpenOPC ↗>` }],
     });
   }
   return blocks;

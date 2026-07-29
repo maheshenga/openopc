@@ -5,9 +5,9 @@ name: Desktop
 # signed macOS/Windows runners, so building it on every main push would be
 # wasteful and would gate the fast API/frontend/CLI path on scarce runners.
 #
-# It builds only when desktop code changes (push to main touching
-# apps/desktop-electron/**) or when manually dispatched. Signed installers are
-# published to the mutable `desktop-dev-latest` prerelease.
+# It builds only when desktop code or its bundled sidecar changes, or when
+# manually dispatched. Signed installers are published to the mutable
+# `desktop-dev-latest` prerelease.
 #
 # Production desktop installers are built separately by deploy-prod.yml and
 # bundled into the unified vX.Y.Z release.
@@ -17,6 +17,13 @@ on:
     branches: [main]
     paths:
       - 'apps/desktop-electron/**'
+      - 'packages/openopc-desktop-agent/**'
+      - 'packages/agent-tunnel/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.npmrc'
+      - 'tsconfig.base.json'
       - '.github/workflows/desktop.yml'
   workflow_dispatch:
 
@@ -73,11 +80,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
       - name: Install pnpm
         run: corepack enable pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --filter @kortix/desktop-electron
+        run: pnpm install --frozen-lockfile --filter "@kortix/desktop-electron..."
         env:
           npm_config_engine_strict: "false"
 
@@ -124,10 +136,9 @@ jobs:
             echo "APPLE_API_KEY=$KEY_PATH" >> "$GITHUB_ENV"
           fi
 
-      # electron-builder reads electron's binary from node_modules; .npmrc sets
-      # ignore-scripts=true so its download postinstall is skipped — ensure it.
-      - name: Ensure Electron runtime
-        run: pnpm --filter @kortix/desktop-electron exec node scripts/ensure-runtime.js
+      # electron-builder needs both its Electron runtime and the bundled sidecar.
+      - name: Prepare Electron runtime and sidecar
+        run: pnpm --filter @kortix/desktop-electron run setup
 
       - name: Build desktop installer (Electron)
         shell: bash
@@ -137,8 +148,8 @@ jobs:
             --config.extraMetadata.version="${{ steps.ver.outputs.version }}" \
             --config.extraMetadata.kortixDefaultUrl="$DESKTOP_URL" \
             --config.extraMetadata.kortixUpdateChannel="dev" \
-            --config.productName="Kortix Dev" \
-            --config.extraMetadata.productName="Kortix Dev" \
+            --config.productName="OpenOPC Dev" \
+            --config.extraMetadata.productName="OpenOPC Dev" \
             --config.appId="$DESKTOP_APP_ID"
         env:
           # macOS signing + notarization (electron-builder conventions).

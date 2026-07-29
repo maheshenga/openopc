@@ -81,6 +81,7 @@ function DeviceAuthorize() {
   const handleApprove = async () => {
     await approve.mutateAsync({
       code,
+      ...(info?.accountId ? { account_id: info.accountId } : {}),
       name: name || info?.machineHostname || 'Unnamed',
       capabilities: Array.from(selectedCaps),
     });

@@ -294,6 +294,7 @@ export function useDenyPermissionRequest() {
 export interface DeviceAuthInfo {
   deviceCode: string;
   machineHostname: string | null;
+  accountId: string | null;
   status: 'pending' | 'approved' | 'denied' | 'expired';
   expiresAt: string;
   createdAt: string;
@@ -321,6 +322,7 @@ export function useApproveDeviceAuth() {
   return useMutation({
     mutationFn: async ({ code, ...data }: {
       code: string;
+      account_id?: string;
       name?: string;
       capabilities?: string[];
     }) => {

@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "candidateId": "openopc-public-beta-fixture",
+  "commit": "0000000000000000000000000000000000000000",
+  "environment": "openopc-public-beta-staging",
+  "artifacts": [
+    {
+      "name": "web",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000001",
+      "imageOrPath": "oci://127.0.0.1/openopc/web@sha256:0000000000000000000000000000000000000000000000000000000000000001"
+    },
+    {
+      "name": "admin",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000002",
+      "imageOrPath": "oci://127.0.0.1/openopc/admin@sha256:0000000000000000000000000000000000000000000000000000000000000002"
+    },
+    {
+      "name": "api",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000003",
+      "imageOrPath": "oci://127.0.0.1/openopc/api@sha256:0000000000000000000000000000000000000000000000000000000000000003"
+    },
+    {
+      "name": "module-host",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000004",
+      "imageOrPath": "oci://127.0.0.1/openopc/module-host@sha256:0000000000000000000000000000000000000000000000000000000000000004"
+    },
+    {
+      "name": "studio-worker",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000005",
+      "imageOrPath": "oci://127.0.0.1/openopc/studio-worker@sha256:0000000000000000000000000000000000000000000000000000000000000005"
+    },
+    {
+      "name": "developer-trust-worker",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000006",
+      "imageOrPath": "oci://127.0.0.1/openopc/developer-trust-worker@sha256:0000000000000000000000000000000000000000000000000000000000000006"
+    },
+    {
+      "name": "automation-browser-worker",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000007",
+      "imageOrPath": "oci://127.0.0.1/openopc/automation-browser-worker@sha256:0000000000000000000000000000000000000000000000000000000000000007"
+    },
+    {
+      "name": "module-ledger-worker",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000008",
+      "imageOrPath": "oci://127.0.0.1/openopc/module-ledger-worker@sha256:0000000000000000000000000000000000000000000000000000000000000008"
+    },
+    {
+      "name": "wasi-runner",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000009",
+      "imageOrPath": "artifacts/public-beta/fixture/wasi-runner-fixture.tar.zst"
+    },
+    {
+      "name": "oci-runner",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000010",
+      "imageOrPath": "artifacts/public-beta/fixture/oci-runner-fixture.tar.zst"
+    },
+    {
+      "name": "desktop",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000011",
+      "imageOrPath": "artifacts/public-beta/fixture/desktop-windows-x64-fixture.tar.zst"
+    }
+  ],
+  "artifactManifestPath": "tests/public-beta/release-artifacts.fixture.json",
+  "artifactManifestDigest": "sha256:98220404cb0fa25bdeabc97f88ca259366a67f2a813c98dc040a047dc0ac4d1a",
+  "evidencePath": "tests/public-beta/evidence.fixture.json",
+  "evidenceDigest": "sha256:d799b2a9cfea87ba14e0002aa976e868b867c66c559f825f53d70c3d0d938ed9",
+  "rollbackTarget": {
+    "commit": "1111111111111111111111111111111111111111",
+    "manifestDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "policyVersions": {
+    "terms": "fixture-2026.07.28",
+    "privacy": "fixture-2026.07.28",
+    "acceptableUse": "fixture-2026.07.28",
+    "moduleRules": "fixture-2026.07.28"
+  },
+  "regionalEvidence": [
+    {
+      "id": "fixture-region",
+      "status": "not_applicable",
+      "artifactDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "approval": null
+}

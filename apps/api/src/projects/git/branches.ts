@@ -5,6 +5,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { mapLimit } from '@kortix/registry';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { createBranchRef, getBranchCommitSha, parseGitHubRepoUrl } from '../github';
 import { validateRef } from '../git-ref';
 import {
@@ -256,7 +257,7 @@ export async function commitMultipleFilesToBranch(
   const tip = await runGitCapture(['rev-parse', '--verify', `refs/heads/${branch}`], repoPath);
   const parentSha = tip.exitCode === 0 ? tip.stdout.trim() : null;
 
-  const author = opts.authorName || 'Kortix';
+  const author = opts.authorName || PRODUCT_BRAND.displayName;
   const email = opts.authorEmail || 'noreply@kortix.ai';
   const identEnv = {
     GIT_AUTHOR_NAME: author,

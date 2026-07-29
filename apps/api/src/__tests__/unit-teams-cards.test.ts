@@ -3,11 +3,14 @@ import {
   buildAnswerCard,
   buildConnectAccountCard,
   buildFinalCard,
+  buildHelpCard,
+  buildPanelCard,
   buildPlanCard,
   buildQuestionCard,
   buildRequestAccessCard,
   buildReviewCard,
   buildSelectCard,
+  buildWelcomeCard,
 } from '../channels/teams/cards';
 import type { StreamTaskChunk } from '../channels/slack-api';
 
@@ -87,6 +90,27 @@ describe('buildAnswerCard', () => {
 });
 
 describe('interactive cards', () => {
+  test('uses OpenOPC across built-in card labels and session links', () => {
+    const cards = [
+      buildFinalCard({ title: 'Done', steps: [], sessionUrl: 'https://app/session' }),
+      buildAnswerCard('Done', 'https://app/session'),
+      buildConnectAccountCard('https://app/login'),
+      buildPanelCard({ emoji: '⚙️', title: 'Panel', rows: [], url: 'https://app/panel' }),
+      buildReviewCard({
+        reviewItemId: 'r1',
+        title: 'Review',
+        summary: 'Summary',
+        risk: 'low',
+        viewUrl: 'https://app/review',
+      }),
+      buildWelcomeCard({ projectUrl: 'https://app/project' }),
+      buildHelpCard([{ cmd: '/login', desc: 'connect your account' }]),
+    ];
+
+    expect(JSON.stringify(cards)).toContain('OpenOPC');
+    expect(JSON.stringify(cards)).not.toContain('Kortix');
+  });
+
   test('connect-account card carries an OpenUrl login action', () => {
     const a = actions(buildConnectAccountCard('https://app/teams/login/tok'));
     expect(a[0]?.type).toBe('Action.OpenUrl');

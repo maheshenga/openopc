@@ -1,3 +1,9 @@
+import { PRODUCT_BRAND } from '@kortix/product-brand';
+
+const BRAND_NAME = PRODUCT_BRAND.displayName;
+
+export const SSO_GROUP_MAPPING_INTRO = `Create an ${BRAND_NAME} group for every group your IdP sends — no per-group mapping.`;
+
 /**
  * Provider guides for the SSO setup wizard — Vercel-style step-by-step
  * instructions per IdP, kept as plain data so the wizard renders them and
@@ -107,10 +113,10 @@ export interface ProviderGuide {
 /** Shared final steps — the connect + test flow is identical per provider. */
 const importStep = (claimHint: string): GuideStep => ({
   id: 'connect',
-  title: 'Connect to Kortix',
+  title: `Connect to ${BRAND_NAME}`,
   kind: 'import',
   intro:
-    'Paste the federation metadata from the previous step. Kortix registers your IdP and routes sign-ins for your email domain through it.',
+    `Paste the federation metadata from the previous step. ${BRAND_NAME} registers your IdP and routes sign-ins for your email domain through it.`,
   note: `Group claim is prefilled with ${claimHint} — it must match the claim name your IdP emits, or group sync silently finds nothing.`,
 });
 
@@ -121,8 +127,8 @@ const testStep = (extra?: string): GuideStep => ({
   intro:
     'Open the sign-in page in a private window, enter a test user’s work email, and complete the sign-in at your identity provider.',
   bullets: [
-    'The user lands in Kortix as an auto-provisioned member.',
-    'Map their IdP groups on the "SAML SSO" card → "Group mappings" (claim value → Kortix group), then grant those groups project roles — a synced group confers no access until you grant it one.',
+    `The user lands in ${BRAND_NAME} as an auto-provisioned member.`,
+    `Map their IdP groups on the "SAML SSO" card → "Group mappings" (claim value → ${BRAND_NAME} group), then grant those groups project roles — a synced group confers no access until you grant it one.`,
     'On the user’s next sign-in their groups reconcile and the granted roles apply.',
     'Access changes in the IdP apply on their next sign-in — removing them from a group revokes the mapped access.',
     ...(extra ? [extra] : []),
@@ -164,7 +170,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
           },
           {
             kind: 'text',
-            text: 'Enter an appropriate app name, such as "Kortix". Select the "Integrate any other application you don\'t find in the gallery (Non-gallery)" option. Click "Create".',
+            text: `Enter an appropriate app name, such as "${BRAND_NAME}". Select the "Integrate any other application you don't find in the gallery (Non-gallery)" option. Click "Create".`,
           },
           {
             kind: 'image',
@@ -196,7 +202,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
           },
           {
             kind: 'text',
-            text: 'Copy the "Identifier (Entity ID)" and the "Reply URL (Assertion Consumer Service URL)" below and paste them into the "Basic SAML Configuration" panel — mark the Identifier as Default, and set "Sign on URL" to your Kortix sign-in page. Leave Relay State and Logout URL empty. Click "Save" and close the edit panel.',
+            text: `Copy the "Identifier (Entity ID)" and the "Reply URL (Assertion Consumer Service URL)" below and paste them into the "Basic SAML Configuration" panel — mark the Identifier as Default, and set "Sign on URL" to your ${BRAND_NAME} sign-in page. Leave Relay State and Logout URL empty. Click "Save" and close the edit panel.`,
           },
           { kind: 'sp-values', includeSignOnUrl: true },
           {
@@ -267,7 +273,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
           'Advanced options → check "Customize the name of the group claim" → Name: memberOf.',
         ],
         warning:
-          'Display names and assigning groups to the app require Entra ID P1/P2. On the Free tier pick "Security groups" + "Group ID" instead — groups arrive as Object IDs (GUIDs), and you map those GUIDs in Kortix. Both work; names are just easier to read.',
+          `Display names and assigning groups to the app require Entra ID P1/P2. On the Free tier pick "Security groups" + "Group ID" instead — groups arrive as Object IDs (GUIDs), and you map those GUIDs in ${BRAND_NAME}. Both work; names are just easier to read.`,
         doneLabel: 'I’ve added the memberOf group claim',
       },
       {
@@ -283,7 +289,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
           },
           {
             kind: 'text',
-            text: 'Click "Add user/group", select the users or groups that should sign in to Kortix, then click "Assign".',
+            text: `Click "Add user/group", select the users or groups that should sign in to ${BRAND_NAME}, then click "Assign".`,
           },
           {
             kind: 'image',
@@ -310,7 +316,9 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
         doneLabel: 'I’ve added the identity provider metadata URL',
       },
       importStep('memberOf'),
-      testStep('Removed from the Entra group → the mapped Kortix access is gone on next sign-in.'),
+      testStep(
+        `Removed from the Entra group → the mapped ${BRAND_NAME} access is gone on next sign-in.`,
+      ),
     ],
   },
   {
@@ -357,7 +365,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
           },
           {
             kind: 'text',
-            text: 'The "Create SAML Integration" wizard opens. On the "General Settings" step, enter an appropriate app name, such as "Kortix" — optionally upload an app logo. Click "Next".',
+            text: `The "Create SAML Integration" wizard opens. On the "General Settings" step, enter an appropriate app name, such as "${BRAND_NAME}" — optionally upload an app logo. Click "Next".`,
           },
           {
             kind: 'image',
@@ -386,7 +394,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
           },
           {
             kind: 'text',
-            text: 'Check "Use this for Recipient URL and Destination URL". Set "Name ID format" to EmailAddress and "Application username" to Email — Kortix matches accounts by email.',
+            text: `Check "Use this for Recipient URL and Destination URL". Set "Name ID format" to EmailAddress and "Application username" to Email — ${BRAND_NAME} matches accounts by email.`,
           },
           {
             kind: 'image',
@@ -447,7 +455,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
             alt: 'Group attribute statements form below the profile attribute statements',
           },
         ],
-        note: 'Okta sends the matching groups by NAME — those names are what you map in Kortix. The attribute name (groups) is what Kortix reads as the group claim.',
+        note: `Okta sends the matching groups by NAME — those names are what you map in ${BRAND_NAME}. The attribute name (groups) is what ${BRAND_NAME} reads as the group claim.`,
         doneLabel: 'I’ve added the groups attribute',
       },
       {
@@ -536,7 +544,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
         intro:
           'On the attribute mapping step, under "Group membership (optional)" select the groups to send and set the App attribute to groups.',
         warning:
-          'Google only sends groups you EXPLICITLY select here (max 75). Add every group you plan to map in Kortix — an unselected group is silently omitted from the claim.',
+          `Google only sends groups you EXPLICITLY select here (max 75). Add every group you plan to map in ${BRAND_NAME} — an unselected group is silently omitted from the claim.`,
       },
       {
         id: 'assign-users',
@@ -554,7 +562,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
     config: {
       groupClaimName: 'groups',
       groupValueHint:
-        'Group values arrive exactly as your IdP emits them (names or IDs) — create Kortix mappings from what actually arrives.',
+        `Group values arrive exactly as your IdP emits them (names or IDs) — create ${BRAND_NAME} mappings from what actually arrives.`,
       preferredMetadata: 'url',
       metadataSource: 'Your IdP’s SAML metadata export (URL or XML)',
       metadataUrlPlaceholder: 'https://…/saml/metadata.xml',
@@ -562,7 +570,7 @@ export const PROVIDER_GUIDES: ProviderGuide[] = [
     steps: [
       {
         id: 'basic-saml',
-        title: 'Register Kortix in your IdP',
+        title: `Register ${BRAND_NAME} in your IdP`,
         intro:
           'Create a SAML 2.0 application in your identity provider and give it these service-provider values.',
         showSpValues: true,
@@ -629,7 +637,7 @@ export const SCIM_PROVIDER_GUIDES: ProviderGuide[] = [
     config: {
       groupClaimName: 'memberOf',
       groupValueHint:
-        'Groups pushed via SCIM are created in Kortix under their Entra display names.',
+        `Groups pushed via SCIM are created in ${BRAND_NAME} under their Entra display names.`,
     },
     steps: [
       {
@@ -661,7 +669,7 @@ export const SCIM_PROVIDER_GUIDES: ProviderGuide[] = [
         id: 'mappings',
         title: 'Check the attribute mappings',
         intro:
-          'The default mappings work. The one that matters: userName must map to the user’s email (userPrincipalName) — it is how Kortix matches accounts.',
+          `The default mappings work. The one that matters: userName must map to the user’s email (userPrincipalName) — it is how ${BRAND_NAME} matches accounts.`,
       },
       {
         id: 'scope',
@@ -692,7 +700,7 @@ export const SCIM_PROVIDER_GUIDES: ProviderGuide[] = [
     config: {
       groupClaimName: 'groups',
       groupValueHint:
-        'Groups pushed via Push Groups are created in Kortix under their Okta names.',
+        `Groups pushed via Push Groups are created in ${BRAND_NAME} under their Okta names.`,
     },
     steps: [
       {
@@ -737,13 +745,13 @@ export const SCIM_PROVIDER_GUIDES: ProviderGuide[] = [
     blurb: 'Any SCIM 2.0-capable identity provider',
     config: {
       groupClaimName: 'groups',
-      groupValueHint: 'Pushed groups are created in Kortix under their displayName.',
+      groupValueHint: `Pushed groups are created in ${BRAND_NAME} under their displayName.`,
     },
     steps: [
       scimTokenStep,
       {
         id: 'configure',
-        title: 'Point your IdP at Kortix',
+        title: `Point your IdP at ${BRAND_NAME}`,
         intro: 'Configure your identity provider’s SCIM client with these settings.',
         bullets: [
           'Base / Tenant URL → the Tenant URL from the token step (the IdP appends /Users and /Groups).',

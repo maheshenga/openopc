@@ -16,13 +16,13 @@ summary and the other half forgets. The information already exists in Linear and
 GitHub; someone just has to gather it, format it, and chase the people who didn't
 post.
 
-We run a daily agent on Kortix that does the gathering. It reads each person's
+We run a daily agent on OpenOPC that does the gathering. It reads each person's
 Linear and GitHub activity, nudges anyone with nothing recorded, and posts a
 concise standup to a Slack channel. This is how we run our own standups, and the
 same setup works for any team.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">A daily cron, one post per weekday</Fact>
   <Fact label="Connected systems">Linear · GitHub · Slack</Fact>
   <Fact label="Mode">Read-only across the tools, no writes</Fact>
@@ -43,7 +43,7 @@ it in.
 
 ## What we built
 
-On Kortix, a cron fires once each weekday morning and spawns an agent. It reads
+On OpenOPC, a cron fires once each weekday morning and spawns an agent. It reads
 each team member's recent Linear issues and GitHub activity, builds a short
 per-person summary, checks who has nothing recorded, and posts the standup to a
 Slack channel. Anyone with a quiet day gets a light prompt so they can add

@@ -17,11 +17,11 @@ time pressure the easy path is to grant broadly and move on, and the record of
 who has what drifts.
 
 We handle this by tying the grant to the request that starts it, and to the
-policy that governs it. This writes up how we run that on Kortix — the
+policy that governs it. This writes up how we run that on OpenOPC — the
 connections, the steps, and the guardrails — so you can set up the same flow.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Trigger">An access request in Slack</Fact>
   <Fact label="Connected systems">Okta · GitHub · Cloud IAM</Fact>
   <Fact label="Mode">Policy-checked · Approval-gated · Logged</Fact>
@@ -41,7 +41,7 @@ behind.
 
 ## What we built
 
-On Kortix, an access request in Slack triggers an agent. Each request runs in its
+On OpenOPC, an access request in Slack triggers an agent. Each request runs in its
 own isolated session — a cloud sandbox — with scoped access to Okta, GitHub, and
 cloud IAM. The agent reads the request, checks it against policy, gathers context
 on the person's role, team, and the least-privilege scope that fits, and prepares
@@ -109,7 +109,7 @@ becomes the narrowest IAM permission that fits, both held for sign-off.
 ## Guardrails
 
 Giving an agent a hand in access decisions is a trust question. The relevant
-controls on Kortix:
+controls on OpenOPC:
 
 - **Isolation.** Every request runs in its own microVM sandbox on its own branch.
   The session can reach only the systems it's scoped to, and only what it's

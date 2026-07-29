@@ -1,4 +1,5 @@
 import { config, getToolCost } from '../../config';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 import { creditGateExemptEnv } from './credit-gate-env';
 
@@ -60,7 +61,7 @@ export async function deductToolCredits(
 
   const baseDescription =
     description ||
-    `Kortix ${toolName.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}`;
+    `${PRODUCT_BRAND.displayName} ${toolName.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}`;
   const deductDescription = sessionId ? `${baseDescription} [session:${sessionId}]` : baseDescription;
 
   console.info(`[BILLING] Deducting $${cost.toFixed(4)} for ${toolName} (direct DB)`);

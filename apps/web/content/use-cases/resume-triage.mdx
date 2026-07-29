@@ -15,14 +15,14 @@ the next, and easy to drift from the criteria the role was actually written
 against. Good candidates get skimmed past and the standard moves depending on who
 is reading.
 
-We run an agent on Kortix that does the first read consistently. Each application
+We run an agent on OpenOPC that does the first read consistently. Each application
 triggers a session that scores the resume against the role's written rubric, writes
 a structured screen with evidence, and proposes interview slots for strong matches.
 A person makes every advance-or-reject call; the agent never rejects anyone. This
 is how we screen our own inbound applicants.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">Every inbound application</Fact>
   <Fact label="Connected systems">Applications inbox / ATS · Role rubric · Google Calendar</Fact>
   <Fact label="Mode">Trigger-driven · a person makes every decision</Fact>
@@ -42,7 +42,7 @@ problem: opaque, unaccountable, and impossible to check.
 
 ## What we built
 
-On Kortix, each inbound application triggers an agent. The application spawns an
+On OpenOPC, each inbound application triggers an agent. The application spawns an
 isolated session (a cloud sandbox) with the role's written rubric and scoped access
 to Google Calendar. The agent reads the resume against the rubric, writes a
 structured screen — strengths, gaps, a score, and supporting quotes as evidence —

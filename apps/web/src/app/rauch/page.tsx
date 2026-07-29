@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import { KortixParticleMark } from './kortix-particle-mark';
 
 export const metadata: Metadata = {
-  title: 'Particle Mark — Kortix',
-  description: 'A Rauch-style hard-pixel particle rendering of the Kortix symbol.',
+  title: 'Particle Mark — OpenOPC',
+  description: 'A Rauch-style hard-pixel particle rendering of the OpenOPC symbol.',
   robots: { index: false, follow: false },
 };
 

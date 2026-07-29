@@ -282,9 +282,11 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
     ]);
     if (started.exitCode !== 0) throw new Error(started.stderr.toString());
 
-    const readinessDeadline = Date.now() + 90_000;
+    const readinessDeadline = Date.now() + 180_000;
+    let lastReadinessOutput = 'readiness query not attempted';
     while (Date.now() < readinessDeadline) {
       const readiness = dockerPsql('SELECT current_database();', true);
+      lastReadinessOutput = readiness.output.trim() || `psql exited ${readiness.exitCode}`;
       if (readiness.exitCode === 0 && readiness.output.trim() === 'testdb') {
         const mappedPort = Bun.spawnSync(['docker', 'port', container, '5432/tcp'], {
           stdout: 'pipe',
@@ -359,10 +361,10 @@ describe.skipIf(!dockerAvailable)('module runtime control-plane migration - real
         seedControlPlaneRows();
         return;
       }
-      await Bun.sleep(250);
+      await Bun.sleep(2_000);
     }
-    throw new Error('Disposable PostgreSQL did not become ready');
-  }, 180_000);
+    throw new Error(`Disposable PostgreSQL did not become ready: ${lastReadinessOutput}`);
+  }, 300_000);
 
   afterAll(() => {
     Bun.spawnSync(['docker', 'rm', '-f', container], { stdout: 'ignore', stderr: 'ignore' });

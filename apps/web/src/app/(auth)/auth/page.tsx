@@ -25,6 +25,7 @@ import { AuthFrame } from '@/features/auth/auth-card-shell';
 import { CodeInput, FieldLabel, InfoStrip, StepHeader } from '@/features/auth/auth-primitives';
 import { useAuth } from '@/features/providers/auth-provider';
 import { invalidateTokenCache, setBootstrapAuthToken } from '@/lib/auth-token';
+import { buildAuthWelcomeTitle } from '@/lib/auth/auth-brand-copy';
 import { buildMobileSessionHandoffUrl } from '@/lib/auth/mobile-handoff';
 import { sanitizeAuthReturnUrl } from '@/lib/auth/return-url';
 import { authRedirectUrl } from '@/lib/desktop';
@@ -38,6 +39,10 @@ import {
   signUpWithPassword,
   verifyOtp,
 } from './actions';
+import {
+  buildRegistrationProofFields,
+  getOrCreateRegistrationDeviceId,
+} from './registration-proof';
 
 const GoogleSignIn = lazy(() => import('@/features/auth/google-signin'));
 
@@ -47,6 +52,43 @@ type Step = 'entry' | 'credentials' | 'code';
 
 const RESEND_COOLDOWN_SECONDS = 30;
 const EASE = [0.23, 1, 0.32, 1] as const;
+const TURNSTILE_SITE_KEY =
+  process.env.NEXT_PUBLIC_OPENOPC_TURNSTILE_SITE_KEY ||
+  process.env.NEXT_PUBLIC_KORTIX_TURNSTILE_SITE_KEY ||
+  '';
+const REGISTRATION_POLICY_VERSIONS = {
+  terms:
+    process.env.NEXT_PUBLIC_OPENOPC_TERMS_VERSION ||
+    process.env.NEXT_PUBLIC_KORTIX_TERMS_VERSION ||
+    '',
+  privacy:
+    process.env.NEXT_PUBLIC_OPENOPC_PRIVACY_VERSION ||
+    process.env.NEXT_PUBLIC_KORTIX_PRIVACY_VERSION ||
+    '',
+  acceptableUse:
+    process.env.NEXT_PUBLIC_OPENOPC_ACCEPTABLE_USE_VERSION ||
+    process.env.NEXT_PUBLIC_KORTIX_ACCEPTABLE_USE_VERSION ||
+    '',
+} as const;
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render(
+        element: HTMLElement,
+        options: {
+          sitekey: string;
+          action: string;
+          theme: 'auto';
+          callback(token: string): void;
+          'expired-callback'(): void;
+          'error-callback'(): void;
+        },
+      ): string;
+      remove(widgetId: string): void;
+    };
+  }
+}
 
 /* ─── Small shared pieces ──────────────────────────────────────────────── */
 
@@ -93,6 +135,54 @@ function PasswordInput({
   );
 }
 
+function RegistrationChallenge({ onToken }: { onToken: (token: string) => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    onToken('');
+    if (!TURNSTILE_SITE_KEY || !containerRef.current) return;
+    let widgetId: string | null = null;
+    let disposed = false;
+    const render = () => {
+      if (disposed || widgetId || !containerRef.current || !window.turnstile) return;
+      widgetId = window.turnstile.render(containerRef.current, {
+        sitekey: TURNSTILE_SITE_KEY,
+        action: 'signup',
+        theme: 'auto',
+        callback: onToken,
+        'expired-callback': () => onToken(''),
+        'error-callback': () => onToken(''),
+      });
+    };
+    const existing = document.getElementById('openopc-turnstile-api') as HTMLScriptElement | null;
+    const script = existing ?? document.createElement('script');
+    script.addEventListener('load', render);
+    if (!existing) {
+      script.id = 'openopc-turnstile-api';
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+    render();
+    return () => {
+      disposed = true;
+      script.removeEventListener('load', render);
+      if (widgetId && window.turnstile) window.turnstile.remove(widgetId);
+      onToken('');
+    };
+  }, [onToken]);
+
+  if (!TURNSTILE_SITE_KEY) {
+    return (
+      <p className="text-destructive text-sm">
+        Registration verification is temporarily unavailable.
+      </p>
+    );
+  }
+  return <div ref={containerRef} className="min-h-[65px]" data-registration-challenge />;
+}
+
 /* ─── The staged auth flow ─────────────────────────────────────────────── */
 
 function AuthCardForm({
@@ -134,6 +224,8 @@ function AuthCardForm({
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [resendIn, setResendIn] = useState(0);
+  const [challengeToken, setChallengeToken] = useState('');
+  const [registrationDeviceId, setRegistrationDeviceId] = useState<string | null>(null);
   const lastTriedCode = useRef('');
   const emailRef = useRef<HTMLInputElement>(null);
 
@@ -149,6 +241,12 @@ function AuthCardForm({
     const t = setTimeout(() => setResendIn(resendIn - 1), 1000);
     return () => clearTimeout(t);
   }, [step, resendIn]);
+
+  useEffect(() => {
+    setRegistrationDeviceId(
+      getOrCreateRegistrationDeviceId(window.localStorage, () => crypto.randomUUID()),
+    );
+  }, []);
 
   const enabledProviders = useMemo(() => {
     const raw = getEnv().AUTH_PROVIDERS || '';
@@ -226,6 +324,21 @@ function AuthCardForm({
     return formData;
   };
 
+  const appendRegistrationProof = (formData: FormData): boolean => {
+    if (mode !== 'signup') return true;
+    const proof = buildRegistrationProofFields({
+      challengeToken,
+      deviceId: registrationDeviceId ?? '',
+      policyVersions: REGISTRATION_POLICY_VERSIONS,
+    });
+    if (!proof) {
+      failWith('Complete registration verification before continuing.');
+      return false;
+    }
+    for (const [key, value] of Object.entries(proof)) formData.set(key, value);
+    return true;
+  };
+
   const sendMagic = async (to?: string, source: 'continue' | 'code' | 'resend' = 'code') => {
     const target = (to ?? email).trim();
     if (!target) return;
@@ -235,6 +348,7 @@ function AuthCardForm({
     try {
       const formData = buildBaseFormData(target);
       if (mode === 'signup') formData.set('acceptedTerms', 'true');
+      if (!appendRegistrationProof(formData)) return;
 
       const result =
         mode === 'signup'
@@ -356,6 +470,10 @@ function AuthCardForm({
       // a confirmation value, so mirror it.
       formData.set('confirmPassword', (formData.get('password') as string) || '');
       formData.set('acceptedTerms', 'true');
+      if (!appendRegistrationProof(formData)) {
+        setPendingAction(null);
+        return;
+      }
     }
 
     try {
@@ -571,6 +689,8 @@ function AuthCardForm({
               />
             </div>
 
+            {mode === 'signup' && <RegistrationChallenge onToken={setChallengeToken} />}
+
             <Button type="submit" size="lg" disabled={pending} className="w-full">
               {pendingAction === 'continue' ? <Loading className="size-4 shrink-0" /> : null}
               Continue
@@ -602,7 +722,7 @@ function AuthCardForm({
     <>
       <motion.div {...rise(0)}>
         <StepHeader
-          title={mode === 'signup' ? 'Create your account' : 'Welcome to Kortix'}
+          title={mode === 'signup' ? 'Create your account' : buildAuthWelcomeTitle()}
           tagline="Your AI Command Center"
         />
       </motion.div>
@@ -642,6 +762,7 @@ function AuthCardForm({
               aria-invalid={!!errorMessage || undefined}
             />
           </div>
+          {mode === 'signup' && <RegistrationChallenge onToken={setChallengeToken} />}
           <Button type="submit" size="lg" disabled={pending} className="w-full">
             {pendingAction === 'continue' ? <Loading className="size-4 shrink-0" /> : null}
             Continue
@@ -712,7 +833,7 @@ function AuthContent() {
   if (user) {
     return (
       <AuthFrame footerVariant="default">
-        <StepHeader title="Welcome to Kortix" tagline="Your AI Command Center" />
+        <StepHeader title={buildAuthWelcomeTitle()} tagline="Your AI Command Center" />
       </AuthFrame>
     );
   }

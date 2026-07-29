@@ -15,6 +15,7 @@ import {
 import { makeOpenApiApp } from '../openapi';
 import type { AuditEventInput } from '../shared/audit';
 import type { AppEnv } from '../types';
+import { createAdminDecisionAuthorizer } from './admin-authorization';
 import { registerAdminDeveloperDistributionRoutes } from './developer-distribution';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
@@ -135,6 +136,7 @@ function appHarness(input: {
   service: DeveloperModuleDistributionService;
   enabled?: boolean;
   recordAuditEvent?: (event: AuditEventInput) => Promise<unknown>;
+  authorizationAudits?: AuditEventInput[];
 }) {
   const app = makeOpenApiApp<AppEnv>();
   app.use('*', async (context, next) => {
@@ -142,6 +144,17 @@ function appHarness(input: {
     if (!userId) throw new HTTPException(401, { message: 'Authentication required' });
     context.set('userId', userId);
     context.set('userEmail', 'admin@example.com');
+    const permissions = context.req.header('x-test-permissions');
+    const stepUp = context.req.header('x-test-step-up') !== 'missing';
+    (context as unknown as { set(key: string, value: unknown): void }).set('adminSession', {
+      userId,
+      permissions:
+        permissions === undefined
+          ? ['developer.module.distribute']
+          : permissions.split(',').filter(Boolean),
+      stepUpAt: stepUp ? '2026-07-24T14:55:00.000Z' : null,
+      stepUpExpiresAt: stepUp ? '2026-07-24T15:05:00.000Z' : null,
+    });
     await next();
   });
   app.use('*', async (context, next) => {
@@ -155,6 +168,12 @@ function appHarness(input: {
     distributionService: input.service,
     enabled: input.enabled ?? true,
     recordAuditEvent: input.recordAuditEvent ?? (async () => undefined),
+    authorizeAdminDecision: createAdminDecisionAuthorizer({
+      now: () => NOW,
+      recordAuditEvent: async (event) => {
+        input.authorizationAudits?.push(structuredClone(event));
+      },
+    }),
   });
   return app;
 }
@@ -162,6 +181,7 @@ function appHarness(input: {
 const adminHeaders = {
   'x-test-user-id': ADMIN_ID,
   'x-test-platform-role': 'admin',
+  'x-openopc-admin-reason': 'Publishing a verified module release',
   'content-type': 'application/json',
 };
 
@@ -198,8 +218,10 @@ describe('admin developer module distribution API', () => {
 
   test('signs then publishes with fenced revisions and bounded supplemental audit events', async () => {
     const audits: AuditEventInput[] = [];
+    const authorizationAudits: AuditEventInput[] = [];
     const app = appHarness({
       service: service(),
+      authorizationAudits,
       recordAuditEvent: async (event) => {
         audits.push(structuredClone(event));
       },
@@ -243,6 +265,40 @@ describe('admin developer module distribution API', () => {
       }),
     ]);
     expect(JSON.stringify(audits)).not.toMatch(/base64url:|private|payload_digest/i);
+    expect(authorizationAudits).toEqual([
+      expect.objectContaining({
+        accountId: ACCOUNT_ID,
+        actorUserId: ADMIN_ID,
+        action: 'admin.cross_tenant.authorized',
+        metadata: expect.objectContaining({
+          permission: 'developer.module.distribute',
+          decision: 'allowed',
+        }),
+      }),
+      expect.objectContaining({ action: 'admin.cross_tenant.authorized' }),
+    ]);
+  });
+
+  test('requires exact distribution permission, step-up, and a bounded reason', async () => {
+    const app = appHarness({ service: service() });
+    const body = { expected_status: 'approved', expected_revision: 2 };
+    const noPermission = await actionRequest(app, 'sign', body, {
+      ...adminHeaders,
+      'x-test-permissions': '',
+    });
+    const noStepUp = await actionRequest(app, 'sign', body, {
+      ...adminHeaders,
+      'x-test-step-up': 'missing',
+    });
+    const noReason = await actionRequest(app, 'sign', body, {
+      'x-test-user-id': ADMIN_ID,
+      'x-test-platform-role': 'admin',
+      'content-type': 'application/json',
+    });
+
+    expect(noPermission.status).toBe(404);
+    expect(noStepUp.status).toBe(403);
+    expect(noReason.status).toBe(400);
   });
 
   test('denies publisher-account admins and returns stale conflicts as code-only errors', async () => {
@@ -254,6 +310,7 @@ describe('admin developer module distribution API', () => {
       {
         'x-test-user-id': MEMBER_ADMIN_ID,
         'x-test-platform-role': 'admin',
+        'x-openopc-admin-reason': 'Publishing a verified module release',
         'content-type': 'application/json',
       },
     );

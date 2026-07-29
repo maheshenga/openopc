@@ -164,6 +164,7 @@ test('Runner cannot claim an unsupported profile', async () => {
 
 test('claim binds immutable execution state and every capability token into the signed envelope', async () => {
   const execution = dispatchableExecution();
+  execution.deadlineAt = '2026-07-27 09:00:00+00';
   const binding = wasiBinding(execution);
   execution.workEnvelopeDigest = await computeModuleExecutionBindingDigest(
     binding,
@@ -175,6 +176,12 @@ test('claim binds immutable execution state and every capability token into the 
     now: () => new Date(NOW),
     createId: () => '80000000-0000-4000-8000-000000000001',
   });
+  const claimNext = executionRepository.claimNext.bind(executionRepository);
+  executionRepository.claimNext = async (command) => {
+    const claim = await claimNext(command);
+    if (claim) claim.lease.deadlineAt = '2026-07-27 08:00:30+00';
+    return claim;
+  };
   const runnerRepository = createMemoryModuleRunnerRepository({
     runners: [
       {
@@ -435,6 +442,14 @@ test('an authenticated Runner heartbeat advances a leased execution to running',
     leases: [lease],
     now: () => new Date(NOW),
   });
+  const heartbeatLease = executionRepository.heartbeatLease.bind(executionRepository);
+  executionRepository.heartbeatLease = async (command) => {
+    const heartbeat = await heartbeatLease(command);
+    return {
+      execution: { ...heartbeat.execution, deadlineAt: '2026-07-27 09:00:00+00' },
+      lease: { ...heartbeat.lease, deadlineAt: '2026-07-27 08:00:30+00' },
+    };
+  };
   const runnerRepository = createMemoryModuleRunnerRepository({
     runners: [
       {
@@ -466,6 +481,7 @@ test('an authenticated Runner heartbeat advances a leased execution to running',
   });
 
   expect(heartbeat.execution.state).toBe('running');
+  expect(heartbeat.execution.deadlineAt).toBe('2026-07-27T09:00:00.000Z');
   expect(heartbeat.lease.deadlineAt).toBe('2026-07-27T08:00:30.000Z');
 });
 

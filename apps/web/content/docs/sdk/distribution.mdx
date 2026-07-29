@@ -1,6 +1,6 @@
 ---
 title: Distribution
-description: 'How @kortix/sdk ships: npm, the CDN ESM bundle, the window.Kortix script global, version lockstep with platform releases, and the entry-point stability tiers.'
+description: 'How @kortix/sdk ships: npm, the CDN ESM bundle, the window.OpenOPC script global, version lockstep with platform releases, and the entry-point stability tiers.'
 ---
 
 ## npm (the default)
@@ -35,7 +35,7 @@ jsDelivr:
 
 **IIFE global** (`dist/kortix.global.js` — what a bare
 `https://unpkg.com/@kortix/sdk` resolves to, via the package's `unpkg` /
-`jsdelivr` fields) — a single `<script>` tag that defines `window.Kortix`:
+`jsdelivr` fields) — a single `<script>` tag that defines `window.OpenOPC`:
 
 ```html
 <script src="https://unpkg.com/@kortix/sdk/dist/kortix.global.js"></script>
@@ -47,8 +47,8 @@ jsDelivr:
 </script>
 ```
 
-`window.Kortix` **is** the root entry — `Kortix.createKortix`,
-`Kortix.classifyTurn`, `Kortix.ApiError`, no namespaces. Streaming works from
+`window.OpenOPC` **is** the root entry — `Kortix.createKortix`,
+`OpenOPC.classifyTurn`, `OpenOPC.ApiError`, no namespaces. Streaming works from
 the CDN bundles in any modern browser (Safari 16.4+).
 
 <Callout type="warn">
@@ -59,7 +59,7 @@ the CDN bundles in any modern browser (Safari 16.4+).
 ## Versioning — lockstep with the platform
 
 The SDK version is stamped from the platform release at publish time; the SDK
-ships **in lockstep with the Kortix platform**. There is no separate SDK
+ships **in lockstep with the OpenOPC platform**. There is no separate SDK
 release train — a platform release publishes the matching SDK. Pin a version
 or use `^` as you prefer; the API surface follows semver, enforced by a
 committed public-surface snapshot asserted in CI (any rename or removal of an
@@ -77,7 +77,7 @@ supported entry points:
 | `@kortix/sdk/react`                                         | **supported**          | The React hooks layer. The only entry allowed to import React.                                                                      |
 | `@kortix/sdk/server`                                        | **supported**          | Node/Bun-only per-request config isolation (`node:async_hooks`). Never bundle into a browser.                                       |
 | Legacy subpaths (`/projects-client`, `/turns`, `/files`, …) | **deprecated aliases** | Still work — every legacy subpath re-exports from the root — but are frozen. Import from the root instead. Removal only in a major. |
-| Browser store subpaths (`/sync-store`, `/server-store`, …)  | **internal**           | Plumbing consumed by the Kortix web app. Not on `window.Kortix`, not designed API — don't build on them.                            |
+| Browser store subpaths (`/sync-store`, `/server-store`, …)  | **internal**           | Plumbing consumed by the OpenOPC web app. Not on `window.OpenOPC`, not designed API — don't build on them.                            |
 
 These guarantees are enforced mechanically, not by convention: an
 import-graph tripwire fails the build if a framework or `node:*` import ever

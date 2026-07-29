@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/features/layout/section/empty-state';
+import { getModelConnectionDescription } from '@/lib/runtime-brand-copy';
 import { useModelConnectionGate } from './use-model-connection-gate';
 
 /**
@@ -30,7 +31,7 @@ export function ModelConnectionGate({
         icon={KeyRound}
         size={size}
         title="Connect a model to start chatting"
-        description="This session needs an LLM connected before it can respond. Upgrade for instant access to Kortix's managed models, or bring your own API key from any provider."
+        description={getModelConnectionDescription()}
         action={
           <Button type="button" size="sm" onClick={openUpgrade}>
             <CreditCard className="size-3.5" />

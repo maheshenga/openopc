@@ -15,6 +15,7 @@ import { getCatalogItemDetail } from '../../marketplace/catalog';
 import { loadProjectTriggers } from '../triggers';
 import { createRoute, z } from '@hono/zod-openapi';
 import { accountGithubInstallations, projectMembers, projects } from '@kortix/db';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { enforceProjectQuota, grantProjectRole, loadProjectForUser, resolveProjectAccount, assertProjectCapability } from '../lib/access';
@@ -547,7 +548,7 @@ projectsApp.openapi(
         // shared remote root) so the warm reuse is never broken by a divergent tip.
         await backend.seedFiles(connRef, internalPushToken, seed.files, {
           branch: provisioned.defaultBranch,
-          message: 'chore: scaffold Kortix project',
+          message: `chore: scaffold ${PRODUCT_BRAND.displayName} project`,
           baseFiles: seed.baseFiles,
         });
       } else {
@@ -556,7 +557,7 @@ projectsApp.openapi(
           token: internalPushToken,
           files: seed.files,
           branch: provisioned.defaultBranch,
-          commitMessage: 'chore: scaffold Kortix project',
+          commitMessage: `chore: scaffold ${PRODUCT_BRAND.displayName} project`,
           baseFiles: seed.baseFiles,
         });
       }

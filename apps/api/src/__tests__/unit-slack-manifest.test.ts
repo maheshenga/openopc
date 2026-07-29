@@ -29,6 +29,30 @@ describe('committed canonical manifests are generated from the builder (drift gu
     expect(committed('slack-app-manifest.prod.json')).toEqual(buildSlackManifest(CANONICAL_PROD));
   });
 });
+
+describe('canonical Slack manifest product branding', () => {
+  test('presents OpenOPC while retaining the legacy command and callback contract', () => {
+    const manifest = buildSlackManifest(CANONICAL_PROD);
+    const visibleCopy = [
+      manifest.display_information.name,
+      manifest.display_information.description,
+      manifest.display_information.long_description,
+      manifest.features.assistant_view.assistant_description,
+      manifest.features.bot_user.display_name,
+      manifest.features.slash_commands[0]?.description,
+      manifest.features.shortcuts[0]?.name,
+      manifest.features.shortcuts[0]?.description,
+    ];
+
+    expect(manifest.display_information.name).toBe('OpenOPC');
+    expect(manifest.features.bot_user.display_name).toBe('OpenOPC');
+    expect(visibleCopy.every((value) => !value?.includes('Kortix'))).toBe(true);
+    expect(manifest.features.slash_commands[0]?.command).toBe('/kortix');
+    expect(manifest.oauth_config.redirect_urls).toEqual([
+      'https://api.kortix.com/v1/webhooks/slack/oauth/callback',
+    ]);
+  });
+});
 describe('canonical and BYO share ONE implementation (only URLs/names/command differ)', () => {
   const canonical = buildSlackManifest(CANONICAL_PROD);
   const byo = generateSlackManifest({ baseUrl: 'https://api.example.com', projectId: 'proj-123' });
@@ -56,6 +80,9 @@ describe('BYO per-project manifest endpoints', () => {
 
   test('slash command at the per-project endpoint', () => {
     expect(m.features.slash_commands[0]!.url).toBe(`${base}/commands`);
+    expect(m.display_information.name).toBe('OpenOPC');
+    expect(m.features.bot_user.display_name).toBe('OpenOPC');
+    expect(m.features.slash_commands[0]!.command).toBe('/kortix');
     expect(m.features.slash_commands[0]!.usage_hint).toContain('agents');
     expect(m.features.slash_commands[0]!.usage_hint).toContain('models');
     expect(m.features.slash_commands[0]!.usage_hint).toContain('session');
@@ -85,6 +112,8 @@ describe('BYO slash command naming', () => {
       botName: 'kortix',
     });
 
+    expect(manifest.display_information.name).toBe('OpenOPC');
+    expect(manifest.features.bot_user.display_name).toBe('OpenOPC');
     expect(manifest.features.slash_commands[0]?.command).toBe('/kortix');
   });
 
@@ -98,6 +127,18 @@ describe('BYO slash command naming', () => {
 
     expect(manifest.features.slash_commands[0]?.command).toBe('/kortix-no-access');
     expect(defaultByoSlashCommand('Kortix No Access', 'Kortix No Access')).toBe('/kortix-no-access');
+  });
+
+  test('keeps deriving the command from a configured bot name when appName is omitted', () => {
+    const manifest = generateSlackManifest({
+      baseUrl: 'https://api.example.com',
+      projectId: 'proj-123',
+      botName: 'Acme Helper',
+    });
+
+    expect(manifest.display_information.name).toBe('OpenOPC');
+    expect(manifest.features.bot_user.display_name).toBe('Acme Helper');
+    expect(manifest.features.slash_commands[0]?.command).toBe('/acme-helper');
   });
 
   test('allows an explicit command override', () => {

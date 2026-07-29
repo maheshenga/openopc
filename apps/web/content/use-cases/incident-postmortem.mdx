@@ -15,13 +15,13 @@ channel, line it up against the deploys and log spikes, work out the root cause,
 and write it all up. It's an hour of careful work at the moment everyone most
 wants to move on, so it often gets a thin summary or nothing.
 
-We run an agent on Kortix that drafts the first version. When an incident
+We run an agent on OpenOPC that drafts the first version. When an incident
 resolves, it reads the incident channel, correlates the deploys and log spikes,
 and opens a structured postmortem as a doc PR. It drafts; humans review and
 finalize. This is how we write our own postmortems.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">Incident resolved, the agent drafts</Fact>
   <Fact label="Connected systems">Incident channel · Logs · GitHub</Fact>
   <Fact label="Mode">Drafts a doc PR, humans finalize</Fact>
@@ -43,7 +43,7 @@ no one wants right after an incident.
 
 ## What we built
 
-On Kortix, resolving an incident triggers an agent. It reads the incident channel
+On OpenOPC, resolving an incident triggers an agent. It reads the incident channel
 for the timeline, pulls the deploy history and log spikes for the same window,
 correlates them, and drafts a structured postmortem, timeline, root cause, and
 action items, as a doc PR against the repo. The team reviews and edits the draft

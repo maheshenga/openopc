@@ -17,13 +17,13 @@ Full field-by-field comparison: [manifest reference](/docs/reference/manifest).
 
 Backed two ways:
 
-- **Kortix-managed repo** — Kortix creates and hosts a private repo (default).
-- **Imported GitHub repo** — link an existing repo; Kortix operates on it via the
+- **OpenOPC-managed repo** — OpenOPC creates and hosts a private repo (default).
+- **Imported GitHub repo** — link an existing repo; OpenOPC operates on it via the
   GitHub API.
 
 When importing GitHub, choose the branch that becomes this project's
 `default_branch` (the repo's default is just the default choice). Each branch of
-the same GitHub repo can be a separate Kortix project with its own sessions and
+the same GitHub repo can be a separate OpenOPC project with its own sessions and
 change requests, so `main` and `dev` can be managed as independent workspaces.
 The SDK exposes branch discovery through
 `kortix.github.listRepositoryBranches` and imports via

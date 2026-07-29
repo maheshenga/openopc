@@ -52,6 +52,7 @@ import {
   type ProviderGuide,
   PROVIDER_GUIDES,
   SCIM_PROVIDER_GUIDES,
+  SSO_GROUP_MAPPING_INTRO,
   getProviderGuide,
   getScimGuide,
 } from './guides';
@@ -686,7 +687,7 @@ function ImportForm({
         <span>
           <span className="font-medium">Auto-provision groups</span>
           <span className="text-muted-foreground block text-xs">
-            Create a Kortix group for every group your IdP sends — no per-group mapping.
+            {SSO_GROUP_MAPPING_INTRO}
           </span>
         </span>
       </label>

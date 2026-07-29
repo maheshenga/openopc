@@ -363,7 +363,7 @@ export function computeModuleExecutionBindingDigest(
     runtimeArtifactBytes: binding.runtimeArtifactBytes,
     killSwitchGeneration: binding.killSwitchGeneration,
     resourceCeilings: binding.resourceCeilings,
-    deadlineAt,
+    deadlineAt: new Date(deadlineAt).toISOString(),
     inputDigest,
   });
 }

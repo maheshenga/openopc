@@ -11,6 +11,9 @@ build/
 *.tsbuildinfo
 
 # pnpm worktree — per-worktree marker (state lives in ~/.kortix, outside the repo)
+
+# Brainstorm local server state and generated previews may contain a session token.
+.superpowers/brainstorm/
 .kortix-worktree.json
 
 # Environment variables

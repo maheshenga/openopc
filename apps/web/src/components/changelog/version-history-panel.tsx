@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowDownToLine, GitCommit, Loader2, Tag } from 'lucide-react';
 
 import { getAllVersions, type VersionEntry, type VersionChannel } from '@kortix/sdk/platform-client';
+import { getVersionHistoryDescription } from '@/lib/runtime-brand-copy';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -276,7 +277,7 @@ export function VersionHistoryPanel({
                       <> {' '}{tHardcodedUi.raw('componentsChangelogVersionHistoryPanel.line272JsxTextMiddotLatest')}<span className="font-mono font-medium text-primary">{latestVersion.startsWith('dev-') ? latestVersion : `v${latestVersion}`}</span></>
                     )}
                   </>
-                ) : 'Version history for Kortix Computer'
+                ) : getVersionHistoryDescription()
               )}
             </p>
             {updateAvailable && !isUpdating && onUpdateLatest && (

@@ -17,6 +17,9 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Fragment } from 'react';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
+
+const BRAND_NAME = PRODUCT_BRAND.displayName;
 
 export default async function Page(props: { params: Promise<{ slug?: string[] }> }) {
   const params = await props.params;
@@ -140,18 +143,17 @@ export async function generateMetadata(props: {
   const page = source.getPage(slug);
   if (!page) return {};
 
-  // `absolute` opts out of the root `%s | Kortix` template so the title never
-  // doubles up. The docs index frontmatter title is "Kortix", so collapse that
-  // case to just "Kortix Docs" instead of "Kortix | Kortix Docs | Kortix".
+  // `absolute` opts out of the root title template so the product name never
+  // doubles up. Collapse the docs index title to one product-branded label.
   const pageTitle = page.data.title?.trim();
   const title =
-    pageTitle && pageTitle.toLowerCase() !== 'kortix'
-      ? `${pageTitle} – Kortix Docs`
-      : 'Kortix Docs';
+    pageTitle && pageTitle.toLowerCase() !== BRAND_NAME.toLowerCase()
+      ? `${pageTitle} – ${BRAND_NAME} Docs`
+      : `${BRAND_NAME} Docs`;
 
   return {
     title: { absolute: title },
-    description: page.data.description ?? 'Kortix developer documentation.',
+    description: page.data.description ?? `${BRAND_NAME} developer documentation.`,
     alternates: { canonical: `${CANONICAL_ORIGIN}${page.url}` },
   };
 }

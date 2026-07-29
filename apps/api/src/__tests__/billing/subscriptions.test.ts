@@ -170,6 +170,35 @@ describe('createCheckoutSession', () => {
     expect(capturedParams.line_items[0].price_data.unit_amount).toBe(2000);
     expect(capturedParams.line_items[0].price_data.recurring.interval).toBe('month');
   });
+
+  test('brands hosted compute checkout as OpenOPC Local Execution', async () => {
+    mockRegistry.getCreditAccount = async () =>
+      createMockCreditAccount({ tier: 'free', stripeSubscriptionId: null });
+
+    const captured: { productData?: { name: string; description?: string } } = {};
+    mockRegistry.stripeClient.checkout.sessions.create = async (params: {
+      line_items: Array<{
+        price_data: { product_data: { name: string; description?: string } };
+      }>;
+    }) => {
+      captured.productData = params.line_items[0].price_data.product_data;
+      return { id: 'cs_new_123', url: 'https://checkout.stripe.com/test' };
+    };
+
+    await createCheckoutSession({
+      accountId: 'acc_test_123',
+      email: 'test@example.com',
+      tierKey: 'pro',
+      successUrl: 'https://example.com/success',
+      cancelUrl: 'https://example.com/cancel',
+      serverType: 'pro',
+    });
+
+    expect(captured.productData?.name).toBe('OpenOPC Local Execution');
+    expect(captured.productData?.description).toBe(
+      'OpenOPC Local Execution · Pro — 8 vCPU, 16 GB RAM, 320 GB SSD',
+    );
+  });
 });
 
 describe('createPerSeatCheckoutSession', () => {

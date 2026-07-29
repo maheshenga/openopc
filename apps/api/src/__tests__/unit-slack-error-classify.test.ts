@@ -3,6 +3,17 @@ import { describe, expect, test } from 'bun:test';
 import { classifyTurnError, parseBalance } from '../channels/slack/errors';
 
 describe('classifyTurnError', () => {
+  test('uses OpenOPC in actionable settings copy', () => {
+    const results = [
+      classifyTurnError({ name: 'APIError', statusCode: 402, message: 'Payment Required' }),
+      classifyTurnError({ name: 'APIError', statusCode: 404, message: 'model not found' }),
+      classifyTurnError({ name: 'ProviderAuthError', message: 'Invalid API key' }),
+    ];
+
+    expect(JSON.stringify(results)).toContain('OpenOPC');
+    expect(JSON.stringify(results)).not.toContain('Kortix');
+  });
+
   test('out of credits — 402 status', () => {
     const r = classifyTurnError({ name: 'APIError', statusCode: 402, message: 'Payment Required' });
     expect(r.title).toBe('Out of credits');

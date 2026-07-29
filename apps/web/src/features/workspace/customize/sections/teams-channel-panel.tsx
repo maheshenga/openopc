@@ -83,8 +83,8 @@ function InstallFlow({ projectId, mode }: { projectId: string; mode: TeamsMode |
 
   return (
     <SectionCard
-      title="Add Kortix to Microsoft Teams"
-      description="Install the Kortix app into your Teams tenant, then bind this project to that tenant."
+      title="Add OpenOPC to Microsoft Teams"
+      description="Install the OpenOPC app into your Teams tenant, then bind this project to that tenant."
     >
       <div className="space-y-5">
         {managedAvailable && !byo ? (
@@ -118,7 +118,7 @@ function InstallFlow({ projectId, mode }: { projectId: string; mode: TeamsMode |
 
             <ol className="space-y-1.5 text-sm">
               {[
-                'Grant admin consent so the Kortix bot can run in your tenant.',
+                'Grant admin consent so the OpenOPC bot can run in your tenant.',
                 'In Teams Admin Center (or Teams → Apps → Manage your apps → Upload), upload an app package built from the manifest above (plus color.png + outline.png icons).',
                 'Add the app to a chat or channel, then paste your Azure AD tenant ID below to bind it to this project.',
               ].map((line, i) => (
@@ -136,11 +136,11 @@ function InstallFlow({ projectId, mode }: { projectId: string; mode: TeamsMode |
         {managedAvailable ? (
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={byo} onChange={(e) => setByo(e.target.checked)} />
-            <span className="text-muted-foreground">Bring your own Azure bot instead of the managed Kortix bot</span>
+            <span className="text-muted-foreground">Bring your own Azure bot instead of the managed OpenOPC bot</span>
           </label>
         ) : (
           <InfoBanner tone="neutral">
-            No managed Kortix Teams bot is configured on this server. Register a multi-tenant Azure Bot and connect its
+            No managed OpenOPC Teams bot is configured on this server. Register a multi-tenant Azure Bot and connect its
             credentials below; after connecting, point its messaging endpoint at this project&apos;s Teams webhook.
           </InfoBanner>
         )}

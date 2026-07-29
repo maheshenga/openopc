@@ -58,6 +58,7 @@ describe('sendDemoRequestNotification', () => {
     expect(payload.html).toContain('Analytical &lt;Engines&gt;');
     expect(payload.html).toContain('ada@example.com');
     expect(payload.html).toContain('automate our inbound support triage');
+    expect(payload.html).toContain('OpenOPC — automated lead notification');
   });
 
   test('honours the configured recipient override', async () => {

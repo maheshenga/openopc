@@ -26,6 +26,11 @@ import {
 import { auth, errors, json } from '../openapi';
 import type { AuditEventInput } from '../shared/audit';
 import type { AppEnv } from '../types';
+import {
+  authorizeAdminDecision,
+  authorizeAdminTarget,
+  type AdminDecisionAuthorizer,
+} from './admin-authorization';
 
 export const DeveloperModuleReleaseSchema = z.object({
   release_id: z.string().uuid(),
@@ -150,7 +155,42 @@ export type AdminDeveloperReviewRouteDependencies = Readonly<{
     'getAdminTrustView' | 'retryAdmin' | 'cancelAdmin'
   >;
   recordAuditEvent: (input: AuditEventInput) => Promise<unknown>;
+  authorizeAdminDecision?: AdminDecisionAuthorizer;
 }>;
+
+const REVIEW_REQUIREMENT = {
+  permission: 'developer.module.review',
+  stepUp: true,
+  crossTenantAudit: true,
+} as const;
+
+const REVIEW_READ_REQUIREMENT = {
+  permission: 'developer.module.review',
+  stepUp: false,
+  crossTenantAudit: true,
+} as const;
+
+const DISTRIBUTION_REQUIREMENT = {
+  permission: 'developer.module.distribute',
+  stepUp: true,
+  crossTenantAudit: true,
+} as const;
+
+async function authorizeReleaseTarget<T>(
+  context: Context<AppEnv>,
+  authorize: AdminDecisionAuthorizer,
+  requirement: typeof REVIEW_REQUIREMENT | typeof REVIEW_READ_REQUIREMENT | typeof DISTRIBUTION_REQUIREMENT,
+  resolve: () => Promise<T>,
+  accountId: (target: T) => string | null,
+): Promise<T> {
+  await authorize(context, { ...requirement, crossTenantAudit: false });
+  const target = await resolve();
+  const resolvedAccountId = accountId(target);
+  if (resolvedAccountId) {
+    await authorizeAdminTarget(context, resolvedAccountId, requirement, authorize);
+  }
+  return target;
+}
 
 function errorResponse(context: Context<AppEnv>, error: unknown) {
   if (
@@ -223,6 +263,11 @@ export function registerAdminDeveloperReviewRoutes(
     async (context) => {
       const query = context.req.valid('query');
       try {
+        await (dependencies.authorizeAdminDecision ?? authorizeAdminDecision)(context, {
+          permission: REVIEW_READ_REQUIREMENT.permission,
+          stepUp: false,
+          crossTenantAudit: false,
+        });
         const page = await dependencies.reviewService.adminList({
           status: query.status,
           limit: query.limit,
@@ -253,9 +298,17 @@ export function registerAdminDeveloperReviewRoutes(
     }),
     async (context) => {
       try {
-        const detail = await dependencies.reviewService.adminGet({
-          releaseId: context.req.valid('param').releaseId,
-        });
+        const authorize = dependencies.authorizeAdminDecision ?? authorizeAdminDecision;
+        const detail = await authorizeReleaseTarget(
+          context,
+          authorize,
+          REVIEW_READ_REQUIREMENT,
+          () =>
+            dependencies.reviewService.adminGet({
+              releaseId: context.req.valid('param').releaseId,
+            }),
+          (target) => target.release.account_id,
+        );
         return context.json(detail, 200);
       } catch (error) {
         if (error instanceof DeveloperModuleReviewError && error.status === 404) {
@@ -281,9 +334,17 @@ export function registerAdminDeveloperReviewRoutes(
     }),
     async (context) => {
       try {
-        const view = await dependencies.verificationService.getAdminTrustView({
-          releaseId: context.req.valid('param').releaseId,
-        });
+        const authorize = dependencies.authorizeAdminDecision ?? authorizeAdminDecision;
+        const view = await authorizeReleaseTarget(
+          context,
+          authorize,
+          REVIEW_READ_REQUIREMENT,
+          () =>
+            dependencies.verificationService.getAdminTrustView({
+              releaseId: context.req.valid('param').releaseId,
+            }),
+          (target) => target.account_id,
+        );
         return context.json(view, 200);
       } catch (error) {
         return verificationReadErrorResponse(context, error);
@@ -312,6 +373,17 @@ export function registerAdminDeveloperReviewRoutes(
     }),
     async (context) => {
       try {
+        const authorize = dependencies.authorizeAdminDecision ?? authorizeAdminDecision;
+        const view = await authorizeReleaseTarget(
+          context,
+          authorize,
+          REVIEW_REQUIREMENT,
+          () =>
+            dependencies.verificationService.getAdminTrustView({
+              releaseId: context.req.valid('param').releaseId,
+            }),
+          (target) => target.account_id,
+        );
         const run = await dependencies.verificationService.retryAdmin({
           releaseId: context.req.valid('param').releaseId,
         });
@@ -357,6 +429,17 @@ export function registerAdminDeveloperReviewRoutes(
     }),
     async (context) => {
       try {
+        const authorize = dependencies.authorizeAdminDecision ?? authorizeAdminDecision;
+        const view = await authorizeReleaseTarget(
+          context,
+          authorize,
+          REVIEW_REQUIREMENT,
+          () =>
+            dependencies.verificationService.getAdminTrustView({
+              releaseId: context.req.valid('param').releaseId,
+            }),
+          (target) => target.account_id,
+        );
         const run = await dependencies.verificationService.cancelAdmin({
           releaseId: context.req.valid('param').releaseId,
         });
@@ -409,6 +492,18 @@ export function registerAdminDeveloperReviewRoutes(
         if (distributionRevoke && !dependencies.distributionEnabled) {
           throw new DeveloperModuleDistributionError('DEVELOPER_MODULE_SIGNER_UNAVAILABLE', 503);
         }
+        const authorize = dependencies.authorizeAdminDecision ?? authorizeAdminDecision;
+        const requirement = distributionRevoke ? DISTRIBUTION_REQUIREMENT : REVIEW_REQUIREMENT;
+        await authorizeReleaseTarget(
+          context,
+          authorize,
+          requirement,
+          () =>
+            dependencies.reviewService.adminGet({
+              releaseId: context.req.valid('param').releaseId,
+            }),
+          (target) => target.release.account_id,
+        );
         const transition = distributionRevoke
           ? await dependencies.distributionService.revoke({
               releaseId: context.req.valid('param').releaseId,

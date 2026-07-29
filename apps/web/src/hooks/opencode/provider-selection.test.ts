@@ -108,6 +108,7 @@ describe('provider-selection', () => {
     expect(list.connected).toEqual(['kortix']);
     expect(list.default).toEqual({ kortix: 'auto' });
     expect(list.all?.[0]?.id).toBe('kortix');
+    expect(list.all?.[0]?.name).toBe('OpenOPC');
     expect(Object.keys(list.all?.[0]?.models ?? {})).toEqual(['auto', 'claude-opus-4.8']);
     expect((list.all?.[0]?.models as any)?.['deepseek-v4-flash-free']).toBeUndefined();
   });

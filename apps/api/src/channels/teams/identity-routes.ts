@@ -33,12 +33,12 @@ teamsIdentityApp.openapi(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="refresh" content="0; url=${target}" />
-    <title>Opening Kortix</title>
+    <title>Opening OpenOPC</title>
   </head>
   <body>
-    <p>Opening Kortix...</p>
+    <p>Opening OpenOPC...</p>
     <script>window.location.replace(${JSON.stringify(target)});</script>
-    <p><a href="${target}">Continue to Kortix</a></p>
+    <p><a href="${target}">Continue to OpenOPC</a></p>
   </body>
 </html>`);
   },
@@ -57,7 +57,7 @@ teamsIdentityApp.openapi(
     method: 'post',
     path: '/bind',
     tags: ['channels'],
-    summary: 'Bind the calling Kortix user to a Teams user from a login token',
+    summary: 'Bind the calling OpenOPC user to a Teams user from a login token',
     ...auth,
     middleware: [combinedAuth] as const,
     request: { body: { content: { 'application/json': { schema: BindBody } } } },
@@ -81,7 +81,7 @@ teamsIdentityApp.openapi(
 
     const projectIds = await listProjectsForWorkspace('teams', payload.tenantId);
     if (projectIds.length === 0) {
-      return c.json({ error: 'This Teams tenant is not connected to any Kortix project.' }, 403);
+      return c.json({ error: 'This Teams tenant is not connected to any OpenOPC project.' }, 403);
     }
     const accountRows = await db
       .select({ accountId: projects.accountId })

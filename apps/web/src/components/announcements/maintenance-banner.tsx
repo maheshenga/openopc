@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { usePathname } from 'next/navigation';
 import { normalizeAppPathname } from '@kortix/sdk/instance-routes';
-import { useAdminRole } from '@/hooks/admin/use-admin-role';
+import { usePlatformOperatorRole } from '@/hooks/platform/use-platform-operator-role';
 import type { MaintenanceConfig, MaintenanceLevel } from '@/lib/maintenance-store';
 
 interface MaintenanceBannerProps {
@@ -60,7 +60,7 @@ export function MaintenanceBanner({ config }: MaintenanceBannerProps) {
   const [isMounted, setIsMounted] = useState(false);
   const [countdown, setCountdown] = useState<string>('');
   const pathname = normalizeAppPathname(usePathname());
-  const { data: adminRole } = useAdminRole();
+  const { data: adminRole } = usePlatformOperatorRole();
   const isAdmin = adminRole?.isAdmin === true;
 
   // Show the banner app-wide (dashboard + marketing) so a system notice reaches

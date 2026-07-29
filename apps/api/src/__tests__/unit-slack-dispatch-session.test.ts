@@ -87,6 +87,7 @@ mock.module('../projects/session-lifecycle', () => ({
 let finalizeCalls: Array<{ error?: string; answer?: string }> = [];
 let ephemerals: Array<{ channel: string; user: string; text: string; threadTs?: string }> = [];
 let messages: Array<{ channel: string; text: string; threadTs?: string }> = [];
+let blockPosts: unknown[][] = [];
 mock.module('../channels/slack/turn', () => ({
   claimFinalize: async () => true,
   openPlanMessage: async () => true,
@@ -131,7 +132,10 @@ mock.module('../channels/slack-api', () => ({
   getChannelName: async () => 'general',
   joinChannel: async () => true,
   openDmChannel: async () => 'D1',
-  postBlocks: async () => 'ts',
+  postBlocks: async (...args: unknown[]) => {
+    blockPosts.push(args);
+    return 'ts';
+  },
   postEphemeral: async (_token: string, channel: string, user: string, text: string, _blocks?: unknown[], threadTs?: string) => {
     ephemerals.push({ channel, user, text, threadTs });
     return true;
@@ -148,7 +152,7 @@ mock.module('../channels/slack-api', () => ({
   updateMessage: async () => {},
 }));
 
-const { spawnAgentTurn, dispatchSlackEvent } = await import('../channels/slack/dispatch');
+const { spawnAgentTurn, dispatchSlackEvent, maybePostChannelIntro } = await import('../channels/slack/dispatch');
 const { config } = await import('../config');
 const { inboundMessageKey } = await import('../channels/slack/dedup');
 const { resetSlackSessionLifecycleForTest, setSlackSessionLifecycleForTest } = await import('../channels/slack/session');
@@ -171,6 +175,7 @@ beforeEach(() => {
   finalizeCalls = [];
   ephemerals = [];
   messages = [];
+  blockPosts = [];
   createSessionCalls = 0;
   createSessionInputs = [];
   deliverCalls = 0;
@@ -185,6 +190,22 @@ beforeEach(() => {
       return { status: 'created', sessionId: 'replacement-sess', row: fakeSessionRow('replacement-sess') };
     },
     resolveProjectAutomationActor: async () => 'user-1',
+  });
+});
+
+describe('Slack channel introduction branding', () => {
+  test('shows OpenOPC while retaining the existing Slack event contract', async () => {
+    dbResults = [[{ projectId: 'proj-1' }], [{ name: 'Project One' }]];
+
+    await maybePostChannelIntro('T1', {
+      type: 'member_joined_channel',
+      channel: 'C1',
+      user: 'B1',
+    } as any);
+
+    expect(blockPosts).toHaveLength(1);
+    expect(JSON.stringify(blockPosts[0])).toContain('OpenOPC');
+    expect(JSON.stringify(blockPosts[0])).not.toContain('Kortix');
   });
 });
 
@@ -320,7 +341,7 @@ describe('spawnAgentTurn — unauthenticated Slack prompt placement', () => {
       expect(ephemerals[0]).toMatchObject({
         channel: 'C1',
         user: 'U1',
-        text: 'Kortix needs a linked Kortix account to continue.',
+        text: 'OpenOPC needs a linked OpenOPC account to continue.',
       });
       expect(ephemerals[0].threadTs).toBeUndefined();
     } finally {
@@ -382,7 +403,7 @@ describe('spawnAgentTurn — permanent 1:1 thread↔session, never a second sess
     expect(finalizeCalls.at(-1)?.error).toContain('error');
     // The notice links straight to the session so the thread isn't a dead end.
     expect(finalizeCalls.at(-1)?.error).toContain('proj-1/sessions/sess-1');
-    expect(finalizeCalls.at(-1)?.error).toContain('Open it in Kortix');
+    expect(finalizeCalls.at(-1)?.error).toContain('Open it in OpenOPC');
   });
 
   test('failed AGAIN → notice already claimed → stay silent (no repeat, the thread isn’t spammed)', async () => {
@@ -506,7 +527,7 @@ describe('dispatchSlackEvent — exactly-once per inbound user message', () => {
     expect(ephemerals[0]).toMatchObject({
       channel: 'C1',
       user: 'U1',
-      text: 'Kortix needs a linked Kortix account to continue.',
+      text: 'OpenOPC needs a linked OpenOPC account to continue.',
     });
 
     dbResults = [

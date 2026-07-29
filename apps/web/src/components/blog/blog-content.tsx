@@ -137,7 +137,7 @@ function VerdictBlock({
       </div>
       <div className="border-kortix-green/30 bg-kortix-green/[0.06] flex flex-col rounded-2xl border p-6">
         <span className="text-foreground flex items-center gap-2 text-sm font-semibold">
-          <span className="bg-kortix-green size-2 rounded-full" /> Choose Kortix if…
+          <span className="bg-kortix-green size-2 rounded-full" /> Choose OpenOPC if…
         </span>
         <p className="text-foreground mt-3 text-base leading-relaxed">{renderInline(kortix)}</p>
       </div>

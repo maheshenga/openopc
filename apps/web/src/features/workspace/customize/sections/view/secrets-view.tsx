@@ -391,7 +391,7 @@ function buildRows(raw: ProjectSecretsResponse | ProjectSecret[] | null | undefi
 }
 
 function statusLabel(row: SecretRow): string {
-  if (row.system) return row.configured ? 'Managed by Kortix' : 'Not set';
+  if (row.system) return row.configured ? 'Managed by OpenOPC' : 'Not set';
   return row.configured ? 'Set' : 'Not set';
 }
 

@@ -10,6 +10,11 @@ import { DEVELOPER_MODULE_RELEASE_STATUSES } from '../developer/releases';
 import { auth, errors, json } from '../openapi';
 import type { AuditEventInput } from '../shared/audit';
 import type { AppEnv } from '../types';
+import {
+  authorizeAdminDecision,
+  authorizeAdminTarget,
+  type AdminDecisionAuthorizer,
+} from './admin-authorization';
 import { DeveloperModuleReleaseSchema } from './developer-reviews';
 
 const DistributionEventSchema = z.object({
@@ -46,10 +51,36 @@ const PublishBodySchema = z
   .strict();
 
 export type AdminDeveloperDistributionRouteDependencies = Readonly<{
-  distributionService: Pick<DeveloperModuleDistributionService, 'sign' | 'publish'>;
+  distributionService: Pick<
+    DeveloperModuleDistributionService,
+    'getAdminRelease' | 'sign' | 'publish'
+  >;
   enabled: boolean;
   recordAuditEvent: (input: AuditEventInput) => Promise<unknown>;
+  authorizeAdminDecision?: AdminDecisionAuthorizer;
 }>;
+
+const DISTRIBUTION_REQUIREMENT = {
+  permission: 'developer.module.distribute',
+  stepUp: true,
+  crossTenantAudit: true,
+} as const;
+
+async function authorizeDistribution(
+  context: Context<AppEnv>,
+  dependencies: AdminDeveloperDistributionRouteDependencies,
+  releaseId: string,
+): Promise<void> {
+  const authorize = dependencies.authorizeAdminDecision ?? authorizeAdminDecision;
+  const release = await dependencies.distributionService.getAdminRelease(releaseId);
+  if (release) {
+    await authorizeAdminTarget(context, release.account_id, DISTRIBUTION_REQUIREMENT, authorize);
+    return;
+  }
+  // Keep not-found responses opaque while still enforcing the platform
+  // permission and step-up boundary before the service lookup is exposed.
+  await authorize(context, { ...DISTRIBUTION_REQUIREMENT, crossTenantAudit: false });
+}
 
 function errorResponse(context: Context<AppEnv>, error: unknown) {
   if (error instanceof DeveloperPublisherError) {
@@ -145,6 +176,11 @@ export function registerAdminDeveloperDistributionRoutes(
     async (context) => {
       const body = context.req.valid('json');
       try {
+        await authorizeDistribution(
+          context,
+          dependencies,
+          context.req.valid('param').releaseId,
+        );
         assertEnabled(dependencies.enabled);
         const transition = await dependencies.distributionService.sign({
           releaseId: context.req.valid('param').releaseId,
@@ -188,6 +224,11 @@ export function registerAdminDeveloperDistributionRoutes(
     async (context) => {
       const body = context.req.valid('json');
       try {
+        await authorizeDistribution(
+          context,
+          dependencies,
+          context.req.valid('param').releaseId,
+        );
         assertEnabled(dependencies.enabled);
         const transition = await dependencies.distributionService.publish({
           releaseId: context.req.valid('param').releaseId,

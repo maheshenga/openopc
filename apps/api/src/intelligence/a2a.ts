@@ -12,6 +12,7 @@ import {
   type TaskEvent,
   TaskEventSchema,
 } from '@kortix/intelligence-contracts';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import type { IntelligenceTaskCreateInput, IntelligenceTaskCreateResult } from './task-service';
 
 export const A2A_PROTOCOL_VERSION = '1.0.1' as const;
@@ -66,7 +67,7 @@ export function serializeAgentCard(card: AgentCard): Response {
   const parsed = AgentCardSchema.parse(card);
   const body = {
     name: parsed.display_name,
-    description: `Kortix project agent ${parsed.id}`,
+    description: `${PRODUCT_BRAND.displayName} project agent ${parsed.id}`,
     version: parsed.version,
     protocolVersion: A2A_PROTOCOL_VERSION,
     capabilities: {

@@ -55,7 +55,7 @@ export function ConnectorIntake({
         setPhase('ready');
       } catch {
         if (!cancelled) {
-          setError('Could not reach Kortix. Check your connection and try again.');
+          setError('Could not reach OpenOPC. Check your connection and try again.');
           setPhase('error');
         }
       }

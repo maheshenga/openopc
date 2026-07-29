@@ -6,8 +6,8 @@
 # Code signing / notarization are env-driven (CSC_LINK / APPLE_* / WIN_CSC_*) so
 # unsigned local builds work for testing; CI injects the secrets.
 appId: com.kortix.desktop
-productName: Kortix
-copyright: © Kortix
+productName: OpenOPC
+copyright: © Kortix AI Corp
 
 # Publish target. We never auto-publish from electron-builder (CI uploads the
 # artifacts itself with --publish never), but a concrete provider is REQUIRED:
@@ -28,6 +28,12 @@ files:
   - src/**/*
   - assets/**/*
   - package.json
+
+# Keep the self-contained sidecar outside app.asar so Electron's embedded Node
+# can execute it directly. No source TypeScript or workspace package is shipped.
+extraResources:
+  - from: ../../packages/openopc-desktop-agent/dist/openopc-agent-sidecar.cjs
+    to: openopc-agent-sidecar.cjs
 
 # Registers the kortix:// deep-link scheme (auth callbacks) in the OS bundle.
 protocols:
@@ -64,9 +70,9 @@ mac:
       NSAllowsLocalNetworking: true
 
 # Per-arch dmg name so the /download route can pick the right one
-# (e.g. Kortix-0.9.82-arm64.dmg / Kortix-0.9.82-x64.dmg).
+# (e.g. OpenOPC-0.9.82-arm64.dmg / OpenOPC-0.9.82-x64.dmg).
 dmg:
-  title: Kortix ${version}
+  title: OpenOPC ${version}
   artifactName: ${productName}-${version}-${arch}.${ext}
 
 win:

@@ -1,6 +1,6 @@
 ---
 title: "How we answer security questionnaires"
-description: An agent we run on Kortix — connected to the inbound questionnaire and our knowledge base of vetted answers and policies. It parses each question, drafts responses in the vendor's format, and flags anything it can't answer confidently.
+description: An agent we run on OpenOPC — connected to the inbound questionnaire and our knowledge base of vetted answers and policies. It parses each question, drafts responses in the vendor's format, and flags anything it can't answer confidently.
 date: "2026-04-15"
 author: team
 tags:
@@ -15,12 +15,12 @@ about our encryption, access controls, data handling, and policies — but they 
 in different formats each time, a SIG one deal, a CAIQ the next, a custom
 spreadsheet after that, and each has to be filled out in its own layout.
 
-We run an agent on Kortix that drafts the answers from our vetted knowledge base.
+We run an agent on OpenOPC that drafts the answers from our vetted knowledge base.
 This is how we answer our own security questionnaires, including the connections
 and guardrails involved.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Runs on">Each inbound questionnaire</Fact>
   <Fact label="Connected systems">Inbound questionnaire · Knowledge base</Fact>
   <Fact label="Mode">Drafts only · security reviews before it's sent</Fact>
@@ -43,7 +43,7 @@ on a security document.
 
 ## What we built
 
-On Kortix, each inbound questionnaire triggers an agent. It spawns an isolated
+On OpenOPC, each inbound questionnaire triggers an agent. It spawns an isolated
 session (a cloud sandbox) with access to our knowledge base of vetted answers and
 policy docs. It parses each question, matches it to our approved answers and
 policies, drafts responses in the vendor's own format — SIG, CAIQ, or a custom

@@ -16,11 +16,11 @@ accumulate, and nobody notices until an audit or an incident surfaces them all a
 once. By then reconstructing when each drift happened is hard.
 
 We handle this by checking the infrastructure against policy every day, so drift
-surfaces the day it appears. This writes up how we run that on Kortix — the
+surfaces the day it appears. This writes up how we run that on OpenOPC — the
 connections, the steps, and the guardrails — so you can set up the same sweep.
 
 <KeyFacts>
-  <Fact label="Team">Kortix</Fact>
+  <Fact label="Team">OpenOPC</Fact>
   <Fact label="Trigger">A daily scheduled sweep</Fact>
   <Fact label="Connected systems">AWS · Audit logs · Slack</Fact>
   <Fact label="Mode">Cron-driven · Review-gated</Fact>
@@ -40,7 +40,7 @@ applied silently.
 
 ## What we built
 
-On Kortix, a daily schedule triggers an agent. Each sweep runs in its own
+On OpenOPC, a daily schedule triggers an agent. Each sweep runs in its own
 isolated session — a cloud sandbox — with scoped, read access to AWS and the
 audit logs. The agent checks resources against policy — public buckets, untagged
 resources, over-broad roles — and files what it finds to Slack. Remediation is
@@ -109,7 +109,7 @@ narrower policy held for review.
 ## Guardrails
 
 Giving an agent a standing view of the infrastructure is a trust question. The
-relevant controls on Kortix:
+relevant controls on OpenOPC:
 
 - **Isolation.** Every sweep runs in its own microVM sandbox on its own branch.
   The session can reach only what it's scoped to read, and only the findings it

@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import { createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { projects } from '@kortix/db';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 import { db } from '../shared/db';
 import { config } from '../config';
 import { slackOauthMode } from './slack-oauth-mode';
@@ -79,7 +80,7 @@ slackOauthApp.openapi(
       }),
     },
     responses: {
-      302: { description: 'Redirect to the Kortix dashboard' },
+      302: { description: `Redirect to the ${PRODUCT_BRAND.displayName} dashboard` },
       ...errors(400, 503),
     },
   }),

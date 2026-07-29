@@ -22,6 +22,10 @@ import {
 } from '@/features/auth/auth-consent';
 import { ErrorStrip, Rise, StepHeader } from '@/features/auth/auth-primitives';
 import { useAuth } from '@/features/providers/auth-provider';
+import {
+  buildChatIdentityConnectCopy,
+  buildChatIdentitySuccessDescription,
+} from '@/lib/auth/auth-brand-copy';
 
 interface BindResult {
   workspaceName?: string | null;
@@ -86,29 +90,28 @@ export function ChatIdentityConnect({
   }
 
   if (phase === 'success') {
-    const workspace = result?.workspaceName ? ` in ${result.workspaceName}` : '';
     return (
       <AuthStatusScreen
         title={`${service} connected`}
-        description={
-          !result?.hasAccess
-            ? `Your Kortix account is connected${workspace}. Head back to ${service} and request project access to continue.`
-            : result?.resumed
-              ? `Your Kortix account is connected${workspace}. Kortix is picking up your ${service} message now.`
-              : `Your Kortix account is connected${workspace}. Head back to ${service} and mention Kortix with a task.`
-        }
+        description={buildChatIdentitySuccessDescription({
+          service,
+          workspaceName: result?.workspaceName,
+          resumed: result?.resumed === true,
+          hasAccess: result?.hasAccess === true,
+        })}
       />
     );
   }
 
   const busy = phase === 'binding';
+  const connectCopy = buildChatIdentityConnectCopy(service);
 
   return (
     <AuthFrame>
       <Rise>
         <StepHeader
-          title={`Connect ${service} to Kortix`}
-          description={`The Kortix bot in ${service} will run as you, with your own credentials, secrets, and connected apps instead of the installer's.`}
+          title={connectCopy.title}
+          description={connectCopy.description}
         />
       </Rise>
 

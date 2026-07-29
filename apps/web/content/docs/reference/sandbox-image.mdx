@@ -1,15 +1,15 @@
 ---
 title: Sandbox image
-description: The layered Docker image, what Kortix injects, constraints, examples, and snapshot rebuilds.
+description: The layered Docker image, what OpenOPC injects, constraints, examples, and snapshot rebuilds.
 ---
 
 The sandbox base image. For how a session uses it at runtime, see [Session runtime](/docs/reference/session-runtime).
 
-Every session boots inside a Docker container, built in two parts: **your Dockerfile** defines the environment (languages, tools, system packages), and the **Kortix runtime layer** is auto-injected on top so the dashboard can connect.
+Every session boots inside a Docker container, built in two parts: **your Dockerfile** defines the environment (languages, tools, system packages), and the **OpenOPC runtime layer** is auto-injected on top so the dashboard can connect.
 
 ```
 ┌─────────────────────────────────────────┐
-│  Kortix runtime layer (auto-injected)   │  ← opencode + kortix-agent + ENTRYPOINT
+│  OpenOPC runtime layer (auto-injected)   │  ← opencode + kortix-agent + ENTRYPOINT
 ├─────────────────────────────────────────┤
 │  Your Dockerfile                        │  ← .kortix/Dockerfile
 └─────────────────────────────────────────┘
@@ -48,7 +48,7 @@ default = "dev"
 
 Each entry sets exactly one of `dockerfile` or `image`. Paths must be repo-relative — absolute paths and `..` traversal are rejected. A singular `sandbox` block with image/build keys on it directly (rather than under `templates`) is **legacy and rejected**; image definitions live under `sandbox.templates`, and `sandbox` itself otherwise only carries `default`. Field details: [the manifest reference](/docs/reference/manifest#sandboxtemplates--sandboxtemplates).
 
-## What the Kortix layer injects
+## What the OpenOPC layer injects
 
 On top of your Dockerfile's final stage, the snapshot builder appends:
 
@@ -69,21 +69,21 @@ These rules keep a sandbox connectable. They aren't enforced statically — your
 
 | Rule | Why |
 | --- | --- |
-| Don't set `ENTRYPOINT`. | Kortix overrides it. Your `CMD` is also ignored. |
+| Don't set `ENTRYPOINT`. | OpenOPC overrides it. Your `CMD` is also ignored. |
 | Don't claim port `8000`. | Reserved for the daemon's reverse proxy. Run your dev servers on other ports. |
 | `FROM` a Debian/Ubuntu-family base. | The layer assumes `apt-get`. Alpine, Fedora, Arch will fail at layer build. |
-| Don't `RUN apt-get clean` without `rm -rf /var/lib/apt/lists/*`. | The Kortix layer re-runs `apt-get update`; a broken lists cache breaks it. |
+| Don't `RUN apt-get clean` without `rm -rf /var/lib/apt/lists/*`. | The OpenOPC layer re-runs `apt-get update`; a broken lists cache breaks it. |
 | Don't bake credentials into the image. | Declare the name in `env:` (or legacy `[env]`) and set the value in the dashboard's Environment variables page — it's injected at session start. |
 
 Everything else is fair game: `RUN curl … | sh` for toolchains, COPY seed data, set `ENV` for non-secret config, install any apt/npm packages.
 
 ## Examples
 
-The starter ships no Dockerfile — `sandbox.templates` is a commented-out example in `kortix.yaml`, so a fresh project boots the platform's default image (bare Ubuntu plus the Kortix runtime layer above):
+The starter ships no Dockerfile — `sandbox.templates` is a commented-out example in `kortix.yaml`, so a fresh project boots the platform's default image (bare Ubuntu plus the OpenOPC runtime layer above):
 
 ```dockerfile
 # syntax=docker/dockerfile:1.7
-# Kortix platform default sandbox base.
+# OpenOPC platform default sandbox base.
 FROM ubuntu:24.04
 
 WORKDIR /workspace

@@ -6,29 +6,37 @@ import { Reveal } from '@/components/home/reveal';
 import { EmptyState } from '@/features/layout/section/empty-state';
 import { getAllPosts } from '@/lib/blog';
 import { siteMetadata } from '@/lib/site-metadata';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 const TITLE = 'Blog';
 const DESCRIPTION =
-  'Field notes on building, running, and governing AI agents that do real work — from the team building the Kortix command center.';
+  `Field notes on building, running, and governing AI agents that do real work — from the team building the ${PRODUCT_BRAND.displayName} command center.`;
 const URL = `${siteMetadata.url}/blog`;
+const SOCIAL_IMAGE = `${siteMetadata.url}/brandkit/Profile%20Picture/Avatar%20Black.png`;
 
 export const metadata: Metadata = {
   title: TITLE,
   description: DESCRIPTION,
-  keywords: ['Kortix blog', 'AI agents', 'AI command center', 'AI workforce', 'agent automation'],
+  keywords: [
+    `${PRODUCT_BRAND.displayName} blog`,
+    'AI agents',
+    'AI command center',
+    'AI workforce',
+    'agent automation',
+  ],
   openGraph: {
     type: 'website',
-    title: `Kortix ${TITLE}`,
+    title: `${PRODUCT_BRAND.displayName} ${TITLE}`,
     description: DESCRIPTION,
     url: URL,
-    siteName: 'Kortix',
-    images: [{ url: `${siteMetadata.url}/banner.png` }],
+    siteName: PRODUCT_BRAND.displayName,
+    images: [{ url: SOCIAL_IMAGE }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: `Kortix ${TITLE}`,
+    title: `${PRODUCT_BRAND.displayName} ${TITLE}`,
     description: DESCRIPTION,
-    images: [`${siteMetadata.url}/banner.png`],
+    images: [SOCIAL_IMAGE],
   },
   alternates: {
     canonical: URL,
@@ -45,12 +53,12 @@ export default function BlogIndexPage() {
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Blog',
-    name: 'Kortix Blog',
+    name: `${PRODUCT_BRAND.displayName} Blog`,
     description: DESCRIPTION,
     url: URL,
     publisher: {
       '@type': 'Organization',
-      name: 'Kortix',
+      name: PRODUCT_BRAND.displayName,
       logo: { '@type': 'ImageObject', url: `${siteMetadata.url}/favicon.png` },
     },
     blogPost: posts.map((post) => ({

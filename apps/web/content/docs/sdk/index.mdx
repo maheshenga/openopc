@@ -1,11 +1,11 @@
 ---
 title: TypeScript SDK
-description: '@kortix/sdk — one typed client for the Kortix platform: projects, sessions, and the live agent runtime, behind a single session-scoped facade.'
+description: '@kortix/sdk — one typed client for the OpenOPC platform: projects, sessions, and the live agent runtime, behind a single session-scoped facade.'
 ---
 
 import { Card, Cards } from 'fumadocs-ui/components/card';
 
-`@kortix/sdk` is the single, opinionated data layer for the Kortix platform. One
+`@kortix/sdk` is the single, opinionated data layer for the OpenOPC platform. One
 typed client wraps both the **Kortix REST API** and the **OpenCode runtime**, so a
 host app — web, mobile, or your own — imports **only `@kortix/sdk`** and never
 touches the raw API, `authenticatedFetch`, or `@opencode-ai/sdk` directly.
@@ -28,7 +28,7 @@ s.previewUrl(3000, '/docs'); // proxy URL for a port the agent exposed
 
 ## Philosophy
 
-- **One token.** Auth is a single Kortix token — a Supabase JWT or a `kortix_pat_…` — supplied once via `getToken`. Keys never leave the server.
+- **One token.** Auth is a single OpenOPC token — a Supabase JWT or a `kortix_pat_…` — supplied once via `getToken`. Keys never leave the server.
 - **Session-scoped.** You hold a _session_ and ask it about its own runtime: `session.health()`, `session.previewUrl()`. The sandbox is an implementation detail you never name.
 - **Mutations own their side-effects** — server-side. You state intent; the SDK doesn't orchestrate side-effects client-side.
 - **One import.** No `@opencode-ai/sdk`, no raw `backendApi`, no `authenticatedFetch` in host code — everything is reachable through `createKortix` or a `@kortix/sdk/*` subpath.

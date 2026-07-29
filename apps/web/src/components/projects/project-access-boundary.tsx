@@ -31,7 +31,7 @@ import { KortixHyperLogo } from '@/components/ui/marketing/kortix-hyper-logo';
 import { Textarea } from '@/components/ui/textarea';
 import { WallpaperBackground } from '@/components/ui/wallpaper-background';
 import { useAuth } from '@/features/providers/auth-provider';
-import { useAdminRole } from '@/hooks/admin/use-admin-role';
+import { usePlatformOperatorRole } from '@/hooks/platform/use-platform-operator-role';
 import { setAdminBypass } from '@/lib/api-client';
 import { getProjectDetail, requestProjectAccess } from '@kortix/sdk/projects-client';
 import { cn } from '@/lib/utils';
@@ -129,7 +129,7 @@ function ForbiddenProjectState({ projectId }: { projectId: string }) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const { data: adminRole } = useAdminRole();
+  const { data: adminRole } = usePlatformOperatorRole();
   const [message, setMessage] = useState('');
   const [sent, setSent] = useState(false);
   const [inlineError, setInlineError] = useState<string | null>(null);
@@ -203,7 +203,7 @@ function ForbiddenProjectState({ projectId }: { projectId: string }) {
       description={
         sent
           ? 'A project manager can approve you from the Members screen. Keep this page open and check again once they approve the request.'
-          : 'This Kortix workspace is private. Send a short note and a project manager can add you as a viewer.'
+          : 'This OpenOPC workspace is private. Send a short note and a project manager can add you as a viewer.'
       }
       panelTitle={sent ? 'Waiting for approval' : 'Access request'}
       panelDescription={

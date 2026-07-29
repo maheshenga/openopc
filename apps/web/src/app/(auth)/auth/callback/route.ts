@@ -8,6 +8,10 @@ import { getServerPublicEnv } from '@/lib/public-env-server';
 import { createClient } from '@/lib/supabase/server';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
+import {
+  completeRegistrationFromSession,
+  registrationMetadataAfterCompletion,
+} from '../complete-registration';
 
 /**
  * Auth Callback Route - Web Handler
@@ -151,6 +155,28 @@ export async function GET(request: NextRequest) {
         authEvent = isNewUser ? 'signup' : 'login';
         authMethod = data.user.app_metadata?.provider || 'email';
 
+        const backendUrl = process.env.BACKEND_URL || runtimeEnv.BACKEND_URL || '';
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = data.session?.access_token || sessionData?.session?.access_token || '';
+        let currentMetadata = (data.user.user_metadata || {}) as Record<string, unknown>;
+        const registrationCompletion = await completeRegistrationFromSession({
+          backendUrl,
+          accessToken,
+          userMetadata: currentMetadata,
+        });
+        if (!registrationCompletion.completed) {
+          return NextResponse.redirect(`${baseUrl}/auth?error=registration_completion_failed`);
+        }
+        if (registrationCompletion.required) {
+          currentMetadata = registrationMetadataAfterCompletion(currentMetadata);
+          const { error: metadataError } = await supabase.auth.updateUser({
+            data: currentMetadata,
+          });
+          if (metadataError) {
+            return NextResponse.redirect(`${baseUrl}/auth?error=registration_completion_failed`);
+          }
+        }
+
         const pendingReferralCode = request.cookies.get('pending-referral-code')?.value;
         if (pendingReferralCode) {
           try {
@@ -159,6 +185,7 @@ export async function GET(request: NextRequest) {
                 referral_code: pendingReferralCode,
               },
             });
+            currentMetadata = { ...currentMetadata, referral_code: pendingReferralCode };
             shouldClearReferralCookie = true;
           } catch (error) {
             console.error('Failed to add referral code to OAuth user:', error);
@@ -166,7 +193,6 @@ export async function GET(request: NextRequest) {
         }
 
         if (termsAccepted) {
-          const currentMetadata = data.user.user_metadata || {};
           if (!currentMetadata.terms_accepted_at) {
             try {
               await supabase.auth.updateUser({
@@ -182,10 +208,6 @@ export async function GET(request: NextRequest) {
         }
 
         // Check subscription status via backend API (has direct DB access)
-        const backendUrl = process.env.BACKEND_URL || runtimeEnv.BACKEND_URL || '';
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData?.session?.access_token;
-
         const billingEnabled = runtimeEnv.BILLING_ENABLED;
         // Skip the billing-aware landing for invited users: a returnUrl pointing
         // at /invites/:id must be honored verbatim so they reach the accept/decline

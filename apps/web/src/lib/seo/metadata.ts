@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
 import { getMarketingRecord } from '@/lib/seo/public-content';
 import { CANONICAL_ORIGIN } from '@/lib/site-metadata';
@@ -15,7 +16,7 @@ export function marketingMetadata(pathname: string): Metadata {
       title: record.title,
       description: record.description,
       url,
-      siteName: 'Kortix',
+      siteName: PRODUCT_BRAND.displayName,
       type: 'website',
     },
   };

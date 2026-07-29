@@ -8,7 +8,9 @@ import { UseCasesBrowser } from '@/components/use-cases/use-cases-browser';
 import { UseCasesCta } from '@/components/use-cases/use-cases-cta';
 import { getAllUseCases } from '@/lib/use-cases';
 import { siteMetadata } from '@/lib/site-metadata';
+import { PRODUCT_BRAND } from '@kortix/product-brand';
 
+const BRAND_NAME = PRODUCT_BRAND.displayName;
 const TITLE = 'Use Cases';
 const EYEBROW = 'Loop Engineering';
 const HEADLINE = 'The loops that run a company';
@@ -20,7 +22,7 @@ export const metadata: Metadata = {
   title: TITLE,
   description: DESCRIPTION,
   keywords: [
-    'Kortix use cases',
+    `${BRAND_NAME} use cases`,
     'AI agent case studies',
     'AI command center',
     'AI workforce',
@@ -29,15 +31,15 @@ export const metadata: Metadata = {
   ],
   openGraph: {
     type: 'website',
-    title: `Kortix ${TITLE}`,
+    title: `${BRAND_NAME} ${TITLE}`,
     description: DESCRIPTION,
     url: URL,
-    siteName: 'Kortix',
+    siteName: BRAND_NAME,
     images: [{ url: `${siteMetadata.url}/banner.png` }],
   },
   twitter: {
     card: 'summary_large_image',
-    title: `Kortix ${TITLE}`,
+    title: `${BRAND_NAME} ${TITLE}`,
     description: DESCRIPTION,
     images: [`${siteMetadata.url}/banner.png`],
   },
@@ -53,12 +55,12 @@ export default function UseCasesIndexPage() {
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'CollectionPage',
-    name: 'Kortix Use Cases',
+    name: `${BRAND_NAME} Use Cases`,
     description: DESCRIPTION,
     url: URL,
     publisher: {
       '@type': 'Organization',
-      name: 'Kortix',
+      name: BRAND_NAME,
       logo: { '@type': 'ImageObject', url: `${siteMetadata.url}/favicon.png` },
     },
     mainEntity: {

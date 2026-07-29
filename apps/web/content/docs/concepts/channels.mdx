@@ -10,7 +10,7 @@ messages in that thread continue the same session.
 
 - **Connect Slack** with [`kortix channels connect`](/docs/reference/cli) or
   from the project's Channels page in the dashboard. Both offer the same two
-  modes: one-click via the Kortix-managed Slack app (the CLI prints an
+  modes: one-click via the OpenOPC-managed Slack app (the CLI prints an
   "Add to Slack" install link — open it, pick the workspace, click Allow), or
   bring your own Slack app (`--manual`: a bot token + signing secret, via
   flags, `SLACK_BOT_TOKEN`/`SLACK_SIGNING_SECRET` env vars, or stdin).
@@ -34,11 +34,11 @@ on connect, you don't declare it.
 ## Who the agent runs as
 
 By default, every Slack sender — the first message in a channel, a thread
-follow-up, or a button click — must be linked to a Kortix account that has
+follow-up, or a button click — must be linked to a OpenOPC account that has
 access to the project before the agent will act for them. Link your identity
 once with the `/kortix login` slash command (or the button on the prompt
 below); it opens a short-lived, private browser link that connects your
-Slack user to a Kortix account.
+Slack user to a OpenOPC account.
 
 If there's no linked mapping yet, the agent doesn't run — it posts an
 ephemeral prompt nudging the sender to connect (or, if they're linked but

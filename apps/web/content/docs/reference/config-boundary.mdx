@@ -1,11 +1,11 @@
 ---
-title: Kortix vs OpenCode config
+title: OpenOPC vs OpenCode config
 description: The strict ownership boundary between the manifest and the .kortix/opencode/ config directory.
 ---
 
-A Kortix project's config has two owners, and the boundary is strict.
+An OpenOPC project's config has two owners, and the boundary is strict.
 
-- **Kortix owns** the manifest (`kortix.yaml`) and `.kortix/Dockerfile` — what a project is, its sandbox, secrets, triggers, and which agents the platform may launch/authorize.
+- **OpenOPC owns** the manifest (`kortix.yaml`) and `.kortix/Dockerfile` — what a project is, its sandbox, secrets, triggers, and which agents the platform may launch/authorize.
 - **OpenCode owns** `.kortix/opencode/` — how the runtime behaves. `opencode.jsonc` remains the native registry for plugins, MCP servers, providers, models, permissions, and default OpenCode behavior.
 
 The config dir is declared via `opencode.config_dir` (default `.kortix/opencode`); the agent daemon launches OpenCode with `OPENCODE_CONFIG_DIR` pointed there.
@@ -22,13 +22,13 @@ v1 projects (`kortix.toml`) express the same governance idea with `[[agents]]` �
 
 | Concern | Lives in | Read by |
 | --- | --- | --- |
-| Project metadata (`name`, `description`) | `kortix.yaml` `project:` | Kortix |
-| Env / secrets spec | `kortix.yaml` `env:` | Kortix |
-| Sandbox base image | `kortix.yaml` `sandbox:` + `.kortix/Dockerfile` | Kortix |
-| Where the OpenCode config dir lives | `kortix.yaml` `opencode.config_dir` | Kortix |
-| Triggers (cron + webhook) | `kortix.yaml` `triggers:` | Kortix |
-| Platform-launchable agents and grants | `kortix.yaml` `agents:` (governance only) | Kortix |
-| Channels | Not in the manifest — dashboard/CLI-managed (`kortix channels`). The connector itself (`provider: channel`) is still declared under `connectors:` once you connect one. | Kortix (live routing is the `chat_channel_bindings` table) |
+| Project metadata (`name`, `description`) | `kortix.yaml` `project:` | OpenOPC |
+| Env / secrets spec | `kortix.yaml` `env:` | OpenOPC |
+| Sandbox base image | `kortix.yaml` `sandbox:` + `.kortix/Dockerfile` | OpenOPC |
+| Where the OpenCode config dir lives | `kortix.yaml` `opencode.config_dir` | OpenOPC |
+| Triggers (cron + webhook) | `kortix.yaml` `triggers:` | OpenOPC |
+| Platform-launchable agents and grants | `kortix.yaml` `agents:` (governance only) | OpenOPC |
+| Channels | Not in the manifest — dashboard/CLI-managed (`kortix channels`). The connector itself (`provider: channel`) is still declared under `connectors:` once you connect one. | OpenOPC (live routing is the `chat_channel_bindings` table) |
 | Agent personas | `.kortix/opencode/agents/<name>.md` | OpenCode |
 | Skills | `.kortix/opencode/skills/` | OpenCode |
 | Slash commands | `.kortix/opencode/` (commands) | OpenCode |
@@ -45,7 +45,7 @@ Full manifest field reference: [the manifest](/docs/reference/manifest). The `.k
 
 ## Where the agent runs
 
-The agent runtime is OpenCode, and **Kortix runs it in the cloud sandbox** — the sandbox agent server launches OpenCode with `OPENCODE_CONFIG_DIR` set to your `config_dir`. There is no Kortix command that runs the agent on your machine; the [CLI](/docs/reference/cli) is a cloud control plane, not a local runner.
+The agent runtime is OpenCode, and **OpenOPC runs it in the cloud sandbox** — the sandbox agent server launches OpenCode with `OPENCODE_CONFIG_DIR` set to your `config_dir`. There is no OpenOPC command that runs the agent on your machine; the [CLI](/docs/reference/cli) is a cloud control plane, not a local runner.
 
 Because `.kortix/opencode/` uses OpenCode's standard layout, the personas, skills, and tools are portable: install the upstream `opencode` binary and point its config dir at that folder and it reads the same files.
 

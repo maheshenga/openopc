@@ -395,13 +395,13 @@ export class ModuleRunnerProtocol {
         runtimeProfile: binding.runtimeProfile,
         policyDigest: binding.policyDigest,
         killSwitchGeneration: execution.killSwitchGeneration,
-        executionDeadline: execution.deadlineAt,
+        executionDeadline: new Date(execution.deadlineAt).toISOString(),
         bindingDigest: execution.workEnvelopeDigest,
         resourceCeilings: { ...binding.resourceCeilings },
         lease: {
           id: claim.lease.leaseId,
           generation: claim.lease.generation,
-          deadline: claim.lease.deadlineAt,
+          deadline: new Date(claim.lease.deadlineAt).toISOString(),
         },
         grants: grants.map(({ grantId, audience, tokenHash }) => ({
           id: grantId,
@@ -461,7 +461,7 @@ export class ModuleRunnerProtocol {
     command: RunnerLeaseHeartbeatCommand,
   ): Promise<HeartbeatModuleExecutionLeaseResult> {
     const runner = await this.authenticate(identity);
-    return this.input.executionRepository.heartbeatLease({
+    const heartbeat = await this.input.executionRepository.heartbeatLease({
       accountId: runner.accountId,
       projectId: command.projectId,
       executionId: command.executionId,
@@ -469,6 +469,21 @@ export class ModuleRunnerProtocol {
       generation: command.generation,
       runnerId: runner.runnerId,
     });
+    return {
+      execution: {
+        ...heartbeat.execution,
+        deadlineAt: new Date(heartbeat.execution.deadlineAt).toISOString(),
+      },
+      lease: {
+        ...heartbeat.lease,
+        deadlineAt: new Date(heartbeat.lease.deadlineAt).toISOString(),
+        claimedAt: new Date(heartbeat.lease.claimedAt).toISOString(),
+        releasedAt:
+          heartbeat.lease.releasedAt === null
+            ? null
+            : new Date(heartbeat.lease.releasedAt).toISOString(),
+      },
+    };
   }
 
   async appendEvidence(

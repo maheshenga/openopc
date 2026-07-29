@@ -9,8 +9,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
 import {
   PUBLIC_BETA_ARCHIVE_LIMITS,
-  authenticateAndExtractPublicBetaArchive,
   type PublicBetaArchiveLimits,
+  authenticateAndExtractPublicBetaArchive,
 } from './public-beta-archive';
 
 type EntryKind = 'file' | 'directory';
@@ -42,7 +42,9 @@ for (let index = 0; index < crcTable.length; index += 1) {
 
 function crc32(bytes: Uint8Array): number {
   let value = 0xffffffff;
-  for (const byte of bytes) value = (value >>> 8) ^ crcTable[(value ^ byte) & 0xff]!;
+  for (const byte of bytes) {
+    value = (value >>> 8) ^ (crcTable[(value ^ byte) & 0xff] ?? 0);
+  }
   return (value ^ 0xffffffff) >>> 0;
 }
 

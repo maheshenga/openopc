@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
-  closeSync,
   constants,
+  closeSync,
   createWriteStream,
   fstatSync,
   lstatSync,
@@ -12,7 +12,7 @@ import {
   rmSync,
 } from 'node:fs';
 import { basename, dirname, join, parse, relative, resolve, sep } from 'node:path';
-import { Transform, type Readable } from 'node:stream';
+import { type Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 import { type Entry, type ZipFile, fromFd } from 'yauzl';
@@ -98,9 +98,10 @@ function resolveLimits(value: unknown): Readonly<PublicBetaArchiveLimits> | fals
     'maxPathSegments',
   ] as const;
   for (const key of integerKeys) {
+    const candidateValue = candidate[key];
     if (
-      !safePositiveInteger(candidate[key]) ||
-      candidate[key]! > PUBLIC_BETA_ARCHIVE_LIMITS[key]
+      !safePositiveInteger(candidateValue) ||
+      candidateValue > PUBLIC_BETA_ARCHIVE_LIMITS[key]
     ) {
       return false;
     }

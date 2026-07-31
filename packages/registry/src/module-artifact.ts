@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto';
 
 import { readRegistryModuleManifest } from './module-manifest';
-import type { RegistryItem, RegistryItemFile, RegistryModuleExecutionMode } from './schema';
+import type {
+  RegistryItem,
+  RegistryItemFile,
+  RegistryModuleExecutionMode,
+  RegistryModuleManifestV2,
+  RegistryModuleManifestV3,
+} from './schema';
 
 export const DEVELOPER_MODULE_ARTIFACT_FORMAT_VERSION = 2 as const;
 export const DEVELOPER_MODULE_ARTIFACT_MEDIA_TYPE =
@@ -63,11 +69,9 @@ export type RegistryModuleArtifactDescriptorModule =
   | RegistryModuleArtifactDescriptorModuleV2
   | RegistryModuleArtifactDescriptorModuleV3;
 
-export interface RegistryModuleArtifactDescriptor {
+interface RegistryModuleArtifactDescriptorBase {
   artifactFormatVersion: typeof DEVELOPER_MODULE_ARTIFACT_FORMAT_VERSION;
   mediaType: typeof DEVELOPER_MODULE_ARTIFACT_MEDIA_TYPE;
-  item: RegistryItem;
-  module: RegistryModuleArtifactDescriptorModule;
   blobs: RegistryModuleArtifactBlobDescriptor[];
   dependencies: string[];
   devDependencies: string[];
@@ -77,6 +81,26 @@ export interface RegistryModuleArtifactDescriptor {
   entries: Record<string, string>;
   uiEntries: Record<string, string>;
   source: RegistryModuleSourceProvenance | null;
+}
+
+export interface RegistryModuleArtifactDescriptorV2 extends RegistryModuleArtifactDescriptorBase {
+  item: RegistryItem & { module: RegistryModuleManifestV2 };
+  module: RegistryModuleArtifactDescriptorModuleV2;
+}
+
+export interface RegistryModuleArtifactDescriptorV3 extends RegistryModuleArtifactDescriptorBase {
+  item: RegistryItem & { module: RegistryModuleManifestV3 };
+  module: RegistryModuleArtifactDescriptorModuleV3;
+}
+
+export type RegistryModuleArtifactDescriptor =
+  | RegistryModuleArtifactDescriptorV2
+  | RegistryModuleArtifactDescriptorV3;
+
+export function isRegistryModuleArtifactDescriptorV2(
+  descriptor: RegistryModuleArtifactDescriptor,
+): descriptor is RegistryModuleArtifactDescriptorV2 {
+  return descriptor.item.module?.schemaVersion === 2;
 }
 
 export interface RegistryModuleArtifactEnvelope {
@@ -503,26 +527,9 @@ export function createRegistryModuleArtifactEnvelope(
       ])
       .sort(([left], [right]) => left.localeCompare(right)),
   );
-  const module =
-    manifest.schemaVersion === 2
-      ? {
-          id: manifest.id,
-          version: manifest.version,
-          publisherId: manifest.publisher.id,
-          category: manifest.category,
-          executionMode: manifest.execution.mode,
-        }
-      : {
-          id: manifest.id,
-          version: manifest.version,
-          publisherId: manifest.publisher.id,
-          executionMode: manifest.execution.mode,
-        };
-  const descriptor: RegistryModuleArtifactDescriptor = {
+  const descriptorBase: RegistryModuleArtifactDescriptorBase = {
     artifactFormatVersion: DEVELOPER_MODULE_ARTIFACT_FORMAT_VERSION,
     mediaType: DEVELOPER_MODULE_ARTIFACT_MEDIA_TYPE,
-    item,
-    module,
     blobs,
     dependencies,
     devDependencies,
@@ -533,6 +540,29 @@ export function createRegistryModuleArtifactEnvelope(
     uiEntries,
     source: normalizedSource(input.source),
   };
+  const descriptor: RegistryModuleArtifactDescriptor =
+    manifest.schemaVersion === 2
+      ? {
+          ...descriptorBase,
+          item: item as RegistryModuleArtifactDescriptorV2['item'],
+          module: {
+            id: manifest.id,
+            version: manifest.version,
+            publisherId: manifest.publisher.id,
+            category: manifest.category,
+            executionMode: manifest.execution.mode,
+          },
+        }
+      : {
+          ...descriptorBase,
+          item: item as RegistryModuleArtifactDescriptorV3['item'],
+          module: {
+            id: manifest.id,
+            version: manifest.version,
+            publisherId: manifest.publisher.id,
+            executionMode: manifest.execution.mode,
+          },
+        };
   const descriptorDigest = sha256(canonicalRegistryModuleArtifactDescriptor(descriptor));
   return {
     descriptor,

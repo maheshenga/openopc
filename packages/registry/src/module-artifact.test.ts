@@ -2,12 +2,19 @@ import { expect, test } from 'bun:test';
 
 import {
   type CreateRegistryModuleArtifactInput,
+  type RegistryModuleArtifactDescriptor,
   canonicalRegistryModuleArtifactDescriptor,
   createRegistryModuleArtifactEnvelope,
+  isRegistryModuleArtifactDescriptorV2,
 } from './module-artifact';
 import type { RegistryItem } from './schema';
 
 const encoder = new TextEncoder();
+
+function legacyCategory(descriptor: RegistryModuleArtifactDescriptor): string | null {
+  if (isRegistryModuleArtifactDescriptorV2(descriptor)) return descriptor.module.category;
+  return null;
+}
 
 function artifactInput(): CreateRegistryModuleArtifactInput {
   const item: RegistryItem = {
@@ -133,6 +140,7 @@ test('builds a deterministic envelope independent of declaration order and path 
   const second = createRegistryModuleArtifactEnvelope(reordered);
 
   expect(second).toEqual(first);
+  expect(legacyCategory(first.descriptor)).toBe('automation');
   expect(first.descriptor.blobs.map(({ path, target }) => ({ path, target }))).toEqual([
     { path: 'assets/config.json', target: 'modules/acme/config.json' },
     { path: 'src/main.ts', target: 'modules/acme/main.ts' },

@@ -118,6 +118,7 @@ const INSPECT_TIMEOUT_MS = 60_000;
 const GIT_OUTPUT_BYTES = 64 * 1_024;
 const PROCESS_OUTPUT_BYTES = 1024 * 1_024;
 const FAILURE_EXCERPT_BYTES = 4_096;
+const MAX_FAILURE_JSON_BYTES = 8_192;
 const BUILD_CONTRACT_VERSION = 1;
 
 const SOURCE_OPERATIONS: readonly PublicBetaCosignBuildOperation[] = Object.freeze([
@@ -530,9 +531,12 @@ function parseProcessResult(value: unknown): Readonly<PublicBetaBuilderProcessRe
 
 function redactPublicBetaCosignBuilderText(value: string): string {
   return value
-    .replace(/(^|\r?\n)([\t ]*authorization[\t ]*:)[^\r\n]*/giu, '$1$2 [REDACTED]')
-    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu, '$1[REDACTED]@')
-    .replace(/\b(token|password|secret|authorization)=([^\s&]+)/giu, '$1=[REDACTED]')
+    .replace(/(\bauthorization[\t ]*:)[^\r\n]*/giu, '$1 [REDACTED]')
+    .replace(/(https?:\/\/)[^\s/@]+@/giu, '$1[REDACTED]@')
+    .replace(
+      /(\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|api[_-]?key|token|password|secret|authorization)\b["']?[\t ]*[:=][\t ]*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s&,;]+)/giu,
+      '$1[REDACTED]',
+    )
     .replace(/\b(bearer)\s+[^\s]+/giu, '$1 [REDACTED]')
     .replace(/\b(?:github_pat_[a-z0-9_]+|gh[pousr]_[a-z0-9_]+)\b/giu, '[REDACTED]');
 }
@@ -550,16 +554,16 @@ function boundedUtf8(value: string, maxBytes: number): string {
   return output;
 }
 
-function processExcerpts(
-  result: Readonly<PublicBetaBuilderProcessResult>,
+function boundedExcerpts(
+  stdout: string,
+  stderr: string,
+  maxBytes: number,
 ): Readonly<{ stdoutExcerpt: string; stderrExcerpt: string }> {
-  const stdout = redactPublicBetaCosignBuilderText(result.stdout);
-  const stderr = redactPublicBetaCosignBuilderText(result.stderr);
   const stdoutBytes = Buffer.byteLength(stdout, 'utf8');
   const stderrBytes = Buffer.byteLength(stderr, 'utf8');
-  let stdoutBudget = Math.min(stdoutBytes, FAILURE_EXCERPT_BYTES / 2);
-  const stderrBudget = Math.min(stderrBytes, FAILURE_EXCERPT_BYTES - stdoutBudget);
-  stdoutBudget = Math.min(stdoutBytes, FAILURE_EXCERPT_BYTES - stderrBudget);
+  let stdoutBudget = Math.min(stdoutBytes, Math.floor(maxBytes / 2));
+  const stderrBudget = Math.min(stderrBytes, maxBytes - stdoutBudget);
+  stdoutBudget = Math.min(stdoutBytes, maxBytes - stderrBudget);
   return Object.freeze({
     stdoutExcerpt: boundedUtf8(stdout, stdoutBudget),
     stderrExcerpt: boundedUtf8(stderr, stderrBudget),
@@ -592,31 +596,50 @@ function buildFailureExecution(
   runnerError?: unknown,
 ): PublicBetaCosignBuildFailureExecutionV1 {
   const outputLimited = code === 'OPENOPC_COSIGN_BUILD_OUTPUT_LIMIT_EXCEEDED';
-  const excerpts =
+  const stdout = result && !outputLimited ? redactPublicBetaCosignBuilderText(result.stdout) : '';
+  const stderr =
     result && !outputLimited
-      ? processExcerpts(result)
-      : Object.freeze({
-          stdoutExcerpt: '',
-          stderrExcerpt:
-            runnerError === undefined
-              ? ''
-              : boundedUtf8(
-                  redactPublicBetaCosignBuilderText(safeRunnerError(runnerError)),
-                  FAILURE_EXCERPT_BYTES,
-                ),
-        });
-  const failure = Object.freeze({
-    schemaVersion: 1 as const,
-    code,
-    stage,
-    operation,
-    executable: commandValue.executable,
-    exitCode: result?.exitCode ?? null,
-    timedOut: result?.timedOut ?? false,
-    outputLimited,
-    stdoutExcerpt: excerpts.stdoutExcerpt,
-    stderrExcerpt: excerpts.stderrExcerpt,
-  });
+      ? redactPublicBetaCosignBuilderText(result.stderr)
+      : runnerError === undefined
+        ? ''
+        : redactPublicBetaCosignBuilderText(safeRunnerError(runnerError));
+  const makeFailure = (excerptBudget: number): Readonly<PublicBetaCosignBuildFailureV1> => {
+    const excerpts = boundedExcerpts(stdout, stderr, excerptBudget);
+    return Object.freeze({
+      schemaVersion: 1 as const,
+      code,
+      stage,
+      operation,
+      executable: commandValue.executable,
+      exitCode: result?.exitCode ?? null,
+      timedOut: result?.timedOut ?? false,
+      outputLimited,
+      stdoutExcerpt: excerpts.stdoutExcerpt,
+      stderrExcerpt: excerpts.stderrExcerpt,
+    });
+  };
+  let failure = makeFailure(outputLimited ? 0 : FAILURE_EXCERPT_BYTES);
+  const serializedBytes = (value: Readonly<PublicBetaCosignBuildFailureV1>): number => {
+    try {
+      return Buffer.byteLength(canonicalPublicBetaJson(value), 'utf8');
+    } catch {
+      return Number.POSITIVE_INFINITY;
+    }
+  };
+  if (serializedBytes(failure) > MAX_FAILURE_JSON_BYTES) {
+    let low = 0;
+    let high = FAILURE_EXCERPT_BYTES;
+    while (low <= high) {
+      const candidateBudget = Math.floor((low + high) / 2);
+      const candidate = makeFailure(candidateBudget);
+      if (serializedBytes(candidate) <= MAX_FAILURE_JSON_BYTES) {
+        failure = candidate;
+        low = candidateBudget + 1;
+      } else {
+        high = candidateBudget - 1;
+      }
+    }
+  }
   return Object.freeze({ ok: false as const, failure });
 }
 

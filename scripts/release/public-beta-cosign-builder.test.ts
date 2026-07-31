@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { canonicalPublicBetaJson } from './public-beta-canonical-json';
 import {
   type PublicBetaBuilderProcessRunner,
   type PublicBetaCosignBuildInput,
@@ -360,6 +361,34 @@ test('classifies runner exceptions without leaking authorization material', asyn
   expect(execution.failure.stderrExcerpt).not.toContain('ghp_1234567890abcdef');
 });
 
+test('redacts prefixed authorization, named secret keys, and URL userinfo', async () => {
+  const plan = createPublicBetaCosignBuildPlan(buildInput());
+  const baseRunner = successfulRunner(plan);
+  const execution = await executePublicBetaCosignBuildPlanDetailed(
+    plan,
+    async (command) =>
+      command === plan.fetch
+        ? {
+            exitCode: 1,
+            timedOut: false,
+            stdout: '',
+            stderr: [
+              'request failed; Authorization: Basic basic-secret',
+              'access_token=access-secret&client_secret=client-secret',
+              'https://url-secret@proxy.invalid/module',
+            ].join('\n'),
+          }
+        : baseRunner(command),
+    () => new Date('2026-07-30T10:00:00.000Z'),
+  );
+
+  expect(execution.ok).toBe(false);
+  if (execution.ok) throw new Error('TEST_COSIGN_FAILURE_EXPECTED');
+  for (const secret of ['basic-secret', 'access-secret', 'client-secret', 'url-secret']) {
+    expect(execution.failure.stderrExcerpt).not.toContain(secret);
+  }
+});
+
 test('bounds retained multibyte output by UTF-8 bytes', async () => {
   const plan = createPublicBetaCosignBuildPlan(buildInput());
   const baseRunner = successfulRunner(plan);
@@ -385,6 +414,25 @@ test('bounds retained multibyte output by UTF-8 bytes', async () => {
   expect(retainedBytes).toBeLessThanOrEqual(4_096);
   expect(execution.failure.stdoutExcerpt).not.toContain('\ufffd');
   expect(execution.failure.stderrExcerpt).not.toContain('\ufffd');
+});
+
+test('bounds the serialized failure document after JSON escaping', async () => {
+  const plan = createPublicBetaCosignBuildPlan(buildInput());
+  const baseRunner = successfulRunner(plan);
+  const execution = await executePublicBetaCosignBuildPlanDetailed(
+    plan,
+    async (command) =>
+      command === plan.fetch
+        ? { exitCode: 1, timedOut: false, stdout: '\u0000'.repeat(4_096), stderr: '' }
+        : baseRunner(command),
+    () => new Date('2026-07-30T10:00:00.000Z'),
+  );
+
+  expect(execution.ok).toBe(false);
+  if (execution.ok) throw new Error('TEST_COSIGN_FAILURE_EXPECTED');
+  expect(Buffer.byteLength(canonicalPublicBetaJson(execution.failure), 'utf8')).toBeLessThanOrEqual(
+    8_192,
+  );
 });
 
 test('runs bounded module DNS and TLS preflight before dependency download', () => {

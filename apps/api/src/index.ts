@@ -60,6 +60,7 @@ import { startLeaderElection, stopLeaderElection, isLeader, runsSingletonWorkers
 import { marketplaceApp } from './marketplace';
 import { developerApp } from './developer';
 import { moduleRuntimeApp } from './module-runtime';
+import { moduleServicesApp } from './module-services';
 import {
   startDeveloperArtifactRetentionWorker,
   stopDeveloperArtifactRetentionWorker,
@@ -712,6 +713,7 @@ app.route('/v1/account', accountDeletionApp); // account deletion status/request
 app.route('/v1/account', accountRequestsApp); // member-owned export/deletion/security/module requests
 app.route('/v1/platform', platformApp); // /v1/platform, /v1/platform/sandbox/version
 app.route('/v1', moduleRuntimeApp); // Project module executions + private mTLS Runner protocol
+app.route('/v1/module-services', moduleServicesApp); // Developer module AI/payment service facade
 registerSunaMigrationRoutes(projectsApp); // /v1/projects/suna-migration/* (OG Suna → opencode, user-triggered)
 app.route('/v1/projects', projectsApp); // /v1/projects — Git-backed Kortix projects
 app.route('/v1/marketplace', marketplaceApp); // /v1/marketplace — browse the registry catalog

@@ -52,10 +52,13 @@ import type {
   moduleRunners,
   moduleRuntimeArtifacts,
   moduleRuntimeDescriptors,
+  moduleServiceAuditEvents,
+  moduleServiceCapabilityGrants,
   projectGitConnections,
   projectGitCredentials,
   projectMembers,
   projectModuleConsentRevisions,
+  projectModuleServiceConsents,
   projectModuleInstallationEvents,
   projectModuleInstallations,
   projectSecrets,
@@ -212,6 +215,12 @@ export type ModuleRuntimeArtifact = typeof moduleRuntimeArtifacts.$inferSelect;
 export type NewModuleRuntimeArtifact = typeof moduleRuntimeArtifacts.$inferInsert;
 export type ProjectModuleConsentRevision = typeof projectModuleConsentRevisions.$inferSelect;
 export type NewProjectModuleConsentRevision = typeof projectModuleConsentRevisions.$inferInsert;
+export type ProjectModuleServiceConsent = typeof projectModuleServiceConsents.$inferSelect;
+export type NewProjectModuleServiceConsent = typeof projectModuleServiceConsents.$inferInsert;
+export type ModuleServiceCapabilityGrant = typeof moduleServiceCapabilityGrants.$inferSelect;
+export type NewModuleServiceCapabilityGrant = typeof moduleServiceCapabilityGrants.$inferInsert;
+export type ModuleServiceAuditEvent = typeof moduleServiceAuditEvents.$inferSelect;
+export type NewModuleServiceAuditEvent = typeof moduleServiceAuditEvents.$inferInsert;
 export type ModuleRunner = typeof moduleRunners.$inferSelect;
 export type NewModuleRunner = typeof moduleRunners.$inferInsert;
 export type ModuleRunnerProfile = typeof moduleRunnerProfiles.$inferSelect;

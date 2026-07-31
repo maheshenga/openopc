@@ -8510,6 +8510,282 @@ export const projectModuleConsentRevisions = kortixSchema.table(
   ],
 );
 
+export const projectModuleServiceConsents = kortixSchema.table(
+  'project_module_service_consents',
+  {
+    consentId: uuid('consent_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    releaseId: uuid('release_id').notNull(),
+    installRevision: integer('install_revision').notNull(),
+    service: varchar('service', { length: 16 }).notNull(),
+    operations: jsonb('operations').notNull().$type<string[]>(),
+    consentDigest: varchar('consent_digest', { length: 71 }).notNull(),
+    acceptedBy: uuid('accepted_by').notNull(),
+    acceptedAt: timestamp('accepted_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    revokedBy: uuid('revoked_by'),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'project_module_service_consents_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'project_module_service_consents_installation_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'project_module_service_consents_release_account_fk',
+    }).onDelete('restrict'),
+    unique('project_module_service_consents_authorization_identity_unique').on(
+      table.consentId,
+      table.accountId,
+      table.projectId,
+      table.installationId,
+      table.releaseId,
+      table.service,
+    ),
+    uniqueIndex('idx_project_module_service_consents_active_identity')
+      .on(table.installationId, table.service, table.installRevision)
+      .where(sql`${table.revokedAt} IS NULL`),
+    index('idx_project_module_service_consents_account_project').on(
+      table.accountId,
+      table.projectId,
+      table.acceptedAt,
+    ),
+    check(
+      'project_module_service_consents_revision_check',
+      sql`${table.installRevision} > 0`,
+    ),
+    check(
+      'project_module_service_consents_service_check',
+      sql`${table.service} IN ('ai', 'payment')`,
+    ),
+    check(
+      'project_module_service_consents_operations_check',
+      sql`jsonb_typeof(${table.operations}) = 'array'
+        AND (
+          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream"]'::jsonb)
+          OR (${table.service} = 'payment' AND ${table.operations} <@ '["orders.create","orders.read","refunds.create"]'::jsonb)
+        )
+        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 6
+        AND jsonb_array_length(${table.operations}) =
+          (CASE WHEN ${table.operations} @> '["models.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["text.generate"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["text.stream"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["orders.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["orders.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END)`,
+    ),
+    check(
+      'project_module_service_consents_digest_check',
+      sql`${table.consentDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'project_module_service_consents_revocation_check',
+      sql`(${table.revokedAt} IS NULL AND ${table.revokedBy} IS NULL)
+        OR (${table.revokedAt} IS NOT NULL AND ${table.revokedBy} IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const moduleServiceCapabilityGrants = kortixSchema.table(
+  'module_service_capability_grants',
+  {
+    grantId: uuid('grant_id').primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    releaseId: uuid('release_id').notNull(),
+    consentId: uuid('consent_id').notNull(),
+    service: varchar('service', { length: 16 }).notNull(),
+    operations: jsonb('operations').notNull().$type<string[]>(),
+    tokenHash: varchar('token_hash', { length: 71 }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'module_service_capability_grants_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'module_service_capability_grants_installation_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'module_service_capability_grants_release_account_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [
+        table.consentId,
+        table.accountId,
+        table.projectId,
+        table.installationId,
+        table.releaseId,
+        table.service,
+      ],
+      foreignColumns: [
+        projectModuleServiceConsents.consentId,
+        projectModuleServiceConsents.accountId,
+        projectModuleServiceConsents.projectId,
+        projectModuleServiceConsents.installationId,
+        projectModuleServiceConsents.releaseId,
+        projectModuleServiceConsents.service,
+      ],
+      name: 'module_service_capability_grants_consent_identity_fk',
+    }).onDelete('cascade'),
+    unique('module_service_capability_grants_audit_identity_unique').on(
+      table.grantId,
+      table.accountId,
+      table.projectId,
+      table.installationId,
+      table.releaseId,
+      table.service,
+    ),
+    index('idx_module_service_grants_account_project').on(
+      table.accountId,
+      table.projectId,
+      table.createdAt,
+    ),
+    index('idx_module_service_grants_identity_expiry').on(table.grantId, table.expiresAt),
+    check(
+      'module_service_capability_grants_service_check',
+      sql`${table.service} IN ('ai', 'payment')`,
+    ),
+    check(
+      'module_service_capability_grants_operations_check',
+      sql`jsonb_typeof(${table.operations}) = 'array'
+        AND (
+          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream"]'::jsonb)
+          OR (${table.service} = 'payment' AND ${table.operations} <@ '["orders.create","orders.read","refunds.create"]'::jsonb)
+        )
+        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 6
+        AND jsonb_array_length(${table.operations}) =
+          (CASE WHEN ${table.operations} @> '["models.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["text.generate"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["text.stream"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["orders.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["orders.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END)`,
+    ),
+    check(
+      'module_service_capability_grants_token_hash_check',
+      sql`${table.tokenHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'module_service_capability_grants_expiry_check',
+      sql`${table.expiresAt} > ${table.createdAt}
+        AND ${table.expiresAt} <= ${table.createdAt} + interval '5 minutes'
+        AND (${table.revokedAt} IS NULL OR ${table.revokedAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
+export const moduleServiceAuditEvents = kortixSchema.table(
+  'module_service_audit_events',
+  {
+    eventId: uuid('event_id').primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    releaseId: uuid('release_id').notNull(),
+    grantId: uuid('grant_id'),
+    service: varchar('service', { length: 16 }).notNull(),
+    operation: varchar('operation', { length: 32 }),
+    outcome: varchar('outcome', { length: 32 }).notNull(),
+    code: varchar('code', { length: 128 }),
+    requestId: uuid('request_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'module_service_audit_events_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'module_service_audit_events_installation_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'module_service_audit_events_release_account_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [
+        table.grantId,
+        table.accountId,
+        table.projectId,
+        table.installationId,
+        table.releaseId,
+        table.service,
+      ],
+      foreignColumns: [
+        moduleServiceCapabilityGrants.grantId,
+        moduleServiceCapabilityGrants.accountId,
+        moduleServiceCapabilityGrants.projectId,
+        moduleServiceCapabilityGrants.installationId,
+        moduleServiceCapabilityGrants.releaseId,
+        moduleServiceCapabilityGrants.service,
+      ],
+      name: 'module_service_audit_events_grant_identity_fk',
+    }).onDelete('cascade'),
+    index('idx_module_service_audit_account_project').on(
+      table.accountId,
+      table.projectId,
+      table.createdAt,
+    ),
+    index('idx_module_service_audit_grant_created').on(table.grantId, table.createdAt),
+    check('module_service_audit_events_service_check', sql`${table.service} IN ('ai', 'payment')`),
+    check(
+      'module_service_audit_events_operation_check',
+      sql`${table.operation} IS NULL
+        OR (${table.service} = 'ai' AND ${table.operation} IN ('models.read', 'text.generate', 'text.stream'))
+        OR (${table.service} = 'payment' AND ${table.operation} IN ('orders.create', 'orders.read', 'refunds.create'))`,
+    ),
+    check(
+      'module_service_audit_events_outcome_check',
+      sql`${table.outcome} IN ('consent_granted', 'issued', 'authorized', 'denied', 'revoked')`,
+    ),
+    check(
+      'module_service_audit_events_code_check',
+      sql`${table.code} IS NULL OR length(${table.code}) BETWEEN 1 AND 128`,
+    ),
+  ],
+);
+
 export const moduleRunners = kortixSchema.table(
   'module_runners',
   {

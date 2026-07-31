@@ -1867,6 +1867,19 @@ importers:
         specifier: ^5.4.0
         version: 5.9.3
 
+  packages/openopc-developer-sdk:
+    dependencies:
+      '@kortix/api-contract':
+        specifier: workspace:*
+        version: link:../api-contract
+    devDependencies:
+      '@types/bun':
+        specifier: ^1.3.12
+        version: 1.3.14
+      typescript:
+        specifier: ^5.4.0
+        version: 5.9.3
+
   packages/product-brand:
     devDependencies:
       '@types/bun':

@@ -45,7 +45,7 @@ export interface PublicBetaCosignToolchainV1 {
   upstream: PublicBetaCosignBuilderLockV1['upstream'];
   builder: {
     oidcIssuer: 'https://token.actions.githubusercontent.com';
-    repository: 'openopc/platform';
+    repository: 'maheshenga/openopc';
     workflowPath: '.github/workflows/openopc-cosign-builder.yml';
     workflowRef: 'refs/heads/main';
     workflowSha: string;
@@ -85,7 +85,7 @@ export interface PublicBetaCosignSlsaPredicateV1 {
 
 const TOOLCHAIN_ID = 'openopc-cosign-v3.1.2.1' as const;
 const BUILDER_IDENTITY =
-  'https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main' as const;
+  'https://github.com/maheshenga/openopc/.github/workflows/openopc-cosign-builder.yml@refs/heads/main' as const;
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
 const SHA1 = /^[a-f0-9]{40}$/;
 const MAX_SUBJECT_BYTES = 268435456;
@@ -260,7 +260,7 @@ export function parsePublicBetaCosignToolchain(
     if (
       !upstream || !builder || !artifacts || !linuxAmd64 || !windowsAmd64 ||
       builder.oidcIssuer !== 'https://token.actions.githubusercontent.com' ||
-      builder.repository !== 'openopc/platform' ||
+      builder.repository !== 'maheshenga/openopc' ||
       builder.workflowPath !== '.github/workflows/openopc-cosign-builder.yml' ||
       builder.workflowRef !== 'refs/heads/main' ||
       !validSha1(builder.workflowSha) ||

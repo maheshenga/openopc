@@ -5,6 +5,13 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { PUBLIC_BETA_LANES } from './public-beta-lanes';
+import {
+  OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE,
+  OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST,
+} from './public-beta-release-profile';
+import { OPENOPC_RESTRICTED_PUBLIC_BETA_LANES } from './public-beta-restricted-lanes';
+
 type Subject = typeof import('./public-beta-evidence-v2');
 
 let subject: Subject | undefined;
@@ -27,10 +34,7 @@ const LANES = {
   G3: 'public-beta-g3-trust-pipeline',
   G4: 'public-beta-g4-malicious-fixtures',
   G5: 'public-beta-g5-wasi',
-  G6: 'public-beta-g6-oci',
-  G7: 'public-beta-g7-ui-capability',
   G8: 'public-beta-g8-tenant-authority',
-  G9: 'public-beta-g9-sandbox-commerce',
   G10: 'public-beta-g10-release-lifecycle',
   G11: 'public-beta-g11-web-desktop',
   G12: 'public-beta-g12-upstream-compatibility',
@@ -39,7 +43,6 @@ const LANES = {
   B3: 'public-beta-b3-admin-isolation',
   B4: 'public-beta-b4-module-workflow',
   B5: 'public-beta-b5-runtime-isolation',
-  B6: 'public-beta-b6-sandbox-ledger',
   B7: 'public-beta-b7-backup-recovery',
   B8: 'public-beta-b8-telemetry-incident',
   B9: 'public-beta-b9-brand-upstream',
@@ -86,7 +89,7 @@ function record(gate: Gate, options: Partial<EvidenceRecord> = {}): EvidenceReco
     commit: COMMIT,
     command: `pnpm.cmd test:${LANES[gate]}`,
     workflow: {
-      repository: 'openopc/platform',
+      repository: 'maheshenga/openopc',
       workflow: 'openopc-public-beta-gates.yml',
       runId: '123456789',
       runAttempt: 1,
@@ -134,18 +137,37 @@ function completeLedger() {
     schemaVersion: 2,
     candidateCommit: COMMIT,
     environment: 'openopc-public-beta-staging',
+    releaseProfileId: OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE.id,
+    releaseProfileDigest: OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST,
     schemaDigest: DIGEST_B,
     artifactSetDigest: DIGEST_C,
     records,
   };
 }
 
-function validate(value: unknown, verifyArtifact = () => true) {
+function requireRecord(
+  ledger: ReturnType<typeof completeLedger>,
+  selector: number | ((value: EvidenceRecord) => boolean),
+): EvidenceRecord {
+  const value =
+    typeof selector === 'number' ? ledger.records[selector] : ledger.records.find(selector);
+  if (value === undefined) throw new Error('EXPECTED_EVIDENCE_TEST_RECORD');
+  return value;
+}
+
+function validate(
+  value: unknown,
+  verifyArtifact = () => true,
+  lanes = OPENOPC_RESTRICTED_PUBLIC_BETA_LANES,
+) {
   if (!subject) throw new Error('PUBLIC_BETA_EVIDENCE_V2_SUBJECT_MISSING');
   return subject.validatePublicBetaEvidenceLedgerV2(value, {
     now: NOW,
     expectedCommit: COMMIT,
     verifyArtifact,
+    profile: OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE,
+    lanes,
+    expectedArtifactSetDigest: DIGEST_C,
   });
 }
 
@@ -197,6 +219,49 @@ describe.skipIf(!subject)('public beta evidence v2', () => {
     expect(validate(ledger)).toEqual(ledger);
   });
 
+  test('binds the ledger to the protected profile, restricted lanes, and artifact set', () => {
+    const missingProfile = completeLedger() as Partial<ReturnType<typeof completeLedger>>;
+    delete missingProfile.releaseProfileId;
+    expect(() => validate(missingProfile)).toThrow('PUBLIC_BETA_EVIDENCE_LEDGER_INVALID');
+
+    const wrongId = completeLedger();
+    (wrongId as { releaseProfileId: string }).releaseProfileId = 'openopc-public-beta-v1';
+    expect(() => validate(wrongId)).toThrow('PUBLIC_BETA_EVIDENCE_PROFILE_ID_MISMATCH');
+
+    const wrongDigest = completeLedger();
+    wrongDigest.releaseProfileDigest = DIGEST_A;
+    expect(() => validate(wrongDigest)).toThrow('PUBLIC_BETA_EVIDENCE_PROFILE_DIGEST_MISMATCH');
+
+    const wrongArtifactSet = completeLedger();
+    wrongArtifactSet.artifactSetDigest = DIGEST_B;
+    expect(() => validate(wrongArtifactSet)).toThrow('PUBLIC_BETA_EVIDENCE_ARTIFACT_SET_MISMATCH');
+
+    expect(() => validate(completeLedger(), () => true, PUBLIC_BETA_LANES)).toThrow(
+      'PUBLIC_BETA_EVIDENCE_OPTIONS_INVALID',
+    );
+
+    const renamedLanes = structuredClone(OPENOPC_RESTRICTED_PUBLIC_BETA_LANES);
+    const firstLane = renamedLanes[0];
+    if (firstLane === undefined) throw new Error('EXPECTED_RESTRICTED_TEST_LANE');
+    Reflect.set(firstLane, 'lane', 'candidate-renamed-lane');
+    Reflect.set(firstLane, 'workflowJobId', 'candidate-renamed-lane');
+    expect(() => validate(completeLedger(), () => true, renamedLanes)).toThrow(
+      'PUBLIC_BETA_EVIDENCE_OPTIONS_INVALID',
+    );
+  });
+
+  test('rejects deferred Gate records and non-evidence outcomes', () => {
+    const deferred = completeLedger();
+    deferred.records.push({ ...record('G5'), id: 'g6-deferred', gate: 'G6' as Gate });
+    expect(() => validate(deferred)).toThrow('PUBLIC_BETA_EVIDENCE_GATE_NOT_IN_PROFILE');
+
+    for (const outcome of ['skipped', 'not_applicable']) {
+      const ledger = completeLedger();
+      (ledger.records[0] as EvidenceRecord & { outcome: string }).outcome = outcome;
+      expect(() => validate(ledger)).toThrow('PUBLIC_BETA_EVIDENCE_RECORD_INVALID');
+    }
+  });
+
   test('rejects unknown keys and not-run outcomes', () => {
     const withUnknown = completeLedger() as ReturnType<typeof completeLedger> & { extra?: boolean };
     withUnknown.extra = true;
@@ -213,17 +278,17 @@ describe.skipIf(!subject)('public beta evidence v2', () => {
     expect(() => validate(missing)).toThrow('PUBLIC_BETA_EVIDENCE_GATES_INCOMPLETE');
 
     const duplicate = completeLedger();
-    duplicate.records[1]!.id = duplicate.records[0]!.id;
+    requireRecord(duplicate, 1).id = requireRecord(duplicate, 0).id;
     expect(() => validate(duplicate)).toThrow('PUBLIC_BETA_EVIDENCE_ID_DUPLICATE');
 
     const lane = completeLedger();
-    lane.records[0]!.lane = 'focused';
+    requireRecord(lane, 0).lane = 'focused';
     expect(() => validate(lane)).toThrow('PUBLIC_BETA_EVIDENCE_LANE_INVALID');
   });
 
   test('rejects passed evidence from another commit or environment', () => {
     const commit = completeLedger();
-    commit.records[0]!.commit = OTHER_COMMIT;
+    requireRecord(commit, 0).commit = OTHER_COMMIT;
     expect(() => validate(commit)).toThrow('PUBLIC_BETA_EVIDENCE_COMMIT_MISMATCH');
 
     const environment = completeLedger();
@@ -233,29 +298,29 @@ describe.skipIf(!subject)('public beta evidence v2', () => {
 
   test('rejects timestamp inversion, future completion, and manually extended expiry', () => {
     const inverted = completeLedger();
-    inverted.records[0]!.startedAt = '2026-07-28T11:30:00.000Z';
+    requireRecord(inverted, 0).startedAt = '2026-07-28T11:30:00.000Z';
     expect(() => validate(inverted)).toThrow('PUBLIC_BETA_EVIDENCE_TIME_INVALID');
 
     const future = completeLedger();
-    future.records[0]!.finishedAt = '2026-07-28T13:00:00.000Z';
-    future.records[0]!.expiresAt = '2026-07-31T13:00:00.000Z';
+    requireRecord(future, 0).finishedAt = '2026-07-28T13:00:00.000Z';
+    requireRecord(future, 0).expiresAt = '2026-07-31T13:00:00.000Z';
     expect(() => validate(future)).toThrow('PUBLIC_BETA_EVIDENCE_TIME_INVALID');
 
     const extended = completeLedger();
-    extended.records[0]!.expiresAt = '2026-08-01T11:00:00.000Z';
+    requireRecord(extended, 0).expiresAt = '2026-08-01T11:00:00.000Z';
     expect(() => validate(extended)).toThrow('PUBLIC_BETA_EVIDENCE_EXPIRY_INVALID');
   });
 
   test('enforces default 72-hour and B10 24-hour freshness', () => {
     const staleDefault = completeLedger();
-    const g1 = staleDefault.records.find((item) => item.gate === 'G1')!;
+    const g1 = requireRecord(staleDefault, (item) => item.gate === 'G1');
     g1.finishedAt = '2026-07-24T11:00:00.000Z';
     g1.startedAt = '2026-07-24T10:00:00.000Z';
     g1.expiresAt = '2026-07-27T11:00:00.000Z';
     expect(() => validate(staleDefault)).toThrow('PUBLIC_BETA_EVIDENCE_STALE');
 
     const staleB10 = completeLedger();
-    const b10 = staleB10.records.find((item) => item.gate === 'B10')!;
+    const b10 = requireRecord(staleB10, (item) => item.gate === 'B10');
     b10.finishedAt = '2026-07-27T10:00:00.000Z';
     b10.startedAt = '2026-07-27T09:00:00.000Z';
     b10.expiresAt = '2026-07-28T10:00:00.000Z';
@@ -264,11 +329,11 @@ describe.skipIf(!subject)('public beta evidence v2', () => {
 
   test('requires B7 seven-day restore evidence to reference a fresh 24-hour smoke', () => {
     const missing = completeLedger();
-    missing.records.find((item) => item.id === 'b7-isolated-restore')!.companionEvidenceIds = [];
+    requireRecord(missing, (item) => item.id === 'b7-isolated-restore').companionEvidenceIds = [];
     expect(() => validate(missing)).toThrow('PUBLIC_BETA_EVIDENCE_B7_COMPANION_REQUIRED');
 
     const stale = completeLedger();
-    const smoke = stale.records.find((item) => item.id === 'b7-post-restore-smoke')!;
+    const smoke = requireRecord(stale, (item) => item.id === 'b7-post-restore-smoke');
     smoke.finishedAt = '2026-07-27T10:00:00.000Z';
     smoke.startedAt = '2026-07-27T09:00:00.000Z';
     smoke.expiresAt = '2026-07-28T10:00:00.000Z';
@@ -280,7 +345,7 @@ describe.skipIf(!subject)('public beta evidence v2', () => {
     expect(() => validate(ledger, () => false)).toThrow('PUBLIC_BETA_EVIDENCE_ARTIFACT_INVALID');
 
     const raw = completeLedger();
-    raw.records[0]!.rawEvidencePaths = ['artifacts/public-beta/raw/missing.json'];
+    requireRecord(raw, 0).rawEvidencePaths = ['artifacts/public-beta/raw/missing.json'];
     expect(() => validate(raw)).toThrow('PUBLIC_BETA_EVIDENCE_RAW_ARTIFACT_MISSING');
   });
 
@@ -292,12 +357,12 @@ describe.skipIf(!subject)('public beta evidence v2', () => {
       'https://prod.openopc.example',
     ]) {
       const ledger = completeLedger();
-      ledger.records[0]!.stagingUrls = [url];
+      requireRecord(ledger, 0).stagingUrls = [url];
       expect(() => validate(ledger)).toThrow('PUBLIC_BETA_EVIDENCE_STAGING_URL_INVALID');
     }
 
     const fixture = completeLedger();
-    fixture.records[0]!.dependencyIdentities = ['fixture:self-created'];
+    requireRecord(fixture, 0).dependencyIdentities = ['fixture:self-created'];
     expect(() => validate(fixture)).toThrow('PUBLIC_BETA_EVIDENCE_DEPENDENCY_INVALID');
   });
 
@@ -322,7 +387,7 @@ describe.skipIf(!subject)('public beta evidence v2', () => {
       finishedAt: '2026-07-28T09:00:00.000Z',
       expiresAt: '2026-07-31T09:00:00.000Z',
     });
-    const passing = resolved.records.find((item) => item.gate === 'G3')!;
+    const passing = requireRecord(resolved, (item) => item.gate === 'G3');
     passing.attempt = 2;
     passing.resolvesFailureIds = [failed.id];
     passing.artifacts.push({
@@ -337,9 +402,10 @@ describe.skipIf(!subject)('public beta evidence v2', () => {
   });
 
   test('returns stable CLI exits and one JSON result', async () => {
+    if (!subject) throw new Error('PUBLIC_BETA_EVIDENCE_V2_SUBJECT_MISSING');
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const exit = await subject!.runPublicBetaEvidenceCli(
+    const exit = await subject.runPublicBetaEvidenceCli(
       [
         '--ledger',
         'tests/public-beta/evidence.fixture.json',
@@ -356,7 +422,7 @@ describe.skipIf(!subject)('public beta evidence v2', () => {
     );
     expect(exit).toBe(65);
     expect(stdout).toHaveLength(1);
-    expect(JSON.parse(stdout[0]!)).toMatchObject({ valid: false });
+    expect(JSON.parse(stdout[0] ?? '{}')).toMatchObject({ valid: false });
     expect(stderr).toHaveLength(1);
   });
 

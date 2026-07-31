@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "disabledRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "apiCliRejected": { "const": true },
+        "artifactAbsent": { "const": true },
+        "capability": { "type": "string" },
+        "deployedServiceAbsent": { "const": true },
+        "iamCapabilityAbsent": { "const": true },
+        "legacyDirectRouteRejected": { "const": true },
+        "serverFlag": { "const": false },
+        "uiAdvertised": { "const": false }
+      },
+      "required": [
+        "capability",
+        "artifactAbsent",
+        "deployedServiceAbsent",
+        "serverFlag",
+        "apiCliRejected",
+        "iamCapabilityAbsent",
+        "legacyDirectRouteRejected",
+        "uiAdvertised"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "assessmentDigest": { "pattern": "^sha256:[a-f0-9]{64}$", "type": "string" },
+    "commit": { "pattern": "^[a-f0-9]{40}$", "type": "string" },
+    "controlSha": { "pattern": "^[a-f0-9]{40}$", "type": "string" },
+    "records": {
+      "items": false,
+      "maxItems": 10,
+      "minItems": 10,
+      "prefixItems": [
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "module.oci.execute" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "module.app.render" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "commerce.purchase" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "commerce.settlement" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "native.mobile" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "studio.3d" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "studio.digital-human" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "studio.batch-remix" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "voice.realtime" } } }
+          ]
+        },
+        {
+          "allOf": [
+            { "$ref": "#/$defs/disabledRecord" },
+            { "properties": { "capability": { "const": "artifact.remote-url" } } }
+          ]
+        }
+      ],
+      "type": "array"
+    },
+    "releaseProfileDigest": { "pattern": "^sha256:[a-f0-9]{64}$", "type": "string" },
+    "releaseProfileId": { "const": "openopc-restricted-public-beta-v1" },
+    "schemaVersion": { "const": 1 }
+  },
+  "required": [
+    "schemaVersion",
+    "releaseProfileId",
+    "releaseProfileDigest",
+    "commit",
+    "controlSha",
+    "records",
+    "assessmentDigest"
+  ],
+  "type": "object"
+}

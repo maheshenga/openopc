@@ -8,6 +8,8 @@
     "schemaVersion",
     "candidateCommit",
     "environment",
+    "releaseProfileId",
+    "releaseProfileDigest",
     "schemaDigest",
     "artifactSetDigest",
     "records"
@@ -16,11 +18,15 @@
     "schemaVersion": { "const": 2 },
     "candidateCommit": { "$ref": "#/$defs/commit" },
     "environment": { "const": "openopc-public-beta-staging" },
+    "releaseProfileId": { "const": "openopc-restricted-public-beta-v1" },
+    "releaseProfileDigest": {
+      "const": "sha256:e548465c35cb5041b38092b2937164f2abecfb6781ab0e545532ce95f387956c"
+    },
     "schemaDigest": { "$ref": "#/$defs/digest" },
     "artifactSetDigest": { "$ref": "#/$defs/digest" },
     "records": {
       "type": "array",
-      "minItems": 22,
+      "minItems": 18,
       "maxItems": 512,
       "items": { "$ref": "#/$defs/record" }
     }
@@ -87,7 +93,28 @@
       ],
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
-        "gate": { "type": "string", "pattern": "^(G(?:[1-9]|1[0-2])|B(?:[1-9]|10))$" },
+        "gate": {
+          "enum": [
+            "G1",
+            "G2",
+            "G3",
+            "G4",
+            "G5",
+            "G8",
+            "G10",
+            "G11",
+            "G12",
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5",
+            "B7",
+            "B8",
+            "B9",
+            "B10"
+          ]
+        },
         "lane": { "type": "string", "pattern": "^public-beta-[gb][0-9]+-[a-z0-9-]+$" },
         "attempt": { "type": "integer", "minimum": 1, "maximum": 1000 },
         "environment": { "const": "openopc-public-beta-staging" },

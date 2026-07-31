@@ -31,7 +31,7 @@
   },
   "runDetails": {
     "builder": {
-      "id": "https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main"
+      "id": "https://github.com/maheshenga/openopc/.github/workflows/openopc-cosign-builder.yml@refs/heads/main"
     },
     "metadata": {
       "invocationId": "fixture-run-101",

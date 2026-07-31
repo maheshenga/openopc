@@ -1,7 +1,17 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { PUBLIC_BETA_LANES, PUBLIC_BETA_LANES_BY_GATE } from './public-beta-lanes';
+import type { PublicBetaLane } from './public-beta-lanes';
+import {
+  OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE,
+  type OpenOpcRestrictedPublicBetaProfileV1,
+  computeOpenOpcRestrictedPublicBetaProfileDigest,
+  parseOpenOpcRestrictedPublicBetaProfile,
+} from './public-beta-release-profile';
+import {
+  OPENOPC_RESTRICTED_PUBLIC_BETA_LANES,
+  validateOpenOpcRestrictedPublicBetaLanes,
+} from './public-beta-restricted-lanes';
 
 export type PublicBetaGateId =
   | `G${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12}`
@@ -44,6 +54,8 @@ export interface PublicBetaEvidenceLedgerV2 {
   schemaVersion: 2;
   candidateCommit: string;
   environment: 'openopc-public-beta-staging';
+  releaseProfileId: OpenOpcRestrictedPublicBetaProfileV1['id'];
+  releaseProfileDigest: `sha256:${string}`;
   schemaDigest: `sha256:${string}`;
   artifactSetDigest: `sha256:${string}`;
   records: PublicBetaEvidenceRecordV2[];
@@ -53,6 +65,9 @@ export interface ValidatePublicBetaEvidenceOptions {
   now: Date;
   expectedCommit: string;
   verifyArtifact(path: string, digest: string, sizeBytes: number): boolean;
+  profile: Readonly<OpenOpcRestrictedPublicBetaProfileV1>;
+  lanes: readonly Readonly<PublicBetaLane>[];
+  expectedArtifactSetDigest?: `sha256:${string}`;
 }
 
 export interface PublicBetaEvidenceCliIo {
@@ -63,8 +78,6 @@ export interface PublicBetaEvidenceCliIo {
 
 const ENVIRONMENT = 'openopc-public-beta-staging' as const;
 const HOUR_MS = 60 * 60 * 1_000;
-const DEFAULT_FRESHNESS_HOURS = 72;
-const B10_FRESHNESS_HOURS = 24;
 const B7_RESTORE_FRESHNESS_HOURS = 7 * 24;
 const B7_SMOKE_FRESHNESS_HOURS = 24;
 const MAX_RECORDS = 512;
@@ -80,7 +93,6 @@ const RFC3339_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const FORBIDDEN_DEPENDENCY = /^(?:fake|fixture|mock|self)(?:[:/@-]|$)/i;
 const FAILURE_RESOLUTION_MEDIA_TYPE = 'application/vnd.openopc.failure-resolution+json';
 
-const REQUIRED_GATES = Object.freeze(PUBLIC_BETA_LANES.map((entry) => entry.gate));
 const PRODUCTION_HOSTS = new Set([
   'api.kortix.com',
   'api.openopc.com',
@@ -96,6 +108,8 @@ const LEDGER_KEYS = [
   'schemaVersion',
   'candidateCommit',
   'environment',
+  'releaseProfileId',
+  'releaseProfileDigest',
   'schemaDigest',
   'artifactSetDigest',
   'records',
@@ -267,7 +281,6 @@ function validateRecord(
     typeof value.id !== 'string' ||
     !ID.test(value.id) ||
     typeof value.gate !== 'string' ||
-    !(value.gate in PUBLIC_BETA_LANES_BY_GATE) ||
     typeof value.lane !== 'string' ||
     !Number.isSafeInteger(value.attempt) ||
     Number(value.attempt) < 1 ||
@@ -302,7 +315,14 @@ function validateRecord(
   }
 
   const gate = value.gate as PublicBetaGateId;
-  if (value.lane !== PUBLIC_BETA_LANES_BY_GATE[gate].lane) {
+  const expectedLane = options.lanes.find((entry) => entry.gate === gate);
+  if (
+    expectedLane === undefined ||
+    !(options.profile.requiredGates as readonly PublicBetaGateId[]).includes(gate)
+  ) {
+    fail('PUBLIC_BETA_EVIDENCE_GATE_NOT_IN_PROFILE');
+  }
+  if (value.lane !== expectedLane.lane) {
     fail('PUBLIC_BETA_EVIDENCE_LANE_INVALID');
   }
   if (value.outcome === 'passed' && value.commit !== options.expectedCommit) {
@@ -326,7 +346,7 @@ function validateRecord(
       fail('PUBLIC_BETA_EVIDENCE_EXPIRY_INVALID');
     }
   } else {
-    const expectedDuration = gate === 'B10' ? B10_FRESHNESS_HOURS : DEFAULT_FRESHNESS_HOURS;
+    const expectedDuration = expectedLane.maxAgeHours;
     if (actualDuration !== expectedDuration) {
       fail('PUBLIC_BETA_EVIDENCE_EXPIRY_INVALID');
     }
@@ -439,8 +459,18 @@ export function validatePublicBetaEvidenceLedgerV2(
     !(options.now instanceof Date) ||
     !Number.isFinite(options.now.valueOf()) ||
     !COMMIT.test(options.expectedCommit) ||
-    typeof options.verifyArtifact !== 'function'
+    typeof options.verifyArtifact !== 'function' ||
+    !Array.isArray(options.lanes) ||
+    (options.expectedArtifactSetDigest !== undefined &&
+      !DIGEST.test(options.expectedArtifactSetDigest))
   ) {
+    fail('PUBLIC_BETA_EVIDENCE_OPTIONS_INVALID');
+  }
+  let profile: OpenOpcRestrictedPublicBetaProfileV1;
+  try {
+    profile = parseOpenOpcRestrictedPublicBetaProfile(options.profile);
+    validateOpenOpcRestrictedPublicBetaLanes(options.lanes);
+  } catch {
     fail('PUBLIC_BETA_EVIDENCE_OPTIONS_INVALID');
   }
   if (!isRecord(value) || !hasExactKeys(value, LEDGER_KEYS)) {
@@ -453,6 +483,9 @@ export function validatePublicBetaEvidenceLedgerV2(
     value.schemaVersion !== 2 ||
     typeof value.candidateCommit !== 'string' ||
     !COMMIT.test(value.candidateCommit) ||
+    typeof value.releaseProfileId !== 'string' ||
+    typeof value.releaseProfileDigest !== 'string' ||
+    !DIGEST.test(value.releaseProfileDigest) ||
     typeof value.schemaDigest !== 'string' ||
     !DIGEST.test(value.schemaDigest) ||
     typeof value.artifactSetDigest !== 'string' ||
@@ -465,8 +498,25 @@ export function validatePublicBetaEvidenceLedgerV2(
   if (value.candidateCommit !== options.expectedCommit) {
     fail('PUBLIC_BETA_EVIDENCE_COMMIT_MISMATCH');
   }
+  if (value.releaseProfileId !== profile.id) {
+    fail('PUBLIC_BETA_EVIDENCE_PROFILE_ID_MISMATCH');
+  }
+  if (value.releaseProfileDigest !== computeOpenOpcRestrictedPublicBetaProfileDigest(profile)) {
+    fail('PUBLIC_BETA_EVIDENCE_PROFILE_DIGEST_MISMATCH');
+  }
+  if (
+    options.expectedArtifactSetDigest !== undefined &&
+    value.artifactSetDigest !== options.expectedArtifactSetDigest
+  ) {
+    fail('PUBLIC_BETA_EVIDENCE_ARTIFACT_SET_MISMATCH');
+  }
 
-  const records = value.records.map((record) => validateRecord(record, options));
+  const validatedOptions: ValidatePublicBetaEvidenceOptions = {
+    ...options,
+    profile,
+    lanes: OPENOPC_RESTRICTED_PUBLIC_BETA_LANES,
+  };
+  const records = value.records.map((record) => validateRecord(record, validatedOptions));
   const ids = new Set<string>();
   const attempts = new Set<string>();
   for (const record of records) {
@@ -478,16 +528,31 @@ export function validatePublicBetaEvidenceLedgerV2(
   }
 
   const gates = new Set(records.map((record) => record.gate));
-  if (REQUIRED_GATES.some((gate) => !gates.has(gate))) {
+  if (profile.requiredGates.some((gate) => !gates.has(gate))) {
     fail('PUBLIC_BETA_EVIDENCE_GATES_INCOMPLETE');
   }
 
-  for (const gate of REQUIRED_GATES) {
+  for (const gate of profile.requiredGates) {
     if (gate === 'B7') continue;
     const passed = records.filter((record) => record.gate === gate && record.outcome === 'passed');
     if (passed.length === 0) fail('PUBLIC_BETA_EVIDENCE_GATES_INCOMPLETE');
     if (passed.every((record) => Date.parse(record.expiresAt) < options.now.valueOf())) {
       fail('PUBLIC_BETA_EVIDENCE_STALE');
+    }
+  }
+
+  const laneByGate = new Map(validatedOptions.lanes.map((entry) => [entry.gate, entry]));
+  for (const gate of profile.requiredGates) {
+    const lane = laneByGate.get(gate);
+    if (lane === undefined) fail('PUBLIC_BETA_EVIDENCE_OPTIONS_INVALID');
+    for (const dependency of lane.dependsOn) {
+      const hasFreshDependency = records.some(
+        (record) =>
+          record.gate === dependency &&
+          record.outcome === 'passed' &&
+          Date.parse(record.expiresAt) >= options.now.valueOf(),
+      );
+      if (!hasFreshDependency) fail('PUBLIC_BETA_EVIDENCE_GATES_INCOMPLETE');
     }
   }
 
@@ -571,6 +636,8 @@ export async function runPublicBetaEvidenceCli(
     const ledger = validatePublicBetaEvidenceLedgerV2(value, {
       now,
       expectedCommit,
+      profile: OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE,
+      lanes: OPENOPC_RESTRICTED_PUBLIC_BETA_LANES,
       verifyArtifact(path, digest, sizeBytes) {
         try {
           const absolute = resolveTrustedInputFile(io.cwd, path);

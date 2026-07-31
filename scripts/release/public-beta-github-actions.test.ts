@@ -7,7 +7,7 @@ import {
   authenticatePublicBetaToolBuilderRun,
 } from './public-beta-github-actions';
 
-const REPOSITORY = 'openopc/platform';
+const REPOSITORY = 'maheshenga/openopc';
 const RUN_ID = '101';
 const HEAD_SHA = 'a'.repeat(40);
 const CONTROL_SHA = 'd'.repeat(40);
@@ -187,6 +187,13 @@ describe('public beta GitHub Actions authentication', () => {
 
   test.each([
     ['fork', { repository: { full_name: 'fork/platform', id: 711 } }],
+    [
+      'legacy repository',
+      {
+        repository: { full_name: 'openopc/platform', id: 711 },
+        head_repository: { full_name: 'openopc/platform', id: 711 },
+      },
+    ],
     ['workflow', { path: '.github/workflows/other.yml' }],
     ['event', { event: 'pull_request_target' }],
     ['branch', { head_branch: 'staging' }],
@@ -307,7 +314,10 @@ describe('public beta GitHub Actions authentication', () => {
 
   test('normalizes repository-name comparison only', async () => {
     const result = await authenticatePublicBetaToolBuilderRun(
-      builderInput({ repository: { full_name: 'OpenOPC/platform', id: 711 }, head_repository: { full_name: 'OPENOPC/PLATFORM', id: 711 } }),
+      builderInput({
+        repository: { full_name: 'Maheshenga/OpenOPC', id: 711 },
+        head_repository: { full_name: 'MAHESHENGA/OPENOPC', id: 711 },
+      }),
     );
     expect(result).not.toBe(false);
   });

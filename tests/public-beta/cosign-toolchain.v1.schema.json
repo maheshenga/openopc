@@ -14,11 +14,11 @@
       "required": ["oidcIssuer", "repository", "workflowPath", "workflowRef", "workflowSha", "certificateIdentity", "trigger", "buildContainerDigest", "buildContractDigest", "goModuleGraphDigest"],
       "properties": {
         "oidcIssuer": { "const": "https://token.actions.githubusercontent.com" },
-        "repository": { "const": "openopc/platform" },
+        "repository": { "const": "maheshenga/openopc" },
         "workflowPath": { "const": ".github/workflows/openopc-cosign-builder.yml" },
         "workflowRef": { "const": "refs/heads/main" },
         "workflowSha": { "type": "string", "pattern": "^(?!0{40}$)[a-f0-9]{40}$" },
-        "certificateIdentity": { "const": "https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main" },
+        "certificateIdentity": { "const": "https://github.com/maheshenga/openopc/.github/workflows/openopc-cosign-builder.yml@refs/heads/main" },
         "trigger": { "const": "workflow_dispatch" },
         "buildContainerDigest": { "type": "string", "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$" },
         "buildContractDigest": { "type": "string", "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$" },

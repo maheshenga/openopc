@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openopc.dev/schemas/restricted-release-profile.v1.schema.json",
+  "title": "OpenOpc Restricted Public Beta Profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "artifacts",
+    "requiredGates",
+    "deferredGates"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "const": "openopc-restricted-public-beta-v1"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 7,
+      "maxItems": 7,
+      "prefixItems": [
+        { "const": "web" },
+        { "const": "admin" },
+        { "const": "api" },
+        { "const": "studio-worker" },
+        { "const": "developer-trust-worker" },
+        { "const": "wasi-runner" },
+        { "const": "desktop" }
+      ],
+      "items": false
+    },
+    "requiredGates": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "prefixItems": [
+        { "const": "G1" },
+        { "const": "G2" },
+        { "const": "G3" },
+        { "const": "G4" },
+        { "const": "G5" },
+        { "const": "G8" },
+        { "const": "G10" },
+        { "const": "G11" },
+        { "const": "G12" },
+        { "const": "B1" },
+        { "const": "B2" },
+        { "const": "B3" },
+        { "const": "B4" },
+        { "const": "B5" },
+        { "const": "B7" },
+        { "const": "B8" },
+        { "const": "B9" },
+        { "const": "B10" }
+      ],
+      "items": false
+    },
+    "deferredGates": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        { "const": "G6" },
+        { "const": "G7" },
+        { "const": "G9" },
+        { "const": "B6" }
+      ],
+      "items": false
+    }
+  }
+}

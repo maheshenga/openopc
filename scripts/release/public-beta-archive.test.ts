@@ -24,8 +24,11 @@ interface ZipEntrySpec {
   mode?: number;
   declaredCompressedSize?: number;
   declaredUncompressedSize?: number;
+  declaredCrc32?: number;
   localName?: string;
   centralExtra?: Uint8Array;
+  centralComment?: Uint8Array;
+  diskStart?: number;
   compressedData?: Uint8Array;
 }
 
@@ -64,6 +67,12 @@ function u32(value: number): Buffer {
   return result;
 }
 
+function u64(value: bigint): Buffer {
+  const result = Buffer.alloc(8);
+  result.writeBigUInt64LE(value, 0);
+  return result;
+}
+
 function zip64Extra(uncompressedSize: bigint, compressedSize: bigint): Uint8Array {
   const data = Buffer.alloc(16);
   data.writeBigUInt64LE(uncompressedSize, 0);
@@ -85,7 +94,7 @@ function buildZip(entries: readonly ZipEntrySpec[]): Uint8Array {
     const flags = entry.flags ?? 0x800;
     const localName = textEncoder.encode(entry.localName ?? entry.name);
     const centralName = textEncoder.encode(entry.name);
-    const crc = crc32(source);
+    const crc = entry.declaredCrc32 ?? crc32(source);
     const localCompressedSize = entry.compressedData
       ? compressed.length
       : compressed.length;
@@ -95,6 +104,7 @@ function buildZip(entries: readonly ZipEntrySpec[]): Uint8Array {
     const mode = entry.mode ?? (kind === 'directory' ? 0o040755 : 0o100644);
     const externalAttributes = (mode << 16) >>> 0;
     const extra = Buffer.from(entry.centralExtra ?? new Uint8Array());
+    const comment = Buffer.from(entry.centralComment ?? new Uint8Array());
 
     const localHeader = Buffer.concat([
       u32(0x04034b50),
@@ -126,13 +136,14 @@ function buildZip(entries: readonly ZipEntrySpec[]): Uint8Array {
       u32(declaredUncompressedSize),
       u16(centralName.length),
       u16(extra.length),
-      u16(0),
-      u16(0),
+      u16(comment.length),
+      u16(entry.diskStart ?? 0),
       u16(0),
       u32(externalAttributes),
       u32(localOffset),
       centralName,
       extra,
+      comment,
     ]);
     centralParts.push(centralHeader);
     localOffset += localHeader.length;
@@ -151,6 +162,44 @@ function buildZip(entries: readonly ZipEntrySpec[]): Uint8Array {
     u16(0),
   ]);
   return Buffer.concat([local, central, end]);
+}
+
+function upgradeToZip64Eocd(archive: Uint8Array): Uint8Array {
+  const source = Buffer.from(archive);
+  const classicOffset = source.length - 22;
+  const entryCount = source.readUInt16LE(classicOffset + 10);
+  const centralSize = source.readUInt32LE(classicOffset + 12);
+  const centralOffset = source.readUInt32LE(classicOffset + 16);
+  const body = source.subarray(0, classicOffset);
+  const zip64Eocd = Buffer.concat([
+    u32(0x06064b50),
+    u64(44n),
+    u16((3 << 8) | 45),
+    u16(45),
+    u32(0),
+    u32(0),
+    u64(BigInt(entryCount)),
+    u64(BigInt(entryCount)),
+    u64(BigInt(centralSize)),
+    u64(BigInt(centralOffset)),
+  ]);
+  const locator = Buffer.concat([
+    u32(0x07064b50),
+    u32(0),
+    u64(BigInt(classicOffset)),
+    u32(1),
+  ]);
+  const sentinel = Buffer.concat([
+    u32(0x06054b50),
+    u16(0),
+    u16(0),
+    u16(0xffff),
+    u16(0xffff),
+    u32(0xffffffff),
+    u32(0xffffffff),
+    u16(0),
+  ]);
+  return Buffer.concat([body, zip64Eocd, locator, sentinel]);
 }
 
 function withLimits(overrides: Partial<PublicBetaArchiveLimits>): PublicBetaArchiveLimits {
@@ -200,9 +249,10 @@ describe('public beta archive authentication and extraction', () => {
     });
 
     expect(result).not.toBe(false);
-    expect(result?.digest).toBe(input.expectedDigest);
-    expect(result?.sizeBytes).toBe(bytes.length);
-    expect(result?.files).toEqual(['nested/hello.txt']);
+    if (result === false) throw new Error('EXPECTED_ARCHIVE_EXTRACTION');
+    expect(result.digest).toBe(input.expectedDigest);
+    expect(result.sizeBytes).toBe(bytes.length);
+    expect(result.files).toEqual(['nested/hello.txt']);
     expect(await readFile(join(input.destination, 'nested', 'hello.txt'), 'utf8')).toBe('hello');
   });
 
@@ -367,6 +417,155 @@ describe('public beta archive authentication and extraction', () => {
     expect(await exists(input.destination)).toBe(false);
   });
 
+  test.each([0, 8])(
+    'rejects a compression method %d entry whose streamed CRC-32 is wrong',
+    async (compressionMethod) => {
+      const bytes = buildZip([
+        {
+          name: 'same-length.bin',
+          data: textEncoder.encode('authenticated payload'),
+          compressionMethod,
+          declaredCrc32: 0x12345678,
+        },
+      ]);
+      const input = await fixture(bytes);
+
+      const result = await authenticateAndExtractPublicBetaArchive({
+        archivePath: input.archivePath,
+        expectedDigest: input.expectedDigest,
+        expectedSizeBytes: bytes.length,
+        destination: input.destination,
+      });
+
+      expect(result).toBe(false);
+      expect(await exists(input.destination)).toBe(false);
+    },
+  );
+
+  test('rejects an EOCD entry count that omits central directory records', async () => {
+    const raw = Buffer.from(
+      buildZip([
+        { name: 'one.txt', data: textEncoder.encode('one') },
+        { name: 'two.txt', data: textEncoder.encode('two') },
+      ]),
+    );
+    raw.writeUInt16LE(1, raw.length - 14);
+    raw.writeUInt16LE(1, raw.length - 12);
+    const input = await fixture(raw);
+
+    const result = await authenticateAndExtractPublicBetaArchive({
+      archivePath: input.archivePath,
+      expectedDigest: input.expectedDigest,
+      expectedSizeBytes: raw.length,
+      destination: input.destination,
+    });
+
+    expect(result).toBe(false);
+    expect(await exists(input.destination)).toBe(false);
+  });
+
+  test('rejects a central directory record assigned to another disk', async () => {
+    const raw = buildZip([{ name: 'other-disk.bin', diskStart: 1 }]);
+    const input = await fixture(raw);
+
+    const result = await authenticateAndExtractPublicBetaArchive({
+      archivePath: input.archivePath,
+      expectedDigest: input.expectedDigest,
+      expectedSizeBytes: raw.length,
+      destination: input.destination,
+    });
+
+    expect(result).toBe(false);
+    expect(await exists(input.destination)).toBe(false);
+  });
+
+  test('rejects an oversized central directory extra field', async () => {
+    const extra = Buffer.concat([u16(0xcafe), u16(65_528), Buffer.alloc(65_528)]);
+    const raw = buildZip([{ name: 'huge-extra.bin', centralExtra: extra }]);
+    const input = await fixture(raw);
+
+    const result = await authenticateAndExtractPublicBetaArchive({
+      archivePath: input.archivePath,
+      expectedDigest: input.expectedDigest,
+      expectedSizeBytes: raw.length,
+      destination: input.destination,
+    });
+
+    expect(result).toBe(false);
+    expect(await exists(input.destination)).toBe(false);
+  });
+
+  test('rejects an oversized central directory comment', async () => {
+    const raw = buildZip([
+      {
+        name: 'huge-comment.bin',
+        centralComment: new Uint8Array(4_097).fill(0x61),
+      },
+    ]);
+    const input = await fixture(raw);
+
+    const result = await authenticateAndExtractPublicBetaArchive({
+      archivePath: input.archivePath,
+      expectedDigest: input.expectedDigest,
+      expectedSizeBytes: raw.length,
+      destination: input.destination,
+    });
+
+    expect(result).toBe(false);
+    expect(await exists(input.destination)).toBe(false);
+  });
+
+  test('rejects a non-empty archive with a zero central directory size', async () => {
+    const raw = Buffer.from(buildZip([{ name: 'hello.txt', data: textEncoder.encode('hello') }]));
+    raw.writeUInt32LE(0, raw.length - 10);
+    const input = await fixture(raw);
+
+    const result = await authenticateAndExtractPublicBetaArchive({
+      archivePath: input.archivePath,
+      expectedDigest: input.expectedDigest,
+      expectedSizeBytes: raw.length,
+      destination: input.destination,
+    });
+
+    expect(result).toBe(false);
+    expect(await exists(input.destination)).toBe(false);
+  });
+
+  test('accepts a valid Zip64 end-of-central-directory contract', async () => {
+    const raw = upgradeToZip64Eocd(
+      buildZip([{ name: 'zip64.txt', data: textEncoder.encode('zip64') }]),
+    );
+    const input = await fixture(raw);
+
+    const result = await authenticateAndExtractPublicBetaArchive({
+      archivePath: input.archivePath,
+      expectedDigest: input.expectedDigest,
+      expectedSizeBytes: raw.length,
+      destination: input.destination,
+    });
+
+    expect(result).not.toBe(false);
+    expect(await readFile(join(input.destination, 'zip64.txt'), 'utf8')).toBe('zip64');
+  });
+
+  test('rejects a conflicting non-sentinel classic count in a Zip64 archive', async () => {
+    const raw = Buffer.from(
+      upgradeToZip64Eocd(buildZip([{ name: 'zip64.txt', data: textEncoder.encode('zip64') }])),
+    );
+    raw.writeUInt16LE(2, raw.length - 14);
+    const input = await fixture(raw);
+
+    const result = await authenticateAndExtractPublicBetaArchive({
+      archivePath: input.archivePath,
+      expectedDigest: input.expectedDigest,
+      expectedSizeBytes: raw.length,
+      destination: input.destination,
+    });
+
+    expect(result).toBe(false);
+    expect(await exists(input.destination)).toBe(false);
+  });
+
   test('closes the archive descriptor on both success and failure', async () => {
     const bytes = buildZip([{ name: 'hello.txt', data: textEncoder.encode('hello') }]);
     const input = await fixture(bytes);
@@ -381,5 +580,59 @@ describe('public beta archive authentication and extraction', () => {
     const renamed = `${input.archivePath}.renamed`;
     await fs.rename(input.archivePath, renamed);
     expect(await exists(renamed)).toBe(true);
+  });
+
+  test('fails closed instead of rejecting when an input getter throws', async () => {
+    const bytes = buildZip([{ name: 'hello.txt', data: textEncoder.encode('hello') }]);
+    const input = await fixture(bytes);
+    const throwingInput = {
+      get archivePath(): string {
+        throw new Error('INPUT_GETTER_FAILED');
+      },
+      expectedDigest: input.expectedDigest,
+      expectedSizeBytes: bytes.length,
+      destination: input.destination,
+    } as unknown as Parameters<typeof authenticateAndExtractPublicBetaArchive>[0];
+
+    let result: Awaited<ReturnType<typeof authenticateAndExtractPublicBetaArchive>> | 'rejected';
+    try {
+      result = await authenticateAndExtractPublicBetaArchive(throwingInput);
+    } catch {
+      result = 'rejected';
+    }
+
+    expect(result).toBe(false);
+  });
+
+  test('snapshots changing archive input and limits getters once', async () => {
+    const bytes = buildZip([{ name: 'hello.txt', data: textEncoder.encode('hello') }]);
+    const input = await fixture(bytes);
+    let digestReads = 0;
+    const dynamicLimits = { ...PUBLIC_BETA_ARCHIVE_LIMITS };
+    let maxEntriesReads = 0;
+    Object.defineProperty(dynamicLimits, 'maxEntries', {
+      configurable: true,
+      get: () => {
+        maxEntriesReads += 1;
+        return maxEntriesReads === 1 ? PUBLIC_BETA_ARCHIVE_LIMITS.maxEntries : 0;
+      },
+    });
+
+    const dynamicInput = {
+      archivePath: input.archivePath,
+      get expectedDigest(): `sha256:${string}` {
+        digestReads += 1;
+        return digestReads === 1 ? input.expectedDigest : `sha256:${'0'.repeat(64)}`;
+      },
+      expectedSizeBytes: bytes.length,
+      destination: input.destination,
+      limits: dynamicLimits,
+    };
+
+    const result = await authenticateAndExtractPublicBetaArchive(dynamicInput);
+
+    expect(result).not.toBe(false);
+    expect(digestReads).toBe(1);
+    expect(maxEntriesReads).toBe(1);
   });
 });

@@ -13,7 +13,7 @@ env:
 
 jobs:
   primary:
-    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    if: github.repository == 'maheshenga/openopc' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -52,7 +52,7 @@ jobs:
           retention-days: 7
 
   replay:
-    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    if: github.repository == 'maheshenga/openopc' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -91,7 +91,7 @@ jobs:
           retention-days: 7
 
   compare_attest:
-    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    if: github.repository == 'maheshenga/openopc' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
     needs: [primary, replay]
     runs-on: ubuntu-24.04
     permissions:
@@ -188,7 +188,7 @@ jobs:
             schemaVersion: 1,
             toolchainId: process.env.TOOLCHAIN_ID,
             upstream: { repository: 'sigstore/cosign', tag: 'v3.1.2', tagObjectSha: process.env.UPSTREAM_TAG_OBJECT, commitSha: process.env.UPSTREAM_COMMIT, treeSha: process.env.UPSTREAM_TREE, goVersion: '1.26.0' },
-            builder: { oidcIssuer: 'https://token.actions.githubusercontent.com', repository: 'openopc/platform', workflowPath: '.github/workflows/openopc-cosign-builder.yml', workflowRef: 'refs/heads/main', workflowSha: process.env.WORKFLOW_SHA, certificateIdentity: 'https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main', trigger: 'workflow_dispatch', buildContainerDigest: 'sha256:2a0ba12e116687098780d3ce700f9ce3cb340783779646aafbabed748fa6677c' },
+            builder: { oidcIssuer: 'https://token.actions.githubusercontent.com', repository: 'maheshenga/openopc', workflowPath: '.github/workflows/openopc-cosign-builder.yml', workflowRef: 'refs/heads/main', workflowSha: process.env.WORKFLOW_SHA, certificateIdentity: 'https://github.com/maheshenga/openopc/.github/workflows/openopc-cosign-builder.yml@refs/heads/main', trigger: 'workflow_dispatch', buildContainerDigest: 'sha256:2a0ba12e116687098780d3ce700f9ce3cb340783779646aafbabed748fa6677c' },
             artifacts: {
               linuxAmd64: { name: linux.name, digest: linux.digest, sizeBytes: linux.sizeBytes, buildContractDigest: linux.buildContractDigest, goModuleGraphDigest: linux.goModuleGraphDigest, replayDigest: linux.replayDigest, bundlePath: 'cosign-v3.1.2-openopc.1/linux-amd64.jsonl', bundleDigest: sha('_cosign-compared/cosign-v3.1.2-openopc.1/linux-amd64.jsonl'), predicateType: 'https://slsa.dev/provenance/v1' },
               windowsAmd64: { name: windows.name, digest: windows.digest, sizeBytes: windows.sizeBytes, buildContractDigest: windows.buildContractDigest, goModuleGraphDigest: windows.goModuleGraphDigest, replayDigest: windows.replayDigest, bundlePath: 'cosign-v3.1.2-openopc.1/windows-amd64.jsonl', bundleDigest: sha('_cosign-compared/cosign-v3.1.2-openopc.1/windows-amd64.jsonl'), predicateType: 'https://slsa.dev/provenance/v1' },
@@ -208,7 +208,7 @@ jobs:
           retention-days: 30
 
   linux_smoke:
-    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    if: github.repository == 'maheshenga/openopc' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
     needs: compare_attest
     runs-on: ubuntu-24.04
     permissions:
@@ -239,7 +239,7 @@ jobs:
           ./_cosign-compared/cosign-linux-amd64 verify-blob --key _cosign-compared/local.pub --signature _cosign-compared/payload.sig _cosign-compared/payload
 
   windows_smoke:
-    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    if: github.repository == 'maheshenga/openopc' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
     needs: compare_attest
     runs-on: windows-2022
     permissions:
@@ -275,7 +275,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'OPENOPC_COSIGN_VERIFY_FAILED' }
 
   promote:
-    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    if: github.repository == 'maheshenga/openopc' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
     needs: [linux_smoke, windows_smoke]
     runs-on: ubuntu-24.04
     environment: toolchain-release
@@ -330,7 +330,7 @@ jobs:
           };
           if (root.schemaVersion !== 1 || root.toolchainId !== 'openopc-cosign-v3.1.2.1') throw new Error('OPENOPC_COSIGN_PREPROMOTION_IDENTITY_INVALID');
           if (upstream.repository !== 'sigstore/cosign' || upstream.tag !== 'v3.1.2' || upstream.tagObjectSha !== 'dc80df70da727f4abdd843640594025584a270ae' || upstream.commitSha !== '193d2153431f8bb0d945a4c1ee721872f73add67' || upstream.treeSha !== '6647db468973d11edb5e737293fcf4b05c69a84a' || upstream.goVersion !== '1.26.0') throw new Error('OPENOPC_COSIGN_PREPROMOTION_UPSTREAM_INVALID');
-          if (builder.oidcIssuer !== 'https://token.actions.githubusercontent.com' || builder.repository !== 'openopc/platform' || builder.workflowPath !== '.github/workflows/openopc-cosign-builder.yml' || builder.workflowRef !== 'refs/heads/main' || builder.workflowSha !== process.env.WORKFLOW_SHA || builder.certificateIdentity !== 'https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main' || builder.trigger !== 'workflow_dispatch' || builder.buildContainerDigest !== 'sha256:2a0ba12e116687098780d3ce700f9ce3cb340783779646aafbabed748fa6677c') throw new Error('OPENOPC_COSIGN_PREPROMOTION_BUILDER_INVALID');
+          if (builder.oidcIssuer !== 'https://token.actions.githubusercontent.com' || builder.repository !== 'maheshenga/openopc' || builder.workflowPath !== '.github/workflows/openopc-cosign-builder.yml' || builder.workflowRef !== 'refs/heads/main' || builder.workflowSha !== process.env.WORKFLOW_SHA || builder.certificateIdentity !== 'https://github.com/maheshenga/openopc/.github/workflows/openopc-cosign-builder.yml@refs/heads/main' || builder.trigger !== 'workflow_dispatch' || builder.buildContainerDigest !== 'sha256:2a0ba12e116687098780d3ce700f9ce3cb340783779646aafbabed748fa6677c') throw new Error('OPENOPC_COSIGN_PREPROMOTION_BUILDER_INVALID');
           const linux = validateArtifact(artifacts.linuxAmd64, { name: 'cosign-linux-amd64', bundlePath: 'cosign-v3.1.2-openopc.1/linux-amd64.jsonl' }, '_cosign-compared/cosign-linux-amd64', '_cosign-compared/cosign-v3.1.2-openopc.1/linux-amd64.jsonl');
           const windows = validateArtifact(artifacts.windowsAmd64, { name: 'cosign-windows-amd64.exe', bundlePath: 'cosign-v3.1.2-openopc.1/windows-amd64.jsonl' }, '_cosign-compared/cosign-windows-amd64.exe', '_cosign-compared/cosign-v3.1.2-openopc.1/windows-amd64.jsonl');
           if (linux.digest === windows.digest || linux.goModuleGraphDigest !== windows.goModuleGraphDigest) throw new Error('OPENOPC_COSIGN_PREPROMOTION_CROSS_PLATFORM_INVALID');

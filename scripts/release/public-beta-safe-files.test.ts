@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  linkSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -13,6 +14,8 @@ import { join, resolve } from 'node:path';
 import { computePublicBetaSha256 } from './public-beta-canonical-json';
 import {
   type PublicBetaFileReference,
+  readPublicBetaBoundedBytes,
+  readPublicBetaBoundedJson,
   readPublicBetaVerifiedBytes,
   readPublicBetaVerifiedJson,
   verifyPublicBetaFile,
@@ -33,6 +36,63 @@ function materializeVerifiedFile(root: string, path: string, contents: Uint8Arra
 }
 
 describe('readPublicBetaVerifiedBytes', () => {
+  test('returns false for runtime references whose properties throw', () => {
+    const throwingReference = () =>
+      new Proxy(Object.create(null) as PublicBetaFileReference, {
+        get() {
+          throw new Error('getter');
+        },
+      });
+
+    expect(readPublicBetaVerifiedBytes(throwingReference())).toBe(false);
+    expect(readPublicBetaBoundedBytes(throwingReference())).toBe(false);
+    expect(verifyPublicBetaFile(throwingReference())).toBe(false);
+    expect(readPublicBetaVerifiedJson(throwingReference())).toBe(false);
+    expect(readPublicBetaBoundedJson(throwingReference())).toBe(false);
+  });
+
+  test('rejects runtime references whose path changes after validation', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'openopc-public-beta-safe-files-'));
+    const root = join(parent, 'trusted-root');
+    const outsideContents = '{"outside":true}';
+    const outsideBytes = new TextEncoder().encode(outsideContents);
+    try {
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, 'inside.json'), '{"inside":true}');
+      writeFileSync(join(parent, 'outside.json'), outsideContents);
+
+      const changingReference = () => {
+        let pathReads = 0;
+        return new Proxy(
+          {
+            root,
+            path: 'inside.json',
+            digest: computePublicBetaSha256(outsideBytes),
+            sizeBytes: outsideBytes.byteLength,
+            maxBytes: 1024,
+          } satisfies PublicBetaFileReference,
+          {
+            get(target, property, receiver) {
+              if (property === 'path') {
+                pathReads += 1;
+                return pathReads === 1 ? 'inside.json' : '../outside.json';
+              }
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        );
+      };
+
+      expect(verifyPublicBetaFile(changingReference())).toBe(false);
+      expect(readPublicBetaVerifiedBytes(changingReference())).toBe(false);
+      expect(readPublicBetaBoundedBytes(changingReference())).toBe(false);
+      expect(readPublicBetaVerifiedJson(changingReference())).toBe(false);
+      expect(readPublicBetaBoundedJson(changingReference())).toBe(false);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   test('accepts a valid file when native realpath canonicalizes the root spelling', () => {
     const root = mkdtempSync(join(tmpdir(), 'openopc-public-beta-safe-files-'));
     try {
@@ -43,7 +103,10 @@ describe('readPublicBetaVerifiedBytes', () => {
       }
 
       const reference = materializeVerifiedFile(root, 'verified/evidence.json', '{"ok":true}');
-      expect(readPublicBetaVerifiedJson(reference)?.value).toEqual({ ok: true });
+      const verified = readPublicBetaVerifiedJson(reference);
+      expect(verified).not.toBe(false);
+      if (verified === false) throw new Error('EXPECTED_VERIFIED_JSON');
+      expect(verified.value).toEqual({ ok: true });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -53,7 +116,10 @@ describe('readPublicBetaVerifiedBytes', () => {
     const root = mkdtempSync(join(tmpdir(), 'openopc-public-beta-safe-files-'));
     try {
       const reference = materializeVerifiedFile(root, 'verified/evidence.json', '{"ok":true}');
-      expect(readPublicBetaVerifiedJson(reference)?.value).toEqual({ ok: true });
+      const verified = readPublicBetaVerifiedJson(reference);
+      expect(verified).not.toBe(false);
+      if (verified === false) throw new Error('EXPECTED_VERIFIED_JSON');
+      expect(verified.value).toEqual({ ok: true });
       expect(readPublicBetaVerifiedJson({ ...reference, sizeBytes: reference.sizeBytes + 1 })).toBe(
         false,
       );
@@ -103,33 +169,64 @@ describe('readPublicBetaVerifiedBytes', () => {
     try {
       const reference = materializeVerifiedFile(root, 'verified/file.json', '{"ok":true}');
       expect(readPublicBetaVerifiedBytes({ ...reference, path: '../outside.json' })).toBe(false);
-      expect(readPublicBetaVerifiedBytes({ ...reference, path: `${'a/'.repeat(32)}file.json` })).toBe(
-        false,
-      );
+      expect(
+        readPublicBetaVerifiedBytes({ ...reference, path: `${'a/'.repeat(32)}file.json` }),
+      ).toBe(false);
       expect(readPublicBetaVerifiedBytes({ ...reference, maxBytes: 0 })).toBe(false);
       expect(readPublicBetaVerifiedBytes({ ...reference, maxBytes: reference.sizeBytes - 1 })).toBe(
         false,
       );
-      expect(
-        readPublicBetaVerifiedBytes({ ...reference, path: `${'a'.repeat(1025)}.json` }),
-      ).toBe(false);
+      expect(readPublicBetaVerifiedBytes({ ...reference, path: `${'a'.repeat(1025)}.json` })).toBe(
+        false,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test('streams a local release artifact under the 10 GiB candidate bound', () => {
-    const root = mkdtempSync(join(tmpdir(), 'openopc-public-beta-safe-files-'));
+  test('rejects a regular file hard-linked from outside the trusted root', () => {
+    const parent = mkdtempSync(join(tmpdir(), 'openopc-public-beta-safe-files-'));
+    const root = join(parent, 'trusted-root');
+    const outside = join(parent, 'outside.bin');
+    const linked = join(root, 'artifacts', 'linked.bin');
     try {
-      const reference = materializeVerifiedFile(root, 'artifacts/local-release.bin', 'release');
+      mkdirSync(join(root, 'artifacts'), { recursive: true });
+      writeFileSync(outside, 'outside-secret');
+      linkSync(outside, linked);
+      const bytes = new TextEncoder().encode('outside-secret');
       expect(
         verifyPublicBetaFile({
-          root: reference.root,
-          path: reference.path,
-          digest: reference.digest,
-          maxBytes: 10 * 1024 * 1024 * 1024,
+          root,
+          path: 'artifacts/linked.bin',
+          digest: computePublicBetaSha256(bytes),
+          sizeBytes: bytes.byteLength,
+          maxBytes: 1024,
+        }),
+      ).toBe(false);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test('streams multiple chunks and requires the exact artifact size', () => {
+    const root = mkdtempSync(join(tmpdir(), 'openopc-public-beta-safe-files-'));
+    try {
+      const contents = new Uint8Array(1024 * 1024 + 17).fill(0xa5);
+      const reference = materializeVerifiedFile(root, 'artifacts/local-release.bin', contents);
+      const maxBytes = 10 * 1024 * 1024 * 1024;
+      expect(
+        verifyPublicBetaFile({
+          ...reference,
+          maxBytes,
         }),
       ).toBe(true);
+      expect(
+        verifyPublicBetaFile({
+          ...reference,
+          sizeBytes: reference.sizeBytes + 1,
+          maxBytes,
+        }),
+      ).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

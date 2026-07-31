@@ -29,9 +29,10 @@ import {
   type PublicBetaEvidenceLedgerV2,
   validatePublicBetaEvidenceLedgerV2,
 } from './public-beta-evidence-v2';
+import { OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE } from './public-beta-release-profile';
+import { OPENOPC_RESTRICTED_PUBLIC_BETA_LANES } from './public-beta-restricted-lanes';
 import {
   readPublicBetaBoundedJson,
-  readPublicBetaVerifiedBytes,
   readPublicBetaVerifiedJson,
   verifyPublicBetaFile,
 } from './public-beta-safe-files';
@@ -828,15 +829,13 @@ export function computePublicBetaEvidenceSchemaDigest(): `sha256:${string}` {
 }
 
 function verifyArtifactAt(cwd: string, path: string, digest: string, sizeBytes: number): boolean {
-  return (
-    readPublicBetaVerifiedBytes({
-      root: cwd,
-      path,
-      digest: digest as `sha256:${string}`,
-      sizeBytes,
-      maxBytes: sizeBytes,
-    }) !== false
-  );
+  return verifyPublicBetaFile({
+    root: cwd,
+    path,
+    digest: digest as `sha256:${string}`,
+    sizeBytes,
+    maxBytes: sizeBytes,
+  });
 }
 
 function evidenceArtifactForDigest(
@@ -1223,6 +1222,9 @@ export function evaluatePublicBetaReadiness(
       validatedLedger = validatePublicBetaEvidenceLedgerV2(ledger, {
         now,
         expectedCommit: manifest.commit,
+        profile: OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE,
+        lanes: OPENOPC_RESTRICTED_PUBLIC_BETA_LANES,
+        expectedArtifactSetDigest: manifest.artifactManifestDigest,
         verifyArtifact: verifyEvidenceArtifact,
       });
     } catch (error) {

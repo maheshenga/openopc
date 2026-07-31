@@ -69,7 +69,7 @@ test('pins the exact upstream source and derives the builder identity', async ()
     goVersion: '1.26.0',
   });
   expect(canonicalPublicBetaCosignBuilderIdentity()).toBe(
-    'https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main',
+    'https://github.com/maheshenga/openopc/.github/workflows/openopc-cosign-builder.yml@refs/heads/main',
   );
   expect(Object.isFrozen(lock)).toBe(true);
   expect(Object.isFrozen(lock.upstream)).toBe(true);
@@ -111,6 +111,11 @@ test.each([
 
 test.each([
   ['unknown artifact key', (value: MutableRecord) => { const artifacts = record(value.artifacts); artifacts.darwinAmd64 = artifacts.linuxAmd64; }],
+  ['legacy builder repository', (value: MutableRecord) => { record(value.builder).repository = 'openopc/platform'; }],
+  ['legacy builder certificate identity', (value: MutableRecord) => {
+    record(value.builder).certificateIdentity =
+      'https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main';
+  }],
   ['non-40-hex workflow SHA', (value: MutableRecord) => { record(value.builder).workflowSha = 'main'; }],
   ['zero subject digest', (value: MutableRecord) => { record(record(value.artifacts).linuxAmd64).digest = digest('0'); }],
   ['unsafe bundle path', (value: MutableRecord) => { record(record(value.artifacts).linuxAmd64).bundlePath = '../linux.jsonl'; }],
@@ -224,12 +229,12 @@ test('states every expressible builder-lock and toolchain contract in the schema
     'trigger', 'buildContainerDigest', 'buildContractDigest', 'goModuleGraphDigest',
   ]).properties);
   expect(builderProperties.oidcIssuer).toEqual({ const: 'https://token.actions.githubusercontent.com' });
-  expect(builderProperties.repository).toEqual({ const: 'openopc/platform' });
+  expect(builderProperties.repository).toEqual({ const: 'maheshenga/openopc' });
   expect(builderProperties.workflowPath).toEqual({ const: '.github/workflows/openopc-cosign-builder.yml' });
   expect(builderProperties.workflowRef).toEqual({ const: 'refs/heads/main' });
   expect(builderProperties.workflowSha).toEqual({ type: 'string', pattern: '^(?!0{40}$)[a-f0-9]{40}$' });
   expect(builderProperties.certificateIdentity).toEqual({
-    const: 'https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main',
+    const: 'https://github.com/maheshenga/openopc/.github/workflows/openopc-cosign-builder.yml@refs/heads/main',
   });
   expect(builderProperties.trigger).toEqual({ const: 'workflow_dispatch' });
   expectDigestPattern(builderProperties, [
@@ -320,7 +325,7 @@ test('states every expressible SLSA predicate contract in the schema', async () 
   const runDetails = record(expectClosedObjectSchema(predicateProperties.runDetails, ['builder', 'metadata']).properties);
   expect(record(runDetails.builder)).toEqual({
     type: 'object', additionalProperties: false, required: ['id'], properties: {
-      id: { const: 'https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main' },
+      id: { const: 'https://github.com/maheshenga/openopc/.github/workflows/openopc-cosign-builder.yml@refs/heads/main' },
     },
   });
   const metadata = record(runDetails.metadata);

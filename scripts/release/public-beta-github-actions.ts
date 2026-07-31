@@ -40,7 +40,7 @@ export interface PublicBetaAuthenticatedSourceRun {
 }
 
 export interface PublicBetaAuthenticatedToolBuilderRun {
-  repository: 'openopc/platform';
+  repository: 'maheshenga/openopc';
   workflow: typeof BUILDER_WORKFLOW;
   workflowRef: typeof MAIN_WORKFLOW_REF;
   controlSha: string;
@@ -137,7 +137,7 @@ export async function authenticatePublicBetaSourceRun(input: {
 
 export async function authenticatePublicBetaToolBuilderRun(input: {
   client: PublicBetaGitHubActionsClient;
-  expectedRepository: 'openopc/platform';
+  expectedRepository: 'maheshenga/openopc';
   expectedControlSha: string;
   runId: string;
   now: Date;
@@ -162,7 +162,7 @@ export async function authenticatePublicBetaToolBuilderRun(input: {
   const artifact = await findArtifact(request.client, request.runId, BUILDER_ARTIFACT, run, request.now);
   if (!artifact) return false;
   return Object.freeze({
-    repository: 'openopc/platform',
+    repository: 'maheshenga/openopc',
     workflow: BUILDER_WORKFLOW,
     workflowRef: MAIN_WORKFLOW_REF,
     controlSha: run.headSha,
@@ -231,11 +231,11 @@ function snapshotSourceRequest(input: unknown):
 }
 
 function snapshotBuilderRequest(input: unknown):
-  | { client: PublicBetaGitHubActionsClient; expectedRepository: 'openopc/platform'; expectedControlSha: string; runId: string; now: number }
+  | { client: PublicBetaGitHubActionsClient; expectedRepository: 'maheshenga/openopc'; expectedControlSha: string; runId: string; now: number }
   | false {
   const request = snapshotRequest(input, ['expectedRepository', 'expectedControlSha']);
-  return request && request.expectedRepository === 'openopc/platform' && commitSha(request.expectedControlSha)
-    ? { ...request, expectedRepository: 'openopc/platform', expectedControlSha: request.expectedControlSha }
+  return request && request.expectedRepository === 'maheshenga/openopc' && commitSha(request.expectedControlSha)
+    ? { ...request, expectedRepository: 'maheshenga/openopc', expectedControlSha: request.expectedControlSha }
     : false;
 }
 

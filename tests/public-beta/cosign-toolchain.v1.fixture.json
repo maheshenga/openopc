@@ -11,11 +11,11 @@
   },
   "builder": {
     "oidcIssuer": "https://token.actions.githubusercontent.com",
-    "repository": "openopc/platform",
+    "repository": "maheshenga/openopc",
     "workflowPath": ".github/workflows/openopc-cosign-builder.yml",
     "workflowRef": "refs/heads/main",
     "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "certificateIdentity": "https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main",
+    "certificateIdentity": "https://github.com/maheshenga/openopc/.github/workflows/openopc-cosign-builder.yml@refs/heads/main",
     "trigger": "workflow_dispatch",
     "buildContainerDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
     "buildContractDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",

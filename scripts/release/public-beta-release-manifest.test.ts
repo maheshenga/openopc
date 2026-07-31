@@ -25,6 +25,10 @@ import {
   verifyPublicBetaArtifactProvenanceFromLedger,
   verifyPublicBetaArtifactSbomFromLedger,
 } from './public-beta-release-manifest';
+import {
+  OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE,
+  OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST,
+} from './public-beta-release-profile';
 
 const COMMIT = 'a'.repeat(40);
 const ROLLBACK_COMMIT = 'b'.repeat(40);
@@ -77,10 +81,7 @@ const LANES = {
   G3: 'public-beta-g3-trust-pipeline',
   G4: 'public-beta-g4-malicious-fixtures',
   G5: 'public-beta-g5-wasi',
-  G6: 'public-beta-g6-oci',
-  G7: 'public-beta-g7-ui-capability',
   G8: 'public-beta-g8-tenant-authority',
-  G9: 'public-beta-g9-sandbox-commerce',
   G10: 'public-beta-g10-release-lifecycle',
   G11: 'public-beta-g11-web-desktop',
   G12: 'public-beta-g12-upstream-compatibility',
@@ -89,7 +90,6 @@ const LANES = {
   B3: 'public-beta-b3-admin-isolation',
   B4: 'public-beta-b4-module-workflow',
   B5: 'public-beta-b5-runtime-isolation',
-  B6: 'public-beta-b6-sandbox-ledger',
   B7: 'public-beta-b7-backup-recovery',
   B8: 'public-beta-b8-telemetry-incident',
   B9: 'public-beta-b9-brand-upstream',
@@ -116,7 +116,7 @@ function evidenceRecord(gate: Gate, index = 1) {
     commit: COMMIT,
     command: `pnpm.cmd test:${LANES[gate]}`,
     workflow: {
-      repository: 'openopc/platform',
+      repository: 'maheshenga/openopc',
       workflow: 'openopc-public-beta-gates.yml',
       runId: String(1_000 + index),
       runAttempt: 1,
@@ -170,6 +170,8 @@ function completeEvidence(): PublicBetaEvidenceLedgerV2 {
     schemaVersion: 2,
     candidateCommit: COMMIT,
     environment: 'openopc-public-beta-staging',
+    releaseProfileId: OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE.id,
+    releaseProfileDigest: OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST,
     schemaDigest: computePublicBetaEvidenceSchemaDigest(),
     artifactSetDigest: releaseArtifactManifest().manifestDigest,
     records,
@@ -658,7 +660,7 @@ describe('public beta release candidate manifest', () => {
     );
 
     expect(result.status).toBe('not_ready');
-    expect(result.reasons).toContain('PUBLIC_BETA_ARTIFACT_SET_DIGEST_MISMATCH');
+    expect(result.reasons).toContain('PUBLIC_BETA_EVIDENCE_ARTIFACT_SET_MISMATCH');
   });
 
   test('binds the evidence ledger to the controlled schema digest', () => {

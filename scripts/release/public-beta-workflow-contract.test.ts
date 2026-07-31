@@ -58,7 +58,7 @@ const SETUP_BUN = 'oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6';
 const UPLOAD = 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a';
 const DOWNLOAD = 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c';
 const ATTEST = 'actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d';
-const GUARD = "github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha";
+const GUARD = "github.repository == 'maheshenga/openopc' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha";
 
 test('cosign builder uses a no-input protected manual trigger and exact job graph', async () => {
   const { source, workflow } = await parseWorkflow(WORKFLOW);
@@ -71,7 +71,7 @@ test('cosign builder uses a no-input protected manual trigger and exact job grap
     'windows_smoke',
     'promote',
   ]);
-  expect(source).toContain("github.repository == 'openopc/platform'");
+  expect(source).toContain("github.repository == 'maheshenga/openopc'");
   expect(source).toContain("github.ref == 'refs/heads/main'");
   expect(source).toContain('github.workflow_sha');
   expect(source).not.toContain('pull_request_target');

@@ -99,17 +99,17 @@ function provenanceEnvelope() {
         internalParameters: {},
         resolvedDependencies: [
           {
-            uri: `git+https://github.com/openopc/platform@${COMMIT}`,
+            uri: `git+https://github.com/maheshenga/openopc@${COMMIT}`,
             digest: { gitCommit: COMMIT },
           },
         ],
       },
       runDetails: {
         builder: {
-          id: 'https://github.com/openopc/platform/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
+          id: 'https://github.com/maheshenga/openopc/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
         },
         metadata: {
-          invocationId: 'https://github.com/openopc/platform/actions/runs/1001/attempts/1',
+          invocationId: 'https://github.com/maheshenga/openopc/actions/runs/1001/attempts/1',
           startedOn: '2026-07-28T10:00:00.000Z',
           finishedOn: '2026-07-28T10:05:00.000Z',
         },
@@ -209,9 +209,9 @@ describe('public beta artifact manifest', () => {
         artifactDigest: DIGEST_A,
         sbomDigest: DIGEST_B,
         commit: COMMIT,
-        repository: 'openopc/platform',
+        repository: 'maheshenga/openopc',
         builderId:
-          'https://github.com/openopc/platform/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
+          'https://github.com/maheshenga/openopc/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
         verifySignature: (_value, preAuthEncoding) => {
           pae = new TextDecoder().decode(preAuthEncoding);
           return true;
@@ -230,9 +230,9 @@ describe('public beta artifact manifest', () => {
         artifactDigest: DIGEST_A,
         sbomDigest: DIGEST_B,
         commit: COMMIT,
-        repository: 'openopc/platform',
+        repository: 'maheshenga/openopc',
         builderId:
-          'https://github.com/openopc/platform/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
+          'https://github.com/maheshenga/openopc/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
       }),
     ).toThrow('PUBLIC_BETA_PROVENANCE_SIGNATURE_VERIFIER_REQUIRED');
   });
@@ -246,9 +246,9 @@ describe('public beta artifact manifest', () => {
         artifactDigest: DIGEST_A,
         sbomDigest: DIGEST_B,
         commit: COMMIT,
-        repository: 'openopc/platform',
+        repository: 'maheshenga/openopc',
         builderId:
-          'https://github.com/openopc/platform/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
+          'https://github.com/maheshenga/openopc/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
         verifySignature: (() => Promise.resolve(false)) as unknown as () => boolean,
       }),
     ).toThrow('PUBLIC_BETA_PROVENANCE_SIGNATURE_INVALID');
@@ -264,9 +264,9 @@ describe('public beta artifact manifest', () => {
         artifactDigest: DIGEST_A,
         sbomDigest: DIGEST_B,
         commit: COMMIT,
-        repository: 'openopc/platform',
+        repository: 'maheshenga/openopc',
         builderId:
-          'https://github.com/openopc/platform/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
+          'https://github.com/maheshenga/openopc/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
         verifySignature: () => true,
       }),
     ).toThrow('PUBLIC_BETA_DSSE_PAYLOAD_NOT_CANONICAL');
@@ -283,9 +283,9 @@ describe('public beta artifact manifest', () => {
         artifactDigest: DIGEST_A,
         sbomDigest: DIGEST_B,
         commit: COMMIT,
-        repository: 'openopc/platform',
+        repository: 'maheshenga/openopc',
         builderId:
-          'https://github.com/openopc/platform/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
+          'https://github.com/maheshenga/openopc/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
         verifySignature: () => true,
       }),
     ).toThrow('PUBLIC_BETA_DSSE_PAYLOAD_NOT_CANONICAL');
@@ -302,9 +302,9 @@ describe('public beta artifact manifest', () => {
         artifactDigest: DIGEST_A,
         sbomDigest: DIGEST_B,
         commit: COMMIT,
-        repository: 'openopc/platform',
+        repository: 'maheshenga/openopc',
         builderId:
-          'https://github.com/openopc/platform/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
+          'https://github.com/maheshenga/openopc/.github/workflows/openopc-public-beta-gates.yml@refs/heads/staging',
         verifySignature: () => true,
       }),
     ).toThrow('PUBLIC_BETA_PROVENANCE_STATEMENT_INVALID');

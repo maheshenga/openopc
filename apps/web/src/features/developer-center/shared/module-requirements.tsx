@@ -4,8 +4,11 @@ const REQUIREMENT_LABELS: Record<DeveloperModuleReviewRequirement, string> = {
   manifest_review: 'Manifest review',
   source_scan: 'Source scan',
   sandbox_test: 'Sandbox test',
+  sdk_contract_test: 'SDK contract test',
   permission_review: 'Permission review',
   desktop_security_review: 'Desktop security review',
+  ai_service_review: 'AI service review',
+  payment_service_review: 'Payment service review',
   human_review: 'Human review',
 };
 

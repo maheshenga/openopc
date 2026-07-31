@@ -1,5 +1,10 @@
-import type { DeveloperModuleDistributionService } from '../developer/distribution';
+import { moduleCatalogLabels } from '@kortix/registry';
+import {
+  assertReleaseRuntimeAllowed,
+  type DeveloperModuleDistributionService,
+} from '../developer/distribution';
 import type { DeveloperModuleRelease } from '../developer/releases';
+import { loadRuntimeReleaseProfile } from '../release-profile/runtime';
 
 export const OPENOPC_MODULE_MARKETPLACE_ID = 'openopc-modules';
 export const OPENOPC_MODULE_MARKETPLACE_LABEL = 'OpenOPC Modules';
@@ -79,18 +84,26 @@ type PublicDeveloperModuleRelease = DeveloperModuleRelease & {
   signed_at: string;
 };
 
-function isPublicDeclarativeRelease(
+function isPublicMarketplaceRelease(
   release: DeveloperModuleRelease,
 ): release is PublicDeveloperModuleRelease {
-  return (
+  if (
     release.status === 'published' &&
     release.signature_algorithm === 'ed25519' &&
     release.signature_key_id !== null &&
     release.signature !== null &&
     release.signature_payload_digest !== null &&
     release.signed_at !== null &&
-    release.manifest.execution.mode === 'declarative'
-  );
+    ['declarative', 'sandboxed-web', 'server-adapter'].includes(release.manifest.execution.mode)
+  ) {
+    try {
+      assertReleaseRuntimeAllowed(release, loadRuntimeReleaseProfile());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function itemId(releaseId: string): string {
@@ -123,7 +136,7 @@ function itemOf(release: DeveloperModuleRelease): DeveloperModuleMarketplaceItem
     type: 'registry:module',
     title: release.item_name,
     description: null,
-    categories: [release.manifest.category],
+    categories: moduleCatalogLabels(release.manifest),
     capabilities: capabilitiesOf(release),
     dependencies: [],
     fileCount: 0,
@@ -175,7 +188,7 @@ export function createDeveloperModuleMarketplaceAdapter(
         offset: Math.max(Math.trunc(input.offset), 0),
       });
       const items = page.releases
-        .filter(isPublicDeclarativeRelease)
+        .filter(isPublicMarketplaceRelease)
         .map(itemOf)
         .filter((item) => matchesQuery(item, input.query))
         .sort((left, right) => left.id.localeCompare(right.id));
@@ -188,7 +201,7 @@ export function createDeveloperModuleMarketplaceAdapter(
       if (!releaseId) return null;
       try {
         const release = await source.getPublished({ releaseId });
-        return isPublicDeclarativeRelease(release) ? detailOf(release) : null;
+        return isPublicMarketplaceRelease(release) ? detailOf(release) : null;
       } catch {
         return null;
       }

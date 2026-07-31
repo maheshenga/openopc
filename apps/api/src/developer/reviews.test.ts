@@ -428,6 +428,55 @@ describe('developer module review service', () => {
     }
   });
 
+  test('requires SDK attestation and AI manual evidence before approving a service release', async () => {
+    const requirements = [
+      'manifest_review',
+      'source_scan',
+      'sdk_contract_test',
+      'ai_service_review',
+      'human_review',
+    ] as unknown as DeveloperModuleReviewRequirement[];
+    const { service } = harness(release('review_pending', 1, requirements));
+
+    const result = await service.decide({
+      releaseId: RELEASE_ID,
+      actorUserId: REVIEWER_ID,
+      decision: 'approve',
+      expectedStatus: 'review_pending',
+      expectedRevision: 1,
+      evidence: [
+        {
+          requirement: 'manifest_review',
+          outcome: 'passed',
+          method: 'manual',
+          summary: 'Manifest is valid.',
+          observed_at: '2026-07-24T14:00:00.000Z',
+        },
+        {
+          requirement: 'ai_service_review',
+          outcome: 'passed',
+          method: 'manual',
+          summary: 'AI service boundary is approved.',
+          observed_at: '2026-07-24T14:00:00.000Z',
+        },
+        {
+          requirement: 'human_review',
+          outcome: 'passed',
+          method: 'manual',
+          summary: 'Release is approved.',
+          observed_at: '2026-07-24T14:00:00.000Z',
+        },
+      ],
+    });
+
+    expect(result.event.evidence.map((entry) => entry.requirement)).toEqual(requirements);
+    expect(
+      result.event.evidence.find((entry) => entry.requirement === 'sdk_contract_test'),
+    ).toMatchObject({
+      method: 'system_attestation',
+    });
+  });
+
   test('validates strict human evidence fields, timestamps, and safe text', async () => {
     const mutations: Array<(evidence: ReturnType<typeof completeEvidence>) => unknown> = [
       (evidence) => evidence.map((entry, index) => (index ? entry : { ...entry, extra: 'nope' })),

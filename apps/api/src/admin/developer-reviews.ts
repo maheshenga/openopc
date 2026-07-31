@@ -73,7 +73,7 @@ const HumanEvidenceSchema = z
 
 const AutomaticEvidenceSchema = z
   .object({
-    requirement: z.enum(['source_scan', 'sandbox_test']),
+    requirement: z.enum(['source_scan', 'sandbox_test', 'sdk_contract_test']),
     outcome: z.literal('passed'),
     method: z.literal('system_attestation'),
     run_id: z.string().uuid(),
@@ -179,7 +179,10 @@ const DISTRIBUTION_REQUIREMENT = {
 async function authorizeReleaseTarget<T>(
   context: Context<AppEnv>,
   authorize: AdminDecisionAuthorizer,
-  requirement: typeof REVIEW_REQUIREMENT | typeof REVIEW_READ_REQUIREMENT | typeof DISTRIBUTION_REQUIREMENT,
+  requirement:
+    | typeof REVIEW_REQUIREMENT
+    | typeof REVIEW_READ_REQUIREMENT
+    | typeof DISTRIBUTION_REQUIREMENT,
   resolve: () => Promise<T>,
   accountId: (target: T) => string | null,
 ): Promise<T> {

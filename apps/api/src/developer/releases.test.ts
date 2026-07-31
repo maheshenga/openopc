@@ -677,4 +677,71 @@ describe('developer module release service', () => {
       'human_review',
     ]);
   });
+
+  test('derives SDK and AI review requirements from a v3 service declaration', async () => {
+    const { artifacts, service } = fixture();
+    const item = {
+      name: 'ai-weather',
+      type: 'registry:module' as const,
+      module: {
+        schemaVersion: 3 as const,
+        id: 'acme.ai-weather',
+        version: '1.0.0',
+        publisher: { id: 'acme', displayName: 'Acme' },
+        locales: ['en'],
+        compatibility: { platform: '^1.0.0' },
+        execution: { mode: 'sandboxed-web' as const, entry: 'dist/index.html' },
+        verification: { profile: 'sandboxed-web' as const },
+        openopc: {
+          sdkApiVersion: 'v1' as const,
+          catalog: { labels: ['h5', 'weather'] },
+          services: { ai: { operations: ['models.read', 'text.generate'] as const } },
+        },
+      },
+    };
+
+    const result = await submitItem(service, artifacts, item);
+
+    expect(result.release.review_requirements).toEqual([
+      'manifest_review',
+      'source_scan',
+      'sandbox_test',
+      'sdk_contract_test',
+      'ai_service_review',
+      'human_review',
+    ]);
+  });
+
+  test('derives payment review requirements from a v3 payment declaration', async () => {
+    const { artifacts, service } = fixture();
+    const item = {
+      name: 'weather-checkout',
+      type: 'registry:module' as const,
+      module: {
+        schemaVersion: 3 as const,
+        id: 'acme.weather-checkout',
+        version: '1.0.0',
+        publisher: { id: 'acme', displayName: 'Acme' },
+        locales: ['en'],
+        compatibility: { platform: '^1.0.0' },
+        execution: { mode: 'sandboxed-web' as const, entry: 'dist/index.html' },
+        verification: { profile: 'sandboxed-web' as const },
+        openopc: {
+          sdkApiVersion: 'v1' as const,
+          services: { payment: { operations: ['orders.create'] as const } },
+        },
+      },
+    };
+
+    const result = await submitItem(service, artifacts, item);
+
+    expect(result.release.review_requirements).toEqual([
+      'manifest_review',
+      'source_scan',
+      'sandbox_test',
+      'sdk_contract_test',
+      'payment_service_review',
+      'human_review',
+    ]);
+  });
 });

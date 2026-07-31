@@ -120,7 +120,7 @@ function cloneEvent(event: DeveloperModuleDistributionEvent): DeveloperModuleDis
   return structuredClone(event);
 }
 
-function assertReleaseRuntimeAllowed(
+export function assertReleaseRuntimeAllowed(
   release: DeveloperModuleRelease,
   runtime: RuntimeReleaseProfile,
   allowRestrictedRevoke = false,
@@ -577,7 +577,8 @@ export function createMemoryDeveloperModuleDistributionRepository(input?: {
           (release) =>
             release.manifest.execution.mode !== 'server-adapter' ||
             !serverAdapterRuntimeKinds ||
-            (release.runtime_kind !== null && serverAdapterRuntimeKinds.includes(release.runtime_kind)),
+            (release.runtime_kind !== null &&
+              serverAdapterRuntimeKinds.includes(release.runtime_kind)),
         )
         .filter(
           (release) =>

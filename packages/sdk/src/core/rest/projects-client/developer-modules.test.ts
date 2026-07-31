@@ -293,7 +293,7 @@ test('developer module release transport preserves public signature metadata', a
       'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
     runtime_descriptor_path: 'runtime/openopc.runtime.json',
     runtime_kind: 'wasi-component',
-    review_requirements: ['manifest_review'],
+    review_requirements: ['manifest_review', 'sdk_contract_test', 'ai_service_review'],
     status: 'published',
     review_revision: 4,
     signature_algorithm: 'ed25519',

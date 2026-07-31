@@ -161,7 +161,7 @@ const DeveloperModuleHumanReviewEvidenceSchema = z
 
 const DeveloperModuleAutomaticEvidenceSchema = z
   .object({
-    requirement: z.enum(['source_scan', 'sandbox_test']),
+    requirement: z.enum(['source_scan', 'sandbox_test', 'sdk_contract_test']),
     outcome: z.literal('passed'),
     method: z.literal('system_attestation'),
     run_id: z.string().uuid(),

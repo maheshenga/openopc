@@ -143,8 +143,11 @@ export type DeveloperModuleReviewRequirement =
   | 'manifest_review'
   | 'source_scan'
   | 'sandbox_test'
+  | 'sdk_contract_test'
   | 'permission_review'
   | 'desktop_security_review'
+  | 'ai_service_review'
+  | 'payment_service_review'
   | 'human_review';
 
 export interface DeveloperModuleRelease {
@@ -199,7 +202,7 @@ export type DeveloperModuleReviewActorKind = 'publisher' | 'platform_admin';
 
 export type DeveloperModuleHumanReviewRequirement = Exclude<
   DeveloperModuleReviewRequirement,
-  'source_scan' | 'sandbox_test'
+  'source_scan' | 'sandbox_test' | 'sdk_contract_test'
 >;
 
 export interface DeveloperModuleHumanReviewEvidence {
@@ -211,7 +214,7 @@ export interface DeveloperModuleHumanReviewEvidence {
 }
 
 export interface DeveloperModuleAutomaticReviewEvidence {
-  requirement: 'source_scan' | 'sandbox_test';
+  requirement: 'source_scan' | 'sandbox_test' | 'sdk_contract_test';
   outcome: 'passed';
   method: 'system_attestation';
   run_id: string;

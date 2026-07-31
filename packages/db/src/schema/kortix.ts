@@ -6277,6 +6277,8 @@ export type DeveloperModuleReviewEvidenceRow =
         | 'manifest_review'
         | 'permission_review'
         | 'desktop_security_review'
+        | 'ai_service_review'
+        | 'payment_service_review'
         | 'human_review';
       outcome: 'passed';
       method: 'manual';
@@ -6284,7 +6286,7 @@ export type DeveloperModuleReviewEvidenceRow =
       observed_at: string;
     }
   | {
-      requirement: 'source_scan' | 'sandbox_test';
+      requirement: 'source_scan' | 'sandbox_test' | 'sdk_contract_test';
       outcome: 'passed';
       method: 'system_attestation';
       run_id: string;

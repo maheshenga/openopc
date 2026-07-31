@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   type RegistryModuleManifest,
   createRegistryModuleArtifactEnvelope,
+  moduleServiceOperations,
   readRegistryModuleManifest,
   validateRegistryItem,
 } from '@kortix/registry';
@@ -27,6 +28,7 @@ import {
   type RuntimeDescriptorEvidence,
   extractRuntimeDescriptor,
 } from './runtime-descriptors';
+import { assertDeveloperModuleServiceNetworkPolicy } from './verification';
 
 export const DEVELOPER_MODULE_RELEASE_STATUSES = [
   'draft',
@@ -48,8 +50,11 @@ export const DEVELOPER_MODULE_REVIEW_REQUIREMENTS = [
   'manifest_review',
   'source_scan',
   'sandbox_test',
+  'sdk_contract_test',
   'permission_review',
   'desktop_security_review',
+  'ai_service_review',
+  'payment_service_review',
   'human_review',
 ] as const;
 
@@ -200,6 +205,7 @@ function reviewRequirements(manifest: RegistryModuleManifest): DeveloperModuleRe
   if (manifest.execution.mode !== 'declarative' || (manifest.ui?.length ?? 0) > 0) {
     requirements.push('sandbox_test');
   }
+  if (manifest.schemaVersion === 3) requirements.push('sdk_contract_test');
   const hasPermissions = Object.values(manifest.permissions ?? {}).some(
     (values) => values !== undefined && values.length > 0,
   );
@@ -209,6 +215,10 @@ function reviewRequirements(manifest: RegistryModuleManifest): DeveloperModuleRe
     (manifest.permissions?.desktop?.length ?? 0) > 0
   ) {
     requirements.push('desktop_security_review');
+  }
+  if (moduleServiceOperations(manifest, 'ai').length > 0) requirements.push('ai_service_review');
+  if (moduleServiceOperations(manifest, 'payment').length > 0) {
+    requirements.push('payment_service_review');
   }
   requirements.push('human_review');
   return requirements;
@@ -243,6 +253,7 @@ export class DeveloperModuleReleaseService {
     if (!validation.valid || !manifest || typeof itemName !== 'string') {
       throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_INVALID', 400);
     }
+    assertDeveloperModuleServiceNetworkPolicy(manifest);
     if (
       manifest.execution.mode === 'server-adapter' &&
       artifact.runtime_kind !== 'wasi-component'

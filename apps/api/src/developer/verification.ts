@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import type { RegistryModuleManifest } from '@kortix/registry';
 
 export type DeveloperModuleVerificationState =
   | 'queued'
@@ -217,6 +218,41 @@ const TERMINAL_STATES = new Set<DeveloperModuleVerificationState>([
   'inconclusive',
   'cancelled',
 ]);
+
+function configuredOrigin(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+export function assertDeveloperModuleServiceNetworkPolicy(
+  manifest: RegistryModuleManifest,
+  configured: { newApiBaseUrl?: string; zPayBaseUrl?: string } = {
+    newApiBaseUrl: process.env.NEWAPI_BASE_URL,
+    zPayBaseUrl: process.env.ZPAY_BASE_URL,
+  },
+): void {
+  if (manifest.schemaVersion !== 3) return;
+  const network = new Set(
+    (manifest.permissions?.network ?? []).flatMap((value) => {
+      try {
+        return [new URL(value).origin];
+      } catch {
+        return [];
+      }
+    }),
+  );
+  const services = manifest.openopc.services;
+  if (services?.ai && network.has(configuredOrigin(configured.newApiBaseUrl) ?? '')) {
+    fail('DEVELOPER_VERIFICATION_RESULT_INVALID', 400);
+  }
+  if (services?.payment && network.has(configuredOrigin(configured.zPayBaseUrl) ?? '')) {
+    fail('DEVELOPER_VERIFICATION_RESULT_INVALID', 400);
+  }
+}
 
 function digest(value: string): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;

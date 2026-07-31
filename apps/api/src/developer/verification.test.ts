@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+  assertDeveloperModuleServiceNetworkPolicy,
   type DeveloperModuleVerificationClaim,
   DeveloperModuleVerificationService,
   type FinalizeVerificationInput,
@@ -106,6 +107,29 @@ function passedResult(
 }
 
 describe('developer module verification lifecycle', () => {
+  test('rejects a declared platform service provider origin in network permissions', () => {
+    const manifest = {
+      schemaVersion: 3,
+      id: 'acme.weather',
+      version: '1.0.0',
+      publisher: { id: 'acme' },
+      locales: ['en'],
+      compatibility: { platform: '^1.0.0' },
+      execution: { mode: 'sandboxed-web' },
+      openopc: {
+        sdkApiVersion: 'v1',
+        services: { ai: { operations: ['models.read'] } },
+      },
+      permissions: { network: ['https://newapi.example.test'] },
+    } as const;
+
+    expect(() =>
+      assertDeveloperModuleServiceNetworkPolicy(manifest as never, {
+        newApiBaseUrl: 'https://newapi.example.test/v1',
+      }),
+    ).toThrow('DEVELOPER_VERIFICATION_RESULT_INVALID');
+  });
+
   test('claims, heartbeats, finalizes, and exposes only a safe account view', async () => {
     const { repository } = fixture();
     await enqueue(repository);

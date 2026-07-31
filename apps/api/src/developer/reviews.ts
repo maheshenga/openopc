@@ -26,13 +26,19 @@ export type DeveloperModuleReviewActorKind = (typeof DEVELOPER_MODULE_REVIEW_ACT
 
 export type DeveloperModuleReviewDecision = 'request_changes' | 'approve' | 'revoke';
 
-export const DEVELOPER_MODULE_AUTOMATIC_REQUIREMENTS = ['source_scan', 'sandbox_test'] as const;
+export const DEVELOPER_MODULE_AUTOMATIC_REQUIREMENTS = [
+  'source_scan',
+  'sandbox_test',
+  'sdk_contract_test',
+] as const;
 export type DeveloperModuleAutomaticRequirement =
   (typeof DEVELOPER_MODULE_AUTOMATIC_REQUIREMENTS)[number];
 export const DEVELOPER_MODULE_HUMAN_REQUIREMENTS = [
   'manifest_review',
   'permission_review',
   'desktop_security_review',
+  'ai_service_review',
+  'payment_service_review',
   'human_review',
 ] as const;
 export type DeveloperModuleHumanRequirement = (typeof DEVELOPER_MODULE_HUMAN_REQUIREMENTS)[number];

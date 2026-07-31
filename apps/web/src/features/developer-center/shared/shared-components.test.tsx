@@ -15,7 +15,15 @@ describe('Developer Center shared views', () => {
         <DeveloperModuleStatusBadge status="uploaded" />
         <DeveloperModuleStatusBadge status="verifying" />
         <DeveloperModuleStatusBadge status="review_pending" />
-        <DeveloperModuleRequirements requirements={['manifest_review', 'human_review']} />
+        <DeveloperModuleRequirements
+          requirements={[
+            'manifest_review',
+            'sdk_contract_test',
+            'ai_service_review',
+            'payment_service_review',
+            'human_review',
+          ]}
+        />
       </>,
     );
 
@@ -24,6 +32,9 @@ describe('Developer Center shared views', () => {
     expect(html).toContain('Verifying');
     expect(html).toContain('Review pending');
     expect(html).toContain('Manifest review');
+    expect(html).toContain('SDK contract test');
+    expect(html).toContain('AI service review');
+    expect(html).toContain('Payment service review');
     expect(html).toContain('Human review');
   });
 
@@ -41,6 +52,27 @@ describe('Developer Center shared views', () => {
     expect(html).toContain('acme.module');
     expect(html).toContain('https://api.example.test');
     expect(html).not.toContain('<script>');
+  });
+
+  test('renders declared SDK services without provider configuration', () => {
+    const html = renderToStaticMarkup(
+      <DeveloperModuleManifestView
+        manifest={{
+          id: 'acme.weather',
+          openopc: {
+            sdkApiVersion: 'v1',
+            services: { ai: { operations: ['models.read', 'text.generate'] } },
+            providerUrl: 'https://newapi.example.test',
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain('SDK API version');
+    expect(html).toContain('v1');
+    expect(html).toContain('AI service');
+    expect(html).toContain('models.read, text.generate');
+    expect(html).not.toContain('newapi.example.test');
   });
 
   test('renders immutable events without privileged actions', () => {

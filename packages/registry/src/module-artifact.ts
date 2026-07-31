@@ -44,18 +44,30 @@ export interface RegistryModuleSourceProvenance {
   registryItemAddress?: string;
 }
 
+export interface RegistryModuleArtifactDescriptorModuleV2 {
+  id: string;
+  version: string;
+  publisherId: string;
+  category: string;
+  executionMode: RegistryModuleExecutionMode;
+}
+
+export interface RegistryModuleArtifactDescriptorModuleV3 {
+  id: string;
+  version: string;
+  publisherId: string;
+  executionMode: RegistryModuleExecutionMode;
+}
+
+export type RegistryModuleArtifactDescriptorModule =
+  | RegistryModuleArtifactDescriptorModuleV2
+  | RegistryModuleArtifactDescriptorModuleV3;
+
 export interface RegistryModuleArtifactDescriptor {
   artifactFormatVersion: typeof DEVELOPER_MODULE_ARTIFACT_FORMAT_VERSION;
   mediaType: typeof DEVELOPER_MODULE_ARTIFACT_MEDIA_TYPE;
   item: RegistryItem;
-  module: {
-    id: string;
-    version: string;
-    publisherId: string;
-    /** Legacy v2 metadata; omitted from v3 descriptors. */
-    category?: string;
-    executionMode: RegistryModuleExecutionMode;
-  };
+  module: RegistryModuleArtifactDescriptorModule;
   blobs: RegistryModuleArtifactBlobDescriptor[];
   dependencies: string[];
   devDependencies: string[];
@@ -464,7 +476,9 @@ export function createRegistryModuleArtifactEnvelope(
   }
   assertJsonDepth(input.item, limits.maxJsonDepth, 'item');
   const manifest = readRegistryModuleManifest(input.item);
-  if (!manifest) fail('item.module', 'must be a valid schema-version-2 module manifest');
+  if (!manifest) {
+    fail('item.module', 'must be a valid schema-version-2 or schema-version-3 module manifest');
+  }
   const item = normalizedItem(input.item, limits);
   const blobs = resolvedBlobs(item, input.files ?? [], limits);
   const dependencies = item.dependencies ?? [];
@@ -489,17 +503,26 @@ export function createRegistryModuleArtifactEnvelope(
       ])
       .sort(([left], [right]) => left.localeCompare(right)),
   );
+  const module =
+    manifest.schemaVersion === 2
+      ? {
+          id: manifest.id,
+          version: manifest.version,
+          publisherId: manifest.publisher.id,
+          category: manifest.category,
+          executionMode: manifest.execution.mode,
+        }
+      : {
+          id: manifest.id,
+          version: manifest.version,
+          publisherId: manifest.publisher.id,
+          executionMode: manifest.execution.mode,
+        };
   const descriptor: RegistryModuleArtifactDescriptor = {
     artifactFormatVersion: DEVELOPER_MODULE_ARTIFACT_FORMAT_VERSION,
     mediaType: DEVELOPER_MODULE_ARTIFACT_MEDIA_TYPE,
     item,
-    module: {
-      id: manifest.id,
-      version: manifest.version,
-      publisherId: manifest.publisher.id,
-      ...(manifest.schemaVersion === 2 ? { category: manifest.category } : {}),
-      executionMode: manifest.execution.mode,
-    },
+    module,
     blobs,
     dependencies,
     devDependencies,

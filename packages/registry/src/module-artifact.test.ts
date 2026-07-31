@@ -137,6 +137,7 @@ test('builds a deterministic envelope independent of declaration order and path 
     { path: 'assets/config.json', target: 'modules/acme/config.json' },
     { path: 'src/main.ts', target: 'modules/acme/main.ts' },
   ]);
+  expect(first.descriptor.module).toMatchObject({ category: 'automation' });
   expect(
     new TextDecoder().decode(canonicalRegistryModuleArtifactDescriptor(first.descriptor)),
   ).toBe(new TextDecoder().decode(canonicalRegistryModuleArtifactDescriptor(second.descriptor)));
@@ -159,6 +160,16 @@ test('omits the legacy category field from a schema-v3 artifact descriptor', () 
   expect(
     new TextDecoder().decode(canonicalRegistryModuleArtifactDescriptor(envelope.descriptor)),
   ).not.toContain('"category"');
+});
+
+test('identifies v2 and v3 as supported schema versions when a manifest is invalid', () => {
+  const input = artifactInput();
+  const module = input.item.module as unknown as Record<string, unknown>;
+  module.schemaVersion = 4;
+
+  expect(() => createRegistryModuleArtifactEnvelope(input)).toThrow(
+    'item.module must be a valid schema-version-2 or schema-version-3 module manifest',
+  );
 });
 
 test.each([

@@ -1,0 +1,42 @@
+{
+  "buildDefinition": {
+    "buildType": "https://openopc.dev/buildtypes/cosign/v1",
+    "externalParameters": {
+      "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "platform": "linuxAmd64",
+      "subjectName": "cosign-linux-amd64",
+      "subjectDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "subjectSizeBytes": 1024,
+      "buildContainerDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "buildContractDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "goModuleGraphDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "replayDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "upstreamRepository": "sigstore/cosign",
+      "upstreamTag": "v3.1.2",
+      "upstreamTagObjectSha": "dc80df70da727f4abdd843640594025584a270ae",
+      "upstreamCommitSha": "193d2153431f8bb0d945a4c1ee721872f73add67",
+      "upstreamTreeSha": "6647db468973d11edb5e737293fcf4b05c69a84a",
+      "upstreamGoVersion": "1.26.0"
+    },
+    "internalParameters": {},
+    "resolvedDependencies": [
+      {
+        "uri": "git+https://github.com/sigstore/cosign@refs/tags/v3.1.2",
+        "digest": {
+          "sha1": "193d2153431f8bb0d945a4c1ee721872f73add67",
+          "gitTree": "6647db468973d11edb5e737293fcf4b05c69a84a"
+        }
+      }
+    ]
+  },
+  "runDetails": {
+    "builder": {
+      "id": "https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main"
+    },
+    "metadata": {
+      "invocationId": "fixture-run-101",
+      "startedOn": "2026-07-30T10:00:00.000Z",
+      "finishedOn": "2026-07-30T10:01:00.000Z"
+    }
+  }
+}

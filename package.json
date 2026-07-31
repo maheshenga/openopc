@@ -32,6 +32,8 @@
     "test:apps": "pnpm --filter \"./apps/**\" --if-present test",
     "test:suite": "pnpm --filter @kortix/tests test",
     "module-beta:evidence:validate": "bun scripts/release/module-beta-targets.ts --check-fixture tests/module-beta/evidence.json",
+    "public-beta:cosign:build": "bun scripts/release/public-beta-cosign-builder.ts build",
+    "public-beta:cosign:predicate": "bun scripts/release/public-beta-cosign-builder.ts predicate",
     "public-beta:evidence:validate": "bun scripts/release/public-beta-evidence-v2.ts",
     "public-beta:validate": "bun scripts/release/public-beta-release-manifest.ts",
     "lint:biome": "biome check .",

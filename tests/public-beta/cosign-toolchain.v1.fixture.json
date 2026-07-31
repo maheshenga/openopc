@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "toolchainId": "openopc-cosign-v3.1.2.1",
+  "upstream": {
+    "repository": "sigstore/cosign",
+    "tag": "v3.1.2",
+    "tagObjectSha": "dc80df70da727f4abdd843640594025584a270ae",
+    "commitSha": "193d2153431f8bb0d945a4c1ee721872f73add67",
+    "treeSha": "6647db468973d11edb5e737293fcf4b05c69a84a",
+    "goVersion": "1.26.0"
+  },
+  "builder": {
+    "oidcIssuer": "https://token.actions.githubusercontent.com",
+    "repository": "openopc/platform",
+    "workflowPath": ".github/workflows/openopc-cosign-builder.yml",
+    "workflowRef": "refs/heads/main",
+    "workflowSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "certificateIdentity": "https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main",
+    "trigger": "workflow_dispatch",
+    "buildContainerDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "buildContractDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "goModuleGraphDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "artifacts": {
+    "linuxAmd64": {
+      "name": "cosign-linux-amd64",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "sizeBytes": 1024,
+      "releaseTag": "openopc-cosign-v3.1.2.1",
+      "releaseAssetId": "101",
+      "bundlePath": "cosign-v3.1.2-openopc.1/linux-amd64.jsonl",
+      "bundleDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "predicateType": "https://slsa.dev/provenance/v1"
+    },
+    "windowsAmd64": {
+      "name": "cosign-windows-amd64.exe",
+      "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "sizeBytes": 2048,
+      "releaseTag": "openopc-cosign-v3.1.2.1",
+      "releaseAssetId": "102",
+      "bundlePath": "cosign-v3.1.2-openopc.1/windows-amd64.jsonl",
+      "bundleDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "predicateType": "https://slsa.dev/provenance/v1"
+    }
+  }
+}

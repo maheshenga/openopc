@@ -1,0 +1,465 @@
+name: OpenOPC Cosign Builder
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  TOOLCHAIN_ID: openopc-cosign-v3.1.2.1
+  UPSTREAM_COMMIT: 193d2153431f8bb0d945a4c1ee721872f73add67
+  UPSTREAM_TREE: 6647db468973d11edb5e737293fcf4b05c69a84a
+  UPSTREAM_TAG_OBJECT: dc80df70da727f4abdd843640594025584a270ae
+
+jobs:
+  primary:
+    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: sigstore/cosign
+          ref: 193d2153431f8bb0d945a4c1ee721872f73add67
+          path: _upstream
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - id: build
+        name: Build primary Linux and Windows subjects
+        run: |
+          set -euo pipefail
+          mkdir -p _primary/linux _primary/windows _primary-module-cache
+          OPENOPC_COSIGN_PLATFORM=linuxAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _primary-module-cache _primary/linux > _primary/linux-build.json
+          mv _primary/linux/cosign-linux-amd64 _primary/cosign-linux-amd64
+          OPENOPC_COSIGN_PLATFORM=windowsAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _primary-module-cache _primary/windows > _primary/windows-build.json
+          mv _primary/windows/cosign-windows-amd64.exe _primary/cosign-windows-amd64.exe
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cosign-primary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: _primary
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
+
+  replay:
+    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: sigstore/cosign
+          ref: 193d2153431f8bb0d945a4c1ee721872f73add67
+          path: _upstream
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - id: build
+        name: Build replay Linux and Windows subjects
+        run: |
+          set -euo pipefail
+          mkdir -p _replay/linux _replay/windows _replay-module-cache
+          OPENOPC_COSIGN_PLATFORM=linuxAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _replay-module-cache _replay/linux > _replay/linux-build.json
+          mv _replay/linux/cosign-linux-amd64 _replay/cosign-linux-amd64
+          OPENOPC_COSIGN_PLATFORM=windowsAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _replay-module-cache _replay/windows > _replay/windows-build.json
+          mv _replay/windows/cosign-windows-amd64.exe _replay/cosign-windows-amd64.exe
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cosign-replay-${{ github.run_id }}-${{ github.run_attempt }}
+          path: _replay
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
+
+  compare_attest:
+    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    needs: [primary, replay]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.primary.outputs.artifact-id }}
+          path: _primary
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.replay.outputs.artifact-id }}
+          path: _replay
+          merge-multiple: true
+      - id: compare
+        name: Compare retained subject bytes and build records
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          cmp -- _primary/cosign-linux-amd64 _replay/cosign-linux-amd64
+          cmp -- _primary/cosign-windows-amd64.exe _replay/cosign-windows-amd64.exe
+          mkdir -p _cosign-compared
+          cp -- _primary/cosign-linux-amd64 _cosign-compared/cosign-linux-amd64
+          cp -- _primary/cosign-windows-amd64.exe _cosign-compared/cosign-windows-amd64.exe
+          bun scripts/release/public-beta-cosign-builder.ts compare _primary/linux-build.json _replay/linux-build.json > _cosign-compared/linux-compared.json
+          bun scripts/release/public-beta-cosign-builder.ts compare _primary/windows-build.json _replay/windows-build.json > _cosign-compared/windows-compared.json
+          linux_digest="sha256:$(sha256sum _cosign-compared/cosign-linux-amd64 | awk '{print $1}')"
+          windows_digest="sha256:$(sha256sum _cosign-compared/cosign-windows-amd64.exe | awk '{print $1}')"
+          linux_size="$(wc -c < _cosign-compared/cosign-linux-amd64)"
+          windows_size="$(wc -c < _cosign-compared/cosign-windows-amd64.exe)"
+          test "$(jq -er '.digest' _cosign-compared/linux-compared.json)" = "$linux_digest" || { echo 'digest-mismatch: error'; exit 1; }
+          test "$(jq -er '.sizeBytes' _cosign-compared/linux-compared.json)" = "$linux_size" || { echo 'size-mismatch: error'; exit 1; }
+          test "$(jq -er '.digest' _cosign-compared/windows-compared.json)" = "$windows_digest" || { echo 'digest-mismatch: error'; exit 1; }
+          test "$(jq -er '.sizeBytes' _cosign-compared/windows-compared.json)" = "$windows_size" || { echo 'size-mismatch: error'; exit 1; }
+          printf '{"compared":%s,"invocationId":"%s","workflowSha":"%s"}\n' "$(cat _cosign-compared/linux-compared.json)" "$GITHUB_RUN_ID" "$WORKFLOW_SHA" > _cosign-compared/linux-predicate-input.json
+          printf '{"compared":%s,"invocationId":"%s","workflowSha":"%s"}\n' "$(cat _cosign-compared/windows-compared.json)" "$GITHUB_RUN_ID" "$WORKFLOW_SHA" > _cosign-compared/windows-predicate-input.json
+          bun scripts/release/public-beta-cosign-builder.ts predicate _cosign-compared/linux-predicate-input.json > _cosign-compared/cosign-linux-amd64.predicate.json
+          bun scripts/release/public-beta-cosign-builder.ts predicate _cosign-compared/windows-predicate-input.json > _cosign-compared/cosign-windows-amd64.predicate.json
+      - name: Attest Linux Cosign subject
+        id: attest-linux
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
+        with:
+          subject-path: _cosign-compared/cosign-linux-amd64
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: _cosign-compared/cosign-linux-amd64.predicate.json
+          show-summary: false
+      - name: Attest Windows Cosign subject
+        id: attest-windows
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
+        with:
+          subject-path: _cosign-compared/cosign-windows-amd64.exe
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: _cosign-compared/cosign-windows-amd64.predicate.json
+          show-summary: false
+      - id: retain-bundles
+        name: Retain action-generated bundles and canonical pre-promotion evidence
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p _cosign-compared/cosign-v3.1.2-openopc.1
+          cp -- "${{ steps.attest-linux.outputs.bundle-path }}" _cosign-compared/cosign-v3.1.2-openopc.1/linux-amd64.jsonl
+          cp -- "${{ steps.attest-windows.outputs.bundle-path }}" _cosign-compared/cosign-v3.1.2-openopc.1/windows-amd64.jsonl
+          bun - <<'EOF'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { canonicalPublicBetaJson } from './scripts/release/public-beta-canonical-json';
+          const bytes = (path) => readFileSync(path);
+          const sha = (path) => `sha256:${createHash('sha256').update(bytes(path)).digest('hex')}`;
+          const compared = (path) => JSON.parse(bytes(path).toString('utf8'));
+          const linux = compared('_cosign-compared/linux-compared.json');
+          const windows = compared('_cosign-compared/windows-compared.json');
+          const requireCompared = (value, platform, name, path) => {
+            if (value?.platform !== platform || value?.name !== name || value?.digest !== sha(path) || value?.sizeBytes !== bytes(path).byteLength || value?.primaryDigest !== value.digest || value?.replayDigest !== value.digest) {
+              throw new Error('OPENOPC_COSIGN_PREPROMOTION_SUBJECT_INVALID');
+            }
+          };
+          requireCompared(linux, 'linuxAmd64', 'cosign-linux-amd64', '_cosign-compared/cosign-linux-amd64');
+          requireCompared(windows, 'windowsAmd64', 'cosign-windows-amd64.exe', '_cosign-compared/cosign-windows-amd64.exe');
+          const output = {
+            schemaVersion: 1,
+            toolchainId: process.env.TOOLCHAIN_ID,
+            upstream: { repository: 'sigstore/cosign', tag: 'v3.1.2', tagObjectSha: process.env.UPSTREAM_TAG_OBJECT, commitSha: process.env.UPSTREAM_COMMIT, treeSha: process.env.UPSTREAM_TREE, goVersion: '1.26.0' },
+            builder: { oidcIssuer: 'https://token.actions.githubusercontent.com', repository: 'openopc/platform', workflowPath: '.github/workflows/openopc-cosign-builder.yml', workflowRef: 'refs/heads/main', workflowSha: process.env.WORKFLOW_SHA, certificateIdentity: 'https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main', trigger: 'workflow_dispatch', buildContainerDigest: 'sha256:2a0ba12e116687098780d3ce700f9ce3cb340783779646aafbabed748fa6677c' },
+            artifacts: {
+              linuxAmd64: { name: linux.name, digest: linux.digest, sizeBytes: linux.sizeBytes, buildContractDigest: linux.buildContractDigest, goModuleGraphDigest: linux.goModuleGraphDigest, replayDigest: linux.replayDigest, bundlePath: 'cosign-v3.1.2-openopc.1/linux-amd64.jsonl', bundleDigest: sha('_cosign-compared/cosign-v3.1.2-openopc.1/linux-amd64.jsonl'), predicateType: 'https://slsa.dev/provenance/v1' },
+              windowsAmd64: { name: windows.name, digest: windows.digest, sizeBytes: windows.sizeBytes, buildContractDigest: windows.buildContractDigest, goModuleGraphDigest: windows.goModuleGraphDigest, replayDigest: windows.replayDigest, bundlePath: 'cosign-v3.1.2-openopc.1/windows-amd64.jsonl', bundleDigest: sha('_cosign-compared/cosign-v3.1.2-openopc.1/windows-amd64.jsonl'), predicateType: 'https://slsa.dev/provenance/v1' },
+            },
+          };
+          const canonical = `${canonicalPublicBetaJson(output)}\n`;
+          writeFileSync('_cosign-compared/prepromotion.json', canonical, 'utf8');
+          if (`${canonicalPublicBetaJson(JSON.parse(bytes('_cosign-compared/prepromotion.json').toString('utf8')))}\n` !== canonical) throw new Error('OPENOPC_COSIGN_PREPROMOTION_REPARSE_INVALID');
+          EOF
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: openopc-cosign-prepromotion-v3.1.2.1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: _cosign-compared
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 30
+
+  linux_smoke:
+    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    needs: compare_attest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ needs.compare_attest.outputs.artifact-id }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.compare_attest.outputs.artifact-id }}
+          path: _cosign-compared
+          merge-multiple: true
+      - id: smoke
+        name: Verify manifest and run the Linux local sign fixture
+        run: |
+          set -euo pipefail
+          test -s _cosign-compared/prepromotion.json
+          test -s _cosign-compared/cosign-v3.1.2-openopc.1/linux-amd64.jsonl
+          test "sha256:$(sha256sum _cosign-compared/cosign-linux-amd64 | awk '{print $1}')" = "$(jq -er '.artifacts.linuxAmd64.digest' _cosign-compared/prepromotion.json)" || { echo 'digest-mismatch: error'; exit 1; }
+          test "$(wc -c < _cosign-compared/cosign-linux-amd64)" = "$(jq -er '.artifacts.linuxAmd64.sizeBytes' _cosign-compared/prepromotion.json)" || { echo 'size-mismatch: error'; exit 1; }
+          test "sha256:$(sha256sum _cosign-compared/cosign-v3.1.2-openopc.1/linux-amd64.jsonl | awk '{print $1}')" = "$(jq -er '.artifacts.linuxAmd64.bundleDigest' _cosign-compared/prepromotion.json)" || { echo 'digest-mismatch: error'; exit 1; }
+          chmod 0755 _cosign-compared/cosign-linux-amd64
+          ./_cosign-compared/cosign-linux-amd64 version
+          printf openopc > _cosign-compared/payload
+          export COSIGN_PASSWORD=''
+          ./_cosign-compared/cosign-linux-amd64 generate-key-pair --output-key-prefix _cosign-compared/local
+          ./_cosign-compared/cosign-linux-amd64 sign-blob --tlog-upload=false --key _cosign-compared/local.key --output-signature _cosign-compared/payload.sig _cosign-compared/payload
+          ./_cosign-compared/cosign-linux-amd64 verify-blob --key _cosign-compared/local.pub --signature _cosign-compared/payload.sig _cosign-compared/payload
+
+  windows_smoke:
+    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    needs: compare_attest
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ needs.compare_attest.outputs.artifact-id }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.compare_attest.outputs.artifact-id }}
+          path: _cosign-compared
+          merge-multiple: true
+      - id: smoke
+        name: Verify manifest and run the Windows local sign fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (!(Test-Path -LiteralPath '_cosign-compared/prepromotion.json') -or !(Test-Path -LiteralPath '_cosign-compared/cosign-v3.1.2-openopc.1/windows-amd64.jsonl')) { throw 'OPENOPC_COSIGN_ARTIFACT_INVALID' }
+          $manifest = Get-Content -Raw -LiteralPath '_cosign-compared/prepromotion.json' | ConvertFrom-Json
+          $subjectDigest = "sha256:$((Get-FileHash -Algorithm SHA256 -LiteralPath '_cosign-compared/cosign-windows-amd64.exe').Hash.ToLowerInvariant())"
+          $bundleDigest = "sha256:$((Get-FileHash -Algorithm SHA256 -LiteralPath '_cosign-compared/cosign-v3.1.2-openopc.1/windows-amd64.jsonl').Hash.ToLowerInvariant())"
+          $subjectSize = (Get-Item -LiteralPath '_cosign-compared/cosign-windows-amd64.exe').Length
+          if ($subjectDigest -ne $manifest.artifacts.windowsAmd64.digest -or $subjectSize -ne $manifest.artifacts.windowsAmd64.sizeBytes -or $bundleDigest -ne $manifest.artifacts.windowsAmd64.bundleDigest) { throw 'digest-mismatch: error' }
+          & .\_cosign-compared\cosign-windows-amd64.exe version
+          if ($LASTEXITCODE -ne 0) { throw 'OPENOPC_COSIGN_VERSION_FAILED' }
+          Set-Content -LiteralPath '_cosign-compared/payload' -NoNewline -Value 'openopc'
+          $env:COSIGN_PASSWORD = ''
+          & .\_cosign-compared\cosign-windows-amd64.exe generate-key-pair --output-key-prefix _cosign-compared/local
+          if ($LASTEXITCODE -ne 0) { throw 'OPENOPC_COSIGN_KEYPAIR_FAILED' }
+          & .\_cosign-compared\cosign-windows-amd64.exe sign-blob --tlog-upload=false --key _cosign-compared/local.key --output-signature _cosign-compared/payload.sig _cosign-compared/payload
+          if ($LASTEXITCODE -ne 0) { throw 'OPENOPC_COSIGN_SIGN_FAILED' }
+          & .\_cosign-compared\cosign-windows-amd64.exe verify-blob --key _cosign-compared/local.pub --signature _cosign-compared/payload.sig _cosign-compared/payload
+          if ($LASTEXITCODE -ne 0) { throw 'OPENOPC_COSIGN_VERIFY_FAILED' }
+
+  promote:
+    if: github.repository == 'openopc/platform' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha
+    needs: [linux_smoke, windows_smoke]
+    runs-on: ubuntu-24.04
+    environment: toolchain-release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ needs.linux_smoke.outputs.artifact-id }}
+          path: _cosign-compared
+          merge-multiple: true
+      - id: promote
+        name: Validate evidence and prepare the immutable draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          bun - <<'EOF'
+          import { createHash } from 'node:crypto';
+          import { readFileSync } from 'node:fs';
+          import { canonicalPublicBetaJson } from './scripts/release/public-beta-canonical-json';
+          const DIGEST = /^sha256:(?!0{64}$)[a-f0-9]{64}$/;
+          const exact = (value, keys, code) => {
+            if (value === null || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length !== 0) throw new Error(code);
+            const names = Object.getOwnPropertyNames(value).sort();
+            const expected = [...keys].sort();
+            if (names.length !== expected.length || names.some((name, index) => name !== expected[index])) throw new Error(code);
+            return value;
+          };
+          const bytes = (path) => readFileSync(path);
+          const sha = (path) => `sha256:${createHash('sha256').update(bytes(path)).digest('hex')}`;
+          const raw = bytes('_cosign-compared/prepromotion.json').toString('utf8');
+          const value = JSON.parse(raw);
+          if (`${canonicalPublicBetaJson(value)}\n` !== raw) throw new Error('OPENOPC_COSIGN_PREPROMOTION_NOT_CANONICAL');
+          const root = exact(value, ['artifacts', 'builder', 'schemaVersion', 'toolchainId', 'upstream'], 'OPENOPC_COSIGN_PREPROMOTION_INVALID');
+          const upstream = exact(root.upstream, ['commitSha', 'goVersion', 'repository', 'tag', 'tagObjectSha', 'treeSha'], 'OPENOPC_COSIGN_PREPROMOTION_UPSTREAM_INVALID');
+          const builder = exact(root.builder, ['buildContainerDigest', 'certificateIdentity', 'oidcIssuer', 'repository', 'trigger', 'workflowPath', 'workflowRef', 'workflowSha'], 'OPENOPC_COSIGN_PREPROMOTION_BUILDER_INVALID');
+          const artifacts = exact(root.artifacts, ['linuxAmd64', 'windowsAmd64'], 'OPENOPC_COSIGN_PREPROMOTION_ARTIFACTS_INVALID');
+          const validateArtifact = (artifactValue, expected, subjectPath, bundlePath) => {
+            const artifact = exact(artifactValue, ['buildContractDigest', 'bundleDigest', 'bundlePath', 'digest', 'goModuleGraphDigest', 'name', 'predicateType', 'replayDigest', 'sizeBytes'], 'OPENOPC_COSIGN_PREPROMOTION_ARTIFACT_INVALID');
+            if (artifact.name !== expected.name || artifact.bundlePath !== expected.bundlePath || artifact.predicateType !== 'https://slsa.dev/provenance/v1' || !DIGEST.test(artifact.digest) || !DIGEST.test(artifact.bundleDigest) || !DIGEST.test(artifact.buildContractDigest) || !DIGEST.test(artifact.goModuleGraphDigest) || artifact.replayDigest !== artifact.digest || !Number.isSafeInteger(artifact.sizeBytes) || artifact.sizeBytes < 1 || artifact.sizeBytes > 268435456 || artifact.digest !== sha(subjectPath) || artifact.sizeBytes !== bytes(subjectPath).byteLength || artifact.bundleDigest !== sha(bundlePath)) throw new Error('OPENOPC_COSIGN_PREPROMOTION_BYTES_INVALID');
+            return artifact;
+          };
+          if (root.schemaVersion !== 1 || root.toolchainId !== 'openopc-cosign-v3.1.2.1') throw new Error('OPENOPC_COSIGN_PREPROMOTION_IDENTITY_INVALID');
+          if (upstream.repository !== 'sigstore/cosign' || upstream.tag !== 'v3.1.2' || upstream.tagObjectSha !== 'dc80df70da727f4abdd843640594025584a270ae' || upstream.commitSha !== '193d2153431f8bb0d945a4c1ee721872f73add67' || upstream.treeSha !== '6647db468973d11edb5e737293fcf4b05c69a84a' || upstream.goVersion !== '1.26.0') throw new Error('OPENOPC_COSIGN_PREPROMOTION_UPSTREAM_INVALID');
+          if (builder.oidcIssuer !== 'https://token.actions.githubusercontent.com' || builder.repository !== 'openopc/platform' || builder.workflowPath !== '.github/workflows/openopc-cosign-builder.yml' || builder.workflowRef !== 'refs/heads/main' || builder.workflowSha !== process.env.WORKFLOW_SHA || builder.certificateIdentity !== 'https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main' || builder.trigger !== 'workflow_dispatch' || builder.buildContainerDigest !== 'sha256:2a0ba12e116687098780d3ce700f9ce3cb340783779646aafbabed748fa6677c') throw new Error('OPENOPC_COSIGN_PREPROMOTION_BUILDER_INVALID');
+          const linux = validateArtifact(artifacts.linuxAmd64, { name: 'cosign-linux-amd64', bundlePath: 'cosign-v3.1.2-openopc.1/linux-amd64.jsonl' }, '_cosign-compared/cosign-linux-amd64', '_cosign-compared/cosign-v3.1.2-openopc.1/linux-amd64.jsonl');
+          const windows = validateArtifact(artifacts.windowsAmd64, { name: 'cosign-windows-amd64.exe', bundlePath: 'cosign-v3.1.2-openopc.1/windows-amd64.jsonl' }, '_cosign-compared/cosign-windows-amd64.exe', '_cosign-compared/cosign-v3.1.2-openopc.1/windows-amd64.jsonl');
+          if (linux.digest === windows.digest || linux.goModuleGraphDigest !== windows.goModuleGraphDigest) throw new Error('OPENOPC_COSIGN_PREPROMOTION_CROSS_PLATFORM_INVALID');
+          EOF
+
+          set +e
+          gh api -i "repos/$GITHUB_REPOSITORY/git/ref/tags/openopc-cosign-v3.1.2.1" > _tag-lookup.txt 2>&1
+          tag_lookup_status=$?
+          set -e
+          if [ "$tag_lookup_status" -eq 0 ]; then echo 'OPENOPC_COSIGN_TAG_EXISTS'; exit 1; fi
+          if [ "$(grep -Ec '^HTTP/[0-9.]+ 404( |$)' _tag-lookup.txt)" -ne 1 ] || [ "$(grep -Ec '^HTTP/' _tag-lookup.txt)" -ne 1 ]; then cat _tag-lookup.txt >&2; exit 1; fi
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > _release-pages.json
+          jq -e --arg tag "$TOOLCHAIN_ID" 'all(.[][]; .tag_name != $tag)' _release-pages.json > /dev/null || { echo 'OPENOPC_COSIGN_RELEASE_EXISTS'; exit 1; }
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TOOLCHAIN_ID" -f sha="$WORKFLOW_SHA" > _claimed-tag.json
+          jq -e --arg ref "refs/tags/$TOOLCHAIN_ID" --arg sha "$WORKFLOW_SHA" 'select(.ref == $ref and .object.type == "commit" and .object.sha == $sha)' _claimed-tag.json > /dev/null
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TOOLCHAIN_ID" > _claimed-tag-verified.json
+          jq -e --arg ref "refs/tags/$TOOLCHAIN_ID" --arg sha "$WORKFLOW_SHA" 'select(.ref == $ref and .object.type == "commit" and .object.sha == $sha)' _claimed-tag-verified.json > /dev/null
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$TOOLCHAIN_ID" -f target_commitish="$WORKFLOW_SHA" -f name='OpenOPC Cosign v3.1.2.1' -F draft=true -F prerelease=false > _draft-release.json
+          RELEASE_ID="$(jq -er --arg tag "$TOOLCHAIN_ID" --arg sha "$WORKFLOW_SHA" 'select(.draft == true and .tag_name == $tag and .target_commitish == $sha and (.id | type == "number") and .id > 0) | .id' _draft-release.json)"
+          gh release upload "$TOOLCHAIN_ID" --repo "$GITHUB_REPOSITORY" _cosign-compared/cosign-linux-amd64 _cosign-compared/cosign-windows-amd64.exe _cosign-compared/cosign-v3.1.2-openopc.1/linux-amd64.jsonl _cosign-compared/cosign-v3.1.2-openopc.1/windows-amd64.jsonl
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" > _release-assets.json
+          jq -ce --arg name 'cosign-linux-amd64' '[.[] | select(.name == $name)] | if length == 1 then .[0] else error("OPENOPC_COSIGN_LINUX_ASSET_AMBIGUOUS") end | {id:(.id|tostring),name,state,size}' _release-assets.json > cosign-linux-amd64.asset.json
+          jq -ce --arg name 'cosign-windows-amd64.exe' '[.[] | select(.name == $name)] | if length == 1 then .[0] else error("OPENOPC_COSIGN_WINDOWS_ASSET_AMBIGUOUS") end | {id:(.id|tostring),name,state,size}' _release-assets.json > cosign-windows-amd64.exe.asset.json
+          jq -ce --arg name 'linux-amd64.jsonl' '[.[] | select(.name == $name)] | if length == 1 then .[0] else error("OPENOPC_COSIGN_LINUX_BUNDLE_ASSET_AMBIGUOUS") end | {id:(.id|tostring),name,state,size}' _release-assets.json > linux-amd64.jsonl.asset.json
+          jq -ce --arg name 'windows-amd64.jsonl' '[.[] | select(.name == $name)] | if length == 1 then .[0] else error("OPENOPC_COSIGN_WINDOWS_BUNDLE_ASSET_AMBIGUOUS") end | {id:(.id|tostring),name,state,size}' _release-assets.json > windows-amd64.jsonl.asset.json
+          LINUX_ASSET_ID="$(jq -er '.id' cosign-linux-amd64.asset.json)"
+          WINDOWS_ASSET_ID="$(jq -er '.id' cosign-windows-amd64.exe.asset.json)"
+          export LINUX_ASSET_ID WINDOWS_ASSET_ID
+          mkdir -p _cosign-final/cosign-v3.1.2-openopc.1
+          cp -- _cosign-compared/cosign-linux-amd64 _cosign-final/cosign-linux-amd64
+          cp -- _cosign-compared/cosign-windows-amd64.exe _cosign-final/cosign-windows-amd64.exe
+          cp -- _cosign-compared/cosign-v3.1.2-openopc.1/linux-amd64.jsonl _cosign-final/cosign-v3.1.2-openopc.1/linux-amd64.jsonl
+          cp -- _cosign-compared/cosign-v3.1.2-openopc.1/windows-amd64.jsonl _cosign-final/cosign-v3.1.2-openopc.1/windows-amd64.jsonl
+          bun - <<'EOF'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { canonicalPublicBetaJson, computeCanonicalPublicBetaDigest } from './scripts/release/public-beta-canonical-json';
+          import { parsePublicBetaCosignToolchain } from './scripts/release/public-beta-cosign-toolchain';
+          const bytes = (path) => readFileSync(path);
+          const json = (path) => JSON.parse(bytes(path).toString('utf8'));
+          const sha = (path) => `sha256:${createHash('sha256').update(bytes(path)).digest('hex')}`;
+          const evidenceRaw = bytes('_cosign-compared/prepromotion.json').toString('utf8');
+          const evidence = JSON.parse(evidenceRaw);
+          if (`${canonicalPublicBetaJson(evidence)}\n` !== evidenceRaw || evidence?.builder?.workflowSha !== process.env.WORKFLOW_SHA) throw new Error('OPENOPC_COSIGN_PREPROMOTION_CHANGED');
+          const asset = (path, name, file) => {
+            const value = json(path);
+            if (!/^[1-9][0-9]*$/.test(value?.id) || value?.name !== name || value?.state !== 'uploaded' || value?.size !== bytes(file).byteLength) throw new Error('OPENOPC_COSIGN_RELEASE_ASSET_INVALID');
+            return value.id;
+          };
+          const linux = evidence.artifacts.linuxAmd64;
+          const windows = evidence.artifacts.windowsAmd64;
+          if (linux.digest !== sha('_cosign-final/cosign-linux-amd64') || linux.sizeBytes !== bytes('_cosign-final/cosign-linux-amd64').byteLength || linux.bundleDigest !== sha('_cosign-final/cosign-v3.1.2-openopc.1/linux-amd64.jsonl') || windows.digest !== sha('_cosign-final/cosign-windows-amd64.exe') || windows.sizeBytes !== bytes('_cosign-final/cosign-windows-amd64.exe').byteLength || windows.bundleDigest !== sha('_cosign-final/cosign-v3.1.2-openopc.1/windows-amd64.jsonl') || linux.goModuleGraphDigest !== windows.goModuleGraphDigest) throw new Error('OPENOPC_COSIGN_FINAL_BYTES_INVALID');
+          const linuxAssetId = asset('cosign-linux-amd64.asset.json', 'cosign-linux-amd64', '_cosign-final/cosign-linux-amd64');
+          const windowsAssetId = asset('cosign-windows-amd64.exe.asset.json', 'cosign-windows-amd64.exe', '_cosign-final/cosign-windows-amd64.exe');
+          asset('linux-amd64.jsonl.asset.json', 'linux-amd64.jsonl', '_cosign-final/cosign-v3.1.2-openopc.1/linux-amd64.jsonl');
+          asset('windows-amd64.jsonl.asset.json', 'windows-amd64.jsonl', '_cosign-final/cosign-v3.1.2-openopc.1/windows-amd64.jsonl');
+          if (linuxAssetId === windowsAssetId || linuxAssetId !== process.env.LINUX_ASSET_ID || windowsAssetId !== process.env.WINDOWS_ASSET_ID) throw new Error('OPENOPC_COSIGN_RELEASE_ASSET_IDS_INVALID');
+          const output = {
+            schemaVersion: 1,
+            toolchainId: evidence.toolchainId,
+            upstream: evidence.upstream,
+            builder: { ...evidence.builder, buildContractDigest: computeCanonicalPublicBetaDigest({ linuxAmd64: linux.buildContractDigest, windowsAmd64: windows.buildContractDigest }), goModuleGraphDigest: linux.goModuleGraphDigest },
+            artifacts: {
+              linuxAmd64: { name: linux.name, digest: linux.digest, sizeBytes: linux.sizeBytes, releaseTag: evidence.toolchainId, releaseAssetId: linuxAssetId, bundlePath: linux.bundlePath, bundleDigest: linux.bundleDigest, predicateType: linux.predicateType },
+              windowsAmd64: { name: windows.name, digest: windows.digest, sizeBytes: windows.sizeBytes, releaseTag: evidence.toolchainId, releaseAssetId: windowsAssetId, bundlePath: windows.bundlePath, bundleDigest: windows.bundleDigest, predicateType: windows.predicateType },
+            },
+          };
+          if (!parsePublicBetaCosignToolchain(output)) throw new Error('OPENOPC_COSIGN_TOOLCHAIN_INVALID');
+          const canonical = `${canonicalPublicBetaJson(output)}\n`;
+          writeFileSync('_cosign-final/manifest.json', canonical, 'utf8');
+          const reparsed = parsePublicBetaCosignToolchain(JSON.parse(bytes('_cosign-final/manifest.json').toString('utf8')));
+          if (!reparsed || `${canonicalPublicBetaJson(reparsed)}\n` !== canonical) throw new Error('OPENOPC_COSIGN_TOOLCHAIN_REPARSE_INVALID');
+          EOF
+          gh release upload "$TOOLCHAIN_ID" --repo "$GITHUB_REPOSITORY" _cosign-final/manifest.json
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" > _final-release-assets.json
+          jq -e '[.[].name] | sort == (["cosign-linux-amd64","cosign-windows-amd64.exe","linux-amd64.jsonl","manifest.json","windows-amd64.jsonl"] | sort)' _final-release-assets.json > /dev/null
+          jq -ce --argjson size "$(wc -c < _cosign-final/manifest.json)" '[.[] | select(.name == "manifest.json" and .state == "uploaded" and .size == $size and (.id | type == "number") and .id > 0)] | if length == 1 then .[0] else error("OPENOPC_COSIGN_MANIFEST_ASSET_AMBIGUOUS") end | {id:(.id|tostring),name,state,size,digest}' _final-release-assets.json > manifest.asset.json
+          echo "release-id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+      - id: upload-final
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: openopc-cosign-toolchain-v3.1.2.1
+          path: _cosign-final
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 30
+      - id: publish
+        name: Publish the fully validated draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.promote.outputs.release-id }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_ID" -gt 0
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TOOLCHAIN_ID" > _prepublish-tag.json
+          jq -e --arg ref "refs/tags/$TOOLCHAIN_ID" --arg sha "$WORKFLOW_SHA" 'select(.ref == $ref and .object.type == "commit" and .object.sha == $sha)' _prepublish-tag.json > /dev/null
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" > _final-release-assets.json
+          bun - <<'EOF'
+          import { createHash } from 'node:crypto';
+          import { readFileSync } from 'node:fs';
+          import { canonicalPublicBetaJson } from './scripts/release/public-beta-canonical-json';
+          import { parsePublicBetaCosignToolchain } from './scripts/release/public-beta-cosign-toolchain';
+          const bytes = (path) => readFileSync(path);
+          const json = (path) => JSON.parse(bytes(path).toString('utf8'));
+          const sha = (path) => `sha256:${createHash('sha256').update(bytes(path)).digest('hex')}`;
+          const assets = json('_final-release-assets.json');
+          if (!Array.isArray(assets) || assets.length !== 5) throw new Error('OPENOPC_COSIGN_FINAL_RELEASE_ASSET_INVALID');
+          const manifestRaw = bytes('_cosign-final/manifest.json').toString('utf8');
+          const manifest = parsePublicBetaCosignToolchain(JSON.parse(manifestRaw));
+          if (!manifest || `${canonicalPublicBetaJson(manifest)}\n` !== manifestRaw) throw new Error('OPENOPC_COSIGN_FINAL_MANIFEST_INVALID');
+          const expected = [
+            { capture: 'cosign-linux-amd64.asset.json', name: 'cosign-linux-amd64', path: '_cosign-final/cosign-linux-amd64', manifestId: manifest.artifacts.linuxAmd64.releaseAssetId },
+            { capture: 'cosign-windows-amd64.exe.asset.json', name: 'cosign-windows-amd64.exe', path: '_cosign-final/cosign-windows-amd64.exe', manifestId: manifest.artifacts.windowsAmd64.releaseAssetId },
+            { capture: 'linux-amd64.jsonl.asset.json', name: 'linux-amd64.jsonl', path: '_cosign-final/cosign-v3.1.2-openopc.1/linux-amd64.jsonl' },
+            { capture: 'windows-amd64.jsonl.asset.json', name: 'windows-amd64.jsonl', path: '_cosign-final/cosign-v3.1.2-openopc.1/windows-amd64.jsonl' },
+            { capture: 'manifest.asset.json', name: 'manifest.json', path: '_cosign-final/manifest.json' },
+          ];
+          for (const expectedAsset of expected) {
+            const matches = assets.filter((asset) => asset?.name === expectedAsset.name);
+            if (matches.length !== 1) throw new Error('OPENOPC_COSIGN_FINAL_RELEASE_ASSET_INVALID');
+            const asset = matches[0];
+            if (!Number.isSafeInteger(asset.id) || asset.id < 1 || asset.state !== 'uploaded' || asset.size !== bytes(expectedAsset.path).byteLength) throw new Error('OPENOPC_COSIGN_FINAL_RELEASE_ASSET_INVALID');
+            if (expectedAsset.capture && String(asset.id) !== json(expectedAsset.capture).id) throw new Error('OPENOPC_COSIGN_FINAL_RELEASE_ASSET_INVALID');
+            if (expectedAsset.manifestId && String(asset.id) !== expectedAsset.manifestId) throw new Error('OPENOPC_COSIGN_FINAL_RELEASE_ASSET_INVALID');
+            if (asset.digest !== undefined && asset.digest !== null && (typeof asset.digest !== 'string' || asset.digest !== sha(expectedAsset.path))) throw new Error('OPENOPC_COSIGN_FINAL_RELEASE_ASSET_INVALID');
+          }
+          EOF
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false > _published-release.json
+          jq -e --arg tag "$TOOLCHAIN_ID" 'select(.draft == false and .tag_name == $tag)' _published-release.json > /dev/null
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TOOLCHAIN_ID" > _published-tag.json
+          jq -e --arg ref "refs/tags/$TOOLCHAIN_ID" --arg sha "$WORKFLOW_SHA" 'select(.ref == $ref and .object.type == "commit" and .object.sha == $sha)' _published-tag.json > /dev/null

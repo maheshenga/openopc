@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "$comment": "Runtime additionally requires linuxAmd64 and windowsAmd64 artifact digests to differ; JSON Schema cannot express this cross-property inequality.",
+  "required": ["schemaVersion", "toolchainId", "upstream", "builder", "artifacts"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "toolchainId": { "const": "openopc-cosign-v3.1.2.1" },
+    "upstream": { "$ref": "cosign-builder-lock.v1.schema.json#/properties/upstream" },
+    "builder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oidcIssuer", "repository", "workflowPath", "workflowRef", "workflowSha", "certificateIdentity", "trigger", "buildContainerDigest", "buildContractDigest", "goModuleGraphDigest"],
+      "properties": {
+        "oidcIssuer": { "const": "https://token.actions.githubusercontent.com" },
+        "repository": { "const": "openopc/platform" },
+        "workflowPath": { "const": ".github/workflows/openopc-cosign-builder.yml" },
+        "workflowRef": { "const": "refs/heads/main" },
+        "workflowSha": { "type": "string", "pattern": "^(?!0{40}$)[a-f0-9]{40}$" },
+        "certificateIdentity": { "const": "https://github.com/openopc/platform/.github/workflows/openopc-cosign-builder.yml@refs/heads/main" },
+        "trigger": { "const": "workflow_dispatch" },
+        "buildContainerDigest": { "type": "string", "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$" },
+        "buildContractDigest": { "type": "string", "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$" },
+        "goModuleGraphDigest": { "type": "string", "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["linuxAmd64", "windowsAmd64"],
+      "properties": {
+        "linuxAmd64": { "$ref": "#/$defs/linuxSubject" },
+        "windowsAmd64": { "$ref": "#/$defs/windowsSubject" }
+      }
+    }
+  },
+  "$defs": {
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "digest", "sizeBytes", "releaseTag", "releaseAssetId", "bundlePath", "bundleDigest", "predicateType"],
+      "properties": {
+        "name": { "type": "string" },
+        "digest": { "type": "string", "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$" },
+        "sizeBytes": { "type": "integer", "minimum": 1, "maximum": 268435456 },
+        "releaseTag": { "const": "openopc-cosign-v3.1.2.1" },
+        "releaseAssetId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+        "bundlePath": { "type": "string" },
+        "bundleDigest": { "type": "string", "pattern": "^sha256:(?!0{64}$)[a-f0-9]{64}$" },
+        "predicateType": { "const": "https://slsa.dev/provenance/v1" }
+      }
+    },
+    "linuxSubject": {
+      "allOf": [
+        { "$ref": "#/$defs/subject" },
+        { "properties": { "name": { "const": "cosign-linux-amd64" }, "bundlePath": { "const": "cosign-v3.1.2-openopc.1/linux-amd64.jsonl" } } }
+      ]
+    },
+    "windowsSubject": {
+      "allOf": [
+        { "$ref": "#/$defs/subject" },
+        { "properties": { "name": { "const": "cosign-windows-amd64.exe" }, "bundlePath": { "const": "cosign-v3.1.2-openopc.1/windows-amd64.jsonl" } } }
+      ]
+    }
+  }
+}

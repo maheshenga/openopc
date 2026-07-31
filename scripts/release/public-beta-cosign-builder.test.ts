@@ -394,7 +394,7 @@ test('runs bounded module DNS and TLS preflight before dependency download', () 
     "curl --fail --silent --show-error --max-time 20 --proto '=https' https://proxy.golang.org/",
   );
   expect(fetch).toContain(
-    "curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/supported",
+    "curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/latest",
   );
   expect(fetch.indexOf('timeout 10 getent hosts proxy.golang.org')).toBeLessThan(
     fetch.indexOf('go mod download'),

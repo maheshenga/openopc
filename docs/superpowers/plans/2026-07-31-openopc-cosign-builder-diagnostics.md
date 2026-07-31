@@ -94,7 +94,7 @@ Assert `plan.fetch.args.join(' ')` contains, in order before `go mod download`:
 ```ts
 expect(fetch).toContain('timeout 10 getent hosts proxy.golang.org');
 expect(fetch).toContain("curl --fail --silent --show-error --max-time 20 --proto '=https' https://proxy.golang.org/");
-expect(fetch).toContain("curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/supported");
+expect(fetch).toContain("curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/latest");
 expect(fetch.indexOf('timeout 10 getent hosts proxy.golang.org')).toBeLessThan(fetch.indexOf('go mod download'));
 ```
 
@@ -191,7 +191,7 @@ Insert after `umask 022` and before the first `go mod verify`:
 'printf "OPENOPC_COSIGN_GOSUMDB=%s\\n" "$(go env GOSUMDB)" >&2',
 'timeout 10 getent hosts proxy.golang.org >/dev/null || { echo OPENOPC_COSIGN_MODULE_DNS_FAILED >&2; exit 72; }',
 "curl --fail --silent --show-error --max-time 20 --proto '=https' https://proxy.golang.org/ >/dev/null || { echo OPENOPC_COSIGN_MODULE_PROXY_TLS_FAILED >&2; exit 73; }",
-"curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/supported >/dev/null || { echo OPENOPC_COSIGN_SUMDB_TLS_FAILED >&2; exit 74; }",
+"curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/latest >/dev/null || { echo OPENOPC_COSIGN_SUMDB_TLS_FAILED >&2; exit 74; }",
 ```
 
 Do not pass host proxy variables or credentials into Docker. Leave `bridge`/`none`, the image digest, and timeouts unchanged.

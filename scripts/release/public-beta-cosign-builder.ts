@@ -328,7 +328,7 @@ export function createPublicBetaCosignBuildPlan(
     'printf "OPENOPC_COSIGN_GOSUMDB=%s\\n" "$(go env GOSUMDB)" >&2',
     'timeout 10 getent hosts proxy.golang.org >/dev/null || { echo OPENOPC_COSIGN_MODULE_DNS_FAILED >&2; exit 72; }',
     "curl --fail --silent --show-error --max-time 20 --proto '=https' https://proxy.golang.org/ >/dev/null || { echo OPENOPC_COSIGN_MODULE_PROXY_TLS_FAILED >&2; exit 73; }",
-    "curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/supported >/dev/null || { echo OPENOPC_COSIGN_SUMDB_TLS_FAILED >&2; exit 74; }",
+    "curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/latest >/dev/null || { echo OPENOPC_COSIGN_SUMDB_TLS_FAILED >&2; exit 74; }",
     'go mod verify >&2',
     'go mod download',
     'go mod verify >&2',

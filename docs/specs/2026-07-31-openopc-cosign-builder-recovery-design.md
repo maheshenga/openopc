@@ -95,6 +95,10 @@ proxy/checksum configuration, DNS/TLS reachability needed for module fetch, and
 the exact image digest. It must not grant network access to the offline build or
 inspect stages.
 
+The checksum-database TLS probe uses the documented read-only
+`https://sum.golang.org/latest` endpoint. A path that returns a normal HTTP 404
+is not treated as proof of checksum-database reachability.
+
 Each build job will retain only a small diagnostic artifact under an
 `if: always()` upload step. The upload is informational and cannot satisfy any
 downstream `needs` edge. Artifact upload, comparison, attestation, smoke, and

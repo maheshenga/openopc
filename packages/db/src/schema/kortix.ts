@@ -6898,6 +6898,9 @@ export const developerModuleArtifacts = kortixSchema.table(
     storageKey: text('storage_key').notNull(),
     mediaType: varchar('media_type', { length: 128 }).notNull(),
     sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull(),
+    runtimeKind: varchar('runtime_kind', { length: 32 }).$type<
+      'wasi-component' | 'oci-image' | null
+    >(),
     itemSnapshot: jsonb('item_snapshot').notNull().$type<Record<string, unknown>>(),
     sourceProvenance: jsonb('source_provenance').$type<Record<string, unknown> | null>(),
     createdBy: uuid('created_by').notNull(),
@@ -6936,6 +6939,10 @@ export const developerModuleArtifacts = kortixSchema.table(
     check(
       'developer_module_artifacts_size_check',
       sql`${table.sizeBytes} BETWEEN 1 AND 536870912`,
+    ),
+    check(
+      'developer_module_artifacts_runtime_kind_check',
+      sql`${table.runtimeKind} IS NULL OR ${table.runtimeKind} IN ('wasi-component', 'oci-image')`,
     ),
     check(
       'developer_module_artifacts_storage_key_check',

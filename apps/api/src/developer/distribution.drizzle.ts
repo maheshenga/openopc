@@ -4,7 +4,7 @@ import {
   developerModuleReleaseDistributionEvents,
   developerModuleReleases,
 } from '@kortix/db';
-import { and, asc, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 
 import {
   DeveloperModuleDistributionError,
@@ -180,7 +180,7 @@ export function createDrizzleDeveloperModuleDistributionRepository(
       });
     },
 
-    async listPublished({ query, limit, offset }) {
+    async listPublished({ query, limit, offset, serverAdapterRuntimeKinds }) {
       const normalizedQuery = query?.trim();
       const searchPattern = normalizedQuery ? `%${escapeLikePattern(normalizedQuery)}%` : null;
       const searchCondition = searchPattern
@@ -190,9 +190,17 @@ export function createDrizzleDeveloperModuleDistributionRepository(
             ilike(developerModuleReleases.publisherId, searchPattern),
           )
         : undefined;
-      const condition = searchCondition
-        ? and(eq(developerModuleReleases.status, 'published'), searchCondition)
-        : eq(developerModuleReleases.status, 'published');
+      const runtimeCondition = serverAdapterRuntimeKinds
+        ? or(
+            sql`coalesce(${developerModuleReleases.manifest}->'execution'->>'mode', '') <> 'server-adapter'`,
+            inArray(developerModuleReleases.runtimeKind, serverAdapterRuntimeKinds),
+          )
+        : undefined;
+      const condition = and(
+        eq(developerModuleReleases.status, 'published'),
+        searchCondition,
+        runtimeCondition,
+      );
       const [totalRow] = await db
         .select({ total: count() })
         .from(developerModuleReleases)

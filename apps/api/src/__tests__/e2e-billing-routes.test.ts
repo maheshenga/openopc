@@ -39,12 +39,17 @@ let mockDeletionCancelResult: any = null;
 let mockDeletionDeleteResult: any = null;
 let mockDeletionError: Error | null = null;
 let mockAccountDeleteAllowed = true;
+let mockAuthCalls = 0;
+let mockStripeCalls = 0;
+let mockRepositoryCalls = 0;
+let mockBillingEnabledMiddlewareCalls = 0;
 
 // ─── Register mocks ──────────────────────────────────────────────────────────
 
 // Auth mock — bypass supabaseAuth, inject test user
 mock.module('../middleware/auth', () => ({
   supabaseAuth: async (c: any, next: any) => {
+    mockAuthCalls += 1;
     c.set('userId', TEST_USER_ID);
     c.set('userEmail', 'test@kortix.dev');
     await next();
@@ -72,6 +77,7 @@ mock.module('../iam', () => ({
 // Credits service mock
 mock.module('../billing/services/credits', () => ({
   calculateTokenCost: (prompt: number, completion: number, model: string) => {
+    mockRepositoryCalls += 1;
     // Realistic: mirrors real calculateTokenCost with TOKEN_PRICE_MULTIPLIER=1.2
     // Uses anthropic-level pricing as default (inputPer1M=3, outputPer1M=15)
     const inputCost = (prompt / 1_000_000) * 3;
@@ -79,10 +85,12 @@ mock.module('../billing/services/credits', () => ({
     return (inputCost + outputCost) * 1.2;
   },
   deductCredits: async (accountId: string, cost: number, desc: string) => {
+    mockRepositoryCalls += 1;
     if (mockDeductError) throw mockDeductError;
     return mockDeductResult;
   },
   getBalance: async (accountId: string) => {
+    mockRepositoryCalls += 1;
     if (!mockCreditBalance) return { balance: 0, expiring: 0, nonExpiring: 0, daily: 0 };
     return {
       balance: Number(mockCreditBalance.balance),
@@ -91,32 +99,80 @@ mock.module('../billing/services/credits', () => ({
       daily: Number(mockCreditBalance.dailyCreditsBalance),
     };
   },
-  getCreditSummary: async () => ({ total: 100, daily: 3, monthly: 80, extra: 20, canRun: true }),
-  grantCredits: async () => {},
-  resetExpiringCredits: async () => {},
-  refreshDailyCredits: async () => null,
+  getCreditSummary: async () => {
+    mockRepositoryCalls += 1;
+    return { total: 100, daily: 3, monthly: 80, extra: 20, canRun: true };
+  },
+  grantCredits: async () => {
+    mockRepositoryCalls += 1;
+  },
+  resetExpiringCredits: async () => {
+    mockRepositoryCalls += 1;
+  },
+  refreshDailyCredits: async () => {
+    mockRepositoryCalls += 1;
+    return null;
+  },
 }));
 
 // Credit accounts repository mock
 mock.module('../billing/repositories/credit-accounts', () => ({
-  getCreditAccount: async () => mockCreditBalance ? { accountId: TEST_USER_ID, ...mockCreditBalance } : null,
-  getCreditBalance: async () => mockCreditBalance,
-  updateCreditAccount: async () => {},
-  upsertCreditAccount: async () => {},
-  updateBalance: async () => {},
-  getSubscriptionInfo: async () => null,
-  getYearlyAccountsDueForRotation: async () => [],
+  getCreditAccount: async () => {
+    mockRepositoryCalls += 1;
+    return mockCreditBalance ? { accountId: TEST_USER_ID, ...mockCreditBalance } : null;
+  },
+  getCreditBalance: async () => {
+    mockRepositoryCalls += 1;
+    return mockCreditBalance;
+  },
+  updateCreditAccount: async () => {
+    mockRepositoryCalls += 1;
+  },
+  upsertCreditAccount: async () => {
+    mockRepositoryCalls += 1;
+  },
+  updateBalance: async () => {
+    mockRepositoryCalls += 1;
+  },
+  getSubscriptionInfo: async () => {
+    mockRepositoryCalls += 1;
+    return null;
+  },
+  getYearlyAccountsDueForRotation: async () => {
+    mockRepositoryCalls += 1;
+    return [];
+  },
 }));
 
 // Transactions repository mock
 mock.module('../billing/repositories/transactions', () => ({
-  insertLedgerEntry: async (data: any) => ({ id: 'ledger_mock', ...data }),
-  getTransactions: async () => ({ rows: [], total: 0 }),
-  getTransactionsSummary: async () => mockTransactionsSummary,
-  getUsageRecords: async () => ({ rows: [], total: 0 }),
-  insertPurchase: async (data: any) => ({ id: 'purchase_mock', ...data }),
-  getPurchaseByPaymentIntent: async () => null,
-  updatePurchaseStatus: async () => {},
+  insertLedgerEntry: async (data: any) => {
+    mockRepositoryCalls += 1;
+    return { id: 'ledger_mock', ...data };
+  },
+  getTransactions: async () => {
+    mockRepositoryCalls += 1;
+    return { rows: [], total: 0 };
+  },
+  getTransactionsSummary: async () => {
+    mockRepositoryCalls += 1;
+    return mockTransactionsSummary;
+  },
+  getUsageRecords: async () => {
+    mockRepositoryCalls += 1;
+    return { rows: [], total: 0 };
+  },
+  insertPurchase: async (data: any) => {
+    mockRepositoryCalls += 1;
+    return { id: 'purchase_mock', ...data };
+  },
+  getPurchaseByPaymentIntent: async () => {
+    mockRepositoryCalls += 1;
+    return null;
+  },
+  updatePurchaseStatus: async () => {
+    mockRepositoryCalls += 1;
+  },
 }));
 
 // Account deletion service mock
@@ -155,7 +211,9 @@ mock.module('../shared/supabase', () => ({
 }));
 
 mock.module('../shared/stripe', () => ({
-  getStripe: () => ({
+  getStripe: () => {
+    mockStripeCalls += 1;
+    return {
     webhooks: { constructEvent: () => ({}) },
     subscriptions: { retrieve: async () => ({}), update: async () => ({}), create: async () => ({}), cancel: async () => ({}) },
     customers: { create: async () => ({ id: 'cus_test' }) },
@@ -164,11 +222,12 @@ mock.module('../shared/stripe', () => ({
     promotionCodes: { list: async () => ({ data: [] }) },
     invoices: { retrieveUpcoming: async () => ({}) },
     subscriptionSchedules: { create: async () => ({}), update: async () => ({}), retrieve: async () => ({}), release: async () => ({}) },
-  }),
+    };
+  },
 }));
 
 mock.module('../config', () => ({
-  config: {
+  config: new Proxy({
     STRIPE_WEBHOOK_SECRET: 'whsec_test',
     INTERNAL_KORTIX_ENV: 'staging',
     DATABASE_URL: '',
@@ -177,25 +236,58 @@ mock.module('../config', () => ({
     ALLOWED_SANDBOX_PROVIDERS: ['daytona'],
     isDaytonaEnabled: () => false,
     getDefaultProvider: () => 'daytona',
-  },
+  }, {
+    get(target, property, receiver) {
+      if (property === 'KORTIX_BILLING_INTERNAL_ENABLED') {
+        mockBillingEnabledMiddlewareCalls += 1;
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  }),
 }));
 
 // Customers repository mock
 mock.module('../billing/repositories/customers', () => ({
-  getCustomerByAccountId: async () => ({ id: 'cus_test_123', accountId: TEST_USER_ID, email: 'test@kortix.dev', provider: 'stripe', active: true }),
-  getCustomerByStripeId: async () => null,
-  listAccountStripeCustomerIds: async () => ['cus_test_123'],
-  upsertCustomer: async () => {},
-  deleteCustomerByStripeId: async () => {},
+  getCustomerByAccountId: async () => {
+    mockRepositoryCalls += 1;
+    return { id: 'cus_test_123', accountId: TEST_USER_ID, email: 'test@kortix.dev', provider: 'stripe', active: true };
+  },
+  getCustomerByStripeId: async () => {
+    mockRepositoryCalls += 1;
+    return null;
+  },
+  listAccountStripeCustomerIds: async () => {
+    mockRepositoryCalls += 1;
+    return ['cus_test_123'];
+  },
+  upsertCustomer: async () => {
+    mockRepositoryCalls += 1;
+  },
+  deleteCustomerByStripeId: async () => {
+    mockRepositoryCalls += 1;
+  },
 }));
 
 // Account deletion repository mock
 mock.module('../billing/repositories/account-deletion', () => ({
-  getActiveDeletionRequest: async () => null,
-  createDeletionRequest: async () => null,
-  cancelDeletionRequest: async () => {},
-  markDeletionCompleted: async () => {},
-  getScheduledDeletions: async () => [],
+  getActiveDeletionRequest: async () => {
+    mockRepositoryCalls += 1;
+    return null;
+  },
+  createDeletionRequest: async () => {
+    mockRepositoryCalls += 1;
+    return null;
+  },
+  cancelDeletionRequest: async () => {
+    mockRepositoryCalls += 1;
+  },
+  markDeletionCompleted: async () => {
+    mockRepositoryCalls += 1;
+  },
+  getScheduledDeletions: async () => {
+    mockRepositoryCalls += 1;
+    return [];
+  },
 }));
 
 // ─── Import billing app AFTER mocks ──────────────────────────────────────────
@@ -249,6 +341,44 @@ beforeEach(() => {
   mockDeletionDeleteResult = null;
   mockDeletionError = null;
   mockAccountDeleteAllowed = true;
+  mockAuthCalls = 0;
+  mockStripeCalls = 0;
+  mockRepositoryCalls = 0;
+  mockBillingEnabledMiddlewareCalls = 0;
+});
+
+test('billing parent rejects every commercial route before authentication or billing side effects', async () => {
+  const routes = [
+    ['/purchase-credits', 'POST'],
+    ['/auto-topup/configure', 'POST'],
+    ['/claim-per-seat', 'POST'],
+    ['/create-checkout-session', 'POST'],
+    ['/create-per-seat-checkout', 'POST'],
+    ['/sync-seat-quantity', 'POST'],
+    ['/create-inline-checkout', 'POST'],
+    ['/confirm-inline-checkout', 'POST'],
+    ['/create-portal-session', 'POST'],
+    ['/cancel-subscription', 'POST'],
+    ['/reactivate-subscription', 'POST'],
+    ['/schedule-downgrade', 'POST'],
+    ['/cancel-scheduled-change', 'POST'],
+    ['/sync-subscription', 'POST'],
+    ['/proration-preview', 'GET'],
+    ['/checkout-session/test-session', 'GET'],
+    ['/confirm-checkout-session', 'POST'],
+  ] as const;
+  const app = createBillingTestApp();
+
+  for (const [path, method] of routes) {
+    const response = await app.request(`/v1/billing${path}`, { method });
+    expect(response.status).toBe(503);
+    expect({
+      auth: mockAuthCalls,
+      billingEnabled: mockBillingEnabledMiddlewareCalls,
+      repositories: mockRepositoryCalls,
+      stripe: mockStripeCalls,
+    }).toEqual({ auth: 0, billingEnabled: 0, repositories: 0, stripe: 0 });
+  }
 });
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -266,14 +396,13 @@ describe('Billing: tier-configurations', () => {
     expect(Array.isArray(body.tiers)).toBe(true);
     expect(body.tiers.length).toBeGreaterThanOrEqual(1);
 
-    // Should include visible tiers
+    // Public self-serve tiers stay visible, including the restricted beta's free credits.
     const tierNames = body.tiers.map((t: any) => t.name);
     expect(tierNames).toContain('pro');
+    expect(tierNames).toContain('free');
 
-    // Should NOT include hidden tiers ('free' is hidden from signup flows,
-    // 'none' is the internal no-access tier).
+    // The internal no-access tier remains hidden.
     expect(tierNames).not.toContain('none');
-    expect(tierNames).not.toContain('free');
 
     // Verify tier structure
     const proTier = body.tiers.find((t: any) => t.name === 'pro');

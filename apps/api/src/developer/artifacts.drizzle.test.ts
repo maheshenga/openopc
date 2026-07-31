@@ -65,6 +65,7 @@ const artifactRecord: DeveloperModuleArtifactRecord = {
   storage_key: 'developer-modules/artifacts/opaque/artifact',
   media_type: 'application/vnd.openopc.developer-module.v2+json',
   size_bytes: 128,
+  runtime_kind: null,
   item_snapshot: {
     name: 'recruiting-workbench',
     type: 'registry:module',
@@ -93,6 +94,7 @@ const artifactRow = {
   storageKey: artifactRecord.storage_key,
   mediaType: artifactRecord.media_type,
   sizeBytes: artifactRecord.size_bytes,
+  runtimeKind: null,
   itemSnapshot: artifactRecord.item_snapshot as unknown as Record<string, unknown>,
   sourceProvenance: null,
   createdBy: USER_ID,

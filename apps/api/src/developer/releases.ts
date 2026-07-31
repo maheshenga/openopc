@@ -10,6 +10,11 @@ import type {
   StoredRuntimeArtifact,
 } from '../module-runtime/runtime-artifacts';
 import {
+  type RuntimeReleaseProfile,
+  assertRuntimeCapability,
+  loadRuntimeReleaseProfile,
+} from '../release-profile/runtime';
+import {
   type DeveloperArtifactStore,
   DeveloperModuleArtifactError,
   type DeveloperModuleArtifactRepository,
@@ -216,6 +221,7 @@ export class DeveloperModuleReleaseService {
       artifacts: Pick<DeveloperModuleArtifactRepository, 'getArtifact'>;
       artifactStore?: Pick<DeveloperArtifactStore, 'readCanonical'>;
       runtimeArtifactStore?: RuntimeArtifactStore;
+      runtime?: RuntimeReleaseProfile;
       verification?: DeveloperModuleVerificationQueueBinding;
       permissions?: DeveloperPublisherPermissionPort;
     },
@@ -226,6 +232,8 @@ export class DeveloperModuleReleaseService {
     actorUserId: string;
     artifactId: string;
   }): Promise<{ release: DeveloperModuleRelease; created: boolean }> {
+    const runtime = this.input.runtime ?? loadRuntimeReleaseProfile();
+    assertRuntimeCapability('module.wasi.execute', runtime);
     const artifact = await this.input.artifacts.getArtifact(input.accountId, input.artifactId);
     if (!artifact) throw new DeveloperModuleArtifactError('DEVELOPER_ARTIFACT_NOT_FOUND', 404);
     const item = artifact.item_snapshot;
@@ -234,6 +242,12 @@ export class DeveloperModuleReleaseService {
     const itemName = item.name;
     if (!validation.valid || !manifest || typeof itemName !== 'string') {
       throw new DeveloperModuleReleaseError('DEVELOPER_MODULE_INVALID', 400);
+    }
+    if (
+      manifest.execution.mode === 'server-adapter' &&
+      artifact.runtime_kind !== 'wasi-component'
+    ) {
+      assertRuntimeCapability('module.oci.execute', runtime);
     }
     if (!manifest.id.startsWith(`${manifest.publisher.id}.`)) {
       throw new DeveloperModuleReleaseError('DEVELOPER_PUBLISHER_MISMATCH', 400);
@@ -271,7 +285,7 @@ export class DeveloperModuleReleaseService {
         if (envelope.artifactDigest !== artifact.artifact_digest) {
           throw new DeveloperRuntimeDescriptorError('DEVELOPER_RUNTIME_ARTIFACT_INVALID');
         }
-        const evidence = await extractRuntimeDescriptor({ manifest, artifactBytes });
+        const evidence = await extractRuntimeDescriptor({ manifest, artifactBytes, runtime });
         if (evidence) {
           const { runtimeArtifact: extractedArtifact, ...descriptorEvidence } = evidence;
           runtimeDescriptor = descriptorEvidence;

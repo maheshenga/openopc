@@ -20,8 +20,35 @@ import { resolveBillingWriteAccountId } from '../require-billing-write';
 import { syncSeatQuantity } from '../services/seat-management';
 import { maybeMigrateLegacyAccount } from '../services/legacy-account-migration';
 import { makeOpenApiApp, json, auth, errors } from '../../openapi';
+import { rejectUnavailableCapability } from '../../release-profile/routes';
 
 export const subscriptionsRouter = makeOpenApiApp<AppEnv>();
+
+const RESTRICTED_SUBSCRIPTION_PATHS = [
+  '/claim-per-seat',
+  '/create-checkout-session',
+  '/create-per-seat-checkout',
+  '/sync-seat-quantity',
+  '/create-inline-checkout',
+  '/confirm-inline-checkout',
+  '/create-portal-session',
+  '/cancel-subscription',
+  '/reactivate-subscription',
+  '/schedule-downgrade',
+  '/cancel-scheduled-change',
+  '/sync-subscription',
+  '/proration-preview',
+  '/checkout-session/*',
+  '/confirm-checkout-session',
+] as const;
+
+for (const path of RESTRICTED_SUBSCRIPTION_PATHS) {
+  subscriptionsRouter.use(path, async (c, next) => {
+    const rejected = rejectUnavailableCapability(c, 'commerce.settlement');
+    if (rejected) return rejected;
+    return next();
+  });
+}
 
 // Opaque Stripe / service payloads — permissive on purpose.
 const OpaqueSchema = z.record(z.string(), z.any());

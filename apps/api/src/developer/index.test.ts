@@ -4,6 +4,8 @@ import type { RegistryItem, RegistryModuleManifest } from '@kortix/registry';
 import { HTTPException } from 'hono/http-exception';
 
 import { ACCOUNT_ACTIONS } from '../iam/actions';
+import { ReleaseProfileUnavailableError } from '../release-profile/runtime';
+import { RESTRICTED_RUNTIME_TEST_PROFILE } from '../release-profile/test-fixtures';
 import { type DeveloperAppDependencies, createDeveloperApp } from './app';
 import {
   DeveloperApplicationService,
@@ -89,6 +91,7 @@ const authenticatedApp = (
     accountId?: string;
     artifactService?: DeveloperAppDependencies['artifactService'];
     releaseService?: DeveloperAppDependencies['releaseService'];
+    authenticate?: DeveloperAppDependencies['authenticate'];
     reviewService?: DeveloperAppDependencies['reviewService'];
     verificationService?: DeveloperAppDependencies['verificationService'];
     publisherService?: DeveloperAppDependencies['publisherService'];
@@ -105,11 +108,13 @@ const authenticatedApp = (
     trustInfrastructureReady: async () => true,
   });
   return createDeveloperApp({
-    authenticate: async (context, next) => {
-      context.set('userId', USER_ID);
-      context.set('userEmail', 'developer@example.com');
-      await next();
-    },
+    authenticate:
+      input.authenticate ??
+      (async (context, next) => {
+        context.set('userId', USER_ID);
+        context.set('userEmail', 'developer@example.com');
+        await next();
+      }),
     resolveAccountId: async (_context, source) => {
       input.resolvedSources?.push(source);
       return input.accountId ?? ACCOUNT_ID;
@@ -119,6 +124,7 @@ const authenticatedApp = (
     releaseService:
       input.releaseService ??
       new DeveloperModuleReleaseService({
+        runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
         repository: createMemoryDeveloperModuleReleaseRepository(),
         artifacts,
       }),
@@ -173,6 +179,7 @@ async function seededReleaseFixture() {
     item: validModuleItem(),
   });
   const releaseService = new DeveloperModuleReleaseService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository: createMemoryDeveloperModuleReleaseRepository(),
     artifacts,
   });
@@ -185,6 +192,26 @@ async function seededReleaseFixture() {
 }
 
 describe('developer module validation API', () => {
+  test('maps release-profile service failures to the stable 503 response', async () => {
+    const response = await authenticatedApp({
+      artifactService: {
+        async createDeclarative() {
+          throw new ReleaseProfileUnavailableError('module.oci.execute');
+        },
+      } as never,
+    }).request('/modules/artifacts/declarative', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account_id: ACCOUNT_ID, item: validModuleItem() }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.oci.execute',
+    });
+  });
+
   test('rejects unauthenticated validation requests', async () => {
     const artifacts = createMemoryDeveloperModuleArtifactRepository();
     const app = createDeveloperApp({
@@ -198,6 +225,7 @@ describe('developer module validation API', () => {
         store: createMemoryDeveloperArtifactStore().store,
       }),
       releaseService: new DeveloperModuleReleaseService({
+        runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
         repository: createMemoryDeveloperModuleReleaseRepository(),
         artifacts,
       }),
@@ -286,6 +314,7 @@ describe('developer module validation API', () => {
         store: createMemoryDeveloperArtifactStore().store,
       }),
       releaseService: new DeveloperModuleReleaseService({
+        runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
         repository: createMemoryDeveloperModuleReleaseRepository(),
         artifacts,
       }),
@@ -365,6 +394,7 @@ describe('developer module validation API', () => {
       item: validModuleItem(),
     });
     const delegate = new DeveloperModuleReleaseService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: createMemoryDeveloperModuleReleaseRepository(),
       artifacts,
     });
@@ -594,7 +624,7 @@ describe('developer module validation API', () => {
 });
 
 describe('developer module artifact API', () => {
-  test('creates a declarative artifact and rejects raw-item release submission', async () => {
+  test('creates a declarative artifact and rejects legacy raw-item release submission', async () => {
     const app = authenticatedApp();
     const artifact = await app.request('/modules/artifacts/declarative', {
       method: 'POST',
@@ -614,8 +644,72 @@ describe('developer module artifact API', () => {
         artifact_digest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       }),
     );
-    expect(rawRelease.status).toBe(400);
-    expect(await rawRelease.json()).toEqual({ error: 'DEVELOPER_RELEASE_ARTIFACT_REQUIRED' });
+    expect(rawRelease.status).toBe(503);
+    expect(await rawRelease.json()).toEqual({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'artifact.remote-url',
+    });
+  });
+
+  test('rejects legacy, remote, and OCI release payloads before developer HTTP side effects', async () => {
+    const calls = {
+      authenticate: 0,
+      authorizeAccount: 0,
+      artifactService: 0,
+      releaseService: 0,
+    };
+    const resolvedSources: Array<'body' | 'query'> = [];
+    const app = authenticatedApp({
+      authenticate: async () => {
+        calls.authenticate += 1;
+      },
+      resolvedSources,
+      authorizeAccount: async () => {
+        calls.authorizeAccount += 1;
+      },
+      artifactService: {
+        async createDeclarative() {
+          calls.artifactService += 1;
+          throw new Error('artifact service must not run');
+        },
+      } as never,
+      releaseService: {
+        async submit() {
+          calls.releaseService += 1;
+          throw new Error('release service must not run');
+        },
+      } as never,
+    });
+    const ociItem = validModuleItem();
+    (ociItem as unknown as { runtime: { kind: string } }).runtime = { kind: 'oci-image' };
+    const requests = [
+      { body: { account_id: ACCOUNT_ID, item: validModuleItem() }, capability: 'artifact.remote-url' },
+      {
+        body: { account_id: ACCOUNT_ID, artifact_url: 'https://untrusted.example/module.tgz' },
+        capability: 'artifact.remote-url',
+      },
+      { body: { account_id: ACCOUNT_ID, item: ociItem }, capability: 'module.oci.execute' },
+    ] as const;
+
+    for (const { body, capability } of requests) {
+      const response = await app.request('/modules/releases', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+        capability,
+      });
+      expect(calls).toEqual({
+        authenticate: 0,
+        authorizeAccount: 0,
+        artifactService: 0,
+        releaseService: 0,
+      });
+      expect(resolvedSources).toEqual([]);
+    }
   });
 
   test('creates, finalizes, reads, and cancels uploads with idempotent HTTP status and IAM', async () => {
@@ -631,6 +725,7 @@ describe('developer module artifact API', () => {
     const app = authenticatedApp({
       artifactService,
       releaseService: new DeveloperModuleReleaseService({
+        runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
         repository: createMemoryDeveloperModuleReleaseRepository(),
         artifacts,
       }),

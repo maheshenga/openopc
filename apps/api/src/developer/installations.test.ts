@@ -2,11 +2,19 @@ import { generateKeyPairSync } from 'node:crypto';
 
 import { describe, expect, test } from 'bun:test';
 
+import type { RuntimeReleaseProfile } from '../release-profile/runtime';
+import {
+  FUTURE_OCI_RUNTIME_TEST_PROFILE,
+  FUTURE_WASI_RUNTIME_TEST_PROFILE,
+  NON_READY_RUNTIME_TEST_PROFILE,
+  RESTRICTED_RUNTIME_TEST_PROFILE,
+} from '../release-profile/test-fixtures';
 import {
   DeveloperModuleDistributionService,
   createMemoryDeveloperModuleDistributionRepository,
 } from './distribution';
 import {
+  type ProjectModuleInstallation,
   ProjectModuleInstallationError,
   ProjectModuleInstallationService,
   createMemoryProjectModuleInstallationRepository,
@@ -23,6 +31,36 @@ const RELEASE_V1 = '40000000-0000-4000-a000-000000000001';
 const RELEASE_V2 = '40000000-0000-4000-a000-000000000002';
 const RELEASE_NEVER_INSTALLED = '40000000-0000-4000-a000-000000000003';
 const MODULE_ID = 'acme.recruiting';
+
+test('release profile rejection happens before installation repository or verification access', async () => {
+  let calls = 0;
+  const service = new ProjectModuleInstallationService({
+    runtime: NON_READY_RUNTIME_TEST_PROFILE,
+    repository: {
+      async findReplay() {
+        calls += 1;
+        return null;
+      },
+    } as never,
+    releaseService: {
+      async getPublished() {
+        calls += 1;
+        throw new Error('unexpected release lookup');
+      },
+    },
+  });
+  await expect(
+    service.install({
+      accountId: PROJECT_ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      releaseId: RELEASE_V1,
+      actorUserId: USER_ID,
+      expectedInstallRevision: 0,
+      idempotencyKey: 'profile-rejection',
+    }),
+  ).rejects.toMatchObject({ code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE' });
+  expect(calls).toBe(0);
+});
 const NOW = new Date('2026-07-24T16:00:00.000Z');
 const INSTALLATION_ACTIONS = ['install', 'update', 'rollback'] as const;
 const TRUST_DIGEST_FIELDS = [
@@ -89,13 +127,42 @@ function baseRelease(
   };
 }
 
+function serverAdapterRelease(
+  releaseId: string,
+  version: string,
+  runtimeKind: DeveloperModuleRelease['runtime_kind'],
+  overrides: Partial<DeveloperModuleRelease> = {},
+): DeveloperModuleRelease {
+  const itemManifest = {
+    ...manifest(version),
+    execution: {
+      mode: 'server-adapter' as const,
+      entry: 'runtime/openopc.runtime.json',
+    },
+    verification: { profile: 'server-conformance' as const },
+  };
+  return baseRelease(releaseId, version, {
+    manifest: itemManifest,
+    runtime_kind: runtimeKind,
+    ...(runtimeKind === null
+      ? { runtime_descriptor_digest: null, runtime_descriptor_path: null }
+      : {
+          runtime_descriptor_digest: `sha256:${'1'.repeat(64)}`,
+          runtime_descriptor_path: 'runtime/openopc.runtime.json',
+        }),
+    ...overrides,
+  });
+}
+
 async function setup(
   input: {
     releases?: DeveloperModuleRelease[];
     platformVersion?: string;
     registryVersion?: string;
+    runtime?: RuntimeReleaseProfile;
   } = {},
 ) {
+  const runtime = input.runtime ?? RESTRICTED_RUNTIME_TEST_PROFILE;
   const keyPair = generateKeyPairSync('ed25519');
   const signingPort = createEd25519ModuleSigningPort({
     keyId: 'module-key-2026',
@@ -121,6 +188,7 @@ async function setup(
     })(),
   });
   const distributionService = new DeveloperModuleDistributionService({
+    runtime,
     repository: distributionRepository,
     signer: signingPort,
     verifiers: [signingPort],
@@ -176,8 +244,10 @@ async function setup(
   return {
     repository,
     signingPort,
+    distributionRepository,
     distributionService,
     service: new ProjectModuleInstallationService({
+      runtime,
       repository,
       releaseService: distributionService,
       verifiers: [signingPort],
@@ -192,6 +262,226 @@ const projectInput = {
   projectId: PROJECT_ID,
   actorUserId: USER_ID,
 };
+
+const EXISTING_INSTALLATION: ProjectModuleInstallation = {
+  installation_id: '60000000-0000-4000-a000-000000000099',
+  project_id: PROJECT_ID,
+  account_id: PROJECT_ACCOUNT_ID,
+  module_id: MODULE_ID,
+  active_release_id: RELEASE_V1,
+  active_version: '1.0.0',
+  install_revision: 1,
+  status: 'active',
+  installed_by: USER_ID,
+  created_at: NOW.toISOString(),
+  updated_at: NOW.toISOString(),
+};
+
+test.each(
+  (
+    [
+      ['OCI', 'oci-image'],
+      ['old-null', null],
+    ] as const
+  ).flatMap(([label, runtimeKind]) =>
+    (['install', 'update', 'rollback'] as const).map(
+      (action) => [label, action, runtimeKind] as const,
+    ),
+  ),
+)(
+  'restricted profile rejects %s server-adapter %s before replay or installation side effects',
+  async (_label, action, runtimeKind) => {
+    const target = serverAdapterRelease(RELEASE_V2, '2.0.0', runtimeKind, {
+      status: 'published',
+      review_revision: 4,
+      published_at: NOW.toISOString(),
+    });
+    const distributionService = new DeveloperModuleDistributionService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository: createMemoryDeveloperModuleDistributionRepository({ releases: [target] }),
+    });
+    const repositoryCalls: string[] = [];
+    const repository = {
+      async list() {
+        repositoryCalls.push('list');
+        return [];
+      },
+      async get() {
+        repositoryCalls.push('get');
+        return null;
+      },
+      async install() {
+        repositoryCalls.push('install');
+        throw new Error('unexpected install transition');
+      },
+      async move() {
+        repositoryCalls.push('move');
+        throw new Error('unexpected move transition');
+      },
+      async history() {
+        repositoryCalls.push('history');
+        return [];
+      },
+      async hasHistoricalTarget() {
+        repositoryCalls.push('hasHistoricalTarget');
+        return true;
+      },
+      async findIdempotentResult() {
+        repositoryCalls.push('findIdempotentResult');
+        throw new Error('idempotent replay bypassed target validation');
+      },
+    } as never;
+    const service = new ProjectModuleInstallationService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository,
+      releaseService: distributionService,
+    });
+    const operation =
+      action === 'install'
+        ? service.install({
+            ...projectInput,
+            releaseId: RELEASE_V2,
+            expectedInstallRevision: 0,
+            idempotencyKey: 'restricted-target-replay',
+          })
+        : action === 'update'
+          ? service.update({
+              ...projectInput,
+              moduleId: MODULE_ID,
+              releaseId: RELEASE_V2,
+              expectedInstallRevision: 1,
+              idempotencyKey: 'restricted-target-replay',
+            })
+          : service.rollback({
+              ...projectInput,
+              moduleId: MODULE_ID,
+              releaseId: RELEASE_V2,
+              expectedInstallRevision: 1,
+              idempotencyKey: 'restricted-target-replay',
+            });
+
+    await expect(operation).rejects.toMatchObject({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.oci.execute',
+    });
+    expect(repositoryCalls).toEqual([]);
+  },
+);
+
+test('restricted profile lists an existing OCI installation as blocked without transitions', async () => {
+  const oci = serverAdapterRelease(RELEASE_V1, '1.0.0', 'oci-image', {
+    status: 'published',
+    review_revision: 4,
+    published_at: NOW.toISOString(),
+  });
+  const distributionRepository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [oci],
+  });
+  const installationRepository = createMemoryProjectModuleInstallationRepository({
+    installations: [EXISTING_INSTALLATION],
+  });
+  const service = new ProjectModuleInstallationService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    repository: installationRepository,
+    releaseService: new DeveloperModuleDistributionService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository: distributionRepository,
+    }),
+  });
+
+  await expect(
+    service.list({ accountId: PROJECT_ACCOUNT_ID, projectId: PROJECT_ID }),
+  ).resolves.toEqual([
+    expect.objectContaining({ active_release_id: RELEASE_V1, status: 'blocked' }),
+  ]);
+  expect(await installationRepository.history(EXISTING_INSTALLATION.installation_id)).toEqual([]);
+  expect(await distributionRepository.history(PUBLISHER_ACCOUNT_ID, RELEASE_V1)).toEqual([]);
+});
+
+test('module.oci.execute is the specific installation authorization delta for the same OCI target', async () => {
+  const ociSetup = await setup({
+    runtime: FUTURE_OCI_RUNTIME_TEST_PROFILE,
+    releases: [serverAdapterRelease(RELEASE_V1, '1.0.0', 'oci-image')],
+  });
+  const deniedInstallationRepository = createMemoryProjectModuleInstallationRepository();
+  const deniedService = new ProjectModuleInstallationService({
+    runtime: FUTURE_WASI_RUNTIME_TEST_PROFILE,
+    repository: deniedInstallationRepository,
+    releaseService: new DeveloperModuleDistributionService({
+      runtime: FUTURE_WASI_RUNTIME_TEST_PROFILE,
+      repository: ociSetup.distributionRepository,
+    }),
+  });
+
+  await expect(
+    deniedService.install({
+      ...projectInput,
+      releaseId: RELEASE_V1,
+      expectedInstallRevision: 0,
+      idempotencyKey: 'future-oci-denied-install',
+    }),
+  ).rejects.toMatchObject({
+    code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+    capability: 'module.oci.execute',
+  });
+  expect(await deniedInstallationRepository.list(PROJECT_ACCOUNT_ID, PROJECT_ID)).toEqual([]);
+
+  const installed = await ociSetup.service.install({
+    ...projectInput,
+    releaseId: RELEASE_V1,
+    expectedInstallRevision: 0,
+    idempotencyKey: 'future-oci-install',
+  });
+  expect(installed.event.action).toBe('install');
+  expect(installed.installation).toMatchObject({
+    active_release_id: RELEASE_V1,
+    active_version: '1.0.0',
+    status: 'active',
+  });
+});
+
+test.each([
+  ['without module.oci.execute', FUTURE_WASI_RUNTIME_TEST_PROFILE],
+  ['with module.oci.execute', FUTURE_OCI_RUNTIME_TEST_PROFILE],
+] as const)(
+  'future profile %s rejects null metadata without installation transitions',
+  async (_label, runtime) => {
+    const oldNull = serverAdapterRelease(RELEASE_V2, '2.0.0', null, {
+      status: 'published',
+      review_revision: 4,
+      published_at: NOW.toISOString(),
+    });
+    const nullDistribution = new DeveloperModuleDistributionService({
+      runtime,
+      repository: createMemoryDeveloperModuleDistributionRepository({ releases: [oldNull] }),
+    });
+    let installTransitions = 0;
+    const nullRepository = {
+      ...createMemoryProjectModuleInstallationRepository(),
+      async install() {
+        installTransitions += 1;
+        throw new Error('unexpected null-metadata install');
+      },
+    };
+    const nullService = new ProjectModuleInstallationService({
+      runtime,
+      repository: nullRepository,
+      releaseService: nullDistribution,
+    });
+    await expect(
+      nullService.install({
+        ...projectInput,
+        releaseId: RELEASE_V2,
+        expectedInstallRevision: 0,
+        idempotencyKey: 'future-null-install',
+      }),
+    ).rejects.toMatchObject({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.oci.execute',
+    });
+    expect(installTransitions).toBe(0);
+  },
+);
 
 describe('project module installation service', () => {
   test('installs, updates, and rolls back an exact published release across publisher accounts', async () => {
@@ -393,6 +683,7 @@ describe('project module installation service', () => {
   )('blocks %s after %s is tampered', async (action, digestField) => {
     const { repository, signingPort, distributionService, service } = await setup();
     const tamperedService = new ProjectModuleInstallationService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository,
       releaseService: {
         async getPublished(input) {

@@ -12,6 +12,11 @@ import {
   parseRuntimeDescriptor,
 } from '@openopc/module-runtime-contracts';
 
+import {
+  ReleaseProfileUnavailableError,
+  type RuntimeReleaseProfile,
+  assertRuntimeCapability,
+} from '../release-profile/runtime';
 import { parseDeveloperModuleArtifactPackage } from './artifacts';
 
 export interface ExtractedRuntimeArtifact {
@@ -61,6 +66,7 @@ function jsonProjection(value: unknown): unknown {
 export async function extractRuntimeDescriptor(input: {
   manifest: RegistryModuleManifest;
   artifactBytes: Uint8Array;
+  runtime?: RuntimeReleaseProfile;
 }): Promise<RuntimeDescriptorEvidence | null> {
   if (input.manifest.execution.mode !== 'server-adapter') return null;
 
@@ -106,11 +112,18 @@ export async function extractRuntimeDescriptor(input: {
   try {
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(descriptorBytes));
     descriptor = parseRuntimeDescriptor(value);
+    if (descriptor.runtime.kind === 'oci-image')
+      assertRuntimeCapability('module.oci.execute', input.runtime);
     if ((await canonicalDigest(descriptor)) !== digest(descriptorBytes)) {
       throw invalid('DEVELOPER_RUNTIME_DESCRIPTOR_INVALID');
     }
   } catch (error) {
-    if (error instanceof DeveloperRuntimeDescriptorError) throw error;
+    if (
+      error instanceof DeveloperRuntimeDescriptorError ||
+      error instanceof ReleaseProfileUnavailableError
+    ) {
+      throw error;
+    }
     throw invalid('DEVELOPER_RUNTIME_DESCRIPTOR_INVALID');
   }
 

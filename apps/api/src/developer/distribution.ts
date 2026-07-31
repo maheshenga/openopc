@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  ReleaseProfileUnavailableError,
+  type RuntimeReleaseProfile,
+  assertRuntimeCapability,
+  loadRuntimeReleaseProfile,
+} from '../release-profile/runtime';
+import {
   type DeveloperModuleSignature,
   type DeveloperModuleSignaturePayloadV2,
   type ModuleSigningPort,
@@ -68,6 +74,7 @@ export interface DeveloperModuleDistributionRepository {
     query?: string;
     limit: number;
     offset: number;
+    serverAdapterRuntimeKinds?: readonly Exclude<DeveloperModuleRelease['runtime_kind'], null>[];
   }): Promise<DeveloperModulePublishedPage>;
   getPublished(releaseId: string): Promise<DeveloperModuleRelease | null>;
   history(
@@ -111,6 +118,28 @@ function cloneRelease(release: DeveloperModuleRelease): DeveloperModuleRelease {
 
 function cloneEvent(event: DeveloperModuleDistributionEvent): DeveloperModuleDistributionEvent {
   return structuredClone(event);
+}
+
+function assertReleaseRuntimeAllowed(
+  release: DeveloperModuleRelease,
+  runtime: RuntimeReleaseProfile,
+  allowRestrictedRevoke = false,
+): void {
+  if (release.manifest.execution.mode !== 'server-adapter') return;
+  if (release.runtime_kind === 'wasi-component') {
+    assertRuntimeCapability('module.wasi.execute', runtime);
+    return;
+  }
+  if (release.runtime_kind === 'oci-image') {
+    if (allowRestrictedRevoke) return;
+    assertRuntimeCapability('module.oci.execute', runtime);
+    return;
+  }
+  throw new ReleaseProfileUnavailableError('module.oci.execute');
+}
+
+function assertReleaseRuntimeReady(runtime: RuntimeReleaseProfile): void {
+  if (!runtime.ready) throw new ReleaseProfileUnavailableError('module.wasi.execute');
 }
 
 function signaturePayload(release: DeveloperModuleRelease): DeveloperModuleSignaturePayloadV2 {
@@ -176,6 +205,7 @@ export class DeveloperModuleDistributionService {
       trustGate?: Pick<DeveloperModuleTrustGate, 'evaluate'>;
       permissions?: DeveloperPublisherPermissionPort;
       now?: () => Date;
+      runtime?: RuntimeReleaseProfile;
     },
   ) {
     this.signer = input.signer ?? null;
@@ -249,7 +279,10 @@ export class DeveloperModuleDistributionService {
     expectedStatus: 'approved';
     expectedRevision: number;
   }): Promise<DeveloperModuleDistributionTransition> {
+    const runtime = this.input.runtime ?? loadRuntimeReleaseProfile();
+    assertReleaseRuntimeReady(runtime);
     const current = await this.input.repository.getAdmin(input.releaseId);
+    if (current) assertReleaseRuntimeAllowed(current, runtime);
     if (current) {
       const replay = await this.replayCompletedTransition(current, {
         action: 'sign',
@@ -306,7 +339,10 @@ export class DeveloperModuleDistributionService {
     expectedStatus: 'signed';
     expectedRevision: number;
   }): Promise<DeveloperModuleDistributionTransition> {
+    const runtime = this.input.runtime ?? loadRuntimeReleaseProfile();
+    assertReleaseRuntimeReady(runtime);
     const current = await this.input.repository.getAdmin(input.releaseId);
+    if (current) assertReleaseRuntimeAllowed(current, runtime);
     if (current) {
       const replay = await this.replayCompletedTransition(current, {
         action: 'publish',
@@ -353,7 +389,10 @@ export class DeveloperModuleDistributionService {
     reason: string;
   }): Promise<DeveloperModuleDistributionTransition> {
     const reason = normalizeRevocationReason(input.reason);
+    const runtime = this.input.runtime ?? loadRuntimeReleaseProfile();
+    assertReleaseRuntimeReady(runtime);
     const current = await this.input.repository.getAdmin(input.releaseId);
+    if (current) assertReleaseRuntimeAllowed(current, runtime, true);
     if (current) {
       const replay = await this.replayCompletedTransition(current, {
         action: 'revoke',
@@ -377,17 +416,23 @@ export class DeveloperModuleDistributionService {
     });
   }
 
-  listPublished(input: {
+  async listPublished(input: {
     query?: string;
     limit?: number;
     offset?: number;
   }): Promise<DeveloperModulePublishedPage> {
     const limit = Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), 200);
     const offset = Math.max(Math.trunc(input.offset ?? 0), 0);
-    return this.input.repository.listPublished({
+    const runtime = this.input.runtime ?? loadRuntimeReleaseProfile();
+    const serverAdapterRuntimeKinds: Exclude<DeveloperModuleRelease['runtime_kind'], null>[] = [
+      'wasi-component',
+    ];
+    if (runtime.allows('module.oci.execute')) serverAdapterRuntimeKinds.push('oci-image');
+    return await this.input.repository.listPublished({
       query: input.query?.trim() || undefined,
       limit,
       offset,
+      serverAdapterRuntimeKinds,
     });
   }
 
@@ -395,7 +440,10 @@ export class DeveloperModuleDistributionService {
     releaseId: string;
   }): Promise<DeveloperModuleRelease> {
     const published = await this.input.repository.getPublished(input.releaseId);
-    if (published) return published;
+    if (published) {
+      assertReleaseRuntimeAllowed(published, this.input.runtime ?? loadRuntimeReleaseProfile());
+      return published;
+    }
     const release = await this.input.repository.getAdmin(input.releaseId);
     if (!release) fail('DEVELOPER_RELEASE_NOT_FOUND', 404);
     if (release.status === 'revoked') fail('DEVELOPER_MODULE_REVOKED', 409);
@@ -521,10 +569,16 @@ export function createMemoryDeveloperModuleDistributionRepository(input?: {
       commitTransition(release, event);
       return { release: cloneRelease(release), event: cloneEvent(event) };
     },
-    async listPublished({ query, limit, offset }) {
+    async listPublished({ query, limit, offset, serverAdapterRuntimeKinds }) {
       const normalizedQuery = query?.trim().toLowerCase() ?? '';
       const matches = [...releases.values()]
         .filter((release) => release.status === 'published')
+        .filter(
+          (release) =>
+            release.manifest.execution.mode !== 'server-adapter' ||
+            !serverAdapterRuntimeKinds ||
+            (release.runtime_kind !== null && serverAdapterRuntimeKinds.includes(release.runtime_kind)),
+        )
         .filter(
           (release) =>
             !normalizedQuery ||

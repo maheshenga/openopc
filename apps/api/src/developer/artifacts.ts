@@ -7,8 +7,10 @@ import {
   type RegistryModuleSourceProvenance,
   type ResolvedRegistryModuleFile,
   createRegistryModuleArtifactEnvelope,
+  readRegistryModuleManifest,
   validateRegistryItem,
 } from '@kortix/registry';
+import { parseRuntimeDescriptor } from '@openopc/module-runtime-contracts';
 import type { DeveloperPublisherPermissionPort } from './publishers';
 
 export const DEVELOPER_ARTIFACT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
@@ -21,6 +23,8 @@ export type DeveloperArtifactUploadState =
   | 'cancelled'
   | 'expired';
 
+export type DeveloperModuleArtifactRuntimeKind = 'wasi-component' | 'oci-image';
+
 export interface DeveloperModuleArtifact {
   artifact_id: string;
   account_id: string;
@@ -29,6 +33,7 @@ export interface DeveloperModuleArtifact {
   envelope_digest: `sha256:${string}`;
   media_type: typeof DEVELOPER_MODULE_ARTIFACT_MEDIA_TYPE;
   size_bytes: number;
+  runtime_kind: DeveloperModuleArtifactRuntimeKind | null;
   item_snapshot: RegistryItem;
   source_provenance: RegistryModuleSourceProvenance | null;
   created_by: string;
@@ -354,6 +359,32 @@ export async function readDeveloperArtifactBytes(
   return result;
 }
 
+function artifactRuntimeKind(
+  artifact: DeveloperModuleArtifactPackageInput,
+): DeveloperModuleArtifactRuntimeKind | null {
+  const manifest = readRegistryModuleManifest(artifact.item);
+  if (!manifest || manifest.execution.mode !== 'server-adapter') return null;
+  const entryPath = manifest.execution.entry;
+  if (typeof entryPath !== 'string') return null;
+  const matches = (artifact.files ?? []).filter((file) => file.target === entryPath);
+  const descriptorFile = matches[0];
+  if (
+    matches.length !== 1 ||
+    !descriptorFile ||
+    (descriptorFile.kind !== undefined && descriptorFile.kind !== 'file')
+  ) {
+    return null;
+  }
+  try {
+    const value = JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(descriptorFile.bytes),
+    );
+    return parseRuntimeDescriptor(value).runtime.kind;
+  } catch {
+    return null;
+  }
+}
+
 function publicArtifact(record: DeveloperModuleArtifactRecord): DeveloperModuleArtifact {
   const { storage_key: _storageKey, ...artifact } = record;
   return structuredClone(artifact);
@@ -364,6 +395,7 @@ function artifactRecord(input: {
   actorUserId: string;
   storageKey: string;
   size: number;
+  runtimeKind: DeveloperModuleArtifactRuntimeKind | null;
   envelope: RegistryModuleArtifactEnvelope;
   now: Date;
 }): DeveloperModuleArtifactRecord {
@@ -376,6 +408,7 @@ function artifactRecord(input: {
     storage_key: input.storageKey,
     media_type: DEVELOPER_MODULE_ARTIFACT_MEDIA_TYPE,
     size_bytes: input.size,
+    runtime_kind: input.runtimeKind,
     item_snapshot: structuredClone(input.envelope.descriptor.item),
     source_provenance: structuredClone(input.envelope.descriptor.source),
     created_by: input.actorUserId,
@@ -470,6 +503,7 @@ export class DeveloperModuleArtifactService {
       actorUserId: input.actorUserId,
       storageKey,
       size: bytes.byteLength,
+      runtimeKind: null,
       envelope,
       now: this.now(),
     });
@@ -623,9 +657,11 @@ export class DeveloperModuleArtifactService {
     if (sha256(bytes) !== upload.expected_digest) {
       return await this.rejectUpload(upload, 'DEVELOPER_ARTIFACT_CHECKSUM_MISMATCH', now);
     }
+    let artifactPackage: DeveloperModuleArtifactPackageInput;
     let envelope: RegistryModuleArtifactEnvelope;
     try {
-      envelope = createRegistryModuleArtifactEnvelope(parseDeveloperModuleArtifactPackage(bytes));
+      artifactPackage = parseDeveloperModuleArtifactPackage(bytes);
+      envelope = createRegistryModuleArtifactEnvelope(artifactPackage);
     } catch {
       return await this.rejectUpload(upload, 'DEVELOPER_ARTIFACT_INVALID', now);
     }
@@ -648,6 +684,7 @@ export class DeveloperModuleArtifactService {
       actorUserId: input.actorUserId,
       storageKey,
       size: bytes.byteLength,
+      runtimeKind: artifactRuntimeKind(artifactPackage),
       envelope,
       now,
     });

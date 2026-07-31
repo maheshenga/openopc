@@ -12,15 +12,16 @@ import {
   ModalHeader,
   ModalTitle,
 } from '@/components/ui/modal';
-import { useRequestDemo } from '@/features/contact/request-demo-provider';
 import { PricingPlanCard } from '@/features/billing/pricing-plan-card';
 import { UPGRADE_MODAL_PLANS, type UpgradeModalPlanId } from '@/features/billing/pricing-plans';
+import { useRequestDemo } from '@/features/contact/request-demo-provider';
 import { useAccountState, useCreatePerSeatCheckout } from '@/hooks/billing';
 import type { AccountState } from '@/lib/api/billing';
 import { BillingAccountProvider } from '@/stores/billing-account-context';
 import { useUpgradeDialogStore } from '@/stores/upgrade-dialog-store';
 import { ArrowRight, UserPlus } from 'lucide-react';
 import { useTranslations } from 'next-intl';
+import { useRuntimeProfileDisplayState } from './release-profile';
 
 export interface UpgradePlansModalProps {
   open: boolean;
@@ -29,6 +30,12 @@ export interface UpgradePlansModalProps {
 }
 
 export function UpgradePlansModal({ open, onOpenChange, accountState }: UpgradePlansModalProps) {
+  const runtimeProfile = useRuntimeProfileDisplayState();
+  if (runtimeProfile !== 'allowed') return null;
+  return <EnabledUpgradePlansModal open={open} onOpenChange={onOpenChange} accountState={accountState} />;
+}
+
+function EnabledUpgradePlansModal({ open, onOpenChange, accountState }: UpgradePlansModalProps) {
   const tI18nHardcoded = useTranslations('hardcodedUi');
   const createPerSeat = useCreatePerSeatCheckout();
   const openDemo = useRequestDemo();

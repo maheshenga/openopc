@@ -3,6 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { satisfies, valid, validRange } from 'semver';
 
 import {
+  ReleaseProfileUnavailableError,
+  type RuntimeReleaseProfile,
+  assertRuntimeCapability,
+  loadRuntimeReleaseProfile,
+} from '../release-profile/runtime';
+import {
   DeveloperModuleDistributionError,
   type DeveloperModuleDistributionService,
 } from './distribution';
@@ -183,6 +189,7 @@ export class ProjectModuleInstallationService {
       verifiers?: readonly ModuleVerificationPort[];
       platformVersion?: string;
       registryVersion?: string;
+      runtime?: RuntimeReleaseProfile;
     },
   ) {
     this.verifiers = new Map((input.verifiers ?? []).map((verifier) => [verifier.keyId, verifier]));
@@ -268,7 +275,11 @@ export class ProjectModuleInstallationService {
       await this.input.releaseService.getPublished({ releaseId: installation.active_release_id });
       return 'active';
     } catch (error) {
-      if (error instanceof DeveloperModuleDistributionError) return 'blocked';
+      if (
+        error instanceof DeveloperModuleDistributionError ||
+        error instanceof ReleaseProfileUnavailableError
+      )
+        return 'blocked';
       throw error;
     }
   }
@@ -300,6 +311,8 @@ export class ProjectModuleInstallationService {
   async install(
     command: ProjectModuleInstallCommand,
   ): Promise<ProjectModuleInstallationTransition> {
+    assertRuntimeCapability('module.wasi.execute', this.input.runtime ?? loadRuntimeReleaseProfile());
+    await this.publishedRelease(command.releaseId, false);
     const idempotencyKey = normalizeIdempotencyKey(command.idempotencyKey);
     if (idempotencyKey) {
       const replay = await this.replay({
@@ -325,18 +338,21 @@ export class ProjectModuleInstallationService {
   async update(
     command: Omit<ProjectModuleMoveCommand, 'action'>,
   ): Promise<ProjectModuleInstallationTransition> {
+    assertRuntimeCapability('module.wasi.execute', this.input.runtime ?? loadRuntimeReleaseProfile());
     return this.move({ ...command, action: 'update' });
   }
 
   async rollback(
     command: Omit<ProjectModuleMoveCommand, 'action'>,
   ): Promise<ProjectModuleInstallationTransition> {
+    assertRuntimeCapability('module.wasi.execute', this.input.runtime ?? loadRuntimeReleaseProfile());
     return this.move({ ...command, action: 'rollback' });
   }
 
   private async move(
     command: ProjectModuleMoveCommand,
   ): Promise<ProjectModuleInstallationTransition> {
+    await this.publishedRelease(command.releaseId, command.action === 'rollback');
     const idempotencyKey = normalizeIdempotencyKey(command.idempotencyKey);
     if (idempotencyKey) {
       const replay = await this.replay({

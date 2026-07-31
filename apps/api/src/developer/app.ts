@@ -4,6 +4,10 @@ import type { Context, MiddlewareHandler } from 'hono';
 
 import { ACCOUNT_ACTIONS } from '../iam/actions';
 import { auth, errors, json, makeOpenApiApp } from '../openapi';
+import {
+  ReleaseProfileUnavailableError,
+  type RestrictedRuntimeCapability,
+} from '../release-profile/runtime';
 import type { AppEnv } from '../types';
 import {
   DEVELOPER_APPLICATION_STATES,
@@ -470,6 +474,9 @@ function reviewErrorResponse(context: Context<AppEnv>, error: unknown) {
 }
 
 function artifactErrorResponse(context: Context<AppEnv>, error: unknown) {
+  if (error instanceof ReleaseProfileUnavailableError) {
+    return context.json({ code: error.code, capability: error.capability }, error.status);
+  }
   if (error instanceof DeveloperPublisherError) return publisherErrorResponse(context, error);
   if (!(error instanceof DeveloperModuleArtifactError)) throw error;
   const body = { error: error.code };
@@ -514,10 +521,55 @@ function requireApplicationService(dependencies: DeveloperAppDependencies) {
   return service;
 }
 
+function objectValue(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function legacyReleaseCapability(value: unknown): RestrictedRuntimeCapability | null {
+  const body = objectValue(value);
+  if (!body) return null;
+  if (
+    Object.hasOwn(body, 'artifact_url') ||
+    Object.hasOwn(body, 'artifactUrl') ||
+    Object.hasOwn(body, 'source_url') ||
+    Object.hasOwn(body, 'sourceUrl')
+  ) {
+    return 'artifact.remote-url';
+  }
+  if (!Object.hasOwn(body, 'item')) return null;
+
+  const item = objectValue(body.item);
+  const module = objectValue(item?.module);
+  const runtime = objectValue(item?.runtime) ?? objectValue(module?.runtime);
+  if (runtime?.kind === 'oci-image') return 'module.oci.execute';
+  return 'artifact.remote-url';
+}
+
+async function rejectLegacyReleaseBeforeAuthentication(
+  context: Context<AppEnv>,
+  next: () => Promise<void>,
+) {
+  if (context.req.method !== 'POST') return next();
+  const contentType = context.req.header('content-type')?.toLowerCase() ?? '';
+  if (!contentType.includes('application/json')) return next();
+  try {
+    const capability = legacyReleaseCapability(await context.req.raw.clone().json());
+    if (capability) {
+      const error = new ReleaseProfileUnavailableError(capability);
+      return context.json({ code: error.code, capability: error.capability }, error.status);
+    }
+  } catch {
+    // Let the request reach the normal JSON validator so malformed bodies retain its response.
+  }
+  return next();
+}
+
 export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
   requireApplicationService(dependencies);
   const app = makeOpenApiApp<AppEnv>();
 
+  app.use('/modules/releases', rejectLegacyReleaseBeforeAuthentication);
   app.use('*', dependencies.authenticate);
 
   app.openapi(
@@ -1078,6 +1130,9 @@ export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
         });
         return context.json(result, result.created ? 201 : 200);
       } catch (error) {
+        if (error instanceof ReleaseProfileUnavailableError) {
+          return context.json({ code: error.code, capability: error.capability }, error.status);
+        }
         if (error instanceof DeveloperPublisherError) {
           return publisherErrorResponse(context, error);
         }

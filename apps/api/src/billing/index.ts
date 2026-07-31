@@ -5,6 +5,7 @@ import type { Context } from 'hono';
 import { config } from '../config';
 import { supabaseAuth } from '../middleware/auth';
 import { errors, json, makeOpenApiApp } from '../openapi';
+import { rejectUnavailableCapability } from '../release-profile/routes';
 import type { AppEnv } from '../types';
 
 import { accountDeletionRouter } from './routes/account-deletion';
@@ -17,10 +18,40 @@ import { webhooksRouter } from './routes/webhooks';
 const billingApp = makeOpenApiApp<AppEnv>();
 const accountDeletionApp = makeOpenApiApp<AppEnv>();
 
+const RESTRICTED_COMMERCIAL_ROUTES = [
+  ['/purchase-credits', 'commerce.purchase'],
+  ['/auto-topup/configure', 'commerce.settlement'],
+  ['/claim-per-seat', 'commerce.settlement'],
+  ['/create-checkout-session', 'commerce.settlement'],
+  ['/create-per-seat-checkout', 'commerce.settlement'],
+  ['/sync-seat-quantity', 'commerce.settlement'],
+  ['/create-inline-checkout', 'commerce.settlement'],
+  ['/confirm-inline-checkout', 'commerce.settlement'],
+  ['/create-portal-session', 'commerce.settlement'],
+  ['/cancel-subscription', 'commerce.settlement'],
+  ['/reactivate-subscription', 'commerce.settlement'],
+  ['/schedule-downgrade', 'commerce.settlement'],
+  ['/cancel-scheduled-change', 'commerce.settlement'],
+  ['/sync-subscription', 'commerce.settlement'],
+  ['/proration-preview', 'commerce.settlement'],
+  ['/checkout-session/:sessionId', 'commerce.settlement'],
+  ['/confirm-checkout-session', 'commerce.settlement'],
+] as const;
+
 // Webhooks — NO auth (handlers verify signatures internally)
 billingApp.route('/webhooks', webhooksRouter);
 // Alias: /webhook → /webhooks (some providers send to singular form)
 billingApp.route('/webhook', webhooksRouter);
+
+// These must run before parent authentication and the billing-enabled gate so
+// restricted releases cannot reach account, repository, or Stripe code.
+for (const [path, capability] of RESTRICTED_COMMERCIAL_ROUTES) {
+  billingApp.use(path, async (c, next) => {
+    const rejected = rejectUnavailableCapability(c, capability);
+    if (rejected) return rejected;
+    return next();
+  });
+}
 
 // Auth for all billing routes except webhooks
 billingApp.use('*', async (c, next) => {

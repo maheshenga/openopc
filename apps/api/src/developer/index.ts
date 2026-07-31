@@ -6,6 +6,7 @@ import { assertAuthorized } from '../iam/dispatcher';
 import { registerDeveloperModuleMarketplaceSource } from '../marketplace/developer-modules';
 import { supabaseAuth } from '../middleware/auth';
 import { createRuntimeArtifactS3Store } from '../module-runtime/runtime-artifacts.s3';
+import { loadRuntimeReleaseProfile } from '../release-profile/runtime';
 import { db } from '../shared/db';
 import { resolveScopedAccountId } from '../shared/resolve-account';
 import { getDefaultStudioApiRuntime } from '../studio/default-routes';
@@ -104,6 +105,7 @@ async function resolveDeveloperAccountId(
 
 const artifactRepository: DeveloperModuleArtifactRepository =
   createDrizzleDeveloperModuleArtifactRepository(db);
+const runtimeReleaseProfile = loadRuntimeReleaseProfile();
 export const developerApplicationService = new DeveloperApplicationService({
   repository: createDrizzleDeveloperApplicationRepository(db),
   currentPolicyVersions: {
@@ -145,6 +147,7 @@ const releaseService = new DeveloperModuleReleaseService({
   artifacts: artifactRepository,
   artifactStore,
   runtimeArtifactStore,
+  runtime: runtimeReleaseProfile,
   permissions: developerPublisherService,
 });
 export const developerModuleVerificationRepository =
@@ -176,6 +179,7 @@ export const developerModuleDistributionService = new DeveloperModuleDistributio
   verifiers: configuredVerifiers,
   trustGate: developerModuleTrustGate,
   permissions: developerPublisherService,
+  runtime: runtimeReleaseProfile,
 });
 export const projectModuleInstallationService = new ProjectModuleInstallationService({
   repository: createProjectInstallationRepository(db),
@@ -183,6 +187,7 @@ export const projectModuleInstallationService = new ProjectModuleInstallationSer
   verifiers: configuredVerifiers,
   platformVersion: process.env.OPENOPC_PLATFORM_VERSION ?? '1.0.0',
   registryVersion: '1.0.0',
+  runtime: runtimeReleaseProfile,
 });
 registerDeveloperModuleMarketplaceSource(
   developerModuleDistributionEnabled ? developerModuleDistributionService : null,

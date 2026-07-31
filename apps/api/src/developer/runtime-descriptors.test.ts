@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto';
 import type { RegistryModuleManifest, ResolvedRegistryModuleFile } from '@kortix/registry';
 import { WASI_RUNTIME_ARTIFACT_MAX_BYTES } from '@openopc/module-runtime-contracts';
 
+import {
+  COMPLETE_RUNTIME_TEST_PROFILE,
+  RESTRICTED_RUNTIME_TEST_PROFILE,
+} from '../release-profile/test-fixtures';
 import { serializeDeveloperModuleArtifactPackage } from './artifacts';
 import { DeveloperRuntimeDescriptorError, extractRuntimeDescriptor } from './runtime-descriptors';
 
@@ -122,6 +126,7 @@ function artifactBytes(
 describe('artifact-bound runtime descriptor extraction', () => {
   test('extracts the exact bounded WASI component derivative', async () => {
     const evidence = await extractRuntimeDescriptor({
+      runtime: COMPLETE_RUNTIME_TEST_PROFILE,
       manifest: manifest(),
       artifactBytes: artifactBytes(),
     });
@@ -143,6 +148,7 @@ describe('artifact-bound runtime descriptor extraction', () => {
   test('keeps a valid OCI descriptor without a local runtime artifact', async () => {
     await expect(
       extractRuntimeDescriptor({
+        runtime: COMPLETE_RUNTIME_TEST_PROFILE,
         manifest: manifest(),
         artifactBytes: artifactBytes(encoder.encode(OCI_DESCRIPTOR)),
       }),
@@ -155,9 +161,24 @@ describe('artifact-bound runtime descriptor extraction', () => {
     });
   });
 
+  test('rejects OCI with the stable release-profile unavailable result', async () => {
+    await expect(
+      extractRuntimeDescriptor({
+        runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+        manifest: manifest(),
+        artifactBytes: artifactBytes(encoder.encode(OCI_DESCRIPTOR)),
+      }),
+    ).rejects.toMatchObject({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      status: 503,
+      capability: 'module.oci.execute',
+    });
+  });
+
   test('leaves non-server-adapter execution modes unchanged', async () => {
     await expect(
       extractRuntimeDescriptor({
+        runtime: COMPLETE_RUNTIME_TEST_PROFILE,
         manifest: manifest('declarative'),
         artifactBytes: new Uint8Array([0xff]),
       }),
@@ -167,6 +188,7 @@ describe('artifact-bound runtime descriptor extraction', () => {
   test('rejects an entry that does not resolve to openopc.runtime.json inside the artifact', async () => {
     await expect(
       extractRuntimeDescriptor({
+        runtime: COMPLETE_RUNTIME_TEST_PROFILE,
         manifest: manifest('server-adapter', '../openopc.runtime.json'),
         artifactBytes: artifactBytes(),
       }),
@@ -218,6 +240,7 @@ describe('artifact-bound runtime descriptor extraction', () => {
   ] as const)('rejects a WASI artifact with a %s', async (_label, options) => {
     await expect(
       extractRuntimeDescriptor({
+        runtime: COMPLETE_RUNTIME_TEST_PROFILE,
         manifest: manifest(),
         artifactBytes: artifactBytes(encoder.encode(WASI_DESCRIPTOR), options),
       }),

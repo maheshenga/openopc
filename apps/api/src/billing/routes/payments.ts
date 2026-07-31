@@ -14,8 +14,20 @@ import { BillingError } from '../../errors';
 import { resolveScopedAccountId } from '../../shared/resolve-account';
 import { resolveBillingWriteAccountId } from '../require-billing-write';
 import { makeOpenApiApp, json, auth, errors } from '../../openapi';
+import { rejectUnavailableCapability } from '../../release-profile/routes';
 
 export const paymentsRouter = makeOpenApiApp<AppEnv>();
+
+paymentsRouter.use('/purchase-credits', async (c, next) => {
+  const rejected = rejectUnavailableCapability(c, 'commerce.purchase');
+  if (rejected) return rejected;
+  return next();
+});
+paymentsRouter.use('/auto-topup/configure', async (c, next) => {
+  const rejected = rejectUnavailableCapability(c, 'commerce.settlement');
+  if (rejected) return rejected;
+  return next();
+});
 
 // Opaque service/Stripe payloads — permissive on purpose.
 const OpaqueSchema = z.record(z.string(), z.any());

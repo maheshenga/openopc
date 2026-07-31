@@ -1,6 +1,14 @@
 import { expect, test } from 'bun:test';
 import { createHash, generateKeyPairSync } from 'node:crypto';
 
+import { RESTRICTED_RUNTIME_CAPABILITIES } from '@kortix/api-contract';
+
+import {
+  FUTURE_OCI_RUNTIME_TEST_PROFILE,
+  FUTURE_WASI_RUNTIME_TEST_PROFILE,
+  NON_READY_RUNTIME_TEST_PROFILE,
+  RESTRICTED_RUNTIME_TEST_PROFILE,
+} from '../release-profile/test-fixtures';
 import {
   DeveloperModuleDistributionError,
   DeveloperModuleDistributionService,
@@ -19,6 +27,40 @@ const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const ADMIN_ID = '20000000-0000-4000-a000-000000000004';
 const RELEASE_ID = '30000000-0000-4000-a000-000000000003';
 const NOW = new Date('2026-07-24T15:00:00.000Z');
+
+test('release profile rejection happens before distribution repository or signer access', async () => {
+  let calls = 0;
+  const service = new DeveloperModuleDistributionService({
+    runtime: NON_READY_RUNTIME_TEST_PROFILE,
+    repository: {
+      async getAdmin() {
+        calls += 1;
+        return null;
+      },
+    } as never,
+    signer: {
+      algorithm: 'ed25519',
+      keyId: 'never',
+      async verify() {
+        calls += 1;
+        throw new Error('unexpected verifier call');
+      },
+      async sign() {
+        calls += 1;
+        throw new Error('unexpected signer call');
+      },
+    },
+  });
+  await expect(
+    service.sign({
+      releaseId: RELEASE_ID,
+      actorUserId: ADMIN_ID,
+      expectedStatus: 'approved',
+      expectedRevision: 1,
+    }),
+  ).rejects.toMatchObject({ code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE' });
+  expect(calls).toBe(0);
+});
 
 type TrustState =
   | 'passed'
@@ -116,12 +158,332 @@ function signingPort() {
   });
 }
 
+function serverAdapterRelease(
+  runtimeKind: DeveloperModuleRelease['runtime_kind'],
+  status: DeveloperModuleRelease['status'] = 'approved',
+  reviewRevision = status === 'approved' ? 2 : status === 'signed' ? 3 : 4,
+): DeveloperModuleRelease {
+  const result = release(status, reviewRevision);
+  result.manifest.execution = {
+    mode: 'server-adapter',
+    entry: 'runtime/openopc.runtime.json',
+  };
+  result.manifest.verification = { profile: 'server-conformance' };
+  result.manifest_digest = canonicalDeveloperModuleManifestDigest(result.manifest);
+  result.runtime_kind = runtimeKind;
+  if (runtimeKind !== null) {
+    result.runtime_descriptor_digest = `sha256:${'1'.repeat(64)}`;
+    result.runtime_descriptor_path = 'runtime/openopc.runtime.json';
+  }
+  if (status === 'signed' || status === 'published') {
+    result.signature_algorithm = 'ed25519';
+    result.signature_key_id = 'openopc-test-2026';
+    result.signature = `base64url:${'A'.repeat(86)}`;
+    result.signature_payload_digest = `sha256:${'b'.repeat(64)}`;
+    result.signed_at = '2026-07-24T14:30:00.000Z';
+  }
+  if (status === 'published') result.published_at = '2026-07-24T14:45:00.000Z';
+  return result;
+}
+
+function countedDistributionFixture(candidate: DeveloperModuleRelease) {
+  const delegate = createMemoryDeveloperModuleDistributionRepository({
+    releases: [candidate],
+    now: () => NOW,
+  });
+  const effects = { signer: 0, sign: 0, transition: 0, history: 0 };
+  const signer = signingPort();
+  return {
+    effects,
+    repository: {
+      ...delegate,
+      async sign(command: Parameters<typeof delegate.sign>[0]) {
+        effects.sign += 1;
+        return delegate.sign(command);
+      },
+      async transition(command: Parameters<typeof delegate.transition>[0]) {
+        effects.transition += 1;
+        return delegate.transition(command);
+      },
+      async history(...args: Parameters<typeof delegate.history>) {
+        effects.history += 1;
+        return delegate.history(...args);
+      },
+    },
+    signer: {
+      ...signer,
+      async sign(payload: Uint8Array) {
+        effects.signer += 1;
+        return signer.sign(payload);
+      },
+      async verify(...args: Parameters<typeof signer.verify>) {
+        effects.signer += 1;
+        return signer.verify(...args);
+      },
+    },
+  };
+}
+
+test.each([
+  ['OCI', 'oci-image'],
+  ['old-null', null],
+] as const)(
+  'restricted profile rejects %s server-adapter sign, publish, get, and replay before side effects',
+  async (_label, runtimeKind) => {
+    const unavailable = {
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.oci.execute',
+    };
+
+    const signFixture = countedDistributionFixture(serverAdapterRelease(runtimeKind));
+    const signService = new DeveloperModuleDistributionService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository: signFixture.repository,
+      signer: signFixture.signer,
+      trustGate: trustGate(),
+    });
+    await expect(
+      signService.sign({
+        releaseId: RELEASE_ID,
+        actorUserId: ADMIN_ID,
+        expectedStatus: 'approved',
+        expectedRevision: 2,
+      }),
+    ).rejects.toMatchObject(unavailable);
+    expect(signFixture.effects).toEqual({ signer: 0, sign: 0, transition: 0, history: 0 });
+
+    const publishFixture = countedDistributionFixture(serverAdapterRelease(runtimeKind, 'signed'));
+    const publishService = new DeveloperModuleDistributionService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository: publishFixture.repository,
+      signer: publishFixture.signer,
+      verifiers: [publishFixture.signer],
+    });
+    await expect(
+      publishService.publish({
+        releaseId: RELEASE_ID,
+        actorUserId: ADMIN_ID,
+        expectedStatus: 'signed',
+        expectedRevision: 3,
+      }),
+    ).rejects.toMatchObject(unavailable);
+    expect(publishFixture.effects).toEqual({ signer: 0, sign: 0, transition: 0, history: 0 });
+
+    const getFixture = countedDistributionFixture(serverAdapterRelease(runtimeKind, 'published'));
+    const getService = new DeveloperModuleDistributionService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository: getFixture.repository,
+    });
+    await expect(getService.getPublished({ releaseId: RELEASE_ID })).rejects.toMatchObject(
+      unavailable,
+    );
+    expect(getFixture.effects).toEqual({ signer: 0, sign: 0, transition: 0, history: 0 });
+
+    const replayFixture = countedDistributionFixture(serverAdapterRelease(runtimeKind, 'signed'));
+    const replayService = new DeveloperModuleDistributionService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository: replayFixture.repository,
+      signer: replayFixture.signer,
+      trustGate: trustGate(),
+    });
+    await expect(
+      replayService.sign({
+        releaseId: RELEASE_ID,
+        actorUserId: ADMIN_ID,
+        expectedStatus: 'approved',
+        expectedRevision: 2,
+      }),
+    ).rejects.toMatchObject(unavailable);
+    expect(replayFixture.effects).toEqual({ signer: 0, sign: 0, transition: 0, history: 0 });
+  },
+);
+
+test('restricted published list excludes OCI and old-null server adapters from page and total', async () => {
+  const wasi = serverAdapterRelease('wasi-component', 'published');
+  const oci = serverAdapterRelease('oci-image', 'published');
+  oci.release_id = '30000000-0000-4000-a000-000000000008';
+  const oldNull = serverAdapterRelease(null, 'published');
+  oldNull.release_id = '30000000-0000-4000-a000-000000000009';
+  const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    repository: createMemoryDeveloperModuleDistributionRepository({
+      releases: [wasi, oci, oldNull],
+    }),
+  });
+
+  const page = await service.listPublished({ limit: 10, offset: 0 });
+
+  expect(page.total).toBe(1);
+  expect(page.releases.map((candidate) => candidate.release_id)).toEqual([RELEASE_ID]);
+  expect(page.releases.map((candidate) => candidate.runtime_kind)).toEqual(['wasi-component']);
+});
+
+test.each([
+  ['signed', 3],
+  ['published', 4],
+] as const)(
+  'restricted profile safely revokes an already-%s OCI release',
+  async (status, revision) => {
+    const repository = createMemoryDeveloperModuleDistributionRepository({
+      releases: [serverAdapterRelease('oci-image', status, revision)],
+      now: () => NOW,
+    });
+    const service = new DeveloperModuleDistributionService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository,
+    });
+
+    expect(RESTRICTED_RUNTIME_TEST_PROFILE.allows('module.oci.execute')).toBe(false);
+    const revoked = await service.revoke({
+      releaseId: RELEASE_ID,
+      actorUserId: ADMIN_ID,
+      expectedStatus: status,
+      expectedRevision: revision,
+      reason: 'Restricted-profile OCI safety withdrawal.',
+    });
+
+    expect(revoked.release.status).toBe('revoked');
+    expect(revoked.event.action).toBe('revoke');
+    expect(await repository.history(ACCOUNT_ID, RELEASE_ID)).toHaveLength(1);
+  },
+);
+
+test.each([
+  ['signed', 3],
+  ['published', 4],
+] as const)(
+  'restricted profile fail-closes revoke for an already-%s old-null release without transitions or history',
+  async (status, revision) => {
+    const fixture = countedDistributionFixture(serverAdapterRelease(null, status, revision));
+    const service = new DeveloperModuleDistributionService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository: fixture.repository,
+    });
+
+    await expect(
+      service.revoke({
+        releaseId: RELEASE_ID,
+        actorUserId: ADMIN_ID,
+        expectedStatus: status,
+        expectedRevision: revision,
+        reason: 'Legacy metadata cannot authorize a safety transition.',
+      }),
+    ).rejects.toMatchObject({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.oci.execute',
+    });
+    expect(fixture.effects).toEqual({ signer: 0, sign: 0, transition: 0, history: 0 });
+  },
+);
+
+test('module.oci.execute is the only future-profile authorization delta for the same OCI target', async () => {
+  expect(
+    RESTRICTED_RUNTIME_CAPABILITIES.filter((capability) =>
+      FUTURE_WASI_RUNTIME_TEST_PROFILE.allows(capability),
+    ),
+  ).toEqual(['module.wasi.execute']);
+  expect(
+    RESTRICTED_RUNTIME_CAPABILITIES.filter((capability) =>
+      FUTURE_OCI_RUNTIME_TEST_PROFILE.allows(capability),
+    ),
+  ).toEqual(['module.wasi.execute', 'module.oci.execute']);
+
+  const ociTarget = serverAdapterRelease('oci-image');
+  const deniedFixture = countedDistributionFixture(ociTarget);
+  const deniedService = new DeveloperModuleDistributionService({
+    runtime: FUTURE_WASI_RUNTIME_TEST_PROFILE,
+    repository: deniedFixture.repository,
+    signer: deniedFixture.signer,
+    trustGate: trustGate(),
+  });
+  await expect(
+    deniedService.sign({
+      releaseId: RELEASE_ID,
+      actorUserId: ADMIN_ID,
+      expectedStatus: 'approved',
+      expectedRevision: 2,
+    }),
+  ).rejects.toMatchObject({
+    code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+    capability: 'module.oci.execute',
+  });
+  expect(deniedFixture.effects).toEqual({ signer: 0, sign: 0, transition: 0, history: 0 });
+
+  const signer = signingPort();
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [ociTarget],
+    now: () => NOW,
+  });
+  const service = new DeveloperModuleDistributionService({
+    runtime: FUTURE_OCI_RUNTIME_TEST_PROFILE,
+    repository,
+    signer,
+    verifiers: [signer],
+    trustGate: trustGate(),
+    now: () => NOW,
+  });
+
+  await expect(
+    service.sign({
+      releaseId: RELEASE_ID,
+      actorUserId: ADMIN_ID,
+      expectedStatus: 'approved',
+      expectedRevision: 2,
+    }),
+  ).resolves.toMatchObject({ release: { runtime_kind: 'oci-image', status: 'signed' } });
+  await expect(
+    service.publish({
+      releaseId: RELEASE_ID,
+      actorUserId: ADMIN_ID,
+      expectedStatus: 'signed',
+      expectedRevision: 3,
+    }),
+  ).resolves.toMatchObject({ release: { runtime_kind: 'oci-image', status: 'published' } });
+  await expect(service.getPublished({ releaseId: RELEASE_ID })).resolves.toMatchObject({
+    runtime_kind: 'oci-image',
+    status: 'published',
+  });
+  await expect(service.listPublished({ limit: 10, offset: 0 })).resolves.toMatchObject({
+    total: 1,
+    releases: [expect.objectContaining({ runtime_kind: 'oci-image', status: 'published' })],
+  });
+});
+
+test.each([
+  ['without module.oci.execute', FUTURE_WASI_RUNTIME_TEST_PROFILE],
+  ['with module.oci.execute', FUTURE_OCI_RUNTIME_TEST_PROFILE],
+] as const)(
+  'future profile %s still rejects null metadata before side effects',
+  async (_label, runtime) => {
+    const fixture = countedDistributionFixture(serverAdapterRelease(null));
+    const service = new DeveloperModuleDistributionService({
+      runtime,
+      repository: fixture.repository,
+      signer: fixture.signer,
+      trustGate: trustGate(),
+    });
+    await expect(
+      service.sign({
+        releaseId: RELEASE_ID,
+        actorUserId: ADMIN_ID,
+        expectedStatus: 'approved',
+        expectedRevision: 2,
+      }),
+    ).rejects.toMatchObject({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.oci.execute',
+    });
+    expect(fixture.effects).toEqual({ signer: 0, sign: 0, transition: 0, history: 0 });
+  },
+);
+
 test('signs approved declarative release and publishes only after verification', async () => {
   const repository = createMemoryDeveloperModuleDistributionRepository({
     releases: [release()],
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -166,6 +528,7 @@ test('binds server runtime descriptor evidence into the release signature', asyn
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer,
     trustGate: trustGate(),
@@ -191,6 +554,7 @@ test('checks Publisher platform-review authority before signing or publishing', 
     now: () => NOW,
   });
   const allowed = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -204,6 +568,7 @@ test('checks Publisher platform-review authority before signing or publishing', 
   });
   const calls: unknown[][] = [];
   const denied = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -239,6 +604,7 @@ test('denies signing by a publisher-account member', async () => {
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -265,7 +631,11 @@ test('fails closed when the module signer is unavailable without mutating the re
     releases: [release()],
     now: () => NOW,
   });
-  const service = new DeveloperModuleDistributionService({ repository, now: () => NOW });
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    now: () => NOW,
+  });
 
   await expect(
     service.sign({
@@ -295,6 +665,7 @@ test.each(['queued', 'running', 'failed', 'inconclusive', 'cancelled', 'stale-po
       now: () => NOW,
     });
     const service = new DeveloperModuleDistributionService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository,
       signer: {
         ...signer,
@@ -319,7 +690,7 @@ test.each(['queued', 'running', 'failed', 'inconclusive', 'cancelled', 'stale-po
   },
 );
 
-test('signs an approved non-declarative release without executing it', async () => {
+test('rejects a legacy server-adapter release with no reviewed WASI metadata', async () => {
   const executable = release();
   executable.manifest.execution = { mode: 'server-adapter', entry: 'server.ts' };
   executable.manifest.verification = { profile: 'server-conformance' };
@@ -329,6 +700,7 @@ test('signs an approved non-declarative release without executing it', async () 
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -342,7 +714,10 @@ test('signs an approved non-declarative release without executing it', async () 
       expectedStatus: 'approved',
       expectedRevision: 2,
     }),
-  ).resolves.toMatchObject({ release: { status: 'signed' } });
+  ).rejects.toMatchObject({
+    code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+    status: 503,
+  });
 });
 
 test('has no schema-1 signature fallback when publishing persisted releases', async () => {
@@ -361,6 +736,7 @@ test('has no schema-1 signature fallback when publishing persisted releases', as
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     verifiers: [signer],
     now: () => NOW,
@@ -397,6 +773,7 @@ test.each([
     },
   };
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer,
     verifiers: [signer],
@@ -436,6 +813,7 @@ test('rejects stale distribution commands without signing', async () => {
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: guardedSigner,
     now: () => NOW,
@@ -464,6 +842,7 @@ test('revokes a published release with an immutable emergency event', async () =
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -520,6 +899,7 @@ test('rejects publication when the persisted manifest no longer matches its dige
     },
   };
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -615,6 +995,7 @@ test('replays the same successful sign command idempotently', async () => {
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: countingSigner,
     trustGate: trustGate(),
@@ -643,6 +1024,7 @@ test('replays the same successful publish command idempotently', async () => {
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -682,7 +1064,11 @@ test('replays the same successful revoke command idempotently', async () => {
     releases: [publishedRelease],
     now: () => NOW,
   });
-  const service = new DeveloperModuleDistributionService({ repository, now: () => NOW });
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    now: () => NOW,
+  });
   const command = {
     releaseId: RELEASE_ID,
     actorUserId: ADMIN_ID,
@@ -713,6 +1099,7 @@ test('maps signer failures to a code-only unavailable error without partial stat
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: failingSigner,
     trustGate: trustGate(),
@@ -749,6 +1136,7 @@ test('discards generated signature state when the repository event write conflic
     },
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -780,6 +1168,7 @@ test('fails publication when the persisted signature key is no longer available'
   });
   const originalSigner = signingPort();
   await new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: originalSigner,
     trustGate: trustGate(),
@@ -797,6 +1186,7 @@ test('fails publication when the persisted signature key is no longer available'
     publicKey,
   });
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: rotatedSigner,
     now: () => NOW,
@@ -830,6 +1220,7 @@ test('publishes with a retained verification-only key after signer rotation', as
     publicKey: previous.publicKey,
   });
   await new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: previousSigner,
     trustGate: trustGate(),
@@ -842,6 +1233,7 @@ test('publishes with a retained verification-only key after signer rotation', as
   });
   const rotatedSigner = signingPort();
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: rotatedSigner,
     verifiers: [
@@ -876,7 +1268,11 @@ test('lists and reads only published module releases', async () => {
     releases: [published, signed, revoked],
     now: () => NOW,
   });
-  const service = new DeveloperModuleDistributionService({ repository, now: () => NOW });
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    now: () => NOW,
+  });
 
   const page = await service.listPublished({ query: 'recruiting', limit: 10, offset: 0 });
   expect(page).toMatchObject({ total: 1 });
@@ -884,6 +1280,32 @@ test('lists and reads only published module releases', async () => {
   await expect(service.getPublished({ releaseId: RELEASE_ID })).resolves.toMatchObject({
     status: 'published',
   });
+});
+
+test('filters server runtime kinds before published-list pagination and counting', async () => {
+  const published = release('published', 4);
+  published.published_at = '2026-07-24T14:45:00.000Z';
+  let received: unknown;
+  const repository = {
+    async listPublished(input: unknown) {
+      received = input;
+      return { releases: [published], total: 201 };
+    },
+  } as never;
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+  });
+
+  const page = await service.listPublished({ limit: 10, offset: 190 });
+
+  expect(received).toEqual({
+    serverAdapterRuntimeKinds: ['wasi-component'],
+    limit: 10,
+    offset: 190,
+    query: undefined,
+  });
+  expect(page).toEqual({ releases: [published], total: 201 });
 });
 
 test('rejects an invalid persisted detached signature', async () => {
@@ -901,6 +1323,7 @@ test('rejects an invalid persisted detached signature', async () => {
     },
   };
   const service = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
@@ -935,7 +1358,11 @@ test('rejects revocation reasons that contain credentials or unsafe text', async
     releases: [release('signed', 3)],
     now: () => NOW,
   });
-  const service = new DeveloperModuleDistributionService({ repository, now: () => NOW });
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    now: () => NOW,
+  });
 
   await expect(
     service.revoke({
@@ -959,7 +1386,11 @@ test('rejects a changed revocation target after a successful command', async () 
     releases: [release('published', 4)],
     now: () => NOW,
   });
-  const service = new DeveloperModuleDistributionService({ repository, now: () => NOW });
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    now: () => NOW,
+  });
   await service.revoke({
     releaseId: RELEASE_ID,
     actorUserId: ADMIN_ID,
@@ -987,7 +1418,11 @@ test('revokes a signed release without inventing a publication timestamp', async
     releases: [release('signed', 3)],
     now: () => NOW,
   });
-  const service = new DeveloperModuleDistributionService({ repository, now: () => NOW });
+  const service = new DeveloperModuleDistributionService({
+    repository,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    now: () => NOW,
+  });
 
   const revoked = await service.revoke({
     releaseId: RELEASE_ID,

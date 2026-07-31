@@ -3,6 +3,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { RegistryItem } from '@kortix/registry';
 
 import {
+  COMPLETE_RUNTIME_TEST_PROFILE,
+  NON_READY_RUNTIME_TEST_PROFILE,
+  RESTRICTED_RUNTIME_TEST_PROFILE,
+} from '../release-profile/test-fixtures';
+import {
   type DeveloperModuleArtifactRepository,
   DeveloperModuleArtifactService,
   createMemoryDeveloperArtifactStore,
@@ -21,6 +26,35 @@ const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000009';
 const USER_ID = '20000000-0000-4000-a000-000000000002';
 const NOW = new Date('2026-07-24T12:00:00.000Z');
+
+test('release profile rejection happens before artifact or repository access', async () => {
+  let calls = 0;
+  const service = new DeveloperModuleReleaseService({
+    runtime: NON_READY_RUNTIME_TEST_PROFILE,
+    repository: {
+      async submit() {
+        calls += 1;
+        throw new Error('unexpected repository call');
+      },
+      async list() {
+        return [];
+      },
+      async get() {
+        return null;
+      },
+    },
+    artifacts: {
+      async getArtifact() {
+        calls += 1;
+        throw new Error('unexpected artifact call');
+      },
+    },
+  });
+  await expect(
+    service.submit({ accountId: ACCOUNT_ID, actorUserId: USER_ID, artifactId: 'artifact' }),
+  ).rejects.toMatchObject({ code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE' });
+  expect(calls).toBe(0);
+});
 
 function validModuleItem() {
   return {
@@ -138,6 +172,7 @@ function fixture() {
   return {
     artifacts,
     service: new DeveloperModuleReleaseService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: createMemoryDeveloperModuleReleaseRepository({ now: () => NOW }),
       artifacts,
     }),
@@ -164,6 +199,7 @@ async function seedArtifact(
     storage_key: `test/${accountId}/${digest.slice('sha256:'.length)}`,
     media_type: 'application/vnd.openopc.developer-module.v2+json',
     size_bytes: JSON.stringify(item).length,
+    runtime_kind: null,
     item_snapshot: structuredClone(snapshot),
     source_provenance: null,
     created_by: USER_ID,
@@ -218,6 +254,7 @@ describe('developer module release service', () => {
       },
     };
     const service = new DeveloperModuleReleaseService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository,
       artifacts,
       artifactStore: memoryStore.store,
@@ -289,6 +326,7 @@ describe('developer module release service', () => {
     let repositoryCalls = 0;
     const backingRepository = createMemoryDeveloperModuleReleaseRepository({ now: () => NOW });
     const service = new DeveloperModuleReleaseService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: {
         ...backingRepository,
         async submit(input: DeveloperModuleReleaseInsert) {
@@ -344,6 +382,7 @@ describe('developer module release service', () => {
       actorUserId: USER_ID,
     });
     const service = new DeveloperModuleReleaseService({
+      runtime: COMPLETE_RUNTIME_TEST_PROFILE,
       repository: createMemoryDeveloperModuleReleaseRepository({ now: () => NOW }),
       artifacts,
       artifactStore: memoryStore.store,
@@ -362,11 +401,73 @@ describe('developer module release service', () => {
     });
   });
 
+  test('rejects finalized OCI metadata before reading the canonical artifact', async () => {
+    const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
+    const memoryStore = createMemoryDeveloperArtifactStore();
+    const artifactService = new DeveloperModuleArtifactService({
+      repository: artifacts,
+      store: memoryStore.store,
+      now: () => NOW,
+      codeModulesEnabled: true,
+      trustInfrastructureReady: () => true,
+    });
+    const bytes = serverAdapterPackageBytes();
+    const upload = await artifactService.createUpload({
+      accountId: ACCOUNT_ID,
+      publisherId: 'acme',
+      expectedSize: bytes.byteLength,
+      expectedDigest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+      actorUserId: USER_ID,
+    });
+    await memoryStore.upload(upload.upload_url, bytes, upload.headers);
+    const artifact = await artifactService.finalizeUpload({
+      accountId: ACCOUNT_ID,
+      uploadId: upload.upload_id,
+      actorUserId: USER_ID,
+    });
+    expect(artifact.runtime_kind).toBe('oci-image');
+
+    let canonicalReads = 0;
+    let releaseWrites = 0;
+    const backingRepository = createMemoryDeveloperModuleReleaseRepository({ now: () => NOW });
+    const service = new DeveloperModuleReleaseService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+      repository: {
+        ...backingRepository,
+        async submit(input: DeveloperModuleReleaseInsert) {
+          releaseWrites += 1;
+          return backingRepository.submit(input);
+        },
+      },
+      artifacts,
+      artifactStore: {
+        readCanonical(storageKey, limits) {
+          canonicalReads += 1;
+          return memoryStore.store.readCanonical(storageKey, limits);
+        },
+      },
+    });
+
+    await expect(
+      service.submit({
+        accountId: ACCOUNT_ID,
+        actorUserId: USER_ID,
+        artifactId: artifact.artifact_id,
+      }),
+    ).rejects.toMatchObject({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.oci.execute',
+    });
+    expect(canonicalReads).toBe(0);
+    expect(releaseWrites).toBe(0);
+  });
+
   test('checks Publisher release authority before creating a release', async () => {
     const artifacts = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
     const artifact = await seedArtifact(artifacts, validModuleItem());
     const calls: unknown[][] = [];
     const service = new DeveloperModuleReleaseService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: createMemoryDeveloperModuleReleaseRepository({ now: () => NOW }),
       artifacts,
       permissions: {
@@ -400,6 +501,7 @@ describe('developer module release service', () => {
       item: validModuleItem(),
     });
     const service = new DeveloperModuleReleaseService({
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: createMemoryDeveloperModuleReleaseRepository({ now: () => NOW }),
       artifacts,
     });

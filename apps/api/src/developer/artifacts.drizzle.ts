@@ -206,6 +206,7 @@ export function serializeDeveloperModuleArtifactRow(
     storage_key: row.storageKey,
     media_type: row.mediaType as DeveloperModuleArtifactRecord['media_type'],
     size_bytes: row.sizeBytes,
+    runtime_kind: row.runtimeKind,
     item_snapshot: structuredClone(row.itemSnapshot) as unknown as RegistryItem,
     source_provenance: structuredClone(
       row.sourceProvenance,
@@ -242,6 +243,7 @@ function artifactValues(input: DeveloperModuleArtifactRecord) {
     storageKey: input.storage_key,
     mediaType: input.media_type,
     sizeBytes: input.size_bytes,
+    runtimeKind: input.runtime_kind,
     itemSnapshot: input.item_snapshot as unknown as Record<string, unknown>,
     sourceProvenance: input.source_provenance as unknown as Record<string, unknown> | null,
     createdBy: input.created_by,

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { accountStateSelectors, useAccountState } from '@/hooks/billing';
 import { isBillingEnabled } from '@/lib/config';
 import { useUpgradeDialogStore } from '@/stores/upgrade-dialog-store';
+import { useRuntimeProfileDisplayState } from './release-profile';
 
 interface UpgradeButtonProps {
   accountId?: string;
@@ -11,6 +12,12 @@ interface UpgradeButtonProps {
 }
 
 export function UpgradeButton({ accountId, className }: UpgradeButtonProps) {
+  const runtimeProfile = useRuntimeProfileDisplayState();
+  if (runtimeProfile !== 'allowed') return null;
+  return <EnabledUpgradeButton accountId={accountId} className={className} />;
+}
+
+function EnabledUpgradeButton({ accountId, className }: UpgradeButtonProps) {
   const { data: accountState } = useAccountState({ accountId });
   const openUpgradeDialog = useUpgradeDialogStore((state) => state.openUpgradeDialog);
 

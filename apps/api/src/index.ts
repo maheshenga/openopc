@@ -26,6 +26,7 @@ import { prettyJSON } from 'hono/pretty-json';
 import { HTTPException } from 'hono/http-exception';
 import { config } from './config';
 import { BillingError } from './errors';
+import { ReleaseProfileUnavailableError } from './release-profile/runtime';
 
 // ─── Sub-Service Imports ──────────────────────────────────────────────────── 
 
@@ -89,6 +90,8 @@ import {
   startDefaultIntelligenceWorkflowRuntime,
   stopDefaultIntelligenceWorkflowRuntime,
 } from './intelligence/workflows/runtime';
+import { createReleaseProfileRouter, releaseProfileReadiness } from './release-profile/routes';
+import { loadRuntimeReleaseProfile } from './release-profile/runtime';
 
 // ─── Process-level crash guards ───────────────────────────────────────────────
 // A stray rejected promise or throw escaping any fire-and-forget path — the
@@ -435,6 +438,12 @@ const livenessHandler = (c: any) => {
 // Unversioned + /v1 forms so either can be wired as the kubelet liveness probe.
 app.get('/health/live', livenessHandler);
 app.get('/v1/health/live', livenessHandler);
+
+app.get('/readyz', (c) => {
+  const runtime = loadRuntimeReleaseProfile();
+  return c.json(releaseProfileReadiness(runtime), runtime.ready ? 200 : 503);
+});
+app.route('/v1', createReleaseProfileRouter());
 
 function hasInternalObservabilityAuth(c: any): boolean {
   const authHeader = c.req.header('Authorization');
@@ -833,6 +842,10 @@ app.onError((err, c) => {
       statusCode: err.statusCode, message: err.message, path, method,
     });
     return c.json({ error: err.message }, err.statusCode as any);
+  }
+
+  if (err instanceof ReleaseProfileUnavailableError) {
+    return c.json({ code: err.code, capability: err.capability }, err.status);
   }
 
   if (err instanceof HTTPException) {

@@ -1,4 +1,4 @@
-import type { GatewayConfig, GatewayHooks } from './domain';
+import type { AuthedPrincipal, GatewayConfig, GatewayHooks } from './domain';
 import {
   type ChatCompletionRequest,
   type GatewayDeps,
@@ -61,21 +61,11 @@ export function createGateway(
     return match ? match[1].trim() : null;
   };
 
-  const listModels = async (authorization: string | undefined): Promise<Response> => {
-    const requestId = `req_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-    const token = bearer(authorization);
-    if (!token) return gatewayErrorResponse(401, {
-      message: 'Missing bearer token', code: 'missing_token', provider: '',
-      requestedModel: '', resolvedModel: '', requestId,
-      suggestion: 'Sign in again or provide a valid API token, then retry.',
-    });
+  const listModelsForPrincipal = async (
+    principal: AuthedPrincipal,
+    requestId = `req_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`,
+  ): Promise<Response> => {
     try {
-      const principal = await hooks.authenticate(token);
-      if (!principal) return gatewayErrorResponse(401, {
-        message: 'Invalid token', code: 'invalid_token', provider: '',
-        requestedModel: '', resolvedModel: '', requestId,
-        suggestion: 'Sign in again or provide a valid API token, then retry.',
-      });
       if (!hooks.listModels) return jsonResponse({ models: {} });
       const models = await hooks.listModels(principal);
       logger.info(
@@ -85,11 +75,70 @@ export function createGateway(
     } catch (err) {
       logger.error('[gateway] model catalog request failed', err);
       return gatewayErrorResponse(502, {
-        message: 'Model catalog unavailable', code: 'models_error', provider: '',
-        requestedModel: '', resolvedModel: '', requestId,
+        message: 'Model catalog unavailable',
+        code: 'models_error',
+        provider: '',
+        requestedModel: '',
+        resolvedModel: '',
+        requestId,
         suggestion: 'Retry the request. If the error continues, reconnect the provider.',
       });
     }
+  };
+
+  const listModels = async (authorization: string | undefined): Promise<Response> => {
+    const requestId = `req_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    const token = bearer(authorization);
+    if (!token)
+      return gatewayErrorResponse(401, {
+        message: 'Missing bearer token',
+        code: 'missing_token',
+        provider: '',
+        requestedModel: '',
+        resolvedModel: '',
+        requestId,
+        suggestion: 'Sign in again or provide a valid API token, then retry.',
+      });
+    try {
+      const principal = await hooks.authenticate(token);
+      if (!principal)
+        return gatewayErrorResponse(401, {
+          message: 'Invalid token',
+          code: 'invalid_token',
+          provider: '',
+          requestedModel: '',
+          resolvedModel: '',
+          requestId,
+          suggestion: 'Sign in again or provide a valid API token, then retry.',
+        });
+      return listModelsForPrincipal(principal, requestId);
+    } catch (err) {
+      logger.error('[gateway] model catalog request failed', err);
+      return gatewayErrorResponse(502, {
+        message: 'Model catalog unavailable',
+        code: 'models_error',
+        provider: '',
+        requestedModel: '',
+        resolvedModel: '',
+        requestId,
+        suggestion: 'Retry the request. If the error continues, reconnect the provider.',
+      });
+    }
+  };
+
+  const chatCompletionsForPrincipal = (
+    principal: AuthedPrincipal,
+    req: Omit<ChatCompletionRequest, 'authorization'>,
+  ): Promise<Response> => {
+    const { authorize: _authorize, ...granularHooks } = hooks;
+    const principalHooks: GatewayHooks = {
+      ...granularHooks,
+      authenticate: async () => principal,
+    };
+    return handleChatCompletions(
+      { ...runtime, hooks: principalHooks },
+      { ...req, authorization: 'Bearer internal-principal' },
+    );
   };
 
   const breakerHealth = (): BreakerHealth[] =>
@@ -102,7 +151,9 @@ export function createGateway(
   return {
     chatCompletions: (req: ChatCompletionRequest): Promise<Response> =>
       handleChatCompletions(runtime, req),
+    chatCompletionsForPrincipal,
     listModels,
+    listModelsForPrincipal,
     breakerHealth,
   };
 }

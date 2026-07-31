@@ -1,3 +1,4 @@
+import type { ModuleServiceCapabilityClaimsV1 } from '@kortix/api-contract';
 import type {
   AuthedPrincipal,
   AuthorizeResult,
@@ -92,6 +93,19 @@ async function withResolvedTier(principal: AuthedPrincipal): Promise<AuthedPrinc
     defaultModel = undefined;
   }
   return defaultModel ? { ...tiered, defaultModel } : tiered;
+}
+
+export async function createModuleServiceGatewayPrincipal(
+  claims: ModuleServiceCapabilityClaimsV1,
+  enrich: (principal: AuthedPrincipal) => Promise<AuthedPrincipal> = withResolvedTier,
+): Promise<AuthedPrincipal> {
+  return enrich({
+    userId: claims.grantId,
+    accountId: claims.accountId,
+    projectId: claims.projectId,
+    sessionId: `module:${claims.installationId}`,
+    keyId: `module:${claims.grantId}`,
+  });
 }
 
 /** Throw with the budget message when a project/member gateway budget is exhausted. */

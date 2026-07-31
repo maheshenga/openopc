@@ -280,6 +280,11 @@ const envSchema = z.object({
   TEAMS_APP_NAME: optStrDefault(PRODUCT_BRAND.displayName),
 
   // ── LLM Providers (optional — only needed in cloud mode) ─────────────────
+  // Independently operated NewAPI site. These values stay server-side and are
+  // consumed only by the managed LLM gateway connector.
+  NEWAPI_BASE_URL:              optUrl(''),
+  NEWAPI_SERVICE_API_KEY:       optStr,
+  NEWAPI_API_COMPATIBILITY:     z.enum(['openai-v1']).optional().default('openai-v1'),
   OPENROUTER_API_URL:          optUrl('https://openrouter.ai/api/v1'),
   // Single OpenRouter key for BOTH the router (/v1/router) and the managed LLM
   // gateway (/v1/llm). The gateway used to read a separate KORTIX_OPENROUTER_API_KEY
@@ -802,6 +807,9 @@ export const config = {
   TEAMS_APP_NAME: env.TEAMS_APP_NAME,
 
   // ─── LLM Providers ────────────────────────────────────────────────────────
+  NEWAPI_BASE_URL: env.NEWAPI_BASE_URL,
+  NEWAPI_SERVICE_API_KEY: env.NEWAPI_SERVICE_API_KEY,
+  NEWAPI_API_COMPATIBILITY: env.NEWAPI_API_COMPATIBILITY,
   OPENROUTER_API_URL: env.OPENROUTER_API_URL,
   OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
   LLM_GATEWAY_ENABLED: env.LLM_GATEWAY_ENABLED,

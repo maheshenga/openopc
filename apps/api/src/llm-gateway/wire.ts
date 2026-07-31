@@ -5,6 +5,17 @@ import { config } from '../config';
 import { createInProcessGatewayHooks } from './hooks';
 import { createInternalGatewayRoutes } from './internal-routes';
 
+type InProcessLlmGateway = ReturnType<typeof createGateway>;
+let inProcessLlmGateway: InProcessLlmGateway | null = null;
+
+export function getInProcessLlmGateway(): InProcessLlmGateway | null {
+  if (!config.LLM_GATEWAY_ENABLED) return null;
+  inProcessLlmGateway ??= createGateway(createInProcessGatewayHooks(), {
+    captureBodies: true,
+  });
+  return inProcessLlmGateway;
+}
+
 // Single place that wires every LLM-gateway surface onto the API:
 //
 //   /v1/llm            In-process gateway running the FULL package pipeline
@@ -16,13 +27,10 @@ import { createInternalGatewayRoutes } from './internal-routes';
 //   /internal/gateway  Control-plane RPC the out-of-process gateway pod calls.
 //   /v1/llm-gateway/*  Reverse proxy to the standalone gateway (when configured).
 export function mountLlmGateway(app: OpenAPIHono): void {
-  if (!config.LLM_GATEWAY_ENABLED) {
+  const gateway = getInProcessLlmGateway();
+  if (!gateway) {
     app.all('/v1/llm/*', (c) => c.json({ error: 'LLM gateway is disabled' }, 503));
   } else {
-    // One gateway instance per process — its circuit breakers are long-lived.
-    const gateway = createGateway(createInProcessGatewayHooks(), {
-      captureBodies: true,
-    });
     const llm = new Hono();
     llm.get('/health', (c) =>
       c.json({ status: 'ok', service: 'kortix-llm-gateway', mode: 'in-process' }),

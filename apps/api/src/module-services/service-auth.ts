@@ -1,4 +1,9 @@
-import type { ModuleServiceCapabilityClaimsV1 } from '@kortix/api-contract';
+import {
+  type ModuleServiceCapabilityClaimsV1,
+  type OpenOpcServiceName,
+  type OpenOpcServiceOperation,
+  parseModuleServiceCapabilityClaims,
+} from '@kortix/api-contract';
 
 import {
   type ModuleServiceCapabilityBroker,
@@ -41,4 +46,37 @@ export async function requireModuleServiceCapability(
     throw new ModuleServiceCapabilityError('MODULE_SERVICE_UNAVAILABLE', 503);
   }
   return createModuleServiceCapabilityRequirement(runtimeBroker)(authorization, input);
+}
+
+export async function requireModuleServiceOperation(
+  authorization: string | undefined,
+  input: { service: OpenOpcServiceName; operation: OpenOpcServiceOperation },
+): Promise<ModuleServiceCapabilityClaimsV1> {
+  if (!runtimeBroker) {
+    throw new ModuleServiceCapabilityError('MODULE_SERVICE_UNAVAILABLE', 503);
+  }
+  const token = bearerToken(authorization);
+  let claims: ModuleServiceCapabilityClaimsV1;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 4 || parts[0] !== 'v4' || parts[1] !== 'public') {
+      throw new Error('invalid token envelope');
+    }
+    const signedPayload = Buffer.from(parts[2] ?? '', 'base64url');
+    if (signedPayload.length <= 64) throw new Error('invalid signed payload');
+    claims = parseModuleServiceCapabilityClaims(
+      JSON.parse(signedPayload.subarray(0, -64).toString('utf8')) as unknown,
+    );
+  } catch {
+    throw new ModuleServiceCapabilityError('MODULE_SERVICE_CAPABILITY_INVALID', 401);
+  }
+  return runtimeBroker.verify(token, {
+    accountId: claims.accountId,
+    projectId: claims.projectId,
+    installationId: claims.installationId,
+    installRevision: claims.installRevision,
+    releaseId: claims.releaseId,
+    service: input.service,
+    operation: input.operation,
+  });
 }

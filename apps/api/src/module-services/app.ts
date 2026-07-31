@@ -14,6 +14,11 @@ import { PROJECT_ACTIONS } from '../iam/actions';
 import { auth, errors, json, makeOpenApiApp } from '../openapi';
 import type { AppEnv } from '../types';
 import {
+  type ModuleAiDependencies,
+  createModuleAiRoutes,
+  createRuntimeModuleAiDependencies,
+} from './ai';
+import {
   type ModuleServiceCapabilityBroker,
   ModuleServiceCapabilityError,
   type ModuleServiceConsent,
@@ -314,6 +319,10 @@ export function createModuleServiceProjectRoutes(
   return app;
 }
 
-export function createModuleServicesApp() {
-  return makeOpenApiApp<AppEnv>();
+export function createModuleServicesApp(
+  aiDependencies: ModuleAiDependencies = createRuntimeModuleAiDependencies(),
+) {
+  const app = makeOpenApiApp<AppEnv>();
+  app.route('/ai', createModuleAiRoutes(aiDependencies));
+  return app;
 }

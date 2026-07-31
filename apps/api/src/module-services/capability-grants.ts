@@ -28,7 +28,8 @@ export type ModuleServiceCapabilityErrorCode =
   | 'MODULE_SERVICE_CAPABILITY_REVOKED'
   | 'MODULE_SERVICE_CAPABILITY_SCOPE_MISMATCH'
   | 'MODULE_SERVICE_OPERATION_DENIED'
-  | 'MODULE_SERVICE_CONFLICT';
+  | 'MODULE_SERVICE_CONFLICT'
+  | 'MODULE_AI_PROVIDER_UNAVAILABLE';
 
 export class ModuleServiceCapabilityError extends Error {
   constructor(

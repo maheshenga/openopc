@@ -9,6 +9,11 @@ import {
   type CodexCredential,
 } from '../credentials/codex';
 import type { ManagedModel } from '../models/managed-models';
+import {
+  type NewApiConnectorEnvironment,
+  newApiBaseUrl,
+  newApiConnectorConfigured,
+} from '../new-api-connector';
 
 export function bedrockBaseUrl(): string {
   return `https://bedrock-runtime.${config.AWS_BEDROCK_REGION || 'us-west-2'}.amazonaws.com`;
@@ -26,6 +31,25 @@ export function livePricing(modelId: string): UpstreamDescriptor['pricing'] | un
 
 function managedPricing(managed: ManagedModel): UpstreamDescriptor['pricing'] | undefined {
   return livePricing(managed.pricingRef);
+}
+
+export function newApiManagedDescriptor(
+  managed: ManagedModel,
+  environment: NewApiConnectorEnvironment = config,
+): UpstreamDescriptor | null {
+  if (managed.transport !== 'new-api' || !newApiConnectorConfigured(environment)) return null;
+  const baseUrl = newApiBaseUrl(environment);
+  if (!baseUrl) return null;
+  return {
+    provider: 'new-api',
+    kind: 'openai-compat',
+    baseUrl,
+    apiKey: environment.NEWAPI_SERVICE_API_KEY,
+    billingMode: 'credits',
+    markup: llmPriceMarkup(),
+    resolvedModel: managed.upstreamModelId,
+    pricing: managedPricing(managed),
+  };
 }
 
 function openRouterManagedDescriptor(managed: ManagedModel): UpstreamDescriptor | null {
@@ -60,11 +84,22 @@ function bedrockManagedDescriptor(managed: ManagedModel): UpstreamDescriptor | n
   };
 }
 
-export function managedCandidates(managed: ManagedModel): UpstreamDescriptor[] {
-  const d =
-    managed.transport === 'openrouter'
-      ? openRouterManagedDescriptor(managed)
-      : bedrockManagedDescriptor(managed);
+export function managedCandidates(
+  managed: ManagedModel,
+  newApiEnvironment?: NewApiConnectorEnvironment,
+): UpstreamDescriptor[] {
+  let d: UpstreamDescriptor | null;
+  switch (managed.transport) {
+    case 'openrouter':
+      d = openRouterManagedDescriptor(managed);
+      break;
+    case 'bedrock':
+      d = bedrockManagedDescriptor(managed);
+      break;
+    case 'new-api':
+      d = newApiManagedDescriptor(managed, newApiEnvironment ?? config);
+      break;
+  }
   return d ? [d] : [];
 }
 

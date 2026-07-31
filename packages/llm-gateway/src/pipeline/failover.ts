@@ -26,6 +26,14 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function upstreamOrigin(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).origin;
+  } catch {
+    return '';
+  }
+}
+
 function parseUpstreamBody(body: string): { message: string; code?: string } {
   if (!body) return { message: 'Upstream request failed' };
   try {
@@ -127,7 +135,7 @@ export async function runFailover(ctx: FailoverContext): Promise<FailoverResult>
       kind: descriptor.kind,
       resolvedModel: descriptor.resolvedModel,
       routeModel,
-      baseUrl: descriptor.baseUrl,
+      origin: upstreamOrigin(descriptor.baseUrl),
       breakerState: breaker.current,
       hasFallback,
     });

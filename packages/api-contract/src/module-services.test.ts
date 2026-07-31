@@ -154,6 +154,11 @@ describe('module service wire contract', () => {
     ).toBe(true);
     expect(
       ModuleServiceErrorResponseSchema.safeParse({
+        error: 'MODULE_AI_PROVIDER_UNAVAILABLE',
+      }).success,
+    ).toBe(true);
+    expect(
+      ModuleServiceErrorResponseSchema.safeParse({
         error: 'NEW_API_KEY_INVALID',
         provider_url: 'https://new-api.example.com',
       }).success,

@@ -40,11 +40,13 @@ export interface ManagedModel {
   // The upstream's own model id, interpreted per `transport`:
   //   'bedrock'      → a Bedrock id (`us.anthropic.claude-opus-4-8`)
   //   'openrouter'   → an OpenRouter slug (`z-ai/glm-5.2`)
+  //   'new-api'      → an id exposed by the independently operated NewAPI site
   upstreamModelId: string;
   // Which upstream + wire format carries it:
   //   'bedrock'      → Anthropic-on-Bedrock InvokeModel payload (Claude only)
   //   'openrouter'   → OpenRouter openai-compatible chat completions
-  transport: "bedrock" | "openrouter";
+  //   'new-api'      → NewAPI openai-compatible chat completions
+  transport: "bedrock" | "openrouter" | "new-api";
   // models.dev id for live pricing — upstream ids don't always match the catalog.
   pricingRef: string;
   tier: "flagship" | "balanced" | "fast";

@@ -12,6 +12,7 @@ import {
   configureModuleServiceCapabilityBroker,
   createModuleServiceCapabilityRequirement,
   requireModuleServiceCapability,
+  requireModuleServiceOperation,
 } from './service-auth';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
@@ -23,6 +24,17 @@ const CONSENT_ID = '50000000-0000-4000-a000-000000000001';
 const GRANT_ID = '60000000-0000-4000-8000-000000000001';
 const USER_ID = '70000000-0000-4000-a000-000000000001';
 const NOW = '2026-08-01T00:00:00.000Z';
+
+function publicTokenEnvelope(payload: ModuleServiceCapabilityClaimsV1): string {
+  const messageAndSignature = Buffer.concat([
+    Buffer.from(JSON.stringify(payload)),
+    Buffer.alloc(64),
+  ]).toString('base64url');
+  const footer = Buffer.from(JSON.stringify({ kid: 'module-service-test-key' })).toString(
+    'base64url',
+  );
+  return `v4.public.${messageAndSignature}.${footer}`;
+}
 
 function consent(): ModuleServiceConsent {
   return {
@@ -423,5 +435,82 @@ describe('module service authorization header', () => {
         operation: 'models.read',
       }),
     ).rejects.toMatchObject({ code: 'MODULE_SERVICE_UNAVAILABLE' });
+  });
+
+  test('derives only the candidate scope from a public token before full broker verification', async () => {
+    const expectedClaims: ModuleServiceCapabilityClaimsV1 = {
+      schemaVersion: 1,
+      iss: 'openopc-control-plane',
+      aud: 'openopc:module-service',
+      jti: '80000000-0000-4000-8000-000000000001',
+      iat: NOW,
+      exp: '2026-08-01T00:05:00.000Z',
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      installationId: INSTALLATION_ID,
+      installRevision: 4,
+      releaseId: RELEASE_ID,
+      moduleId: 'example.weather-station',
+      moduleVersion: '1.2.3',
+      consentId: CONSENT_ID,
+      grantId: GRANT_ID,
+      service: 'ai',
+      operations: ['text.generate'],
+    };
+    const calls: unknown[] = [];
+    configureModuleServiceCapabilityBroker({
+      async verify(token, scope) {
+        calls.push({ token, scope });
+        return expectedClaims;
+      },
+    });
+
+    try {
+      const token = publicTokenEnvelope(expectedClaims);
+      await expect(
+        requireModuleServiceOperation(`Bearer ${token}`, {
+          service: 'ai',
+          operation: 'text.generate',
+        }),
+      ).resolves.toEqual(expectedClaims);
+      expect(calls).toEqual([
+        {
+          token,
+          scope: {
+            accountId: ACCOUNT_ID,
+            projectId: PROJECT_ID,
+            installationId: INSTALLATION_ID,
+            installRevision: 4,
+            releaseId: RELEASE_ID,
+            service: 'ai',
+            operation: 'text.generate',
+          },
+        },
+      ]);
+    } finally {
+      configureModuleServiceCapabilityBroker(null);
+    }
+  });
+
+  test('rejects a malformed self-scoped token before invoking the broker', async () => {
+    let verifyCalls = 0;
+    configureModuleServiceCapabilityBroker({
+      async verify() {
+        verifyCalls += 1;
+        throw new Error('must not be called');
+      },
+    });
+
+    try {
+      await expect(
+        requireModuleServiceOperation('Bearer v4.public.not-a-payload.footer', {
+          service: 'ai',
+          operation: 'models.read',
+        }),
+      ).rejects.toMatchObject({ code: 'MODULE_SERVICE_CAPABILITY_INVALID' });
+      expect(verifyCalls).toBe(0);
+    } finally {
+      configureModuleServiceCapabilityBroker(null);
+    }
   });
 });

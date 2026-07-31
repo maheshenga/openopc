@@ -39,7 +39,7 @@ describe("managed catalog", () => {
         m.pricingRef.length,
         `${m.id} needs a pricing ref`,
       ).toBeGreaterThan(0);
-      expect(["bedrock", "openrouter"]).toContain(m.transport);
+      expect(["bedrock", "openrouter", "new-api"]).toContain(m.transport);
     }
   });
 
@@ -50,7 +50,7 @@ describe("managed catalog", () => {
         expect(m.upstreamModelId, `${m.id} (Bedrock) → Anthropic`).toContain(
           "anthropic.claude",
         );
-      } else {
+      } else if (m.transport === "openrouter") {
         // OpenRouter slugs are provider/model.
         expect(m.transport, `${m.id} transport`).toBe("openrouter");
         expect(m.upstreamModelId, `${m.id} OpenRouter slug`).toContain("/");

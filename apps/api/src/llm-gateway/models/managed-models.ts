@@ -9,7 +9,7 @@ const managedModelSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   upstreamModelId: z.string().min(1),
-  transport: z.enum(['bedrock', 'openrouter']),
+  transport: z.enum(['bedrock', 'openrouter', 'new-api']),
   pricingRef: z.string().min(1),
   tier: z.enum(['flagship', 'balanced', 'fast']),
   vision: z.boolean(),

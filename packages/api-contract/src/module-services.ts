@@ -95,6 +95,7 @@ export const MODULE_SERVICE_ERROR_CODES = [
   'MODULE_SERVICE_CAPABILITY_SCOPE_MISMATCH',
   'MODULE_SERVICE_OPERATION_DENIED',
   'MODULE_SERVICE_CONFLICT',
+  'MODULE_AI_PROVIDER_UNAVAILABLE',
 ] as const;
 export const ModuleServiceErrorCodeSchema = z.enum(MODULE_SERVICE_ERROR_CODES);
 export type ModuleServiceErrorCode = z.infer<typeof ModuleServiceErrorCodeSchema>;

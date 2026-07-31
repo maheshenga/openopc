@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test';
 type WorkflowStep = {
   id?: string;
   name?: string;
+  if?: string;
   uses?: string;
   run?: string;
   with?: Record<string, unknown>;
@@ -157,6 +158,28 @@ test('cosign builder creates every bind output root before either protected buil
   expect(step(workflow.jobs.replay, 'build').run).toContain(
     'mkdir -p _replay/linux _replay/windows _replay-module-cache',
   );
+});
+
+test('cosign builder retains failure-only diagnostics without adding a promotion edge', async () => {
+  const { workflow } = await parseWorkflow(WORKFLOW);
+  for (const name of ['primary', 'replay'] as const) {
+    const job = workflow.jobs[name];
+    const diagnostic = step(job, 'upload-diagnostics');
+    const build = step(job, 'build');
+    expect(build.run).toContain(`_${name}/diagnostics/linux-amd64.json`);
+    expect(build.run).toContain(`_${name}/diagnostics/windows-amd64.json`);
+    expect(build.run).toContain('cat "$diagnostic" >&2');
+    expect(diagnostic.uses).toBe(UPLOAD);
+    expect(diagnostic.if).toBe("failure() && steps.build.outcome == 'failure'");
+    expect(diagnostic.with).toMatchObject({
+      path: `_${name}/diagnostics`,
+      'if-no-files-found': 'error',
+      overwrite: false,
+      'retention-days': 7,
+    });
+    expect(job.outputs).toEqual({ 'artifact-id': '${{ steps.upload.outputs.artifact-id }}' });
+    expect(job.outputs).not.toHaveProperty('diagnostic-artifact-id');
+  }
 });
 
 test('cosign builder compares both replay subjects byte-for-byte before attesting', async () => {

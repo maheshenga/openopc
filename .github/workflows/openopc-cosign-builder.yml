@@ -37,11 +37,30 @@ jobs:
         name: Build primary Linux and Windows subjects
         run: |
           set -euo pipefail
-          mkdir -p _primary/linux _primary/windows _primary-module-cache
-          OPENOPC_COSIGN_PLATFORM=linuxAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _primary-module-cache _primary/linux > _primary/linux-build.json
+          mkdir -p _primary/linux _primary/windows _primary-module-cache _primary/diagnostics
+          diagnostic='_primary/diagnostics/linux-amd64.json'
+          if ! OPENOPC_COSIGN_PLATFORM=linuxAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _primary-module-cache _primary/linux > _primary/linux-build.json 2> "$diagnostic"; then
+            cat "$diagnostic" >&2
+            exit 1
+          fi
+          rm -f -- "$diagnostic"
           mv _primary/linux/cosign-linux-amd64 _primary/cosign-linux-amd64
-          OPENOPC_COSIGN_PLATFORM=windowsAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _primary-module-cache _primary/windows > _primary/windows-build.json
+          diagnostic='_primary/diagnostics/windows-amd64.json'
+          if ! OPENOPC_COSIGN_PLATFORM=windowsAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _primary-module-cache _primary/windows > _primary/windows-build.json 2> "$diagnostic"; then
+            cat "$diagnostic" >&2
+            exit 1
+          fi
+          rm -f -- "$diagnostic"
           mv _primary/windows/cosign-windows-amd64.exe _primary/cosign-windows-amd64.exe
+      - id: upload-diagnostics
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: openopc-cosign-primary-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: _primary/diagnostics
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
       - id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -76,11 +95,30 @@ jobs:
         name: Build replay Linux and Windows subjects
         run: |
           set -euo pipefail
-          mkdir -p _replay/linux _replay/windows _replay-module-cache
-          OPENOPC_COSIGN_PLATFORM=linuxAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _replay-module-cache _replay/linux > _replay/linux-build.json
+          mkdir -p _replay/linux _replay/windows _replay-module-cache _replay/diagnostics
+          diagnostic='_replay/diagnostics/linux-amd64.json'
+          if ! OPENOPC_COSIGN_PLATFORM=linuxAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _replay-module-cache _replay/linux > _replay/linux-build.json 2> "$diagnostic"; then
+            cat "$diagnostic" >&2
+            exit 1
+          fi
+          rm -f -- "$diagnostic"
           mv _replay/linux/cosign-linux-amd64 _replay/cosign-linux-amd64
-          OPENOPC_COSIGN_PLATFORM=windowsAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _replay-module-cache _replay/windows > _replay/windows-build.json
+          diagnostic='_replay/diagnostics/windows-amd64.json'
+          if ! OPENOPC_COSIGN_PLATFORM=windowsAmd64 bun scripts/release/public-beta-cosign-builder.ts build _upstream _replay-module-cache _replay/windows > _replay/windows-build.json 2> "$diagnostic"; then
+            cat "$diagnostic" >&2
+            exit 1
+          fi
+          rm -f -- "$diagnostic"
           mv _replay/windows/cosign-windows-amd64.exe _replay/cosign-windows-amd64.exe
+      - id: upload-diagnostics
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: openopc-cosign-replay-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: _replay/diagnostics
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 7
       - id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

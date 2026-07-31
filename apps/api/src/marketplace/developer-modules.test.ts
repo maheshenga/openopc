@@ -94,10 +94,10 @@ describe('developer module marketplace adapter', () => {
   test('projects v3 catalog labels and keeps executable artifacts private', async () => {
     const v3 = release({
       release_id: 'v3',
-      module_id: 'acme.weather',
+      module_id: 'acme.forecast',
       manifest: {
         schemaVersion: 3,
-        id: 'acme.weather',
+        id: 'acme.forecast',
         version: '1.0.0',
         publisher: { id: 'acme', displayName: 'Acme' },
         locales: ['en'],

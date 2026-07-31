@@ -1282,6 +1282,35 @@ test('lists and reads only published module releases', async () => {
   });
 });
 
+test('searches published v3 releases by catalog label before pagination', async () => {
+  const published = release('published', 4);
+  published.item_name = 'forecast-workbench';
+  published.module_id = 'acme.forecast';
+  published.manifest = {
+    schemaVersion: 3,
+    id: 'acme.forecast',
+    version: '1.0.0',
+    publisher: { id: 'acme', displayName: 'Acme' },
+    locales: ['en'],
+    compatibility: { platform: '^1.0.0' },
+    execution: { mode: 'sandboxed-web', entry: 'dist/index.html' },
+    verification: { profile: 'sandboxed-web' },
+    openopc: {
+      sdkApiVersion: 'v1',
+      catalog: { labels: ['weather'] },
+    },
+  };
+  const service = new DeveloperModuleDistributionService({
+    repository: createMemoryDeveloperModuleDistributionRepository({ releases: [published] }),
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+  });
+
+  const page = await service.listPublished({ query: 'weather', limit: 1, offset: 0 });
+
+  expect(page.total).toBe(1);
+  expect(page.releases.map((candidate) => candidate.release_id)).toEqual([published.release_id]);
+});
+
 test('filters server runtime kinds before published-list pagination and counting', async () => {
   const published = release('published', 4);
   published.published_at = '2026-07-24T14:45:00.000Z';

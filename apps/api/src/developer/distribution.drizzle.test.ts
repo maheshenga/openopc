@@ -253,6 +253,12 @@ describe('developer module distribution Drizzle repository', () => {
       expect.arrayContaining(['published']),
     );
     expect(conditionParams(listSelect.condition)).toEqual(expect.arrayContaining(['published']));
+    expect(
+      conditionParams(listCountSelect.condition).filter((value) => value === '%Acme%'),
+    ).toHaveLength(5);
+    expect(
+      conditionParams(listSelect.condition).filter((value) => value === '%Acme%'),
+    ).toHaveLength(5);
     expect(listSelect.orderBy).toHaveLength(2);
     expect(listSelect.limit).toBe(10);
     expect(listSelect.offset).toBe(2);

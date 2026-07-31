@@ -27,6 +27,7 @@ import {
   createMemoryDeveloperModuleReviewRepository,
 } from './reviews';
 import {
+  DeveloperModuleVerificationError,
   DeveloperModuleVerificationService,
   createMemoryDeveloperModuleVerificationRepository,
 } from './verification';
@@ -192,6 +193,23 @@ async function seededReleaseFixture() {
 }
 
 describe('developer module validation API', () => {
+  test('maps release service network-policy failures to the stable 400 response', async () => {
+    const response = await authenticatedApp({
+      releaseService: {
+        async submit() {
+          throw new DeveloperModuleVerificationError('DEVELOPER_VERIFICATION_RESULT_INVALID', 400);
+        },
+      } as never,
+    }).request('/modules/releases', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ artifact_id: '40000000-0000-4000-a000-000000000004' }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'DEVELOPER_VERIFICATION_RESULT_INVALID' });
+  });
+
   test('maps release-profile service failures to the stable 503 response', async () => {
     const response = await authenticatedApp({
       artifactService: {

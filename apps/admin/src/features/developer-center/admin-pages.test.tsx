@@ -429,7 +429,7 @@ describe('Admin Developer Center pages', () => {
   test('disables approval and signing with the current server trust reason', () => {
     const release: DeveloperModuleRelease = {
       ...RELEASE,
-      review_requirements: ['source_scan', 'sandbox_test', 'human_review'],
+      review_requirements: ['source_scan', 'sandbox_test', 'sdk_contract_test', 'human_review'],
     };
     const reviewPending = renderToStaticMarkup(
       <AdminDeveloperReviewDetailView
@@ -488,6 +488,7 @@ describe('Admin Developer Center pages', () => {
     expect(reviewPending).toContain('Sandbox verification is still running');
     expect(buttonTag(reviewPending, 'approve-decision')).toContain('disabled=""');
     expect(reviewPending).not.toContain('source_scan evidence summary');
+    expect(reviewPending).not.toContain('sdk_contract_test evidence summary');
     expect(buttonTag(approved, 'sign-release')).toContain('disabled=""');
     expect(approved).toContain('Cancel verification');
   });

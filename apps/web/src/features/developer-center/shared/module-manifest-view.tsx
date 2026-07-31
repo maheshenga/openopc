@@ -6,6 +6,10 @@ function permissionValue(value: unknown): string {
 }
 
 type OpenOpcServices = Array<{ name: 'AI service' | 'Payment service'; operations: string[] }>;
+const SERVICE_OPERATIONS = {
+  ai: new Set(['models.read', 'text.generate', 'text.stream']),
+  payment: new Set(['orders.create', 'orders.read', 'refunds.create']),
+};
 
 function openOpcServices(value: unknown): OpenOpcServices {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
@@ -20,13 +24,14 @@ function openOpcServices(value: unknown): OpenOpcServices {
     const declaration = (services as Record<string, unknown>)[key];
     if (!declaration || typeof declaration !== 'object' || Array.isArray(declaration)) return [];
     const operations = (declaration as Record<string, unknown>).operations;
-    if (
-      !Array.isArray(operations) ||
-      !operations.every((operation) => typeof operation === 'string')
-    ) {
+    if (!Array.isArray(operations)) {
       return [];
     }
-    return [{ name, operations }];
+    const allowed = operations.filter(
+      (operation): operation is string =>
+        typeof operation === 'string' && SERVICE_OPERATIONS[key].has(operation),
+    );
+    return allowed.length > 0 ? [{ name, operations: allowed }] : [];
   });
 }
 

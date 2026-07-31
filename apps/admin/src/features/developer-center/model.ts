@@ -148,7 +148,9 @@ export function humanReviewRequirements(
 ): DeveloperModuleHumanReviewRequirement[] {
   return requirements.filter(
     (requirement): requirement is DeveloperModuleHumanReviewRequirement =>
-      requirement !== 'source_scan' && requirement !== 'sandbox_test',
+      requirement !== 'source_scan' &&
+      requirement !== 'sandbox_test' &&
+      requirement !== 'sdk_contract_test',
   );
 }
 

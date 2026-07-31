@@ -58,6 +58,7 @@ describe('developer module marketplace adapter', () => {
       listPublished: async () => ({
         releases: [
           published,
+          release({ release_id: 'review-pending', status: 'review_pending' }),
           release({ release_id: 'revoked', status: 'revoked' }),
           release({ release_id: 'unsigned', signature: null }),
           release({
@@ -65,7 +66,7 @@ describe('developer module marketplace adapter', () => {
             manifest: { ...published.manifest, execution: { mode: 'agent', entry: 'agent' } },
           }),
         ],
-        total: 4,
+        total: 5,
       }),
       getPublished: async () => published,
     });
@@ -79,6 +80,7 @@ describe('developer module marketplace adapter', () => {
         title: 'recruiting-workbench',
         marketplaceId: 'openopc-modules',
         fileCount: 0,
+        categories: ['industry'],
         capabilities: {
           secrets: ['RECRUITING_MODEL_API_KEY'],
           connectors: ['crm'],

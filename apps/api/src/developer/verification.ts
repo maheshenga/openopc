@@ -246,10 +246,12 @@ export function assertDeveloperModuleServiceNetworkPolicy(
     }),
   );
   const services = manifest.openopc.services;
-  if (services?.ai && network.has(configuredOrigin(configured.newApiBaseUrl) ?? '')) {
-    fail('DEVELOPER_VERIFICATION_RESULT_INVALID', 400);
-  }
-  if (services?.payment && network.has(configuredOrigin(configured.zPayBaseUrl) ?? '')) {
+  if (
+    (services?.ai || services?.payment) &&
+    [configuredOrigin(configured.newApiBaseUrl), configuredOrigin(configured.zPayBaseUrl)].some(
+      (origin) => origin !== null && network.has(origin),
+    )
+  ) {
     fail('DEVELOPER_VERIFICATION_RESULT_INVALID', 400);
   }
 }

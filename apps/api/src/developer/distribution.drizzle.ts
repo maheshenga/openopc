@@ -188,6 +188,8 @@ export function createDrizzleDeveloperModuleDistributionRepository(
             ilike(developerModuleReleases.itemName, searchPattern),
             ilike(developerModuleReleases.moduleId, searchPattern),
             ilike(developerModuleReleases.publisherId, searchPattern),
+            sql`${developerModuleReleases.manifest}->>'category' ilike ${searchPattern}`,
+            sql`exists (select 1 from jsonb_array_elements_text(coalesce(${developerModuleReleases.manifest}->'openopc'->'catalog'->'labels', '[]'::jsonb)) as label where label ilike ${searchPattern})`,
           )
         : undefined;
       const runtimeCondition = serverAdapterRuntimeKinds

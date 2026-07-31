@@ -1139,6 +1139,9 @@ export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
         if (error instanceof DeveloperModuleArtifactError) {
           return artifactErrorResponse(context, error);
         }
+        if (error instanceof DeveloperModuleVerificationError) {
+          return verificationErrorResponse(context, error);
+        }
         if (!(error instanceof DeveloperModuleReleaseError)) throw error;
         const body = { error: error.code };
         if (error.status === 400) return context.json(body, 400);

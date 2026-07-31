@@ -24,6 +24,7 @@ const SEVERITIES: readonly DeveloperModuleFindingSeverity[] = [
 const AUTOMATIC_REQUIREMENT_LABELS: Partial<Record<DeveloperModuleReviewRequirement, string>> = {
   source_scan: 'Source scan',
   sandbox_test: 'Sandbox test',
+  sdk_contract_test: 'SDK contract test',
 };
 
 function titleCase(value: string): string {

@@ -80,6 +80,7 @@ describe('Developer Center model', () => {
         'manifest_review',
         'source_scan',
         'sandbox_test',
+        'sdk_contract_test',
         'permission_review',
       ]),
     ).toEqual(['manifest_review', 'permission_review']);

@@ -61,7 +61,17 @@ describe('Developer Center shared views', () => {
           id: 'acme.weather',
           openopc: {
             sdkApiVersion: 'v1',
-            services: { ai: { operations: ['models.read', 'text.generate'] } },
+            services: {
+              ai: {
+                operations: [
+                  'models.read',
+                  'text.generate',
+                  'https://newapi.example.test',
+                  'token=secret-value',
+                  'orders.create',
+                ],
+              },
+            },
             providerUrl: 'https://newapi.example.test',
           },
         }}
@@ -73,6 +83,8 @@ describe('Developer Center shared views', () => {
     expect(html).toContain('AI service');
     expect(html).toContain('models.read, text.generate');
     expect(html).not.toContain('newapi.example.test');
+    expect(html).not.toContain('secret-value');
+    expect(html).not.toContain('orders.create');
   });
 
   test('renders immutable events without privileged actions', () => {

@@ -130,6 +130,27 @@ describe('developer module verification lifecycle', () => {
     ).toThrow('DEVELOPER_VERIFICATION_RESULT_INVALID');
   });
 
+  test('rejects either configured platform provider origin for every declared service', () => {
+    const manifest = {
+      schemaVersion: 3,
+      id: 'acme.weather',
+      version: '1.0.0',
+      publisher: { id: 'acme' },
+      locales: ['en'],
+      compatibility: { platform: '^1.0.0' },
+      execution: { mode: 'sandboxed-web' },
+      openopc: { sdkApiVersion: 'v1', services: { ai: { operations: ['models.read'] } } },
+      permissions: { network: ['https://zpay.example.test'] },
+    } as const;
+
+    expect(() =>
+      assertDeveloperModuleServiceNetworkPolicy(manifest as never, {
+        newApiBaseUrl: 'https://newapi.example.test/v1',
+        zPayBaseUrl: 'https://zpay.example.test',
+      }),
+    ).toThrow('DEVELOPER_VERIFICATION_RESULT_INVALID');
+  });
+
   test('claims, heartbeats, finalizes, and exposes only a safe account view', async () => {
     const { repository } = fixture();
     await enqueue(repository);

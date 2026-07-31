@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { moduleCatalogLabels } from '@kortix/registry';
 
 import {
   ReleaseProfileUnavailableError,
@@ -583,9 +584,12 @@ export function createMemoryDeveloperModuleDistributionRepository(input?: {
         .filter(
           (release) =>
             !normalizedQuery ||
-            [release.item_name, release.module_id, release.publisher_id].some((value) =>
-              value.toLowerCase().includes(normalizedQuery),
-            ),
+            [
+              release.item_name,
+              release.module_id,
+              release.publisher_id,
+              ...moduleCatalogLabels(release.manifest),
+            ].some((value) => value.toLowerCase().includes(normalizedQuery)),
         )
         .sort(
           (left, right) =>

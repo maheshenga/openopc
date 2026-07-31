@@ -65,6 +65,46 @@ export type PublicBetaBuilderProcessRunner = (
   command: Readonly<PublicBetaBuilderCommand>,
 ) => Promise<Readonly<PublicBetaBuilderProcessResult>>;
 
+export type PublicBetaCosignBuildStage =
+  | 'source-verify'
+  | 'module-fetch'
+  | 'offline-build'
+  | 'inspect';
+
+export type PublicBetaCosignBuildOperation =
+  | 'source-commit'
+  | 'source-tree'
+  | 'source-clean'
+  | 'module-files-worktree'
+  | 'module-files-index'
+  | 'source-timestamp'
+  | 'module-fetch'
+  | 'offline-build'
+  | 'inspect';
+
+export type PublicBetaCosignBuildFailureCode =
+  | 'OPENOPC_COSIGN_BUILD_PROCESS_FAILED'
+  | 'OPENOPC_COSIGN_BUILD_OUTPUT_INVALID'
+  | 'OPENOPC_COSIGN_BUILD_OUTPUT_LIMIT_EXCEEDED'
+  | 'OPENOPC_COSIGN_BUILD_RUNNER_FAILED';
+
+export interface PublicBetaCosignBuildFailureV1 {
+  schemaVersion: 1;
+  code: PublicBetaCosignBuildFailureCode;
+  stage: PublicBetaCosignBuildStage;
+  operation: PublicBetaCosignBuildOperation;
+  executable: PublicBetaBuilderCommand['executable'];
+  exitCode: number | null;
+  timedOut: boolean;
+  outputLimited: boolean;
+  stdoutExcerpt: string;
+  stderrExcerpt: string;
+}
+
+export type PublicBetaCosignBuildExecutionV1 =
+  | Readonly<{ ok: true; value: Readonly<PublicBetaCosignBuildResultV1> }>
+  | Readonly<{ ok: false; failure: Readonly<PublicBetaCosignBuildFailureV1> }>;
+
 const SHA1 = /^[a-f0-9]{40}$/;
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
 const INTEGER = /^[1-9][0-9]*$/;
@@ -77,7 +117,17 @@ const BUILD_TIMEOUT_MS = 30 * 60_000;
 const INSPECT_TIMEOUT_MS = 60_000;
 const GIT_OUTPUT_BYTES = 64 * 1_024;
 const PROCESS_OUTPUT_BYTES = 1024 * 1_024;
+const FAILURE_EXCERPT_BYTES = 4_096;
 const BUILD_CONTRACT_VERSION = 1;
+
+const SOURCE_OPERATIONS: readonly PublicBetaCosignBuildOperation[] = Object.freeze([
+  'source-commit',
+  'source-tree',
+  'source-clean',
+  'module-files-worktree',
+  'module-files-index',
+  'source-timestamp',
+]);
 
 type RecordValue = Record<string, unknown>;
 
@@ -273,6 +323,12 @@ export function createPublicBetaCosignBuildPlan(
 
   const fetchScript = [
     'umask 022',
+    'printf "OPENOPC_COSIGN_GO_VERSION=%s\\n" "$(go version)" >&2',
+    'printf "OPENOPC_COSIGN_GOPROXY=%s\\n" "$(go env GOPROXY)" >&2',
+    'printf "OPENOPC_COSIGN_GOSUMDB=%s\\n" "$(go env GOSUMDB)" >&2',
+    'timeout 10 getent hosts proxy.golang.org >/dev/null || { echo OPENOPC_COSIGN_MODULE_DNS_FAILED >&2; exit 72; }',
+    "curl --fail --silent --show-error --max-time 20 --proto '=https' https://proxy.golang.org/ >/dev/null || { echo OPENOPC_COSIGN_MODULE_PROXY_TLS_FAILED >&2; exit 73; }",
+    "curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/supported >/dev/null || { echo OPENOPC_COSIGN_SUMDB_TLS_FAILED >&2; exit 74; }",
     'go mod verify >&2',
     'go mod download',
     'go mod verify >&2',
@@ -451,19 +507,178 @@ function outputBytes(result: Readonly<PublicBetaBuilderProcessResult>): number {
   return Buffer.byteLength(result.stdout, 'utf8') + Buffer.byteLength(result.stderr, 'utf8');
 }
 
-function validProcessResult(
-  value: unknown,
-  commandValue: Readonly<PublicBetaBuilderCommand>,
-): value is Readonly<PublicBetaBuilderProcessResult> {
+function parseProcessResult(value: unknown): Readonly<PublicBetaBuilderProcessResult> | false {
   const record = exactRecord(value, ['exitCode', 'stderr', 'stdout', 'timedOut']);
-  return Boolean(
-    record &&
-      record.exitCode === 0 &&
-      record.timedOut === false &&
-      typeof record.stdout === 'string' &&
-      typeof record.stderr === 'string' &&
-      outputBytes(record as unknown as PublicBetaBuilderProcessResult) <= commandValue.maxOutputBytes,
-  );
+  if (!record) return false;
+  const exitCode = record.exitCode;
+  if (
+    (exitCode !== null &&
+      (typeof exitCode !== 'number' || !Number.isSafeInteger(exitCode) || exitCode < 0)) ||
+    typeof record.timedOut !== 'boolean' ||
+    typeof record.stdout !== 'string' ||
+    typeof record.stderr !== 'string'
+  ) {
+    return false;
+  }
+  return Object.freeze({
+    exitCode,
+    timedOut: record.timedOut,
+    stdout: record.stdout,
+    stderr: record.stderr,
+  });
+}
+
+function redactPublicBetaCosignBuilderText(value: string): string {
+  return value
+    .replace(/(^|\r?\n)([\t ]*authorization[\t ]*:)[^\r\n]*/giu, '$1$2 [REDACTED]')
+    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu, '$1[REDACTED]@')
+    .replace(/\b(token|password|secret|authorization)=([^\s&]+)/giu, '$1=[REDACTED]')
+    .replace(/\b(bearer)\s+[^\s]+/giu, '$1 [REDACTED]')
+    .replace(/\b(?:github_pat_[a-z0-9_]+|gh[pousr]_[a-z0-9_]+)\b/giu, '[REDACTED]');
+}
+
+function boundedUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
+  let output = '';
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (bytes + characterBytes > maxBytes) break;
+    output += character;
+    bytes += characterBytes;
+  }
+  return output;
+}
+
+function processExcerpts(
+  result: Readonly<PublicBetaBuilderProcessResult>,
+): Readonly<{ stdoutExcerpt: string; stderrExcerpt: string }> {
+  const stdout = redactPublicBetaCosignBuilderText(result.stdout);
+  const stderr = redactPublicBetaCosignBuilderText(result.stderr);
+  const stdoutBytes = Buffer.byteLength(stdout, 'utf8');
+  const stderrBytes = Buffer.byteLength(stderr, 'utf8');
+  let stdoutBudget = Math.min(stdoutBytes, FAILURE_EXCERPT_BYTES / 2);
+  const stderrBudget = Math.min(stderrBytes, FAILURE_EXCERPT_BYTES - stdoutBudget);
+  stdoutBudget = Math.min(stdoutBytes, FAILURE_EXCERPT_BYTES - stderrBudget);
+  return Object.freeze({
+    stdoutExcerpt: boundedUtf8(stdout, stdoutBudget),
+    stderrExcerpt: boundedUtf8(stderr, stderrBudget),
+  });
+}
+
+function safeRunnerError(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return 'OPENOPC_COSIGN_BUILDER_FAILED';
+  }
+}
+
+type PublicBetaCosignBuildFailureExecutionV1 = Readonly<{
+  ok: false;
+  failure: Readonly<PublicBetaCosignBuildFailureV1>;
+}>;
+
+type PublicBetaBuilderCommandExecutionV1 =
+  | Readonly<{ ok: true; result: Readonly<PublicBetaBuilderProcessResult> }>
+  | PublicBetaCosignBuildFailureExecutionV1;
+
+function buildFailureExecution(
+  code: PublicBetaCosignBuildFailureCode,
+  stage: PublicBetaCosignBuildStage,
+  operation: PublicBetaCosignBuildOperation,
+  commandValue: Readonly<PublicBetaBuilderCommand>,
+  result?: Readonly<PublicBetaBuilderProcessResult>,
+  runnerError?: unknown,
+): PublicBetaCosignBuildFailureExecutionV1 {
+  const outputLimited = code === 'OPENOPC_COSIGN_BUILD_OUTPUT_LIMIT_EXCEEDED';
+  const excerpts =
+    result && !outputLimited
+      ? processExcerpts(result)
+      : Object.freeze({
+          stdoutExcerpt: '',
+          stderrExcerpt:
+            runnerError === undefined
+              ? ''
+              : boundedUtf8(
+                  redactPublicBetaCosignBuilderText(safeRunnerError(runnerError)),
+                  FAILURE_EXCERPT_BYTES,
+                ),
+        });
+  const failure = Object.freeze({
+    schemaVersion: 1 as const,
+    code,
+    stage,
+    operation,
+    executable: commandValue.executable,
+    exitCode: result?.exitCode ?? null,
+    timedOut: result?.timedOut ?? false,
+    outputLimited,
+    stdoutExcerpt: excerpts.stdoutExcerpt,
+    stderrExcerpt: excerpts.stderrExcerpt,
+  });
+  return Object.freeze({ ok: false as const, failure });
+}
+
+async function executeBuilderCommand(
+  commandValue: Readonly<PublicBetaBuilderCommand>,
+  stage: PublicBetaCosignBuildStage,
+  operation: PublicBetaCosignBuildOperation,
+  runner: PublicBetaBuilderProcessRunner,
+): Promise<PublicBetaBuilderCommandExecutionV1> {
+  let raw: unknown;
+  try {
+    raw = await runner(commandValue);
+  } catch (error) {
+    return buildFailureExecution(
+      'OPENOPC_COSIGN_BUILD_RUNNER_FAILED',
+      stage,
+      operation,
+      commandValue,
+      undefined,
+      error,
+    );
+  }
+  const result = parseProcessResult(raw);
+  if (!result) {
+    return buildFailureExecution(
+      'OPENOPC_COSIGN_BUILD_RUNNER_FAILED',
+      stage,
+      operation,
+      commandValue,
+    );
+  }
+  if (outputBytes(result) > commandValue.maxOutputBytes) {
+    return buildFailureExecution(
+      'OPENOPC_COSIGN_BUILD_OUTPUT_LIMIT_EXCEEDED',
+      stage,
+      operation,
+      commandValue,
+      result,
+    );
+  }
+  if (result.exitCode !== 0 || result.timedOut) {
+    return buildFailureExecution(
+      'OPENOPC_COSIGN_BUILD_PROCESS_FAILED',
+      stage,
+      operation,
+      commandValue,
+      result,
+    );
+  }
+  return Object.freeze({ ok: true as const, result });
+}
+
+function buildTimestamp(now: () => Date): string {
+  try {
+    const value = now();
+    if (!(value instanceof Date)) throw new Error('OPENOPC_COSIGN_BUILD_INPUT_INVALID');
+    const timestamp = value.toISOString();
+    if (!validTimestamp(timestamp)) throw new Error('OPENOPC_COSIGN_BUILD_INPUT_INVALID');
+    return timestamp;
+  } catch {
+    throw new Error('OPENOPC_COSIGN_BUILD_INPUT_INVALID');
+  }
 }
 
 function oneOutputLine(stdout: string): string | false {
@@ -491,48 +706,88 @@ function parseInspectionOutput(
   return Object.freeze({ digest: lines[0], sizeBytes });
 }
 
-export async function executePublicBetaCosignBuildPlan(
+export async function executePublicBetaCosignBuildPlanDetailed(
   plan: Readonly<PublicBetaCosignBuildPlan>,
   runner: PublicBetaBuilderProcessRunner,
   now: () => Date = () => new Date(),
-): Promise<Readonly<PublicBetaCosignBuildResultV1> | false> {
+): Promise<PublicBetaCosignBuildExecutionV1> {
   const metadata = planMetadata.get(plan);
-  if (!metadata || typeof runner !== 'function' || typeof now !== 'function') return false;
-  try {
-    const startedAt = now().toISOString();
-    if (!validTimestamp(startedAt)) return false;
-    for (const sourceCommand of plan.verifySource) {
-      const result = await runner(sourceCommand);
-      if (!validProcessResult(result, sourceCommand)) return false;
-      const args = sourceCommand.args;
-      if (args[0] === 'rev-parse' && args[2] === 'HEAD') {
-        if (oneOutputLine(result.stdout) !== metadata.commitSha) return false;
-      } else if (args[0] === 'rev-parse' && args[2] === 'HEAD^{tree}') {
-        if (oneOutputLine(result.stdout) !== metadata.treeSha) return false;
-      } else if (args[0] === 'status') {
-        if (result.stdout !== '') return false;
-      } else if (args[0] === 'show') {
-        const commitTimestamp = oneOutputLine(result.stdout);
-        if (!commitTimestamp || !validCommitTimestamp(commitTimestamp)) return false;
-      }
+  if (!metadata || typeof runner !== 'function' || typeof now !== 'function') {
+    throw new Error('OPENOPC_COSIGN_BUILD_INPUT_INVALID');
+  }
+  const startedAt = buildTimestamp(now);
+  for (const [index, sourceCommand] of plan.verifySource.entries()) {
+    const operation = SOURCE_OPERATIONS[index];
+    if (!operation) throw new Error('OPENOPC_COSIGN_BUILD_INPUT_INVALID');
+    const execution = await executeBuilderCommand(sourceCommand, 'source-verify', operation, runner);
+    if (!execution.ok) return execution;
+    const result = execution.result;
+    let outputValid = true;
+    if (operation === 'source-commit') {
+      outputValid = oneOutputLine(result.stdout) === metadata.commitSha;
+    } else if (operation === 'source-tree') {
+      outputValid = oneOutputLine(result.stdout) === metadata.treeSha;
+    } else if (operation === 'source-clean') {
+      outputValid = result.stdout === '';
+    } else if (operation === 'source-timestamp') {
+      const commitTimestamp = oneOutputLine(result.stdout);
+      outputValid = Boolean(commitTimestamp && validCommitTimestamp(commitTimestamp));
     }
+    if (!outputValid) {
+      return buildFailureExecution(
+        'OPENOPC_COSIGN_BUILD_OUTPUT_INVALID',
+        'source-verify',
+        operation,
+        sourceCommand,
+        result,
+      );
+    }
+  }
 
-    const fetchResult = await runner(plan.fetch);
-    if (!validProcessResult(fetchResult, plan.fetch)) return false;
-    const goModuleGraphDigest = oneOutputLine(fetchResult.stdout);
-    if (!validDigest(goModuleGraphDigest)) return false;
+  const fetchExecution = await executeBuilderCommand(
+    plan.fetch,
+    'module-fetch',
+    'module-fetch',
+    runner,
+  );
+  if (!fetchExecution.ok) return fetchExecution;
+  const goModuleGraphDigest = oneOutputLine(fetchExecution.result.stdout);
+  if (!validDigest(goModuleGraphDigest)) {
+    return buildFailureExecution(
+      'OPENOPC_COSIGN_BUILD_OUTPUT_INVALID',
+      'module-fetch',
+      'module-fetch',
+      plan.fetch,
+      fetchExecution.result,
+    );
+  }
 
-    const buildResult = await runner(plan.build);
-    if (!validProcessResult(buildResult, plan.build)) return false;
+  const buildExecution = await executeBuilderCommand(
+    plan.build,
+    'offline-build',
+    'offline-build',
+    runner,
+  );
+  if (!buildExecution.ok) return buildExecution;
 
-    const inspectResult = await runner(plan.inspect);
-    if (!validProcessResult(inspectResult, plan.inspect)) return false;
-    const inspected = parseInspectionOutput(inspectResult.stdout, metadata.name);
-    if (!inspected) return false;
+  const inspectExecution = await executeBuilderCommand(plan.inspect, 'inspect', 'inspect', runner);
+  if (!inspectExecution.ok) return inspectExecution;
+  const inspected = parseInspectionOutput(inspectExecution.result.stdout, metadata.name);
+  if (!inspected) {
+    return buildFailureExecution(
+      'OPENOPC_COSIGN_BUILD_OUTPUT_INVALID',
+      'inspect',
+      'inspect',
+      plan.inspect,
+      inspectExecution.result,
+    );
+  }
 
-    const finishedAt = now().toISOString();
-    if (!validTimestamp(finishedAt) || Date.parse(startedAt) > Date.parse(finishedAt)) return false;
-    return Object.freeze({
+  const finishedAt = buildTimestamp(now);
+  if (Date.parse(startedAt) > Date.parse(finishedAt)) {
+    throw new Error('OPENOPC_COSIGN_BUILD_INPUT_INVALID');
+  }
+  const value = Object.freeze({
       platform: metadata.platform,
       name: metadata.name,
       digest: inspected.digest,
@@ -541,7 +796,18 @@ export async function executePublicBetaCosignBuildPlan(
       goModuleGraphDigest,
       startedAt,
       finishedAt,
-    });
+  });
+  return Object.freeze({ ok: true as const, value });
+}
+
+export async function executePublicBetaCosignBuildPlan(
+  plan: Readonly<PublicBetaCosignBuildPlan>,
+  runner: PublicBetaBuilderProcessRunner,
+  now: () => Date = () => new Date(),
+): Promise<Readonly<PublicBetaCosignBuildResultV1> | false> {
+  try {
+    const execution = await executePublicBetaCosignBuildPlanDetailed(plan, runner, now);
+    return execution.ok ? execution.value : false;
   } catch {
     return false;
   }
@@ -732,11 +998,7 @@ export function createPublicBetaCosignSlsaPredicate(input: Readonly<{
 
 export function redactPublicBetaCosignBuilderStderr(value: unknown): string {
   if (typeof value !== 'string') return 'OPENOPC_COSIGN_BUILDER_FAILED';
-  return value
-    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu, '$1[REDACTED]@')
-    .replace(/\b(token|password|secret|authorization)=([^\s&]+)/giu, '$1=[REDACTED]')
-    .replace(/\b(bearer)\s+[^\s]+/giu, '$1 [REDACTED]')
-    .slice(0, 4_096);
+  return boundedUtf8(redactPublicBetaCosignBuilderText(value), FAILURE_EXCERPT_BYTES);
 }
 
 async function readProcessStream(
@@ -875,9 +1137,12 @@ async function runCli(args: readonly string[]): Promise<number> {
       console.log(canonicalPublicBetaJson(plan));
       return 0;
     }
-    const result = await executePublicBetaCosignBuildPlan(plan, defaultProcessRunner);
-    if (!result) throw new Error('OPENOPC_COSIGN_BUILD_FAILED');
-    console.log(canonicalPublicBetaJson(result));
+    const execution = await executePublicBetaCosignBuildPlanDetailed(plan, defaultProcessRunner);
+    if (!execution.ok) {
+      console.error(canonicalPublicBetaJson(execution.failure));
+      return 1;
+    }
+    console.log(canonicalPublicBetaJson(execution.value));
     return 0;
   }
   if (commandName === 'predicate') {

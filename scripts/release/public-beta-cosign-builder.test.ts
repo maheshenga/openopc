@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import {
@@ -10,6 +10,7 @@ import {
   createPublicBetaCosignBuildPlan,
   createPublicBetaCosignSlsaPredicate,
   executePublicBetaCosignBuildPlan,
+  executePublicBetaCosignBuildPlanDetailed,
   redactPublicBetaCosignBuilderStderr,
 } from './public-beta-cosign-builder';
 import {
@@ -214,6 +215,235 @@ test('rejects failed and timed out processes before parsing output', async () =>
   }));
   expect(failed).toBe(false);
   expect(timedOut).toBe(false);
+});
+
+test('classifies and redacts a module fetch process failure', async () => {
+  const plan = createPublicBetaCosignBuildPlan(buildInput());
+  const baseRunner = successfulRunner(plan);
+  const execution = await executePublicBetaCosignBuildPlanDetailed(
+    plan,
+    async (command) =>
+      command === plan.fetch
+        ? {
+            exitCode: 1,
+            timedOut: false,
+            stdout: '',
+            stderr: 'go: https://user:download-secret@proxy.invalid?token=query-secret failed',
+          }
+        : baseRunner(command),
+    () => new Date('2026-07-30T10:00:00.000Z'),
+  );
+
+  expect(execution.ok).toBe(false);
+  if (execution.ok) throw new Error('TEST_COSIGN_FAILURE_EXPECTED');
+  expect(execution.failure).toMatchObject({
+    schemaVersion: 1,
+    code: 'OPENOPC_COSIGN_BUILD_PROCESS_FAILED',
+    stage: 'module-fetch',
+    operation: 'module-fetch',
+    executable: 'docker',
+    exitCode: 1,
+    timedOut: false,
+    outputLimited: false,
+  });
+  expect(execution.failure.stderrExcerpt).not.toContain('download-secret');
+  expect(execution.failure.stderrExcerpt).not.toContain('query-secret');
+  expect(Buffer.byteLength(JSON.stringify(execution.failure), 'utf8')).toBeLessThanOrEqual(8_192);
+  expect(Object.isFrozen(execution.failure)).toBe(true);
+});
+
+test('classifies an offline build timeout', async () => {
+  const plan = createPublicBetaCosignBuildPlan(buildInput());
+  const baseRunner = successfulRunner(plan);
+  const execution = await executePublicBetaCosignBuildPlanDetailed(
+    plan,
+    async (command) =>
+      command === plan.build
+        ? { exitCode: null, timedOut: true, stdout: '', stderr: 'build timed out' }
+        : baseRunner(command),
+    () => new Date('2026-07-30T10:00:00.000Z'),
+  );
+
+  expect(execution.ok).toBe(false);
+  if (execution.ok) throw new Error('TEST_COSIGN_FAILURE_EXPECTED');
+  expect(execution.failure).toMatchObject({
+    code: 'OPENOPC_COSIGN_BUILD_PROCESS_FAILED',
+    stage: 'offline-build',
+    operation: 'offline-build',
+    executable: 'docker',
+    exitCode: null,
+    timedOut: true,
+    outputLimited: false,
+  });
+});
+
+test('classifies oversized process output without retaining excerpts', async () => {
+  const plan = createPublicBetaCosignBuildPlan(buildInput());
+  const baseRunner = successfulRunner(plan);
+  const execution = await executePublicBetaCosignBuildPlanDetailed(
+    plan,
+    async (command) =>
+      command === plan.fetch
+        ? {
+            exitCode: 1,
+            timedOut: false,
+            stdout: 'x'.repeat(command.maxOutputBytes + 1),
+            stderr: 'must not be retained',
+          }
+        : baseRunner(command),
+    () => new Date('2026-07-30T10:00:00.000Z'),
+  );
+
+  expect(execution.ok).toBe(false);
+  if (execution.ok) throw new Error('TEST_COSIGN_FAILURE_EXPECTED');
+  expect(execution.failure).toMatchObject({
+    code: 'OPENOPC_COSIGN_BUILD_OUTPUT_LIMIT_EXCEEDED',
+    stage: 'module-fetch',
+    operation: 'module-fetch',
+    outputLimited: true,
+    stdoutExcerpt: '',
+    stderrExcerpt: '',
+  });
+});
+
+test('classifies an invalid module graph digest', async () => {
+  const plan = createPublicBetaCosignBuildPlan(buildInput());
+  const baseRunner = successfulRunner(plan);
+  const execution = await executePublicBetaCosignBuildPlanDetailed(
+    plan,
+    async (command) =>
+      command === plan.fetch
+        ? { exitCode: 0, timedOut: false, stdout: 'not-a-digest\n', stderr: '' }
+        : baseRunner(command),
+    () => new Date('2026-07-30T10:00:00.000Z'),
+  );
+
+  expect(execution.ok).toBe(false);
+  if (execution.ok) throw new Error('TEST_COSIGN_FAILURE_EXPECTED');
+  expect(execution.failure).toMatchObject({
+    code: 'OPENOPC_COSIGN_BUILD_OUTPUT_INVALID',
+    stage: 'module-fetch',
+    operation: 'module-fetch',
+    executable: 'docker',
+    exitCode: 0,
+    timedOut: false,
+    outputLimited: false,
+  });
+});
+
+test('classifies runner exceptions without leaking authorization material', async () => {
+  const plan = createPublicBetaCosignBuildPlan(buildInput());
+  const baseRunner = successfulRunner(plan);
+  const execution = await executePublicBetaCosignBuildPlanDetailed(
+    plan,
+    async (command) => {
+      if (command === plan.fetch) {
+        throw new Error('Authorization: Bearer ghp_1234567890abcdef');
+      }
+      return baseRunner(command);
+    },
+    () => new Date('2026-07-30T10:00:00.000Z'),
+  );
+
+  expect(execution.ok).toBe(false);
+  if (execution.ok) throw new Error('TEST_COSIGN_FAILURE_EXPECTED');
+  expect(execution.failure).toMatchObject({
+    code: 'OPENOPC_COSIGN_BUILD_RUNNER_FAILED',
+    stage: 'module-fetch',
+    operation: 'module-fetch',
+    executable: 'docker',
+    exitCode: null,
+    timedOut: false,
+    outputLimited: false,
+  });
+  expect(execution.failure.stderrExcerpt).toBe('Authorization: [REDACTED]');
+  expect(execution.failure.stderrExcerpt).not.toContain('ghp_1234567890abcdef');
+});
+
+test('bounds retained multibyte output by UTF-8 bytes', async () => {
+  const plan = createPublicBetaCosignBuildPlan(buildInput());
+  const baseRunner = successfulRunner(plan);
+  const execution = await executePublicBetaCosignBuildPlanDetailed(
+    plan,
+    async (command) =>
+      command === plan.fetch
+        ? {
+            exitCode: 1,
+            timedOut: false,
+            stdout: '\u754c'.repeat(1_200),
+            stderr: '\u9519'.repeat(1_200),
+          }
+        : baseRunner(command),
+    () => new Date('2026-07-30T10:00:00.000Z'),
+  );
+
+  expect(execution.ok).toBe(false);
+  if (execution.ok) throw new Error('TEST_COSIGN_FAILURE_EXPECTED');
+  const retainedBytes =
+    Buffer.byteLength(execution.failure.stdoutExcerpt, 'utf8') +
+    Buffer.byteLength(execution.failure.stderrExcerpt, 'utf8');
+  expect(retainedBytes).toBeLessThanOrEqual(4_096);
+  expect(execution.failure.stdoutExcerpt).not.toContain('\ufffd');
+  expect(execution.failure.stderrExcerpt).not.toContain('\ufffd');
+});
+
+test('runs bounded module DNS and TLS preflight before dependency download', () => {
+  const fetch = createPublicBetaCosignBuildPlan(buildInput()).fetch.args.join(' ');
+  expect(fetch).toContain('timeout 10 getent hosts proxy.golang.org');
+  expect(fetch).toContain(
+    "curl --fail --silent --show-error --max-time 20 --proto '=https' https://proxy.golang.org/",
+  );
+  expect(fetch).toContain(
+    "curl --fail --silent --show-error --max-time 20 --proto '=https' https://sum.golang.org/supported",
+  );
+  expect(fetch.indexOf('timeout 10 getent hosts proxy.golang.org')).toBeLessThan(
+    fetch.indexOf('go mod download'),
+  );
+});
+
+test('build CLI emits one canonical source failure diagnostic', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'openopc-cosign-build-failure-'));
+  const sourceRoot = resolve(root, 'source');
+  const moduleCacheRoot = resolve(root, 'module-cache');
+  const outputRoot = resolve(root, 'output');
+  try {
+    mkdirSync(sourceRoot);
+    mkdirSync(moduleCacheRoot);
+    mkdirSync(outputRoot);
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        resolve(import.meta.dir, 'public-beta-cosign-builder.ts'),
+        'build',
+        sourceRoot,
+        moduleCacheRoot,
+        outputRoot,
+      ],
+      {
+        env: { ...process.env, OPENOPC_COSIGN_PLATFORM: 'linuxAmd64' },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    );
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toBe('');
+    expect(stderr.trimEnd().split(/\r?\n/)).toHaveLength(1);
+    expect(JSON.parse(stderr)).toMatchObject({
+      schemaVersion: 1,
+      code: 'OPENOPC_COSIGN_BUILD_PROCESS_FAILED',
+      stage: 'source-verify',
+      operation: 'source-commit',
+      executable: 'git',
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 });
 
 test('bounds process output and redacts credentials from process stderr', async () => {

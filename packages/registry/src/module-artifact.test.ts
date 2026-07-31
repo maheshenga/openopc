@@ -142,6 +142,25 @@ test('builds a deterministic envelope independent of declaration order and path 
   ).toBe(new TextDecoder().decode(canonicalRegistryModuleArtifactDescriptor(second.descriptor)));
 });
 
+test('omits the legacy category field from a schema-v3 artifact descriptor', () => {
+  const input = artifactInput();
+  const module = input.item.module as unknown as Record<string, unknown>;
+  delete module.category;
+  Object.assign(module, {
+    schemaVersion: 3,
+    openopc: {
+      sdkApiVersion: 'v1',
+      catalog: { labels: ['server'] },
+    },
+  });
+
+  const envelope = createRegistryModuleArtifactEnvelope(input);
+  expect(Object.hasOwn(envelope.descriptor.module, 'category')).toBe(false);
+  expect(
+    new TextDecoder().decode(canonicalRegistryModuleArtifactDescriptor(envelope.descriptor)),
+  ).not.toContain('"category"');
+});
+
 test.each([
   [
     'file byte',

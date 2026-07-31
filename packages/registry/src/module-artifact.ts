@@ -52,7 +52,8 @@ export interface RegistryModuleArtifactDescriptor {
     id: string;
     version: string;
     publisherId: string;
-    category: string;
+    /** Legacy v2 metadata; omitted from v3 descriptors. */
+    category?: string;
     executionMode: RegistryModuleExecutionMode;
   };
   blobs: RegistryModuleArtifactBlobDescriptor[];
@@ -496,7 +497,7 @@ export function createRegistryModuleArtifactEnvelope(
       id: manifest.id,
       version: manifest.version,
       publisherId: manifest.publisher.id,
-      category: manifest.category,
+      ...(manifest.schemaVersion === 2 ? { category: manifest.category } : {}),
       executionMode: manifest.execution.mode,
     },
     blobs,

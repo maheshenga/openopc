@@ -232,14 +232,7 @@ export interface RegistryModuleManifestV3
   openopc: RegistryOpenOpcExtension;
 }
 
-/**
- * The compatibility category keeps existing artifact consumers
- * source-compatible; the v3 validator rejects it at runtime rather than
- * relying on a type-only exclusion.
- */
-export type RegistryModuleManifest =
-  | RegistryModuleManifestV2
-  | (RegistryModuleManifestV3 & { category: RegistryModuleCategory });
+export type RegistryModuleManifest = RegistryModuleManifestV2 | RegistryModuleManifestV3;
 
 /**
  * A parameter a `registry:template` collects at install time and substitutes

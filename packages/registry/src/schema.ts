@@ -112,6 +112,8 @@ export interface RegistryItemFile {
 }
 
 export const REGISTRY_MODULE_SCHEMA_VERSION = 2 as const;
+export const REGISTRY_MODULE_SCHEMA_VERSIONS = [2, 3] as const;
+export type RegistryModuleSchemaVersion = (typeof REGISTRY_MODULE_SCHEMA_VERSIONS)[number];
 
 export const REGISTRY_MODULE_CATEGORIES = [
   'industry',
@@ -146,6 +148,25 @@ export type RegistryModuleVerificationProfile =
   (typeof REGISTRY_MODULE_VERIFICATION_PROFILES)[number];
 export type RegistryModuleCapabilityKind = (typeof REGISTRY_MODULE_CAPABILITY_KINDS)[number];
 export type RegistryModuleUiSurfaceKind = (typeof REGISTRY_MODULE_UI_SURFACES)[number];
+
+export type OpenOpcModuleServiceName = 'ai' | 'payment';
+export type OpenOpcModuleServiceOperation =
+  | 'models.read'
+  | 'text.generate'
+  | 'text.stream'
+  | 'orders.create'
+  | 'orders.read'
+  | 'refunds.create';
+
+export interface OpenOpcModuleServiceDeclaration {
+  operations: OpenOpcModuleServiceOperation[];
+}
+
+export interface RegistryOpenOpcExtension {
+  sdkApiVersion: 'v1';
+  catalog?: { labels: string[] };
+  services?: Partial<Record<OpenOpcModuleServiceName, OpenOpcModuleServiceDeclaration>>;
+}
 
 export interface RegistryModulePublisher {
   id: string;
@@ -190,7 +211,7 @@ export interface RegistryModuleUiSurface {
   entry?: string;
 }
 
-export interface RegistryModuleManifest {
+export interface RegistryModuleManifestV2 {
   schemaVersion: typeof REGISTRY_MODULE_SCHEMA_VERSION;
   id: string;
   version: string;
@@ -204,6 +225,21 @@ export interface RegistryModuleManifest {
   permissions?: RegistryModulePermissions;
   ui?: RegistryModuleUiSurface[];
 }
+
+export interface RegistryModuleManifestV3
+  extends Omit<RegistryModuleManifestV2, 'schemaVersion' | 'category'> {
+  schemaVersion: 3;
+  openopc: RegistryOpenOpcExtension;
+}
+
+/**
+ * The compatibility category keeps existing artifact consumers
+ * source-compatible; the v3 validator rejects it at runtime rather than
+ * relying on a type-only exclusion.
+ */
+export type RegistryModuleManifest =
+  | RegistryModuleManifestV2
+  | (RegistryModuleManifestV3 & { category: RegistryModuleCategory });
 
 /**
  * A parameter a `registry:template` collects at install time and substitutes

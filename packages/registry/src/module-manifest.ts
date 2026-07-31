@@ -1,4 +1,6 @@
 import {
+  type OpenOpcModuleServiceName,
+  type OpenOpcModuleServiceOperation,
   REGISTRY_MODULE_CAPABILITY_KINDS,
   REGISTRY_MODULE_CATEGORIES,
   REGISTRY_MODULE_EXECUTION_MODES,
@@ -42,6 +44,20 @@ const TOP_LEVEL_KEYS = new Set([
   'permissions',
   'ui',
 ]);
+const V3_TOP_LEVEL_KEYS = new Set([
+  'schemaVersion',
+  'id',
+  'version',
+  'publisher',
+  'locales',
+  'compatibility',
+  'execution',
+  'verification',
+  'capabilities',
+  'permissions',
+  'ui',
+  'openopc',
+]);
 const PUBLISHER_KEYS = new Set(['id', 'displayName']);
 const COMPATIBILITY_KEYS = new Set(['platform', 'registry']);
 const EXECUTION_KEYS = new Set(['mode', 'entry']);
@@ -57,6 +73,14 @@ const PERMISSION_KEYS = new Set([
   'desktop',
 ]);
 const UI_KEYS = new Set(['id', 'surface', 'entry']);
+const OPENOPC_KEYS = new Set(['sdkApiVersion', 'catalog', 'services']);
+const OPENOPC_CATALOG_KEYS = new Set(['labels']);
+const OPENOPC_SERVICE_KEYS = new Set(['operations']);
+const OPENOPC_LABEL_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const OPENOPC_SERVICE_OPERATIONS: Record<OpenOpcModuleServiceName, readonly OpenOpcModuleServiceOperation[]> = {
+  ai: ['models.read', 'text.generate', 'text.stream'],
+  payment: ['orders.create', 'orders.read', 'refunds.create'],
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -116,9 +140,10 @@ export function validateRegistryModuleManifest(
     error(basePath, 'module manifest must be an object');
     return { valid: false, issues };
   }
-  rejectUnknownKeys(value, TOP_LEVEL_KEYS, basePath);
+  const isV3 = value.schemaVersion === 3;
+  rejectUnknownKeys(value, isV3 ? V3_TOP_LEVEL_KEYS : TOP_LEVEL_KEYS, basePath);
 
-  if (value.schemaVersion !== REGISTRY_MODULE_SCHEMA_VERSION) {
+  if (value.schemaVersion !== REGISTRY_MODULE_SCHEMA_VERSION && value.schemaVersion !== 3) {
     error(`${basePath}.schemaVersion`, `schemaVersion must be ${REGISTRY_MODULE_SCHEMA_VERSION}`);
   }
 
@@ -129,7 +154,7 @@ export function validateRegistryModuleManifest(
   if (typeof value.version !== 'string' || !SEMVER_RE.test(value.version)) {
     error(`${basePath}.version`, 'version must be a semantic version');
   }
-  if (!isOneOf(REGISTRY_MODULE_CATEGORIES, value.category)) {
+  if (!isV3 && !isOneOf(REGISTRY_MODULE_CATEGORIES, value.category)) {
     error(
       `${basePath}.category`,
       `category must be one of: ${REGISTRY_MODULE_CATEGORIES.join(', ')}`,
@@ -356,7 +381,118 @@ export function validateRegistryModuleManifest(
     }
   }
 
+  if (isV3) {
+    const openopc = value.openopc;
+    if (!isRecord(openopc)) {
+      error(`${basePath}.openopc`, 'openopc must be an object');
+    } else {
+      rejectUnknownKeys(openopc, OPENOPC_KEYS, `${basePath}.openopc`);
+      if (openopc.sdkApiVersion !== 'v1') {
+        error(`${basePath}.openopc.sdkApiVersion`, 'sdkApiVersion must be v1');
+      }
+
+      if (openopc.catalog !== undefined) {
+        if (!isRecord(openopc.catalog)) {
+          error(`${basePath}.openopc.catalog`, 'catalog must be an object');
+        } else {
+          rejectUnknownKeys(openopc.catalog, OPENOPC_CATALOG_KEYS, `${basePath}.openopc.catalog`);
+          const labels = openopc.catalog.labels;
+          if (!Array.isArray(labels)) {
+            error(`${basePath}.openopc.catalog.labels`, 'labels must be an array');
+          } else {
+            const validLabels: string[] = [];
+            labels.forEach((label, index) => {
+              if (typeof label !== 'string' || !OPENOPC_LABEL_RE.test(label)) {
+                error(
+                  `${basePath}.openopc.catalog.labels[${index}]`,
+                  'label must be lowercase ASCII slug',
+                );
+              } else {
+                validLabels.push(label);
+              }
+            });
+            if (labels.length > 12) {
+              error(`${basePath}.openopc.catalog.labels`, 'labels must contain at most 12 values');
+            }
+            if (hasDuplicate(validLabels)) {
+              error(`${basePath}.openopc.catalog.labels`, 'duplicate label');
+            }
+            if (
+              validLabels.some((label, index) => {
+                const previous = validLabels[index - 1];
+                return previous !== undefined && label < previous;
+              })
+            ) {
+              error(`${basePath}.openopc.catalog.labels`, 'labels must be sorted');
+            }
+          }
+        }
+      }
+
+      if (openopc.services !== undefined) {
+        if (!isRecord(openopc.services)) {
+          error(`${basePath}.openopc.services`, 'services must be an object');
+        } else {
+          for (const serviceName of Object.keys(openopc.services)) {
+            if (!Object.hasOwn(OPENOPC_SERVICE_OPERATIONS, serviceName)) {
+              error(`${basePath}.openopc.services.${serviceName}`, 'unknown field');
+              continue;
+            }
+            const declaration = openopc.services[serviceName];
+            const servicePath = `${basePath}.openopc.services.${serviceName}`;
+            if (!isRecord(declaration)) {
+              error(servicePath, 'service declaration must be an object');
+              continue;
+            }
+            rejectUnknownKeys(declaration, OPENOPC_SERVICE_KEYS, servicePath);
+            const operations = declaration.operations;
+            if (!Array.isArray(operations) || operations.length === 0) {
+              error(`${servicePath}.operations`, 'operations must be a non-empty array');
+              continue;
+            }
+            const validOperations: string[] = [];
+            const allowed = OPENOPC_SERVICE_OPERATIONS[serviceName as OpenOpcModuleServiceName];
+            operations.forEach((operation, index) => {
+              if (typeof operation !== 'string' || !allowed.includes(operation as OpenOpcModuleServiceOperation)) {
+                error(`${servicePath}.operations[${index}]`, 'operation is not allowed for service');
+              } else {
+                validOperations.push(operation);
+              }
+            });
+            if (hasDuplicate(validOperations)) {
+              error(`${servicePath}.operations`, 'duplicate operation');
+            }
+            if (
+              validOperations.some(
+                (operation, index) => {
+                  const previous = validOperations[index - 1];
+                  return previous !== undefined && operation < previous;
+                },
+              )
+            ) {
+              error(`${servicePath}.operations`, 'operations must be sorted');
+            }
+          }
+        }
+      }
+    }
+  }
+
   return { valid: issues.length === 0, issues };
+}
+
+export function moduleCatalogLabels(manifest: RegistryModuleManifest): string[] {
+  if (manifest.schemaVersion === REGISTRY_MODULE_SCHEMA_VERSION) return [manifest.category];
+  return [...(manifest.openopc.catalog?.labels ?? [])];
+}
+
+export function moduleServiceOperations(
+  manifest: RegistryModuleManifest,
+  service: OpenOpcModuleServiceName,
+): readonly OpenOpcModuleServiceOperation[] {
+  if (manifest.schemaVersion === REGISTRY_MODULE_SCHEMA_VERSION) return [];
+  const operations = manifest.openopc.services?.[service]?.operations;
+  return operations ? Object.freeze([...operations]) : [];
 }
 
 export function readRegistryModuleManifest(item: unknown): RegistryModuleManifest | null {

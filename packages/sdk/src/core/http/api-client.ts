@@ -92,6 +92,7 @@ async function makeRequest<T = any>(
   url: string,
   options: RequestInit & ApiClientOptions = {}
 ): Promise<ApiResponse<T>> {
+  const fetchImpl = globalThis.fetch.bind(globalThis);
   const {
     showErrors = true,
     errorContext,
@@ -149,7 +150,7 @@ async function makeRequest<T = any>(
     // Note: X-Refresh-Token was removed to reduce header size and prevent HTTP 431 errors.
     // The backend handles token refresh via Supabase directly.
 
-    let response = await fetch(url, {
+    let response = await fetchImpl(url, {
       ...fetchOptions,
       headers,
       signal: controller.signal,
@@ -187,7 +188,7 @@ async function makeRequest<T = any>(
           retryController.abort();
         }, timeout);
         try {
-          response = await fetch(url, {
+          response = await fetchImpl(url, {
             ...fetchOptions,
             headers,
             signal: retryController.signal,

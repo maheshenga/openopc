@@ -45,6 +45,7 @@ test('renders a remote-only state when the desktop bridge is unavailable', () =>
 });
 
 test('renders visible desktop grant state and a revoke action', () => {
+  const now = Date.now();
   const html = renderToStaticMarkup(
     <LocalAccessPanel
       userId="user-1"
@@ -64,8 +65,8 @@ test('renders visible desktop grant state and a revoke action', () => {
           roots: ['C:/workspace'],
           userId: 'user-1',
           deviceId: 'device-1',
-          issuedAt: '2026-07-29T00:00:00.000Z',
-          expiresAt: '2026-07-29T00:30:00.000Z',
+          issuedAt: new Date(now - 30_000).toISOString(),
+          expiresAt: new Date(now + 30_000).toISOString(),
           commandDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           approvedLocally: true,
           revokedAt: null,

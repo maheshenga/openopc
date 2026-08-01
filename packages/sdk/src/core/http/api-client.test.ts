@@ -65,6 +65,50 @@ describe('makeRequest admin-bypass header', () => {
   });
 });
 
+describe('makeRequest transport isolation', () => {
+  test('keeps the fetch implementation present when the request starts', async () => {
+    let resolveToken: ((token: string | null) => void) | undefined;
+    configureKortix({
+      backendUrl: 'http://api.test/v1',
+      getToken: () =>
+        new Promise<string | null>((resolve) => {
+          resolveToken = resolve;
+        }),
+    });
+
+    const originalFetch = globalThis.fetch;
+    let requestFetchCalls = 0;
+    let replacementFetchCalls = 0;
+    globalThis.fetch = (async () => {
+      requestFetchCalls += 1;
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const request = backendApi.get('/projects/abc/detail');
+      globalThis.fetch = (async () => {
+        replacementFetchCalls += 1;
+        return new Response(JSON.stringify({ replacement: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as unknown as typeof fetch;
+      resolveToken?.('test-token');
+
+      const response = await request;
+      expect(response.success).toBe(true);
+      expect(response.data).toEqual({ ok: true });
+      expect(requestFetchCalls).toBe(1);
+      expect(replacementFetchCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 // Regression for prod TypeError "t.message.includes is not a function": a
 // backend 4xx body whose `message` (or `detail.message`) is a non-string
 // value used to flow straight into `new ApiError(message, …)`, and from there

@@ -127,6 +127,9 @@ jobs:
           fi
           echo "No focused tests."
 
+      - name: Deploy Dev workflow contract
+        run: bun test scripts/release/deploy-dev-workflow-contract.test.ts
+
       - name: Typecheck @kortix/sdk
         run: pnpm --filter @kortix/sdk typecheck
 

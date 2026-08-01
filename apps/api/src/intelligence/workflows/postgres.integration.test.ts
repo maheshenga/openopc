@@ -152,7 +152,9 @@ async function startPostgres(): Promise<void> {
       task_id uuid PRIMARY KEY,
       account_id uuid NOT NULL,
       project_id uuid NOT NULL,
-      job_id uuid REFERENCES kortix.studio_jobs(job_id)
+      job_id uuid REFERENCES kortix.studio_jobs(job_id),
+      idempotency_key text NOT NULL,
+      UNIQUE (project_id, idempotency_key)
     );
     CREATE TABLE kortix.review_items(
       review_item_id uuid PRIMARY KEY,
@@ -177,10 +179,10 @@ async function startPostgres(): Promise<void> {
     );
     INSERT INTO kortix.accounts(account_id) VALUES ('${ACCOUNT_ID}');
     INSERT INTO kortix.projects(project_id, account_id) VALUES ('${PROJECT_ID}', '${ACCOUNT_ID}');
-    INSERT INTO kortix.intelligence_tasks(task_id, account_id, project_id)
+    INSERT INTO kortix.intelligence_tasks(task_id, account_id, project_id, idempotency_key)
       VALUES
-        ('${TASK_ID}', '${ACCOUNT_ID}', '${PROJECT_ID}'),
-        ('${TASK_ID_2}', '${ACCOUNT_ID}', '${PROJECT_ID}');
+        ('${TASK_ID}', '${ACCOUNT_ID}', '${PROJECT_ID}', 'workflow-fixture-task-1'),
+        ('${TASK_ID_2}', '${ACCOUNT_ID}', '${PROJECT_ID}', 'workflow-fixture-task-2');
   `;
   const migrations = await Promise.all(migrationPaths.map((path) => Bun.file(path).text()));
   dockerPsql(`BEGIN;\n${schema}\n${migrations.join('\n')}\nCOMMIT;`);

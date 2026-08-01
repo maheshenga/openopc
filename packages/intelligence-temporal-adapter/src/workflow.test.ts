@@ -15,11 +15,11 @@ describe('Temporal workflow coordinator', () => {
 
   beforeAll(async () => {
     environment = await TestWorkflowEnvironment.createTimeSkipping();
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (environment) await environment.teardown();
-  });
+  }, 30_000);
 
   test('retries an idempotent pump and resumes after an approval signal', async () => {
     const testEnvironment = environment;

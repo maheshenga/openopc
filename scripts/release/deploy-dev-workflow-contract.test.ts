@@ -59,8 +59,7 @@ test('Deploy Dev only runs inherited server infrastructure when explicitly enabl
 test('Deploy Dev keeps the frontend standalone build independent while gating image publication', async () => {
   const workflow = await parseWorkflow();
   const frontend = job(workflow, 'build-frontend');
-  expect(frontend.if).toContain("needs.detect-changes.outputs.frontend == 'true'");
-  expect(frontend.if).not.toContain(REMOTE_DEPLOY_GUARD);
+  expect(frontend.if).toBe("needs.detect-changes.outputs.frontend == 'true'");
   expect(namedStep(frontend, 'Build frontend standalone output').if).toBeUndefined();
 
   for (const name of [
@@ -76,14 +75,20 @@ test('Deploy Dev keeps the frontend standalone build independent while gating im
 
 test('Deploy Dev keeps CLI build and dev-latest publication independent of remote deployment', async () => {
   const workflow = await parseWorkflow();
-  expect(job(workflow, 'build-cli').if).not.toContain('OPENOPC_DEV_SERVER_DEPLOY_ENABLED');
-  expect(job(workflow, 'publish-dev-release').if).not.toContain('OPENOPC_DEV_SERVER_DEPLOY_ENABLED');
+  expect(job(workflow, 'build-cli').if).toBe("needs.detect-changes.outputs.cli == 'true'");
+  expect(job(workflow, 'publish-dev-release').if).toBe(
+    "needs.detect-changes.outputs.cli == 'true' && needs.build-cli.result == 'success'",
+  );
 });
 
 test('Deploy Dev summary identifies the default non-deployment and explicit opt-in', async () => {
   const workflow = await parseWorkflow();
   const summary = namedStep(job(workflow, 'detect-changes'), 'Summary').run;
-  expect(summary).toContain('Remote backend: not deployed');
-  expect(summary).toContain('OPENOPC_DEV_SERVER_DEPLOY_ENABLED=true');
-  expect(summary).toContain('Remote backend: deployment enabled');
+  expect(summary).toContain(
+    '  if [ "${{ vars.OPENOPC_DEV_SERVER_DEPLOY_ENABLED }}" = "true" ]; then\n'
+      + '    echo "- Remote backend: deployment enabled (OPENOPC_DEV_SERVER_DEPLOY_ENABLED=true)"\n'
+      + '  else\n'
+      + '    echo "- Remote backend: not deployed (set OPENOPC_DEV_SERVER_DEPLOY_ENABLED=true to opt in)"\n'
+      + '  fi',
+  );
 });

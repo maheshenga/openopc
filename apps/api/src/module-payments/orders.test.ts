@@ -18,6 +18,8 @@ const RELEASE_ID = '40000000-0000-4000-a000-000000000001';
 const GRANT_ID = '60000000-0000-4000-8000-000000000001';
 const OTHER_GRANT_ID = '60000000-0000-4000-8000-000000000009';
 const NOW = '2026-08-01T00:00:00.000Z';
+const PAID_AT = '2026-08-01T00:16:00.000Z';
+const CALLBACK_DIGEST = `sha256:${'a'.repeat(64)}` as const;
 
 function claims(
   overrides: Partial<ModuleServiceCapabilityClaimsV1> = {},
@@ -49,6 +51,18 @@ const orderInput = {
   currency: 'CNY' as const,
   product_name: 'OpenOPC module purchase',
 };
+
+function callbackInput(overrides: Record<string, unknown> = {}) {
+  return {
+    provider: 'zpay' as const,
+    merchantOrderNo: 'OPC202608010000000000000000001',
+    providerTradeNo: 'trade-001',
+    amountMinor: 567,
+    paidAt: PAID_AT,
+    canonicalPayloadDigest: CALLBACK_DIGEST,
+    ...overrides,
+  };
+}
 
 class FakePaymentProvider implements DeveloperModulePaymentProviderPort {
   readonly createCalls: string[] = [];
@@ -219,7 +233,7 @@ describe('developer module payment order service', () => {
       }),
     ).rejects.toMatchObject({ code: 'MODULE_PAYMENT_ORDER_NOT_FOUND', status: 404 });
 
-    await service.recordProviderPayment({ orderId: created.order_id, paidAt: NOW });
+    await service.recordProviderCallback(callbackInput({ paidAt: NOW }));
     const refund = await service.createRefund({
       claims: claims(),
       orderId: created.order_id,
@@ -237,7 +251,7 @@ describe('developer module payment order service', () => {
   });
 
   test('records a provider callback after local expiry as paid_late', async () => {
-    const { service } = serviceFixture();
+    const { repository, service } = serviceFixture();
     const created = await service.createOrder({
       claims: claims(),
       input: orderInput,
@@ -249,15 +263,57 @@ describe('developer module payment order service', () => {
       at: '2026-08-01T00:15:01.000Z',
     });
 
-    await expect(
-      service.recordProviderPayment({
-        orderId: created.order_id,
-        paidAt: '2026-08-01T00:16:00.000Z',
-      }),
-    ).resolves.toMatchObject({
-      status: 'paid_late',
-      paidAt: '2026-08-01T00:16:00.000Z',
+    await expect(service.recordProviderCallback(callbackInput())).resolves.toEqual({
+      kind: 'recorded',
     });
+    await expect(
+      repository.findOrder({
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        installationId: INSTALLATION_ID,
+        releaseId: RELEASE_ID,
+        orderId: created.order_id,
+      }),
+    ).resolves.toMatchObject({ status: 'paid_late', paidAt: PAID_AT });
+  });
+
+  test('records a provider callback once and rejects unknown orders or amount mismatches', async () => {
+    const { repository, service } = serviceFixture();
+    const created = await service.createOrder({
+      claims: claims(),
+      input: orderInput,
+      idempotencyKey: 'checkout-00000006',
+    });
+
+    await expect(service.recordProviderCallback(callbackInput())).resolves.toEqual({
+      kind: 'recorded',
+    });
+    await expect(service.recordProviderCallback(callbackInput())).resolves.toEqual({
+      kind: 'duplicate',
+    });
+    await expect(
+      repository.findOrder({
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        installationId: INSTALLATION_ID,
+        releaseId: RELEASE_ID,
+        orderId: created.order_id,
+      }),
+    ).resolves.toMatchObject({ status: 'paid', paidAt: PAID_AT });
+
+    await expect(
+      service.recordProviderCallback(
+        callbackInput({ providerTradeNo: 'trade-002', amountMinor: 568 }),
+      ),
+    ).rejects.toMatchObject({ code: 'MODULE_PAYMENT_ORDER_STATE_CONFLICT', status: 409 });
+    await expect(
+      service.recordProviderCallback(
+        callbackInput({
+          merchantOrderNo: 'OPC202608010000000000000000099',
+          providerTradeNo: 'trade-003',
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'MODULE_PAYMENT_ORDER_NOT_FOUND', status: 404 });
   });
 
   test('does not expose a provider close operation', () => {

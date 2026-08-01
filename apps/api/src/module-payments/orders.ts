@@ -111,6 +111,20 @@ export interface DeveloperModulePaymentAuditInput extends DeveloperModulePayment
   createdAt: string;
 }
 
+export interface DeveloperModulePaymentProviderCallbackInput {
+  provider: 'zpay';
+  merchantOrderNo: string;
+  providerTradeNo: string;
+  amountMinor: number;
+  paidAt: string;
+  canonicalPayloadDigest: `sha256:${string}`;
+}
+
+export interface DeveloperModulePaymentProviderCallbackResult {
+  kind: 'recorded' | 'duplicate';
+  order: DeveloperModulePaymentOrder;
+}
+
 export interface DeveloperModulePaymentRepository {
   reserveOrder(input: {
     order: DeveloperModulePaymentOrder;
@@ -140,6 +154,9 @@ export interface DeveloperModulePaymentRepository {
     targetStatus: DeveloperModulePaymentOrderStatus;
     at: string;
   }): Promise<DeveloperModulePaymentOrder | null>;
+  recordProviderCallback(
+    input: DeveloperModulePaymentProviderCallbackInput,
+  ): Promise<DeveloperModulePaymentProviderCallbackResult>;
   reserveRefund(input: {
     orderId: string;
     accountId: string;
@@ -391,33 +408,17 @@ export class DeveloperModulePaymentOrderService {
     return refundView(completed);
   }
 
-  async recordProviderPayment(input: {
-    orderId: string;
-    paidAt: string;
-  }): Promise<DeveloperModulePaymentOrder> {
-    assertUuid(input.orderId);
-    let result: DeveloperModulePaymentOrder | null;
+  async recordProviderCallback(
+    input: DeveloperModulePaymentProviderCallbackInput,
+  ): Promise<{ kind: 'recorded' | 'duplicate' }> {
+    const callback = parseProviderCallback(input);
     try {
-      result = await this.repository.transitionOrderById({
-        orderId: input.orderId,
-        targetStatus: 'paid',
-        at: input.paidAt,
-      });
+      const result = await this.repository.recordProviderCallback(callback);
+      return { kind: result.kind };
     } catch (error) {
-      if (
-        !(error instanceof DeveloperModulePaymentError) ||
-        error.code !== 'MODULE_PAYMENT_ORDER_STATE_CONFLICT'
-      ) {
-        throw error;
-      }
-      result = await this.repository.transitionOrderById({
-        orderId: input.orderId,
-        targetStatus: 'paid_late',
-        at: input.paidAt,
-      });
+      if (error instanceof DeveloperModulePaymentError) throw error;
+      throw new DeveloperModulePaymentError('MODULE_PAYMENT_PROVIDER_UNAVAILABLE', 503);
     }
-    if (!result) throw new DeveloperModulePaymentError('MODULE_PAYMENT_ORDER_NOT_FOUND', 404);
-    return result;
   }
 
   async expireOrder(input: { orderId: string; at: string }): Promise<DeveloperModulePaymentOrder> {
@@ -450,6 +451,24 @@ function parseIdempotencyKey(value: string): string {
   const result = ModulePaymentIdempotencyKeySchema.safeParse(value);
   if (!result.success) throw new DeveloperModulePaymentError('MODULE_SERVICE_INPUT_INVALID', 400);
   return result.data;
+}
+
+function parseProviderCallback(
+  input: DeveloperModulePaymentProviderCallbackInput,
+): DeveloperModulePaymentProviderCallbackInput {
+  if (
+    input.provider !== 'zpay' ||
+    !/^[A-Za-z0-9_-]{1,32}$/.test(input.merchantOrderNo) ||
+    !/^[A-Za-z0-9._:-]{1,128}$/.test(input.providerTradeNo) ||
+    !Number.isSafeInteger(input.amountMinor) ||
+    input.amountMinor < 1 ||
+    input.amountMinor > 100_000_000 ||
+    !/^sha256:[0-9a-f]{64}$/.test(input.canonicalPayloadDigest)
+  ) {
+    throw new DeveloperModulePaymentError('MODULE_SERVICE_INPUT_INVALID', 400);
+  }
+  const paidAt = validNow(new Date(input.paidAt)).toISOString();
+  return { ...input, paidAt };
 }
 
 function scope(
@@ -613,6 +632,8 @@ function clone<T>(value: T): T {
 export function createInMemoryDeveloperModulePaymentRepository(): DeveloperModulePaymentRepository {
   const orders = new Map<string, DeveloperModulePaymentOrder>();
   const ordersById = new Map<string, DeveloperModulePaymentOrder>();
+  const ordersByMerchantNo = new Map<string, DeveloperModulePaymentOrder>();
+  const callbacksByTrade = new Map<string, { orderId: string }>();
   const refunds = new Map<string, DeveloperModuleRefund>();
   const refundsByKey = new Map<string, DeveloperModuleRefund>();
 
@@ -624,6 +645,7 @@ export function createInMemoryDeveloperModulePaymentRepository(): DeveloperModul
         const stored = clone(order);
         orders.set(key, stored);
         ordersById.set(stored.orderId, stored);
+        ordersByMerchantNo.set(stored.merchantOrderNo, stored);
         return { kind: 'reserved', order: clone(stored) };
       }
       if (
@@ -693,6 +715,42 @@ export function createInMemoryDeveloperModulePaymentRepository(): DeveloperModul
       const next = transitionDeveloperModulePaymentOrder(current, targetStatus, at);
       Object.assign(current, next);
       return clone(current);
+    },
+
+    async recordProviderCallback(input) {
+      const current = ordersByMerchantNo.get(input.merchantOrderNo);
+      if (!current || current.provider !== input.provider) {
+        throw new DeveloperModulePaymentError('MODULE_PAYMENT_ORDER_NOT_FOUND', 404);
+      }
+      if (current.amountMinor !== input.amountMinor) {
+        throw new DeveloperModulePaymentError('MODULE_PAYMENT_ORDER_STATE_CONFLICT', 409);
+      }
+
+      const callbackKey = `${input.provider}:${input.providerTradeNo}`;
+      const existing = callbacksByTrade.get(callbackKey);
+      if (existing) {
+        if (existing.orderId !== current.orderId) {
+          throw new DeveloperModulePaymentError('MODULE_PAYMENT_ORDER_STATE_CONFLICT', 409);
+        }
+        return { kind: 'duplicate', order: clone(current) };
+      }
+
+      let kind: 'recorded' | 'duplicate' = 'duplicate';
+      if (current.status === 'checkout_issued') {
+        Object.assign(
+          current,
+          transitionDeveloperModulePaymentOrder(current, 'paid', input.paidAt),
+        );
+        kind = 'recorded';
+      } else if (current.status === 'expired') {
+        Object.assign(
+          current,
+          transitionDeveloperModulePaymentOrder(current, 'paid_late', input.paidAt),
+        );
+        kind = 'recorded';
+      }
+      callbacksByTrade.set(callbackKey, { orderId: current.orderId });
+      return { kind, order: clone(current) };
     },
 
     async reserveRefund(input) {

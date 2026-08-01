@@ -268,6 +268,83 @@ export function createDrizzleDeveloperModulePaymentRepository(
       });
     },
 
+    async recordProviderCallback(input) {
+      return db.transaction(async (tx) => {
+        const orderResult = await tx.execute(sql`
+          SELECT payment_order.*
+          FROM kortix.developer_module_payment_orders payment_order
+          WHERE payment_order.provider = ${input.provider}
+            AND payment_order.merchant_order_no = ${input.merchantOrderNo}
+          LIMIT 1
+          FOR UPDATE
+        `);
+        const orderRow = rows(orderResult)[0];
+        if (!orderRow) {
+          throw new DeveloperModulePaymentError('MODULE_PAYMENT_ORDER_NOT_FOUND', 404);
+        }
+        const current = mapDeveloperModulePaymentOrder(orderRow);
+        if (current.amountMinor !== input.amountMinor) {
+          throw new DeveloperModulePaymentError('MODULE_PAYMENT_ORDER_STATE_CONFLICT', 409);
+        }
+
+        const targetStatus =
+          current.status === 'checkout_issued'
+            ? 'paid'
+            : current.status === 'expired'
+              ? 'paid_late'
+              : null;
+        const outcome = targetStatus ?? 'duplicate';
+        const inserted = rows(
+          await tx.execute(sql`
+            INSERT INTO kortix.developer_module_payment_callbacks (
+              order_id, provider, provider_trade_no, canonical_payload_digest,
+              verified, outcome, received_at
+            ) VALUES (
+              ${current.orderId}, ${input.provider}, ${input.providerTradeNo},
+              ${input.canonicalPayloadDigest}, TRUE, ${outcome}, ${input.paidAt}
+            )
+            ON CONFLICT (provider, provider_trade_no)
+              WHERE provider_trade_no IS NOT NULL
+            DO NOTHING
+            RETURNING order_id
+          `),
+        )[0];
+
+        if (!inserted) {
+          const duplicateResult = await tx.execute(sql`
+            SELECT callback.order_id
+            FROM kortix.developer_module_payment_callbacks callback
+            WHERE callback.provider = ${input.provider}
+              AND callback.provider_trade_no = ${input.providerTradeNo}
+            LIMIT 1
+          `);
+          const duplicateOrderId = optionalString(
+            rows(duplicateResult)[0] ?? {},
+            'orderId',
+            'order_id',
+          );
+          if (duplicateOrderId !== current.orderId) {
+            throw new DeveloperModulePaymentError('MODULE_PAYMENT_ORDER_STATE_CONFLICT', 409);
+          }
+          return { kind: 'duplicate', order: current };
+        }
+
+        if (!targetStatus) return { kind: 'duplicate', order: current };
+        const next = transitionDeveloperModulePaymentOrder(current, targetStatus, input.paidAt);
+        const updated = await tx.execute(sql`
+          UPDATE kortix.developer_module_payment_orders
+          SET status = ${next.status}, paid_at = ${next.paidAt}, updated_at = ${next.updatedAt}
+          WHERE order_id = ${current.orderId} AND status = ${current.status}
+          RETURNING *
+        `);
+        const updatedRow = rows(updated)[0];
+        if (!updatedRow) {
+          throw new DeveloperModulePaymentError('MODULE_PAYMENT_ORDER_STATE_CONFLICT', 409);
+        }
+        return { kind: 'recorded', order: mapDeveloperModulePaymentOrder(updatedRow) };
+      });
+    },
+
     async reserveRefund(input) {
       return db.transaction(async (tx) => {
         const current = await findOrder(tx, {

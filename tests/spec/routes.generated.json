@@ -1,6 +1,6 @@
 {
   "generatedAt": "static",
-  "count": 531,
+  "count": 586,
   "routes": [
     {
       "method": "GET",
@@ -53,6 +53,10 @@
     {
       "method": "GET",
       "path": "/metrics"
+    },
+    {
+      "method": "GET",
+      "path": "/readyz"
     },
     {
       "method": "GET",
@@ -124,6 +128,14 @@
     },
     {
       "method": "POST",
+      "path": "/v1/access/registration/complete"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/access/registration/preflight"
+    },
+    {
+      "method": "POST",
       "path": "/v1/access/request-access"
     },
     {
@@ -157,6 +169,18 @@
     {
       "method": "POST",
       "path": "/v1/account/request-deletion"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/account/requests"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/account/requests"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/account/requests/:requestId/cancel"
     },
     {
       "method": "GET",
@@ -536,6 +560,18 @@
     },
     {
       "method": "POST",
+      "path": "/v1/admin/developer/applications/:applicationId/decision"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/developer/applications/:applicationId/suspend"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/developer/invitations"
+    },
+    {
+      "method": "POST",
       "path": "/v1/admin/developer/modules/releases/:releaseId/publish"
     },
     {
@@ -552,7 +588,35 @@
     },
     {
       "method": "GET",
+      "path": "/v1/admin/developer/modules/releases/:releaseId/trust"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/developer/modules/releases/:releaseId/verification-cancellations"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/developer/modules/releases/:releaseId/verification-retries"
+    },
+    {
+      "method": "GET",
       "path": "/v1/admin/developer/modules/reviews"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/admin/developer/organizations/:organizationId/verification"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/developer/publishers/:publisherId/reinstatements"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/developer/publishers/:publisherId/suspensions"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/session"
     },
     {
       "method": "POST",
@@ -784,6 +848,42 @@
     },
     {
       "method": "GET",
+      "path": "/v1/developer/access"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/developer/applications"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/developer/applications/current"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/developer/invitations/accept"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/developer/modules/artifact-uploads"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/developer/modules/artifact-uploads/:uploadId"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/developer/modules/artifact-uploads/:uploadId/finalize"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/developer/modules/artifacts/:artifactId"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/developer/modules/artifacts/declarative"
+    },
+    {
+      "method": "GET",
       "path": "/v1/developer/modules/releases"
     },
     {
@@ -803,8 +903,28 @@
       "path": "/v1/developer/modules/releases/:releaseId/review-requests"
     },
     {
+      "method": "GET",
+      "path": "/v1/developer/modules/releases/:releaseId/trust"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/developer/modules/releases/:releaseId/verification-retries"
+    },
+    {
       "method": "POST",
       "path": "/v1/developer/modules/validate"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/developer/publishers"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/developer/publishers"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/developer/publishers/:publisherId/members/:userId"
     },
     {
       "method": "GET",
@@ -953,6 +1073,58 @@
     {
       "method": "DELETE",
       "path": "/v1/marketplace/sources/:id"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-runtime/artifacts/fetch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-runtime/claims/next"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-runtime/evidence"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-runtime/finalize"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-runtime/leases/heartbeat"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-runtime/runners/heartbeat"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-runtime/runners/register"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-services/ai/chat/completions"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/ai/models"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-services/payments/orders"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/payments/orders/:orderId"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-services/payments/orders/:orderId/refunds"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/payments/zpay/callback"
     },
     {
       "method": "GET",
@@ -1511,8 +1683,52 @@
       "path": "/v1/projects/:projectId/model-picker"
     },
     {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/module-executions"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/module-executions/:executionId"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/module-executions/:executionId/cancel"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/module-executions/:executionId/confirm"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/module-executions/:executionId/events"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/module-executions/estimate"
+    },
+    {
       "method": "GET",
       "path": "/v1/projects/:projectId/modules"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/projects/:projectId/modules/:installationId/service-capabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/modules/:installationId/service-consents"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/projects/:projectId/modules/:installationId/service-consents/:service"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/projects/:projectId/modules/:installationId/service-consents/:service"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/modules/:moduleId/history"
     },
     {
       "method": "POST",
@@ -1901,6 +2117,10 @@
     {
       "method": "POST",
       "path": "/v1/router/web-search"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/runtime-profile"
     },
     {
       "method": "GET",

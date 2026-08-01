@@ -167,4 +167,58 @@ describe('developer module payment Drizzle repository', () => {
       expect.arrayContaining([ACCOUNT_ID, PROJECT_ID, INSTALLATION_ID, RELEASE_ID, ORDER_ID]),
     );
   });
+
+  test('locks by merchant order and records one provider callback with the payment transition', async () => {
+    const paidOrder: DeveloperModulePaymentOrder = { ...order, status: 'paid', paidAt: NOW };
+    const fixture = databaseFixture([[order], [{ order_id: ORDER_ID }], [paidOrder]]);
+    const repository = createDrizzleDeveloperModulePaymentRepository(fixture.database);
+
+    await expect(
+      repository.recordProviderCallback({
+        provider: 'zpay',
+        merchantOrderNo: order.merchantOrderNo,
+        providerTradeNo: 'trade-001',
+        amountMinor: 567,
+        paidAt: NOW,
+        canonicalPayloadDigest: `sha256:${'a'.repeat(64)}`,
+      }),
+    ).resolves.toEqual({ kind: 'recorded', order: paidOrder });
+
+    expect(fixture.queries).toHaveLength(3);
+    expect(fixture.queries[0]?.sql).toMatch(/merchant_order_no[\s\S]*FOR UPDATE/);
+    expect(fixture.queries[1]?.sql).toMatch(
+      /INSERT INTO[\s\S]*developer_module_payment_callbacks[\s\S]*ON CONFLICT/,
+    );
+    expect(fixture.queries[2]?.sql).toMatch(/UPDATE[\s\S]*developer_module_payment_orders/);
+    expect(fixture.queries.flatMap((query) => query.params)).toEqual(
+      expect.arrayContaining([
+        'zpay',
+        'trade-001',
+        order.merchantOrderNo,
+        `sha256:${'a'.repeat(64)}`,
+        'paid',
+      ]),
+    );
+  });
+
+  test('deduplicates an already recorded provider trade inside the callback transaction', async () => {
+    const fixture = databaseFixture([[order], [], [{ order_id: ORDER_ID }]]);
+    const repository = createDrizzleDeveloperModulePaymentRepository(fixture.database);
+
+    await expect(
+      repository.recordProviderCallback({
+        provider: 'zpay',
+        merchantOrderNo: order.merchantOrderNo,
+        providerTradeNo: 'trade-001',
+        amountMinor: 567,
+        paidAt: NOW,
+        canonicalPayloadDigest: `sha256:${'b'.repeat(64)}`,
+      }),
+    ).resolves.toEqual({ kind: 'duplicate', order });
+
+    expect(fixture.queries).toHaveLength(3);
+    expect(fixture.queries[2]?.sql).toMatch(
+      /developer_module_payment_callbacks[\s\S]*provider_trade_no/,
+    );
+  });
 });

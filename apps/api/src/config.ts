@@ -35,6 +35,28 @@ const optUrl = (def: string) =>
     { message: 'Must be a valid HTTP(S) URL' },
   );
 
+const optHttpsOrigin = (def: string) =>
+  z
+    .string()
+    .optional()
+    .default(def)
+    .refine((value) => {
+      if (value === '') return true;
+      try {
+        const url = new URL(value);
+        return (
+          url.protocol === 'https:' &&
+          url.username === '' &&
+          url.password === '' &&
+          url.search === '' &&
+          url.hash === '' &&
+          (url.pathname === '' || url.pathname === '/')
+        );
+      } catch {
+        return false;
+      }
+    }, 'Must be an HTTPS origin without credentials, path, query, or fragment');
+
 /** Optional int with a default. */
 const optInt = (def: number) =>
   z.string().optional().default(String(def)).transform((v) => {
@@ -124,6 +146,10 @@ const envSchema = z.object({
   OPENOPC_MODULE_SERVICE_CAPABILITY_KEY_ID: optStr,
   OPENOPC_MODULE_SERVICE_CAPABILITY_PRIVATE_KEY_BASE64: optStr,
   OPENOPC_MODULE_SERVICE_CAPABILITY_PUBLIC_KEY_BASE64: optStr,
+  ZPAY_BASE_URL: optHttpsOrigin('https://zpayz.cn'),
+  ZPAY_MERCHANT_PID: optStr,
+  ZPAY_MERCHANT_KEY: optStr,
+  ZPAY_CALLBACK_BASE_URL: optHttpsOrigin(''),
   // Durable Intelligence workflows remain extension-owned and inert until the
   // full route, scheduler, Studio, and acceptance gates are explicitly enabled.
   INTELLIGENCE_WORKFLOWS_ENABLED:   optBoolFalse,
@@ -715,6 +741,10 @@ export const config = {
     env.OPENOPC_MODULE_SERVICE_CAPABILITY_PRIVATE_KEY_BASE64,
   OPENOPC_MODULE_SERVICE_CAPABILITY_PUBLIC_KEY_BASE64:
     env.OPENOPC_MODULE_SERVICE_CAPABILITY_PUBLIC_KEY_BASE64,
+  ZPAY_BASE_URL: env.ZPAY_BASE_URL,
+  ZPAY_MERCHANT_PID: env.ZPAY_MERCHANT_PID,
+  ZPAY_MERCHANT_KEY: env.ZPAY_MERCHANT_KEY,
+  ZPAY_CALLBACK_BASE_URL: env.ZPAY_CALLBACK_BASE_URL,
   INTELLIGENCE_WORKFLOWS_ENABLED: env.INTELLIGENCE_WORKFLOWS_ENABLED,
   INTELLIGENCE_AG_UI_ENABLED: env.INTELLIGENCE_AG_UI_ENABLED,
   AUTOMATION_CONTROL_ENABLED: env.AUTOMATION_CONTROL_ENABLED,

@@ -68,9 +68,7 @@ describe('registry module manifest', () => {
     const module = validV3Module();
 
     expect(validateRegistryModuleManifest(module)).toEqual({ valid: true, issues: [] });
-    expect(module.capabilities).toEqual([
-      { id: 'example.weather-station.forecast', kind: 'ui' },
-    ]);
+    expect(module.capabilities).toEqual([{ id: 'example.weather-station.forecast', kind: 'ui' }]);
     const typedModule = module as unknown as RegistryModuleManifest;
     expect(moduleCatalogLabels(typedModule)).toEqual(['h5', 'weather']);
     expect(moduleServiceOperations(typedModule, 'payment')).toEqual([
@@ -99,40 +97,73 @@ describe('registry module manifest', () => {
   });
 
   test.each([
-    ['category', (module: Record<string, unknown>) => Object.assign(module, { category: 'industry' })],
-    ['duplicate labels', (module: Record<string, unknown>) => {
-      (module.openopc as { catalog: { labels: string[] } }).catalog.labels = ['h5', 'h5'];
-    }],
-    ['unsorted labels', (module: Record<string, unknown>) => {
-      (module.openopc as { catalog: { labels: string[] } }).catalog.labels = ['weather', 'h5'];
-    }],
-    ['duplicate operations', (module: Record<string, unknown>) => {
-      (module.openopc as { services: { payment: { operations: string[] } } }).services.payment.operations = [
-        'orders.create',
-        'orders.create',
-      ];
-    }],
-    ['empty operation list', (module: Record<string, unknown>) => {
-      (module.openopc as { services: { payment: { operations: string[] } } }).services.payment.operations = [];
-    }],
-    ['undeclared operation', (module: Record<string, unknown>) => {
-      (module.openopc as { services: { payment: { operations: string[] } } }).services.payment.operations = [
-        'text.generate',
-      ];
-    }],
-    ['unknown openopc field', (module: Record<string, unknown>) => {
-      Object.assign(module.openopc as Record<string, unknown>, { providerUrl: 'https://provider.example' });
-    }],
-    ['provider URL in catalog', (module: Record<string, unknown>) => {
-      Object.assign((module.openopc as { catalog: Record<string, unknown> }).catalog, {
-        providerUrl: 'https://provider.example',
-      });
-    }],
-    ['provider key in service', (module: Record<string, unknown>) => {
-      Object.assign((module.openopc as { services: { ai: Record<string, unknown> } }).services.ai, {
-        apiKey: 'secret',
-      });
-    }],
+    [
+      'category',
+      (module: Record<string, unknown>) => Object.assign(module, { category: 'industry' }),
+    ],
+    [
+      'duplicate labels',
+      (module: Record<string, unknown>) => {
+        (module.openopc as { catalog: { labels: string[] } }).catalog.labels = ['h5', 'h5'];
+      },
+    ],
+    [
+      'unsorted labels',
+      (module: Record<string, unknown>) => {
+        (module.openopc as { catalog: { labels: string[] } }).catalog.labels = ['weather', 'h5'];
+      },
+    ],
+    [
+      'duplicate operations',
+      (module: Record<string, unknown>) => {
+        (
+          module.openopc as { services: { payment: { operations: string[] } } }
+        ).services.payment.operations = ['orders.create', 'orders.create'];
+      },
+    ],
+    [
+      'empty operation list',
+      (module: Record<string, unknown>) => {
+        (
+          module.openopc as { services: { payment: { operations: string[] } } }
+        ).services.payment.operations = [];
+      },
+    ],
+    [
+      'undeclared operation',
+      (module: Record<string, unknown>) => {
+        (
+          module.openopc as { services: { payment: { operations: string[] } } }
+        ).services.payment.operations = ['text.generate'];
+      },
+    ],
+    [
+      'unknown openopc field',
+      (module: Record<string, unknown>) => {
+        Object.assign(module.openopc as Record<string, unknown>, {
+          providerUrl: 'https://provider.example',
+        });
+      },
+    ],
+    [
+      'provider URL in catalog',
+      (module: Record<string, unknown>) => {
+        Object.assign((module.openopc as { catalog: Record<string, unknown> }).catalog, {
+          providerUrl: 'https://provider.example',
+        });
+      },
+    ],
+    [
+      'provider key in service',
+      (module: Record<string, unknown>) => {
+        Object.assign(
+          (module.openopc as { services: { ai: Record<string, unknown> } }).services.ai,
+          {
+            apiKey: 'secret',
+          },
+        );
+      },
+    ],
   ] as const)('rejects v3 %s', (_label, mutate) => {
     const module = validV3Module() as Record<string, unknown>;
     mutate(module);

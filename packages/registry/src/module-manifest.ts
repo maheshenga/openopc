@@ -77,7 +77,10 @@ const OPENOPC_KEYS = new Set(['sdkApiVersion', 'catalog', 'services']);
 const OPENOPC_CATALOG_KEYS = new Set(['labels']);
 const OPENOPC_SERVICE_KEYS = new Set(['operations']);
 const OPENOPC_LABEL_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const OPENOPC_SERVICE_OPERATIONS: Record<OpenOpcModuleServiceName, readonly OpenOpcModuleServiceOperation[]> = {
+const OPENOPC_SERVICE_OPERATIONS: Record<
+  OpenOpcModuleServiceName,
+  readonly OpenOpcModuleServiceOperation[]
+> = {
   ai: ['models.read', 'text.generate', 'text.stream'],
   payment: ['orders.create', 'orders.read', 'refunds.create'],
 };
@@ -453,8 +456,14 @@ export function validateRegistryModuleManifest(
             const validOperations: string[] = [];
             const allowed = OPENOPC_SERVICE_OPERATIONS[serviceName as OpenOpcModuleServiceName];
             operations.forEach((operation, index) => {
-              if (typeof operation !== 'string' || !allowed.includes(operation as OpenOpcModuleServiceOperation)) {
-                error(`${servicePath}.operations[${index}]`, 'operation is not allowed for service');
+              if (
+                typeof operation !== 'string' ||
+                !allowed.includes(operation as OpenOpcModuleServiceOperation)
+              ) {
+                error(
+                  `${servicePath}.operations[${index}]`,
+                  'operation is not allowed for service',
+                );
               } else {
                 validOperations.push(operation);
               }
@@ -463,12 +472,10 @@ export function validateRegistryModuleManifest(
               error(`${servicePath}.operations`, 'duplicate operation');
             }
             if (
-              validOperations.some(
-                (operation, index) => {
-                  const previous = validOperations[index - 1];
-                  return previous !== undefined && operation < previous;
-                },
-              )
+              validOperations.some((operation, index) => {
+                const previous = validOperations[index - 1];
+                return previous !== undefined && operation < previous;
+              })
             ) {
               error(`${servicePath}.operations`, 'operations must be sorted');
             }

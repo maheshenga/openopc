@@ -80,6 +80,24 @@ function isTrustedAppSender(configuredUrl, senderUrl) {
   }
 }
 
+function isOpenOpcModuleServiceUrl(urlStr, configuredUrl) {
+  try {
+    const configured = new URL(configuredUrl);
+    const requested = new URL(urlStr);
+    if (!['http:', 'https:'].includes(configured.protocol)) return false;
+    if (!['http:', 'https:'].includes(requested.protocol)) return false;
+    if (requested.protocol === 'http:' && !isLoopbackHost(requested.hostname)) return false;
+    if (configured.origin !== requested.origin) return false;
+    if (requested.username || requested.password) return false;
+    return (
+      requested.pathname === '/v1/module-services' ||
+      requested.pathname.startsWith('/v1/module-services/')
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isLoopbackHost(hostname) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
 }
@@ -113,6 +131,7 @@ module.exports = {
   downloadFromWebContents,
   isMainAppHost,
   isLocalGrantOperation,
+  isOpenOpcModuleServiceUrl,
   isTrustedAppSender,
   normalizeDownloadUrl,
   shouldLoadInApp,

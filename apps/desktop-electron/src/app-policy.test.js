@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const {
   downloadFromWebContents,
   isLocalGrantOperation,
+  isOpenOpcModuleServiceUrl,
   isTrustedAppSender,
   normalizeDownloadUrl,
   shouldLoadInApp,
@@ -205,6 +206,31 @@ describe('desktop app navigation policy', () => {
       expect(shouldLoadInApp(workflowUrl, configured)).toBe(true);
       expect(isTrustedAppSender(configured, workflowUrl)).toBe(true);
     }
+  });
+});
+
+describe('desktop module service policy', () => {
+  test('allows only the configured OpenOPC API service path and never provider origins', () => {
+    const configured = 'https://app.openopc.example/projects';
+
+    expect(
+      isOpenOpcModuleServiceUrl(
+        'https://app.openopc.example/v1/module-services/ai/models',
+        configured,
+      ),
+    ).toBe(true);
+    expect(isOpenOpcModuleServiceUrl('https://new-api.example/v1/models', configured)).toBe(false);
+    expect(isOpenOpcModuleServiceUrl('https://z-pay.example/mapi.php', configured)).toBe(false);
+    expect(isOpenOpcModuleServiceUrl('https://app.openopc.example/pricing', configured)).toBe(
+      false,
+    );
+  });
+
+  test('does not add provider origins to preload or native IPC surfaces', () => {
+    const preload = readDesktopFile(path.join('src', 'preload.js'));
+    const main = readDesktopFile(path.join('src', 'main.js'));
+
+    expect(`${preload}\n${main}`).not.toMatch(/new-api|newapi|z-pay|alipay|wechat/i);
   });
 });
 

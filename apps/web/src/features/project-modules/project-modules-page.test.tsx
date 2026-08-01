@@ -163,4 +163,40 @@ describe('Project modules workbench', () => {
     expect(html).not.toContain('data-testid="update-module"');
     expect(html).not.toContain('data-testid="rollback-module"');
   });
+
+  test('does not render service consent controls when the release has no openopc services', () => {
+    const html = renderView();
+
+    expect(html).not.toContain('Service access');
+    expect(html).not.toContain('Grant service access');
+  });
+
+  test('renders only the exact declared AI and payment operations', () => {
+    const html = renderView({
+      releases: RELEASES.map((release) =>
+        release.release_id === 'release-v2'
+          ? {
+              ...release,
+              manifest: {
+                schemaVersion: 3,
+                openopc: {
+                  sdkApiVersion: 'v1',
+                  services: {
+                    ai: { operations: ['models.read', 'text.generate'] },
+                    payment: { operations: ['orders.create'] },
+                  },
+                },
+              },
+            }
+          : release,
+      ),
+    });
+
+    expect(html).toContain('AI service');
+    expect(html).toContain('models.read');
+    expect(html).toContain('text.generate');
+    expect(html).toContain('Payment service');
+    expect(html).toContain('orders.create');
+    expect(html).not.toContain('refunds.create');
+  });
 });

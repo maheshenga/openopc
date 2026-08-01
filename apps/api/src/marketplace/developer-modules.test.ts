@@ -87,6 +87,7 @@ describe('developer module marketplace adapter', () => {
           tools: [],
           network: ['https://api.example.com'],
         },
+        manifest: published.manifest,
       }),
     );
   });
@@ -115,7 +116,9 @@ describe('developer module marketplace adapter', () => {
     expect(page.items).toEqual([
       expect.objectContaining({ release_id: 'v3', categories: ['h5', 'weather'] }),
     ]);
-    await expect(adapter.getFile(page.items[0]!.id, 'dist/index.html')).resolves.toBeNull();
+    const firstItem = page.items[0];
+    expect(firstItem).toBeDefined();
+    await expect(adapter.getFile(firstItem?.id ?? '', 'dist/index.html')).resolves.toBeNull();
   });
 
   test('supports deterministic search and exposes public release metadata without files', async () => {

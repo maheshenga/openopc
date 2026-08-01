@@ -1,7 +1,7 @@
 import { moduleCatalogLabels } from '@kortix/registry';
 import {
-  assertReleaseRuntimeAllowed,
   type DeveloperModuleDistributionService,
+  assertReleaseRuntimeAllowed,
 } from '../developer/distribution';
 import type { DeveloperModuleRelease } from '../developer/releases';
 import { loadRuntimeReleaseProfile } from '../release-profile/runtime';
@@ -34,6 +34,7 @@ export interface DeveloperModuleMarketplaceItem {
   module_id: string;
   module_version: string;
   publisher_id: string;
+  manifest: DeveloperModuleRelease['manifest'];
 }
 
 export interface DeveloperModuleMarketplaceDetail extends DeveloperModuleMarketplaceItem {
@@ -148,6 +149,7 @@ function itemOf(release: DeveloperModuleRelease): DeveloperModuleMarketplaceItem
     module_id: release.module_id,
     module_version: release.module_version,
     publisher_id: release.publisher_id,
+    manifest: structuredClone(release.manifest),
   };
 }
 

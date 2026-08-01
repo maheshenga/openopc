@@ -8,10 +8,16 @@ import type {
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
+  type ModuleServiceConsent,
+  type ModuleServiceConsentMutationInput,
+  type OpenOpcServiceName,
+  grantProjectModuleServiceConsent,
   installPublishedProjectModule,
   listInstalledProjectModules,
   listProjectModuleHistory,
+  listProjectModuleServiceConsents,
   listPublishedProjectModuleReleases,
+  revokeProjectModuleServiceConsent,
   rollbackPublishedProjectModule,
   updatePublishedProjectModule,
 } from './client';
@@ -22,6 +28,12 @@ export const projectModuleKeys = {
   releases: () => ['project-modules', 'published-releases'] as const,
   history: (projectId: string, moduleId: string) =>
     ['project-modules', projectId, 'history', moduleId] as const,
+  serviceConsents: (projectId: string, installationId: string) =>
+    ['project-modules', projectId, 'service-consents', installationId] as const,
+  serviceConsentsPrefix: (projectId: string) =>
+    ['project-modules', projectId, 'service-consents'] as const,
+  serviceCapabilities: (projectId: string, installationId: string) =>
+    ['project-modules', projectId, 'service-capabilities', installationId] as const,
 };
 
 export const projectModulesQuery = (projectId: string) => ({
@@ -60,6 +72,86 @@ export function useProjectModuleHistories(
       ...projectModuleHistoryQuery(projectId, installation.module_id),
       enabled: Boolean(projectId) && enabled,
     })),
+  });
+}
+
+export const projectModuleServiceConsentsQuery = (projectId: string, installationId: string) => ({
+  queryKey: projectModuleKeys.serviceConsents(projectId, installationId),
+  queryFn: () => listProjectModuleServiceConsents(projectId, installationId),
+  staleTime: 15_000,
+});
+
+export function useProjectModuleServiceConsents(
+  projectId: string,
+  installationId: string,
+  enabled = true,
+) {
+  return useQuery({
+    ...projectModuleServiceConsentsQuery(projectId, installationId),
+    enabled: Boolean(projectId) && Boolean(installationId) && enabled,
+  });
+}
+
+export function useProjectModuleServiceConsentsForInstallations(
+  projectId: string,
+  modules: readonly ProjectModuleInstallation[],
+  enabled = true,
+) {
+  return useQueries({
+    queries: modules.map((installation) => ({
+      ...projectModuleServiceConsentsQuery(projectId, installation.installation_id),
+      enabled: Boolean(projectId) && enabled,
+    })),
+  });
+}
+
+export interface ProjectModuleServiceConsentMutationInput {
+  projectId: string;
+  installationId: string;
+  service: OpenOpcServiceName;
+  operations: ModuleServiceConsentMutationInput['operations'];
+  expectedInstallRevision: number;
+}
+
+export function useGrantProjectModuleServiceConsent() {
+  const queryClient = useQueryClient();
+  return useMutation<ModuleServiceConsent, Error, ProjectModuleServiceConsentMutationInput>({
+    mutationFn: (input) =>
+      grantProjectModuleServiceConsent(input.projectId, input.installationId, input.service, {
+        operations: input.operations,
+        expected_install_revision: input.expectedInstallRevision,
+      }),
+    retry: false,
+    onSuccess: (_consent, input) => {
+      void queryClient.invalidateQueries({
+        queryKey: projectModuleKeys.serviceConsents(input.projectId, input.installationId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: projectModuleKeys.serviceCapabilities(input.projectId, input.installationId),
+      });
+    },
+  });
+}
+
+export function useRevokeProjectModuleServiceConsent() {
+  const queryClient = useQueryClient();
+  return useMutation<void, Error, Omit<ProjectModuleServiceConsentMutationInput, 'operations'>>({
+    mutationFn: (input) =>
+      revokeProjectModuleServiceConsent(
+        input.projectId,
+        input.installationId,
+        input.service,
+        input.expectedInstallRevision,
+      ),
+    retry: false,
+    onSuccess: (_result, input) => {
+      void queryClient.invalidateQueries({
+        queryKey: projectModuleKeys.serviceConsents(input.projectId, input.installationId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: projectModuleKeys.serviceCapabilities(input.projectId, input.installationId),
+      });
+    },
   });
 }
 
@@ -106,6 +198,12 @@ export function useProjectModuleMutation(
       void queryClient.invalidateQueries({
         queryKey: projectModuleKeys.history(input.projectId, input.moduleId),
       });
+      void queryClient.invalidateQueries({
+        queryKey: projectModuleKeys.serviceConsentsPrefix(input.projectId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [...projectModuleKeys.all, input.projectId, 'service-capabilities'],
+      });
     },
   });
 }
@@ -124,6 +222,12 @@ export function useInstallProjectModule() {
         void queryClient.invalidateQueries({
           queryKey: [...projectModuleKeys.all, input.projectId, 'history'],
         });
+        void queryClient.invalidateQueries({
+          queryKey: projectModuleKeys.serviceConsentsPrefix(input.projectId),
+        });
+        void queryClient.invalidateQueries({
+          queryKey: [...projectModuleKeys.all, input.projectId, 'service-capabilities'],
+        });
       },
     },
   );
@@ -140,6 +244,10 @@ export type ProjectModuleUiErrorCode =
   | 'DEVELOPER_MODULE_NOT_PUBLISHED'
   | 'DEVELOPER_MODULE_REVOKED'
   | 'DEVELOPER_RELEASE_NOT_FOUND'
+  | 'MODULE_SERVICE_CONSENT_REVOKED'
+  | 'MODULE_SERVICE_INSTALLATION_STALE'
+  | 'MODULE_SERVICE_RELEASE_REVOKED'
+  | 'MODULE_SERVICE_CAPABILITY_EXPIRED'
   | 'PROJECT_MODULE_REQUEST_FAILED';
 
 const PROJECT_MODULE_ERRORS = new Set<ProjectModuleUiErrorCode>([
@@ -153,6 +261,10 @@ const PROJECT_MODULE_ERRORS = new Set<ProjectModuleUiErrorCode>([
   'DEVELOPER_MODULE_NOT_PUBLISHED',
   'DEVELOPER_MODULE_REVOKED',
   'DEVELOPER_RELEASE_NOT_FOUND',
+  'MODULE_SERVICE_CONSENT_REVOKED',
+  'MODULE_SERVICE_INSTALLATION_STALE',
+  'MODULE_SERVICE_RELEASE_REVOKED',
+  'MODULE_SERVICE_CAPABILITY_EXPIRED',
 ]);
 
 export function projectModuleErrorCode(error: unknown): ProjectModuleUiErrorCode {

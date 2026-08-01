@@ -53,14 +53,24 @@ import {
 import { PROJECT_ACTIONS } from '@/lib/project-actions';
 import { useProjectCan } from '@/lib/use-project-can';
 
-import type { PublishedProjectModuleRelease } from './client';
+import type {
+  ModuleServiceConsent,
+  OpenOpcServiceName,
+  OpenOpcServiceOperation,
+  PublishedProjectModuleRelease,
+} from './client';
+import { moduleServiceDeclarations } from './client';
+import { ModuleServiceConsentDialog } from './module-service-consent-dialog';
 import {
   projectModuleErrorCode,
+  useGrantProjectModuleServiceConsent,
   useInstallProjectModule,
   useProjectModuleHistories,
   useProjectModuleMutation,
   useProjectModuleReleases,
+  useProjectModuleServiceConsentsForInstallations,
   useProjectModules,
+  useRevokeProjectModuleServiceConsent,
 } from './query';
 
 export type { PublishedProjectModuleRelease } from './client';
@@ -114,9 +124,20 @@ export interface ProjectModulesViewProps {
   canWrite: boolean;
   pendingModuleId: string | null;
   errorCode: string | null;
+  serviceConsentsByInstallation?: Readonly<Record<string, readonly ModuleServiceConsent[]>>;
+  pendingServiceKey?: string | null;
   onInstall: (releaseId: string) => void;
   onUpdate: (moduleId: string, releaseId: string, revision: number) => void;
   onRollback: (moduleId: string, releaseId: string, revision: number) => void;
+  onGrantServiceConsent?: (
+    installation: ProjectModuleInstallation,
+    service: OpenOpcServiceName,
+    operations: readonly OpenOpcServiceOperation[],
+  ) => void;
+  onRevokeServiceConsent?: (
+    installation: ProjectModuleInstallation,
+    service: OpenOpcServiceName,
+  ) => void;
   onReload: () => void;
 }
 
@@ -128,9 +149,13 @@ export function ProjectModulesView({
   canWrite,
   pendingModuleId,
   errorCode,
+  serviceConsentsByInstallation = {},
+  pendingServiceKey = null,
   onInstall,
   onUpdate,
   onRollback,
+  onGrantServiceConsent,
+  onRevokeServiceConsent,
   onReload,
 }: ProjectModulesViewProps) {
   const [installTarget, setInstallTarget] = useState<PublishedProjectModuleRelease | null>(null);
@@ -141,6 +166,12 @@ export function ProjectModulesView({
     revision: number;
   } | null>(null);
   const [historyInstallationId, setHistoryInstallationId] = useState<string | null>(null);
+  const [serviceConsentTarget, setServiceConsentTarget] = useState<{
+    installation: ProjectModuleInstallation;
+    service: OpenOpcServiceName;
+    operations: OpenOpcServiceOperation[];
+    consent: ModuleServiceConsent | null;
+  } | null>(null);
   const [updateSelection, setUpdateSelection] = useState<Record<string, string>>({});
   const [rollbackSelection, setRollbackSelection] = useState<Record<string, string>>({});
 
@@ -227,6 +258,11 @@ export function ProjectModulesView({
                   rollbackSelection[installation.module_id] ?? rollbackTargets[0]?.release_id;
                 const active = installation.status === 'active';
                 const pending = pendingModuleId === installation.module_id;
+                const activeRelease = moduleReleases.find(
+                  (release) => release.release_id === installation.active_release_id,
+                );
+                const services = moduleServiceDeclarations(activeRelease?.manifest);
+                const consents = serviceConsentsByInstallation[installation.installation_id] ?? [];
                 return (
                   <TableRow key={installation.installation_id}>
                     <TableCell>
@@ -236,6 +272,57 @@ export function ProjectModulesView({
                         )?.item_name ?? installation.module_id}
                       </p>
                       <p className="text-muted-foreground text-xs">{installation.module_id}</p>
+                      {services.length > 0 ? (
+                        <div className="mt-2 space-y-2" data-testid="module-service-access">
+                          {services.map(({ service, operations }) => {
+                            const consent =
+                              consents.find(
+                                (candidate) =>
+                                  candidate.service === service &&
+                                  candidate.release_id === installation.active_release_id &&
+                                  candidate.install_revision === installation.install_revision,
+                              ) ?? null;
+                            const serviceKey = `${installation.installation_id}:${service}`;
+                            const hasActiveConsent = consent?.revoked_at === null;
+                            return (
+                              <div key={service} className="border-l-2 border-border pl-2 text-xs">
+                                <p className="font-medium">
+                                  {service === 'ai' ? 'AI service' : 'Payment service'}
+                                </p>
+                                <p className="text-muted-foreground">{operations.join(', ')}</p>
+                                <div className="mt-1 flex flex-wrap items-center gap-2">
+                                  <Badge variant={hasActiveConsent ? 'secondary' : 'outline'}>
+                                    {hasActiveConsent
+                                      ? 'Granted'
+                                      : consent
+                                        ? 'Revoked'
+                                        : 'Not granted'}
+                                  </Badge>
+                                  {canWrite && active ? (
+                                    <Button
+                                      type="button"
+                                      size="xs"
+                                      variant="ghost"
+                                      data-testid={`${hasActiveConsent ? 'revoke' : 'grant'}-service-${service}`}
+                                      disabled={pendingServiceKey === serviceKey}
+                                      onClick={() =>
+                                        setServiceConsentTarget({
+                                          installation,
+                                          service,
+                                          operations,
+                                          consent,
+                                        })
+                                      }
+                                    >
+                                      {hasActiveConsent ? 'Revoke' : 'Grant access'}
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                     </TableCell>
                     <TableCell>{installation.active_version}</TableCell>
                     <TableCell>
@@ -449,6 +536,37 @@ export function ProjectModulesView({
         </SheetContent>
       </Sheet>
 
+      {serviceConsentTarget ? (
+        <ModuleServiceConsentDialog
+          open
+          service={serviceConsentTarget.service}
+          operations={serviceConsentTarget.operations}
+          consent={serviceConsentTarget.consent}
+          pending={
+            pendingServiceKey ===
+            `${serviceConsentTarget.installation.installation_id}:${serviceConsentTarget.service}`
+          }
+          onOpenChange={(open) => {
+            if (!open) setServiceConsentTarget(null);
+          }}
+          onGrant={() => {
+            onGrantServiceConsent?.(
+              serviceConsentTarget.installation,
+              serviceConsentTarget.service,
+              serviceConsentTarget.operations,
+            );
+            setServiceConsentTarget(null);
+          }}
+          onRevoke={() => {
+            onRevokeServiceConsent?.(
+              serviceConsentTarget.installation,
+              serviceConsentTarget.service,
+            );
+            setServiceConsentTarget(null);
+          }}
+        />
+      ) : null}
+
       <AlertDialog
         open={installTarget !== null}
         onOpenChange={(open) => {
@@ -528,6 +646,8 @@ export function ProjectModulesPage({ projectId }: { projectId: string }) {
   const installMutation = useInstallProjectModule();
   const updateMutation = useProjectModuleMutation('update');
   const rollbackMutation = useProjectModuleMutation('rollback');
+  const grantServiceConsentMutation = useGrantProjectModuleServiceConsent();
+  const revokeServiceConsentMutation = useRevokeProjectModuleServiceConsent();
   const [mutationHistoryByInstallation, setMutationHistoryByInstallation] = useState<
     Readonly<Record<string, readonly ProjectModuleInstallationEvent[]>>
   >({});
@@ -538,6 +658,18 @@ export function ProjectModulesPage({ projectId }: { projectId: string }) {
     modules,
     canRead.allowed || canRead.isLoading,
   );
+  const serviceConsentQueries = useProjectModuleServiceConsentsForInstallations(
+    projectId,
+    modules,
+    canRead.allowed || canRead.isLoading,
+  );
+  const serviceConsentsByInstallation = useMemo(() => {
+    const next: Record<string, readonly ModuleServiceConsent[]> = {};
+    modules.forEach((installation, index) => {
+      next[installation.installation_id] = serviceConsentQueries[index]?.data ?? [];
+    });
+    return next;
+  }, [modules, serviceConsentQueries]);
   const historyByInstallation = useMemo(() => {
     const next: Record<string, readonly ProjectModuleInstallationEvent[]> = {};
     modules.forEach((installation, index) => {
@@ -566,6 +698,14 @@ export function ProjectModulesPage({ projectId }: { projectId: string }) {
           : 'ready';
   const pendingModuleId =
     updateMutation.variables?.moduleId ?? rollbackMutation.variables?.moduleId ?? null;
+  const pendingServiceKey =
+    grantServiceConsentMutation.isPending && grantServiceConsentMutation.variables
+      ? `${grantServiceConsentMutation.variables.installationId}:${grantServiceConsentMutation.variables.service}`
+      : null;
+  const pendingRevokeServiceKey =
+    revokeServiceConsentMutation.isPending && revokeServiceConsentMutation.variables
+      ? `${revokeServiceConsentMutation.variables.installationId}:${revokeServiceConsentMutation.variables.service}`
+      : null;
   const recordTransition = (transition: ProjectModuleInstallationTransition) =>
     setMutationHistoryByInstallation((current) => ({
       ...current,
@@ -586,6 +726,8 @@ export function ProjectModulesPage({ projectId }: { projectId: string }) {
       canWrite={canWrite.allowed}
       pendingModuleId={pendingModuleId}
       errorCode={errorCode}
+      serviceConsentsByInstallation={serviceConsentsByInstallation}
+      pendingServiceKey={pendingServiceKey ?? pendingRevokeServiceKey ?? null}
       onInstall={(releaseId) =>
         installMutation.mutate(
           { projectId, releaseId, idempotencyKey: key('install', 'new', releaseId, 0) },
@@ -615,6 +757,23 @@ export function ProjectModulesPage({ projectId }: { projectId: string }) {
           },
           { onSuccess: recordTransition },
         )
+      }
+      onGrantServiceConsent={(installation, service, operations) =>
+        grantServiceConsentMutation.mutate({
+          projectId,
+          installationId: installation.installation_id,
+          service,
+          operations: [...operations],
+          expectedInstallRevision: installation.install_revision,
+        })
+      }
+      onRevokeServiceConsent={(installation, service) =>
+        revokeServiceConsentMutation.mutate({
+          projectId,
+          installationId: installation.installation_id,
+          service,
+          expectedInstallRevision: installation.install_revision,
+        })
       }
       onReload={() => {
         void modulesQuery.refetch();

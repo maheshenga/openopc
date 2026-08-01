@@ -8843,6 +8843,10 @@ export const developerModulePaymentOrders = kortixSchema.table(
       table.installationId,
       table.releaseId,
     ),
+    unique('developer_module_payment_orders_order_account_unique').on(
+      table.orderId,
+      table.accountId,
+    ),
     unique('developer_module_payment_orders_merchant_order_unique').on(table.merchantOrderNo),
     uniqueIndex('developer_module_payment_orders_idempotency_unique').on(
       table.accountId,

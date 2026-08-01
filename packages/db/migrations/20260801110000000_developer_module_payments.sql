@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS kortix.developer_module_payment_orders (
     REFERENCES kortix.developer_module_releases(release_id, account_id) ON DELETE RESTRICT,
   CONSTRAINT developer_module_payment_orders_identity_unique
     UNIQUE (order_id, account_id, project_id, installation_id, release_id),
+  CONSTRAINT developer_module_payment_orders_order_account_unique
+    UNIQUE (order_id, account_id),
   CONSTRAINT developer_module_payment_orders_merchant_order_unique
     UNIQUE (merchant_order_no),
   CONSTRAINT developer_module_payment_orders_idempotency_unique

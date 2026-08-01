@@ -43,12 +43,12 @@ type ViewProps = {
 };
 
 async function view(): Promise<ComponentType<ViewProps>> {
-  let module: Record<string, unknown> = {};
+  let loadedModule: Record<string, unknown> = {};
   try {
-    module = (await import('./developer-application-page')) as Record<string, unknown>;
+    loadedModule = (await import('./developer-application-page')) as Record<string, unknown>;
   } catch {}
-  expect(module.DeveloperApplicationView).toBeFunction();
-  return module.DeveloperApplicationView as ComponentType<ViewProps>;
+  expect(loadedModule.DeveloperApplicationView).toBeFunction();
+  return loadedModule.DeveloperApplicationView as ComponentType<ViewProps>;
 }
 
 const noop = () => undefined;
@@ -154,9 +154,9 @@ test('renders account, permission, loading, and recoverable error boundaries', a
 });
 
 test('resets organization and policy confirmations when the selected account changes', async () => {
-  const module = (await import('./developer-application-page')) as Record<string, unknown>;
-  expect(module.developerApplicationFormStateForAccount).toBeFunction();
-  const formStateForAccount = module.developerApplicationFormStateForAccount as (
+  const loadedModule = (await import('./developer-application-page')) as Record<string, unknown>;
+  expect(loadedModule.developerApplicationFormStateForAccount).toBeFunction();
+  const formStateForAccount = loadedModule.developerApplicationFormStateForAccount as (
     current: {
       accountId: string | null;
       organizationName: string;

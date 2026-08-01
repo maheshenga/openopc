@@ -163,6 +163,12 @@ test('adds an idempotent payment-only migration without merchant secrets or orde
   );
   expect(migration).toContain('CREATE TABLE IF NOT EXISTS kortix.developer_module_payment_refunds');
   expect(migration).toContain('developer_module_payment_orders_idempotency_unique');
+  expect(migration).toContain(
+    'CONSTRAINT developer_module_payment_orders_order_account_unique\n    UNIQUE (order_id, account_id)',
+  );
+  expect(migration).toContain(
+    'REFERENCES kortix.developer_module_payment_orders(order_id, account_id)',
+  );
   expect(migration).toContain('developer_module_payment_callbacks_trade_unique');
   expect(migration).toContain('REVOKE ALL');
   expect(migration).not.toMatch(/orders[.]close/i);

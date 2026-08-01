@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+  CreateDeveloperPaymentOrderInputSchema,
+  CreateDeveloperPaymentOrderResultSchema,
+  CreateDeveloperPaymentRefundInputSchema,
+  DeveloperPaymentOrderViewSchema,
+  DeveloperPaymentRefundViewSchema,
+  ModulePaymentIdempotencyKeySchema,
   type ModuleServiceCapabilityClaimsV1,
   ModuleServiceCapabilityClaimsV1Schema,
   ModuleServiceCapabilityRequestSchema,
@@ -159,8 +165,143 @@ describe('module service wire contract', () => {
     ).toBe(true);
     expect(
       ModuleServiceErrorResponseSchema.safeParse({
+        error: 'MODULE_PAYMENT_IDEMPOTENCY_CONFLICT',
+      }).success,
+    ).toBe(true);
+    expect(
+      ModuleServiceErrorResponseSchema.safeParse({
+        error: 'MODULE_PAYMENT_PROVIDER_UNAVAILABLE',
+      }).success,
+    ).toBe(true);
+    expect(
+      ModuleServiceErrorResponseSchema.safeParse({
         error: 'NEW_API_KEY_INVALID',
         provider_url: 'https://new-api.example.com',
+      }).success,
+    ).toBe(false);
+  });
+
+  test('accepts only bounded CNY order input without provider configuration', () => {
+    expect(
+      CreateDeveloperPaymentOrderInputSchema.parse({
+        amount_minor: 567,
+        currency: 'CNY',
+        product_name: 'OpenOPC module purchase',
+      }),
+    ).toEqual({
+      amount_minor: 567,
+      currency: 'CNY',
+      product_name: 'OpenOPC module purchase',
+    });
+
+    for (const input of [
+      { amount_minor: 0, currency: 'CNY', product_name: 'x' },
+      { amount_minor: 1.5, currency: 'CNY', product_name: 'x' },
+      { amount_minor: 100_000_001, currency: 'CNY', product_name: 'x' },
+      { amount_minor: 1, currency: 'USD', product_name: 'x' },
+      { amount_minor: 1, currency: 'CNY', product_name: '' },
+      { amount_minor: 1, currency: 'CNY', product_name: 'x'.repeat(101) },
+      {
+        amount_minor: 1,
+        currency: 'CNY',
+        product_name: 'x',
+        provider: 'zpay',
+      },
+      {
+        amount_minor: 1,
+        currency: 'CNY',
+        product_name: 'x',
+        api_key: 'merchant-secret',
+      },
+    ]) {
+      expect(CreateDeveloperPaymentOrderInputSchema.safeParse(input).success).toBe(false);
+    }
+    expect(
+      CreateDeveloperPaymentOrderInputSchema.safeParse({
+        amount_minor: 1,
+        currency: 'CNY',
+        product_name: '🚀'.repeat(100),
+      }).success,
+    ).toBe(true);
+  });
+
+  test('requires printable bounded idempotency keys and positive refund amounts', () => {
+    expect(ModulePaymentIdempotencyKeySchema.parse('checkout-00000001')).toBe('checkout-00000001');
+    for (const key of ['short', 'x'.repeat(129), 'checkout-000000\n', 'checkout-密钥-000000']) {
+      expect(ModulePaymentIdempotencyKeySchema.safeParse(key).success).toBe(false);
+    }
+    expect(CreateDeveloperPaymentRefundInputSchema.parse({ amount_minor: 567 })).toEqual({
+      amount_minor: 567,
+    });
+    expect(CreateDeveloperPaymentRefundInputSchema.safeParse({ amount_minor: 0 }).success).toBe(
+      false,
+    );
+    expect(
+      CreateDeveloperPaymentRefundInputSchema.safeParse({
+        amount_minor: 1,
+        merchant_key: 'secret',
+      }).success,
+    ).toBe(false);
+  });
+
+  test('parses provider-neutral checkout, order, and refund response shapes', () => {
+    expect(
+      CreateDeveloperPaymentOrderResultSchema.parse({
+        order_id: '90000000-0000-4000-8000-000000000001',
+        status: 'checkout_issued',
+        expires_at: '2026-08-01T00:15:00.000Z',
+        checkout: {
+          kind: 'redirect',
+          url: 'https://payments.example.com/checkout/one',
+          mobile_url: null,
+        },
+      }),
+    ).toEqual({
+      order_id: '90000000-0000-4000-8000-000000000001',
+      status: 'checkout_issued',
+      expires_at: '2026-08-01T00:15:00.000Z',
+      checkout: {
+        kind: 'redirect',
+        url: 'https://payments.example.com/checkout/one',
+        mobile_url: null,
+      },
+    });
+
+    expect(
+      DeveloperPaymentOrderViewSchema.safeParse({
+        order_id: '90000000-0000-4000-8000-000000000001',
+        amount_minor: 567,
+        currency: 'CNY',
+        product_name: 'OpenOPC module purchase',
+        status: 'paid',
+        expires_at: '2026-08-01T00:15:00.000Z',
+        paid_at: '2026-08-01T00:02:00.000Z',
+        created_at: '2026-08-01T00:00:00.000Z',
+        updated_at: '2026-08-01T00:02:00.000Z',
+      }).success,
+    ).toBe(true);
+    expect(
+      DeveloperPaymentRefundViewSchema.safeParse({
+        refund_id: 'a0000000-0000-4000-8000-000000000001',
+        order_id: '90000000-0000-4000-8000-000000000001',
+        amount_minor: 567,
+        status: 'refunded',
+        requested_at: '2026-08-01T00:03:00.000Z',
+        resolved_at: '2026-08-01T00:04:00.000Z',
+      }).success,
+    ).toBe(true);
+    expect(
+      DeveloperPaymentOrderViewSchema.safeParse({
+        order_id: '90000000-0000-4000-8000-000000000001',
+        amount_minor: 567,
+        currency: 'CNY',
+        product_name: 'OpenOPC module purchase',
+        status: 'paid',
+        expires_at: '2026-08-01T00:15:00.000Z',
+        paid_at: '2026-08-01T00:02:00.000Z',
+        created_at: '2026-08-01T00:00:00.000Z',
+        updated_at: '2026-08-01T00:02:00.000Z',
+        pid: 'merchant-001',
       }).success,
     ).toBe(false);
   });

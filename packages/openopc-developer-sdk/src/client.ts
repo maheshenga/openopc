@@ -1,4 +1,15 @@
 import {
+  type CreateDeveloperPaymentOrderInput,
+  CreateDeveloperPaymentOrderInputSchema,
+  type CreateDeveloperPaymentOrderResult,
+  CreateDeveloperPaymentOrderResultSchema,
+  type CreateDeveloperPaymentRefundInput,
+  CreateDeveloperPaymentRefundInputSchema,
+  type DeveloperPaymentOrderView,
+  DeveloperPaymentOrderViewSchema,
+  type DeveloperPaymentRefundView,
+  DeveloperPaymentRefundViewSchema,
+  ModulePaymentIdempotencyKeySchema,
   ModuleServiceCapabilityRequestSchema,
   type ModuleServiceErrorCode,
   ModuleServiceErrorResponseSchema,
@@ -8,7 +19,7 @@ import {
 
 const MAX_TOKEN_LENGTH = 16_384;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const REQUEST_KEYS = new Set(['service', 'operation', 'method', 'path', 'body']);
+const REQUEST_KEYS = new Set(['service', 'operation', 'method', 'path', 'body', 'idempotencyKey']);
 const PROVIDER_SELECTION_KEYS = new Set([
   'provider',
   'baseUrl',
@@ -38,6 +49,7 @@ export interface OpenOpcModuleTransportRequest {
   method: 'GET' | 'POST';
   path: string;
   body?: unknown;
+  idempotencyKey?: string;
 }
 
 export interface OpenOpcModel {
@@ -114,9 +126,27 @@ export interface OpenOpcAiClient {
   };
 }
 
+export interface OpenOpcPaymentClient {
+  orders: {
+    create(
+      input: CreateDeveloperPaymentOrderInput,
+      idempotencyKey: string,
+    ): Promise<CreateDeveloperPaymentOrderResult>;
+    get(orderId: string): Promise<DeveloperPaymentOrderView>;
+  };
+  refunds: {
+    create(
+      orderId: string,
+      input: CreateDeveloperPaymentRefundInput,
+      idempotencyKey: string,
+    ): Promise<DeveloperPaymentRefundView>;
+  };
+}
+
 export interface OpenOpcModuleClient {
   request<T = unknown>(input: OpenOpcModuleTransportRequest): Promise<T>;
   ai: OpenOpcAiClient;
+  payments: OpenOpcPaymentClient;
 }
 
 export class OpenOpcModuleProtocolError extends Error {
@@ -176,6 +206,13 @@ function validateRequest(input: OpenOpcModuleTransportRequest): void {
     protocolError('OpenOPC module service request is invalid');
   }
   if (input.method === 'GET' && input.body !== undefined) {
+    protocolError('OpenOPC module service request is invalid');
+  }
+  if (
+    input.idempotencyKey !== undefined &&
+    (input.method !== 'POST' ||
+      !ModulePaymentIdempotencyKeySchema.safeParse(input.idempotencyKey).success)
+  ) {
     protocolError('OpenOPC module service request is invalid');
   }
   const expectedPrefix =
@@ -341,6 +378,7 @@ export function createOpenOpcModuleClient(
     const headers = new Headers({
       Accept: 'application/json',
       Authorization: `Bearer ${token}`,
+      ...(input.idempotencyKey ? { 'Idempotency-Key': input.idempotencyKey } : {}),
     });
     let body: string | undefined;
     if (input.body !== undefined) {
@@ -411,6 +449,65 @@ export function createOpenOpcModuleClient(
     });
   }
 
+  const createPaymentOrder = async (
+    input: CreateDeveloperPaymentOrderInput,
+    idempotencyKey: string,
+  ): Promise<CreateDeveloperPaymentOrderResult> => {
+    if (!CreateDeveloperPaymentOrderInputSchema.safeParse(input).success) {
+      protocolError('OpenOPC module payment order input is invalid');
+    }
+    const value = await request<unknown>({
+      service: 'payment',
+      operation: 'orders.create',
+      method: 'POST',
+      path: '/v1/module-services/payments/orders',
+      body: input,
+      idempotencyKey,
+    });
+    const parsed = CreateDeveloperPaymentOrderResultSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC module payment response is invalid');
+    return parsed.data;
+  };
+
+  const getPaymentOrder = async (orderId: string): Promise<DeveloperPaymentOrderView> => {
+    if (typeof orderId !== 'string' || orderId.length === 0) {
+      protocolError('OpenOPC module payment order id is invalid');
+    }
+    const value = await request<unknown>({
+      service: 'payment',
+      operation: 'orders.read',
+      method: 'GET',
+      path: `/v1/module-services/payments/orders/${encodeURIComponent(orderId)}`,
+    });
+    const parsed = DeveloperPaymentOrderViewSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC module payment response is invalid');
+    return parsed.data;
+  };
+
+  const createPaymentRefund = async (
+    orderId: string,
+    input: CreateDeveloperPaymentRefundInput,
+    idempotencyKey: string,
+  ): Promise<DeveloperPaymentRefundView> => {
+    if (typeof orderId !== 'string' || orderId.length === 0) {
+      protocolError('OpenOPC module payment order id is invalid');
+    }
+    if (!CreateDeveloperPaymentRefundInputSchema.safeParse(input).success) {
+      protocolError('OpenOPC module payment refund input is invalid');
+    }
+    const value = await request<unknown>({
+      service: 'payment',
+      operation: 'refunds.create',
+      method: 'POST',
+      path: `/v1/module-services/payments/orders/${encodeURIComponent(orderId)}/refunds`,
+      body: input,
+      idempotencyKey,
+    });
+    const parsed = DeveloperPaymentRefundViewSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC module payment response is invalid');
+    return parsed.data;
+  };
+
   return {
     request,
     ai: {
@@ -424,6 +521,13 @@ export function createOpenOpcModuleClient(
           }),
       },
       chat: { create: createChat },
+    },
+    payments: {
+      orders: {
+        create: createPaymentOrder,
+        get: getPaymentOrder,
+      },
+      refunds: { create: createPaymentRefund },
     },
   };
 }

@@ -24,6 +24,11 @@ import {
   type ModuleServiceConsent,
   type ModuleServiceConsentManager,
 } from './capability-grants';
+import {
+  type ModulePaymentRouteDependencies,
+  createModulePaymentRoutes,
+  createRuntimeModulePaymentDependencies,
+} from './payments';
 
 type LoadedProject = { row: { accountId: string; projectId: string }; userId: string };
 type LoadProjectForUser = (
@@ -321,8 +326,10 @@ export function createModuleServiceProjectRoutes(
 
 export function createModuleServicesApp(
   aiDependencies: ModuleAiDependencies = createRuntimeModuleAiDependencies(),
+  paymentDependencies: ModulePaymentRouteDependencies = createRuntimeModulePaymentDependencies(),
 ) {
   const app = makeOpenApiApp<AppEnv>();
   app.route('/ai', createModuleAiRoutes(aiDependencies));
+  app.route('/payments', createModulePaymentRoutes(paymentDependencies));
   return app;
 }

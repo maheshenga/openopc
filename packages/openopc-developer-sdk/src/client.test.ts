@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+  type CreateDeveloperPaymentOrderInput,
+  type CreateDeveloperPaymentOrderResult,
+  type CreateDeveloperPaymentRefundInput,
+  type DeveloperPaymentOrderView,
+  type DeveloperPaymentRefundView,
   type OpenOpcAiClient,
   type OpenOpcChatChunk,
   type OpenOpcChatCompletion,
@@ -9,10 +14,49 @@ import {
   type OpenOpcModel,
   OpenOpcModuleProtocolError,
   OpenOpcModuleServiceError,
+  type OpenOpcPaymentClient,
   createOpenOpcModuleClient,
 } from './index';
 
 describe('OpenOPC developer SDK transport', () => {
+  test('exports payment input and output types from the public SDK entrypoint', () => {
+    const orderInput: CreateDeveloperPaymentOrderInput = {
+      amount_minor: 567,
+      currency: 'CNY',
+      product_name: 'OpenOPC module purchase',
+    };
+    const orderResult: CreateDeveloperPaymentOrderResult = {
+      order_id: '90000000-0000-4000-8000-000000000001',
+      status: 'checkout_issued',
+      expires_at: '2026-08-01T00:15:00.000Z',
+      checkout: {
+        kind: 'redirect',
+        url: 'https://payments.example.com/checkout/one',
+        mobile_url: null,
+      },
+    };
+    const order: DeveloperPaymentOrderView = {
+      order_id: orderResult.order_id,
+      ...orderInput,
+      status: 'paid',
+      expires_at: orderResult.expires_at,
+      paid_at: '2026-08-01T00:02:00.000Z',
+      created_at: '2026-08-01T00:00:00.000Z',
+      updated_at: '2026-08-01T00:02:00.000Z',
+    };
+    const refundInput: CreateDeveloperPaymentRefundInput = { amount_minor: 567 };
+    const refund: DeveloperPaymentRefundView = {
+      refund_id: 'a0000000-0000-4000-8000-000000000001',
+      order_id: order.order_id,
+      amount_minor: refundInput.amount_minor,
+      status: 'refunded',
+      requested_at: '2026-08-01T00:03:00.000Z',
+      resolved_at: '2026-08-01T00:04:00.000Z',
+    };
+
+    expect(refund.status).toBe('refunded');
+  });
+
   test('rejects malformed JavaScript options with a stable protocol error', () => {
     expect(() => createOpenOpcModuleClient(undefined as never)).toThrow(OpenOpcModuleProtocolError);
     expect(() =>
@@ -426,5 +470,116 @@ describe('OpenOPC developer SDK transport', () => {
     }
     expect(capabilityCalls).toBe(0);
     expect(fetchCalls).toBe(0);
+  });
+
+  test('exposes provider-neutral payment create, read, and refund methods', async () => {
+    const capabilities: unknown[] = [];
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const client = createOpenOpcModuleClient({
+      baseUrl: 'https://platform.example.com',
+      async getCapabilityToken(input) {
+        capabilities.push(input);
+        return 'v4.public.module-token';
+      },
+      async fetch(input, init) {
+        requests.push({ url: String(input), init });
+        if (String(input).endsWith('/orders') && init?.method === 'POST') {
+          return new Response(
+            JSON.stringify({
+              order_id: '90000000-0000-4000-8000-000000000001',
+              status: 'checkout_issued',
+              expires_at: '2026-08-01T00:15:00.000Z',
+              checkout: {
+                kind: 'redirect',
+                url: 'https://payments.example.com/checkout/one',
+                mobile_url: null,
+              },
+            }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (String(input).endsWith('/refunds')) {
+          return new Response(
+            JSON.stringify({
+              refund_id: 'a0000000-0000-4000-8000-000000000001',
+              order_id: '90000000-0000-4000-8000-000000000001',
+              amount_minor: 567,
+              status: 'refunded',
+              requested_at: '2026-08-01T00:03:00.000Z',
+              resolved_at: '2026-08-01T00:04:00.000Z',
+            }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            order_id: '90000000-0000-4000-8000-000000000001',
+            amount_minor: 567,
+            currency: 'CNY',
+            product_name: 'OpenOPC module purchase',
+            status: 'paid',
+            expires_at: '2026-08-01T00:15:00.000Z',
+            paid_at: '2026-08-01T00:02:00.000Z',
+            created_at: '2026-08-01T00:00:00.000Z',
+            updated_at: '2026-08-01T00:02:00.000Z',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      },
+    });
+    const payments: OpenOpcPaymentClient = client.payments;
+
+    const created = await payments.orders.create(
+      { amount_minor: 567, currency: 'CNY', product_name: 'OpenOPC module purchase' },
+      'checkout-00000001',
+    );
+    await payments.orders.get(created.order_id);
+    await payments.refunds.create(created.order_id, { amount_minor: 567 }, 'refund-000000001');
+
+    expect(capabilities).toEqual([
+      { service: 'payment', operation: 'orders.create' },
+      { service: 'payment', operation: 'orders.read' },
+      { service: 'payment', operation: 'refunds.create' },
+    ]);
+    expect(requests.map((request) => request.url)).toEqual([
+      'https://platform.example.com/v1/module-services/payments/orders',
+      'https://platform.example.com/v1/module-services/payments/orders/90000000-0000-4000-8000-000000000001',
+      'https://platform.example.com/v1/module-services/payments/orders/90000000-0000-4000-8000-000000000001/refunds',
+    ]);
+    expect(new Headers(requests[0]?.init?.headers).get('idempotency-key')).toBe(
+      'checkout-00000001',
+    );
+    expect(new Headers(requests[2]?.init?.headers).get('idempotency-key')).toBe('refund-000000001');
+    expect(requests.every((request) => !String(request.init?.body).includes('merchant_key'))).toBe(
+      true,
+    );
+    expect('close' in payments.orders).toBe(false);
+  });
+
+  test('rejects payment provider configuration before minting a capability', async () => {
+    let capabilityCalls = 0;
+    const client = createOpenOpcModuleClient({
+      baseUrl: 'https://platform.example.com',
+      async getCapabilityToken() {
+        capabilityCalls += 1;
+        return 'v4.public.module-token';
+      },
+      async fetch() {
+        return new Response('{}');
+      },
+    });
+
+    await expect(
+      client.payments.orders.create(
+        {
+          amount_minor: 1,
+          currency: 'CNY',
+          product_name: 'x',
+          provider: 'zpay',
+        } as never,
+        'checkout-00000002',
+      ),
+    ).rejects.toBeInstanceOf(OpenOpcModuleProtocolError);
+    expect(capabilityCalls).toBe(0);
   });
 });

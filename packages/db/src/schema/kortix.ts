@@ -8786,6 +8786,203 @@ export const moduleServiceAuditEvents = kortixSchema.table(
   ],
 );
 
+export const developerModulePaymentOrders = kortixSchema.table(
+  'developer_module_payment_orders',
+  {
+    orderId: uuid('order_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    releaseId: uuid('release_id').notNull(),
+    moduleId: varchar('module_id', { length: 128 }).notNull(),
+    provider: varchar('provider', { length: 32 }).notNull(),
+    providerOrderId: varchar('provider_order_id', { length: 128 }),
+    merchantOrderNo: varchar('merchant_order_no', { length: 32 }).notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    currency: varchar('currency', { length: 3 }).notNull(),
+    productName: varchar('product_name', { length: 400 }).notNull(),
+    status: varchar('status', { length: 32 }).notNull(),
+    idempotencyKey: varchar('idempotency_key', { length: 128 }).notNull(),
+    checkoutKind: varchar('checkout_kind', { length: 16 }),
+    checkoutUrl: varchar('checkout_url', { length: 4096 }),
+    checkoutMobileUrl: varchar('checkout_mobile_url', { length: 4096 }),
+    providerFailureCode: varchar('provider_failure_code', { length: 128 }),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true, mode: 'string' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'developer_module_payment_orders_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'developer_module_payment_orders_installation_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'developer_module_payment_orders_release_account_fk',
+    }).onDelete('restrict'),
+    unique('developer_module_payment_orders_identity_unique').on(
+      table.orderId,
+      table.accountId,
+      table.projectId,
+      table.installationId,
+      table.releaseId,
+    ),
+    unique('developer_module_payment_orders_merchant_order_unique').on(table.merchantOrderNo),
+    uniqueIndex('developer_module_payment_orders_idempotency_unique').on(
+      table.accountId,
+      table.projectId,
+      table.installationId,
+      table.releaseId,
+      table.idempotencyKey,
+    ),
+    uniqueIndex('developer_module_payment_orders_provider_order_unique')
+      .on(table.provider, table.providerOrderId)
+      .where(sql`${table.providerOrderId} IS NOT NULL`),
+    index('idx_developer_module_payment_orders_account_project').on(
+      table.accountId,
+      table.projectId,
+      table.createdAt,
+    ),
+    index('idx_developer_module_payment_orders_expiry').on(table.status, table.expiresAt),
+    check(
+      'developer_module_payment_orders_amount_check',
+      sql`${table.amountMinor} > 0 AND ${table.amountMinor} <= 100000000`,
+    ),
+    check('developer_module_payment_orders_currency_check', sql`${table.currency} = 'CNY'`),
+    check(
+      'developer_module_payment_orders_product_name_check',
+      sql`char_length(${table.productName}) BETWEEN 1 AND 100`,
+    ),
+    check(
+      'developer_module_payment_orders_state_check',
+      sql`${table.status} IN ('checkout_issued', 'paid', 'expired', 'paid_late', 'refund_requested', 'refunded', 'refund_failed')`,
+    ),
+    check(
+      'developer_module_payment_orders_idempotency_check',
+      sql`${table.idempotencyKey} ~ '^[ -~]{16,128}$'`,
+    ),
+    check(
+      'developer_module_payment_orders_checkout_check',
+      sql`(${table.checkoutKind} IS NULL AND ${table.checkoutUrl} IS NULL AND ${table.checkoutMobileUrl} IS NULL)
+        OR (${table.checkoutKind} IN ('redirect', 'qr') AND ${table.checkoutUrl} IS NOT NULL
+          AND (${table.checkoutMobileUrl} IS NULL OR ${table.checkoutMobileUrl} IS NOT NULL))`,
+    ),
+    check(
+      'developer_module_payment_orders_secret_check',
+      sql`(${table.providerFailureCode} IS NULL
+        OR (${table.providerFailureCode} !~* 'bearer'
+          AND ${table.providerFailureCode} !~* 'merchant[_-]?key'
+          AND ${table.providerFailureCode} !~* '(^|[^a-z])sign([^a-z]|$)'))`,
+    ),
+  ],
+);
+
+export const developerModulePaymentCallbacks = kortixSchema.table(
+  'developer_module_payment_callbacks',
+  {
+    callbackId: uuid('callback_id').defaultRandom().primaryKey(),
+    orderId: uuid('order_id').notNull(),
+    provider: varchar('provider', { length: 32 }).notNull(),
+    providerTradeNo: varchar('provider_trade_no', { length: 128 }),
+    canonicalPayloadDigest: varchar('canonical_payload_digest', { length: 71 }).notNull(),
+    verified: boolean('verified').notNull(),
+    outcome: varchar('outcome', { length: 32 }).notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.orderId],
+      foreignColumns: [developerModulePaymentOrders.orderId],
+      name: 'developer_module_payment_callbacks_order_fk',
+    }).onDelete('cascade'),
+    uniqueIndex('developer_module_payment_callbacks_trade_unique')
+      .on(table.provider, table.providerTradeNo)
+      .where(sql`${table.providerTradeNo} IS NOT NULL`),
+    index('idx_developer_module_payment_callbacks_order').on(table.orderId, table.receivedAt),
+    check(
+      'developer_module_payment_callbacks_digest_check',
+      sql`${table.canonicalPayloadDigest} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'developer_module_payment_callbacks_outcome_check',
+      sql`${table.outcome} IN ('paid', 'paid_late', 'duplicate', 'rejected')`,
+    ),
+  ],
+);
+
+export const developerModulePaymentRefunds = kortixSchema.table(
+  'developer_module_payment_refunds',
+  {
+    refundId: uuid('refund_id').defaultRandom().primaryKey(),
+    orderId: uuid('order_id').notNull(),
+    accountId: uuid('account_id').notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    idempotencyKey: varchar('idempotency_key', { length: 128 }).notNull(),
+    providerResult: jsonb('provider_result').$type<Record<string, unknown> | null>(),
+    status: varchar('status', { length: 32 }).notNull(),
+    requestedBy: uuid('requested_by').notNull(),
+    requestedAt: timestamp('requested_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.orderId, table.accountId],
+      foreignColumns: [
+        developerModulePaymentOrders.orderId,
+        developerModulePaymentOrders.accountId,
+      ],
+      name: 'developer_module_payment_refunds_order_account_fk',
+    }).onDelete('cascade'),
+    unique('developer_module_payment_refunds_identity_unique').on(
+      table.refundId,
+      table.orderId,
+      table.accountId,
+    ),
+    uniqueIndex('developer_module_payment_refunds_idempotency_unique').on(
+      table.orderId,
+      table.idempotencyKey,
+    ),
+    index('idx_developer_module_payment_refunds_account').on(table.accountId, table.requestedAt),
+    index('idx_developer_module_payment_refunds_order').on(table.orderId, table.requestedAt),
+    check(
+      'developer_module_payment_refunds_amount_check',
+      sql`${table.amountMinor} > 0 AND ${table.amountMinor} <= 100000000`,
+    ),
+    check(
+      'developer_module_payment_refunds_idempotency_check',
+      sql`${table.idempotencyKey} ~ '^[ -~]{16,128}$'`,
+    ),
+    check(
+      'developer_module_payment_refunds_status_check',
+      sql`${table.status} IN ('refund_requested', 'refunded', 'refund_failed')`,
+    ),
+    check(
+      'developer_module_payment_refunds_result_check',
+      sql`${table.providerResult} IS NULL OR (jsonb_typeof(${table.providerResult}) = 'object' AND pg_column_size(${table.providerResult}) <= 16384)`,
+    ),
+  ],
+);
+
 export const moduleRunners = kortixSchema.table(
   'module_runners',
   {

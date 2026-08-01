@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-// Narrow subpath: loads only the SDK config module, not the full barrel (which
-// would pull projects-client + reorder module load → a transient ESM cycle).
+// Narrow SDK subpaths: avoid the full barrel (which pulls projects-client and
+// can reorder module load → a transient ESM cycle). The Web shim is a pure
+// re-export, so these behavior checks import the SDK path directly; other Bun
+// test files mock the shim alias globally and would otherwise race this file.
+import {
+  backendApi,
+  isAdminBypassEnabled,
+  setAdminBypass,
+} from '@kortix/sdk/api-client';
 import { configureKortix } from '@kortix/sdk/config';
 
 mock.module('@/lib/auth-token', () => ({
@@ -43,7 +50,6 @@ describe('backendApi', () => {
       });
     };
 
-    const { backendApi } = await import('./api-client');
     const res = await backendApi.get('/billing/account-state', { fetchImpl });
 
     expect(res.success).toBe(true);
@@ -56,10 +62,10 @@ describe('backendApi', () => {
 describe('setAdminBypass / isAdminBypassEnabled', () => {
   beforeEach(() => {
     mock.restore();
+    setAdminBypass(false);
   });
 
   test('toggles on and off', async () => {
-    const { setAdminBypass, isAdminBypassEnabled } = await import('./api-client');
     expect(isAdminBypassEnabled()).toBe(false);
     setAdminBypass(true);
     expect(isAdminBypassEnabled()).toBe(true);
@@ -76,8 +82,6 @@ describe('setAdminBypass / isAdminBypassEnabled', () => {
         headers: { 'content-type': 'application/json' },
       });
     };
-
-    const { backendApi, setAdminBypass } = await import('./api-client');
 
     setAdminBypass(true);
     await backendApi.get('/projects/abc/detail', { fetchImpl });

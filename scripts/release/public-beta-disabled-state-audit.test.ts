@@ -182,7 +182,7 @@ test('rejects reachable, incomplete, extra, and self-reported raw evidence', () 
   }
 });
 
-test('assembles the exact ten-record assessment from complete raw evidence', () => {
+test('assembles the exact protected assessment from complete raw evidence', () => {
   const assessment = auditDisabledStateEvidence(completeEvidence());
   expect(assessment.records.map((record) => record.capability)).toEqual([
     ...RESTRICTED_DISABLED_CAPABILITIES,
@@ -198,7 +198,7 @@ test('rejects an omitted protected deployment service from the complete inventor
       rawEvidence: {
         ...input.rawEvidence,
         deploymentInventory: input.rawEvidence.deploymentInventory.filter(
-        (entry) => (entry as { service: string }).service !== 'api',
+          (entry) => (entry as { service: string }).service !== 'api',
         ),
       },
     }),
@@ -333,7 +333,7 @@ test('CLI reads only explicit local evidence files and emits the protected asses
       output = value;
     });
     expect(JSON.parse(output)).toEqual(assessment);
-    expect(assessment.records).toHaveLength(10);
+    expect(assessment.records).toHaveLength(RESTRICTED_DISABLED_CAPABILITIES.length);
     await expect(
       runDisabledStateAuditCli([...args.slice(0, -1), 'https://example.invalid/evidence.json']),
     ).rejects.toThrow('OPENOPC_DISABLED_STATE_AUDIT_ARGUMENT_INVALID');

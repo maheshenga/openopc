@@ -6,6 +6,12 @@ import { type ManagedModel, RUNTIME_MANAGED_MODELS } from '../llm-gateway/models
 import { newApiConnectorConfigured } from '../llm-gateway/new-api-connector';
 import { getInProcessLlmGateway } from '../llm-gateway/wire';
 import { makeOpenApiApp } from '../openapi';
+import {
+  ReleaseProfileUnavailableError,
+  type RuntimeReleaseProfile,
+  assertRuntimeCapability,
+  loadRuntimeReleaseProfile,
+} from '../release-profile/runtime';
 import type { AppEnv } from '../types';
 import { ModuleServiceCapabilityError } from './capability-grants';
 import { requireModuleServiceOperation } from './service-auth';
@@ -33,6 +39,7 @@ export interface ModuleAiGateway {
 }
 
 export interface ModuleAiDependencies {
+  runtime: RuntimeReleaseProfile;
   requireCapability(
     authorization: string | undefined,
     operation: ModuleAiOperation,
@@ -53,6 +60,7 @@ export interface ExecuteModuleServiceAiRequestInput {
 
 export function createRuntimeModuleAiDependencies(): ModuleAiDependencies {
   return {
+    runtime: loadRuntimeReleaseProfile(),
     requireCapability: (authorization, operation) =>
       requireModuleServiceOperation(authorization, { service: 'ai', operation }),
     principalForClaims: createModuleServiceGatewayPrincipal,
@@ -67,6 +75,7 @@ export async function executeModuleServiceAiRequest(
   dependencies: ModuleAiDependencies,
 ): Promise<Response> {
   try {
+    assertRuntimeCapability('module.ai.gateway', dependencies.runtime);
     if (input.kind === 'models') {
       const claims = await dependencies.requireCapability(input.authorization, 'models.read');
       const gateway = dependencies.gateway();
@@ -112,6 +121,9 @@ export async function executeModuleServiceAiRequest(
       ? moduleAiError('MODULE_SERVICE_INPUT_INVALID', 400)
       : moduleAiError('MODULE_AI_PROVIDER_UNAVAILABLE', 503);
   } catch (error) {
+    if (error instanceof ReleaseProfileUnavailableError) {
+      return jsonResponse({ code: error.code, capability: error.capability }, error.status);
+    }
     if (error instanceof ModuleServiceCapabilityError) {
       return moduleAiError(error.code, error.status);
     }

@@ -4,6 +4,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto';
 import { RESTRICTED_RUNTIME_CAPABILITIES } from '@kortix/api-contract';
 
 import {
+  DEVELOPER_RUNTIME_TEST_PROFILE,
   FUTURE_OCI_RUNTIME_TEST_PROFILE,
   FUTURE_WASI_RUNTIME_TEST_PROFILE,
   NON_READY_RUNTIME_TEST_PROFILE,
@@ -12,6 +13,7 @@ import {
 import {
   DeveloperModuleDistributionError,
   DeveloperModuleDistributionService,
+  assertReleaseRuntimeAllowed,
   createMemoryDeveloperModuleDistributionRepository,
 } from './distribution';
 import {
@@ -223,6 +225,22 @@ function countedDistributionFixture(candidate: DeveloperModuleRelease) {
     },
   };
 }
+
+test('sandboxed-web release eligibility follows the module render profile capability', () => {
+  const candidate = release('published', 4);
+  candidate.manifest.execution = { mode: 'sandboxed-web', entry: 'dist/index.html' };
+  candidate.manifest.verification = { profile: 'sandboxed-web' };
+
+  expect(() => assertReleaseRuntimeAllowed(candidate, RESTRICTED_RUNTIME_TEST_PROFILE)).toThrow(
+    expect.objectContaining({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.app.render',
+    }),
+  );
+  expect(() =>
+    assertReleaseRuntimeAllowed(candidate, DEVELOPER_RUNTIME_TEST_PROFILE),
+  ).not.toThrow();
+});
 
 test.each([
   ['OCI', 'oci-image'],

@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModuleServiceCapabilityClaimsV1 } from '@kortix/api-contract';
 
+import {
+  DEVELOPER_RUNTIME_TEST_PROFILE,
+  RESTRICTED_RUNTIME_TEST_PROFILE,
+} from '../release-profile/test-fixtures';
 import { createModulePaymentRoutes } from './payments';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
@@ -31,9 +35,10 @@ const claims: ModuleServiceCapabilityClaimsV1 = {
   operations: ['orders.create', 'orders.read', 'refunds.create'],
 };
 
-function routeFixture() {
+function routeFixture(runtime = DEVELOPER_RUNTIME_TEST_PROFILE) {
   const calls: Array<{ operation: string; input: unknown }> = [];
   const dependencies = {
+    runtime,
     requireCapability: async (_authorization: string | undefined, operation: string) => {
       calls.push({ operation, input: null });
       return claims;
@@ -85,6 +90,30 @@ function routeFixture() {
 const auth = { Authorization: 'Bearer v4.public.test-token' };
 
 describe('developer module payment service routes', () => {
+  test('rejects buyer payment access when the deployment profile does not enable purchases', async () => {
+    const { app, calls } = routeFixture(RESTRICTED_RUNTIME_TEST_PROFILE);
+    const response = await app.request('/orders', {
+      method: 'POST',
+      headers: {
+        ...auth,
+        'Idempotency-Key': 'checkout-profile-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        amount_minor: 567,
+        currency: 'CNY',
+        product_name: 'OpenOPC module purchase',
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'commerce.purchase',
+    });
+    expect(calls).toHaveLength(0);
+  });
+
   test('requires capability operations and forwards only provider-neutral create input', async () => {
     const { app, calls } = routeFixture();
     const response = await app.request('/orders', {
@@ -162,6 +191,7 @@ describe('developer module payment service routes', () => {
 
   test('maps service errors to stable redacted payment errors', async () => {
     const dependencies = {
+      runtime: DEVELOPER_RUNTIME_TEST_PROFILE,
       requireCapability: async () => {
         throw Object.assign(new Error('provider key must not escape'), {
           code: 'MODULE_PAYMENT_PROVIDER_UNAVAILABLE',

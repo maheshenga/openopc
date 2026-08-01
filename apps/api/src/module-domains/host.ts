@@ -8,6 +8,8 @@ import {
   readDeveloperArtifactBytes,
 } from '../developer/artifacts';
 import { makeOpenApiApp } from '../openapi';
+import { rejectUnavailableCapability } from '../release-profile/routes';
+import type { RuntimeReleaseProfile } from '../release-profile/runtime';
 import type { AppEnv } from '../types';
 import type { ModuleCustomDomainEnvironment } from './bindings';
 
@@ -181,6 +183,7 @@ export interface ModuleCustomDomainHostRouteDependencies {
   hostService: Pick<ModuleCustomDomainStaticHostService, 'read'> | null;
   internalServiceKey: string;
   environment: ModuleCustomDomainEnvironment;
+  runtime: RuntimeReleaseProfile;
 }
 
 export function createModuleCustomDomainHostRoutes(
@@ -196,6 +199,12 @@ export function createModuleCustomDomainHostRoutes(
     ) {
       return new Response('Unauthorized', { status: 401 });
     }
+    const rejected = rejectUnavailableCapability(
+      context,
+      'module.app.render',
+      dependencies.runtime,
+    );
+    if (rejected) return rejected;
     if (!dependencies.hostService) return notFound();
     const releaseId = context.req.param('releaseId');
     const bindingId = context.req.header('X-OpenOPC-Module-Domain-Binding') ?? '';

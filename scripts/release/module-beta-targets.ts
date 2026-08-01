@@ -1,6 +1,11 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import {
+  OPENOPC_RELEASE_PROFILE_DIGESTS,
+  type OpenOpcReleaseProfileId,
+} from '../../packages/api-contract/src/release-profile';
+
 export function normalizeBetaTarget(value: string): string {
   return value
     .trim()
@@ -15,6 +20,151 @@ export interface BetaTargets {
 }
 
 export type NormalizedBetaTargets = Readonly<BetaTargets>;
+
+export const MODULE_BETA_ACCEPTANCE_FLOW_IDS = [
+  'web_core_login',
+  'desktop_core_login',
+  'module_install_consent_execute_revoke_rollback',
+  'web_sandbox_review_smoke',
+  'server_or_wasi_review_smoke',
+  'newapi_model_catalog',
+  'newapi_text_completion',
+  'newapi_streaming_usage_audit',
+  'zpay_create_callback_lookup_refund',
+  'zpay_duplicate_callback',
+  'zpay_expired_late_payment_disposition',
+  'capability_cross_tenant_and_revocation_rejection',
+  'custom_domain_dns_tls_and_host_routing',
+  'provider_failure_bounded_and_audited',
+] as const;
+
+export type ModuleBetaAcceptanceFlowId = (typeof MODULE_BETA_ACCEPTANCE_FLOW_IDS)[number];
+export const MODULE_BETA_ACCEPTANCE_PROFILE_ID =
+  'openopc-web-desktop-developer-beta-v2' as const satisfies OpenOpcReleaseProfileId;
+export const MODULE_BETA_ACCEPTANCE_PROFILE_DIGEST =
+  OPENOPC_RELEASE_PROFILE_DIGESTS[MODULE_BETA_ACCEPTANCE_PROFILE_ID];
+
+export type DeveloperModuleBetaEvidenceOutcome = 'not-run' | 'passed' | 'failed';
+
+export interface DeveloperModuleBetaEvidenceRecord {
+  id: ModuleBetaAcceptanceFlowId;
+  releaseProfileId: typeof MODULE_BETA_ACCEPTANCE_PROFILE_ID;
+  releaseProfileDigest: typeof MODULE_BETA_ACCEPTANCE_PROFILE_DIGEST;
+  candidateCommit: string;
+  recordedAt: string;
+  referenceDigest: `sha256:${string}`;
+  outcome: DeveloperModuleBetaEvidenceOutcome;
+  claims: string[];
+}
+
+export interface DeveloperModuleBetaEvidenceLedger {
+  schemaVersion: 2;
+  records: DeveloperModuleBetaEvidenceRecord[];
+}
+
+const DEVELOPER_BETA_EVIDENCE_RECORD_KEYS = [
+  'candidateCommit',
+  'claims',
+  'id',
+  'outcome',
+  'recordedAt',
+  'referenceDigest',
+  'releaseProfileDigest',
+  'releaseProfileId',
+] as const;
+
+const UNSAFE_DEVELOPER_BETA_CLAIM_PATTERNS = [
+  /\borders\.close\b/i,
+  /\b(?:provider|z[- ]?pay)\s+close\s+operation\b/i,
+  /\bcommerce\.settlement\b/i,
+  /\b(?:developer\s+balance|payout|withdrawal|split\s+payment|stripe\s+mutation)\b/i,
+  /\blate\s+payment\b[\s\S]*\bauto[- ]?fulfill(?:ed|ment)?\b/i,
+  /\bmissing\b[\s\S]*\b(?:credential\s+rotation|stream\s+audit)\b/i,
+  /\binvalid\s+callback\s+signature\s+accepted\b/i,
+  /\bduplicate\s+callback\b[\s\S]*\btwo\s+state\s+transitions\b/i,
+  /\bcross[- ]tenant\s+capability\s+call\s+accepted\b/i,
+  /\bcustom\s+domain\s+active\b[\s\S]*\b(?:without|missing)\b[\s\S]*\b(?:dns|tls)\b/i,
+  /\bdesktop\s+policy\b[\s\S]*\bprovider\s+origin\b/i,
+  /\b(?:raw\s+provider\s+credentials?|provider\s+raw\s+credentials?)\b/i,
+  /\b(?:api[_ -]?key|secret|password|bearer|token)\s*[:=]\s*\S+/i,
+  /\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b/i,
+  /\b(?:browser|desktop|web)\b[\s\S]*\bmodule\b[\s\S]*\b(?:called|accessed|reached|used)\b[\s\S]*\b(?:new[- ]?api|z[- ]?pay|alipay|wechat)\b/i,
+  /\b(?:new[- ]?api|z[- ]?pay|alipay|wechat)\b[\s\S]*\b(?:called|accessed|reached|used)\b[\s\S]*\b(?:browser|desktop|web)\b[\s\S]*\bmodule\b/i,
+] as const;
+
+export function validateDeveloperModuleBetaEvidence(
+  value: unknown,
+): DeveloperModuleBetaEvidenceLedger {
+  if (!isRecord(value) || !hasExactKeys(value, ['schemaVersion', 'records'])) {
+    throw new Error('MODULE_BETA_EVIDENCE_INVALID');
+  }
+  if (value.schemaVersion !== 2 || !Array.isArray(value.records)) {
+    throw new Error('MODULE_BETA_EVIDENCE_INVALID');
+  }
+  if (value.records.length !== MODULE_BETA_ACCEPTANCE_FLOW_IDS.length) {
+    throw new Error('MODULE_BETA_EVIDENCE_FLOWS_INCOMPLETE');
+  }
+
+  const expectedIds = new Set<string>(MODULE_BETA_ACCEPTANCE_FLOW_IDS);
+  const records: DeveloperModuleBetaEvidenceRecord[] = [];
+  for (const rawRecord of value.records) {
+    if (!isRecord(rawRecord) || !hasExactKeys(rawRecord, DEVELOPER_BETA_EVIDENCE_RECORD_KEYS)) {
+      throw new Error('MODULE_BETA_EVIDENCE_RECORD_INVALID');
+    }
+    if (
+      typeof rawRecord.id !== 'string' ||
+      !expectedIds.has(rawRecord.id) ||
+      records.some((record) => record.id === rawRecord.id) ||
+      typeof rawRecord.releaseProfileId !== 'string' ||
+      rawRecord.releaseProfileId !== MODULE_BETA_ACCEPTANCE_PROFILE_ID ||
+      typeof rawRecord.releaseProfileDigest !== 'string' ||
+      rawRecord.releaseProfileDigest !== MODULE_BETA_ACCEPTANCE_PROFILE_DIGEST ||
+      typeof rawRecord.candidateCommit !== 'string' ||
+      !/^[0-9a-f]{40}$/.test(rawRecord.candidateCommit) ||
+      typeof rawRecord.recordedAt !== 'string' ||
+      !Number.isFinite(Date.parse(rawRecord.recordedAt)) ||
+      typeof rawRecord.referenceDigest !== 'string' ||
+      !/^sha256:[a-f0-9]{64}$/.test(rawRecord.referenceDigest) ||
+      typeof rawRecord.outcome !== 'string' ||
+      !['not-run', 'passed', 'failed'].includes(rawRecord.outcome) ||
+      !isStringArray(rawRecord.claims) ||
+      new Set(rawRecord.claims).size !== rawRecord.claims.length
+    ) {
+      throw new Error('MODULE_BETA_EVIDENCE_RECORD_INVALID');
+    }
+    if (
+      rawRecord.claims.some((claim) =>
+        UNSAFE_DEVELOPER_BETA_CLAIM_PATTERNS.some((pattern) => pattern.test(claim)),
+      )
+    ) {
+      throw new Error('MODULE_BETA_EVIDENCE_UNSAFE_CLAIM');
+    }
+    records.push({
+      id: rawRecord.id as ModuleBetaAcceptanceFlowId,
+      releaseProfileId: MODULE_BETA_ACCEPTANCE_PROFILE_ID,
+      releaseProfileDigest: MODULE_BETA_ACCEPTANCE_PROFILE_DIGEST,
+      candidateCommit: rawRecord.candidateCommit,
+      recordedAt: rawRecord.recordedAt,
+      referenceDigest: rawRecord.referenceDigest as `sha256:${string}`,
+      outcome: rawRecord.outcome as DeveloperModuleBetaEvidenceOutcome,
+      claims: [...rawRecord.claims],
+    });
+  }
+
+  if (records.some((record, index) => record.id !== MODULE_BETA_ACCEPTANCE_FLOW_IDS[index])) {
+    throw new Error('MODULE_BETA_EVIDENCE_FLOWS_INCOMPLETE');
+  }
+  const candidateCommit = records[0]?.candidateCommit;
+  if (!candidateCommit || records.some((record) => record.candidateCommit !== candidateCommit)) {
+    throw new Error('MODULE_BETA_EVIDENCE_CANDIDATE_MISMATCH');
+  }
+  return Object.freeze({
+    schemaVersion: 2,
+    records: Object.freeze(
+      records.map((record) => Object.freeze(record)),
+    ) as unknown as DeveloperModuleBetaEvidenceRecord[],
+  });
+}
 
 const PRODUCTION_HOSTS = new Set([
   'api.kortix.com',
@@ -118,6 +268,7 @@ export function buildReleaseQaEnvironment(input: ReleaseQaTargetInput): ReleaseQ
 export interface ModuleBetaEvidenceLedger {
   schemaVersion: 1;
   records: ModuleBetaEvidenceRecord[];
+  developerBetaAcceptance?: DeveloperModuleBetaEvidenceLedger;
 }
 
 export type ModuleBetaEvidenceLane =
@@ -166,7 +317,14 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 export function validateEvidenceLedger(value: unknown): ModuleBetaEvidenceLedger {
-  if (!isRecord(value) || !hasExactKeys(value, ['schemaVersion', 'records'])) {
+  if (
+    !isRecord(value) ||
+    !Object.hasOwn(value, 'schemaVersion') ||
+    !Object.hasOwn(value, 'records') ||
+    Object.keys(value).some(
+      (key) => !['schemaVersion', 'records', 'developerBetaAcceptance'].includes(key),
+    )
+  ) {
     throw new Error('EVIDENCE_LEDGER_INVALID');
   }
   if (value.schemaVersion !== 1 || !Array.isArray(value.records)) {
@@ -262,6 +420,9 @@ export function validateEvidenceLedger(value: unknown): ModuleBetaEvidenceLedger
       }
     }
   }
+  if (ledger.developerBetaAcceptance !== undefined) {
+    validateDeveloperModuleBetaEvidence(ledger.developerBetaAcceptance);
+  }
   return ledger;
 }
 
@@ -280,7 +441,12 @@ export function formatGithubEnvironment(environment: ReleaseQaEnvironment): stri
 async function main(args: string[]): Promise<void> {
   if (args[0] === '--check-fixture') {
     const path = resolve(requiredArgument(args, 1, '--check-fixture'));
-    validateEvidenceLedger(JSON.parse(readFileSync(path, 'utf8')) as unknown);
+    const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    if (isRecord(value) && value.schemaVersion === 2) {
+      validateDeveloperModuleBetaEvidence(value);
+    } else {
+      validateEvidenceLedger(value);
+    }
     console.log(`[module-beta] evidence ledger valid: ${path}`);
     return;
   }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { DeveloperModuleRelease } from '../developer/releases';
+import { DEVELOPER_RUNTIME_TEST_PROFILE } from '../release-profile/test-fixtures';
 import { createDeveloperModuleMarketplaceAdapter } from './developer-modules';
 
 const release = (input: Partial<DeveloperModuleRelease> = {}): DeveloperModuleRelease => ({
@@ -108,10 +109,13 @@ describe('developer module marketplace adapter', () => {
         openopc: { sdkApiVersion: 'v1', catalog: { labels: ['h5', 'weather'] } },
       },
     });
-    const adapter = createDeveloperModuleMarketplaceAdapter({
-      listPublished: async () => ({ releases: [v3], total: 1 }),
-      getPublished: async () => v3,
-    });
+    const adapter = createDeveloperModuleMarketplaceAdapter(
+      {
+        listPublished: async () => ({ releases: [v3], total: 1 }),
+        getPublished: async () => v3,
+      },
+      DEVELOPER_RUNTIME_TEST_PROFILE,
+    );
     const page = await adapter.list({ query: 'weather', limit: 20, offset: 0 });
     expect(page.items).toEqual([
       expect.objectContaining({ release_id: 'v3', categories: ['h5', 'weather'] }),

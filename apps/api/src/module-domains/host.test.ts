@@ -8,6 +8,10 @@ import {
   serializeDeveloperModuleArtifactPackage,
 } from '../developer/artifacts';
 import {
+  DEVELOPER_RUNTIME_TEST_PROFILE,
+  RESTRICTED_RUNTIME_TEST_PROFILE,
+} from '../release-profile/test-fixtures';
+import {
   ModuleCustomDomainStaticHostService,
   createMemoryModuleCustomDomainHostRepository,
   createModuleCustomDomainHostRoutes,
@@ -43,7 +47,7 @@ function sandboxedWebItem(): RegistryItem {
   } as RegistryItem;
 }
 
-async function hostHarness() {
+async function hostHarness(runtime = DEVELOPER_RUNTIME_TEST_PROFILE) {
   const artifactStore = createMemoryDeveloperArtifactStore();
   const artifactBytes = serializeDeveloperModuleArtifactPackage({
     item: sandboxedWebItem(),
@@ -91,10 +95,28 @@ async function hostHarness() {
     hostService,
     internalServiceKey: INTERNAL_SERVICE_KEY,
     environment: 'dev',
+    runtime,
   });
 }
 
 describe('module custom domain static host', () => {
+  test('rejects sandboxed-web assets when the deployment profile does not enable rendering', async () => {
+    const app = await hostHarness(RESTRICTED_RUNTIME_TEST_PROFILE);
+
+    const response = await app.request(`/module-host/releases/${RELEASE_ID}/`, {
+      headers: {
+        'X-Kortix-Internal-Key': INTERNAL_SERVICE_KEY,
+        'X-OpenOPC-Module-Domain-Binding': BINDING_ID,
+      },
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.app.render',
+    });
+  });
+
   test('serves the immutable sandboxed-web entry only for the active binding selected by the worker', async () => {
     const app = await hostHarness();
 

@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 
-import { RELEASE_PROFILE_UNAVAILABLE, loadRuntimeReleaseProfile } from './runtime';
+import { RELEASE_PROFILE_UNAVAILABLE, RESTRICTED_RUNTIME_CAPABILITIES } from '@kortix/api-contract';
+import {
+  OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST,
+  OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_ID,
+  OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_DIGEST,
+  OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_ID,
+  loadRuntimeReleaseProfile,
+} from './runtime';
 
 const digest = 'sha256:e548465c35cb5041b38092b2937164f2abecfb6781ab0e545532ce95f387956c';
 
@@ -40,5 +47,45 @@ describe('loadRuntimeReleaseProfile', () => {
     expect(runtime.allows('module.oci.execute')).toBe(false);
     expect(runtime.allows('commerce.purchase')).toBe(false);
     expect(runtime.allows('artifact.remote-url')).toBe(false);
+  });
+
+  test('v1 rejects developer app, AI gateway, and purchase capabilities', () => {
+    const runtime = loadRuntimeReleaseProfile({
+      OPENOPC_RELEASE_PROFILE_ID: OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_ID,
+      OPENOPC_RELEASE_PROFILE_DIGEST: OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST,
+    });
+
+    expect(runtime.allows('module.app.render')).toBe(false);
+    expect(runtime.allows('module.ai.gateway')).toBe(false);
+    expect(runtime.allows('commerce.purchase')).toBe(false);
+  });
+
+  test('v2 enables only the reviewed Web/Desktop developer capabilities', () => {
+    const runtime = loadRuntimeReleaseProfile({
+      OPENOPC_RELEASE_PROFILE_ID: OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_ID,
+      OPENOPC_RELEASE_PROFILE_DIGEST: OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_DIGEST,
+    });
+    const enabled = new Set([
+      'module.wasi.execute',
+      'module.app.render',
+      'module.ai.gateway',
+      'commerce.purchase',
+    ]);
+
+    expect(runtime.ready).toBe(true);
+    for (const capability of RESTRICTED_RUNTIME_CAPABILITIES) {
+      expect(runtime.allows(capability)).toBe(enabled.has(capability));
+    }
+    expect(runtime.allows('commerce.settlement')).toBe(false);
+    expect(runtime.allows('native.mobile')).toBe(false);
+  });
+
+  test('v2 remains unavailable when either deployment identity component mismatches', () => {
+    expect(
+      loadRuntimeReleaseProfile({
+        OPENOPC_RELEASE_PROFILE_ID: OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_ID,
+        OPENOPC_RELEASE_PROFILE_DIGEST: `sha256:${'0'.repeat(64)}`,
+      }).ready,
+    ).toBe(false);
   });
 });

@@ -1,26 +1,43 @@
 import {
+  OPENOPC_RELEASE_PROFILE_DIGESTS,
+  OPENOPC_RELEASE_PROFILE_IDS,
+  type OpenOpcReleaseProfileId,
   RELEASE_PROFILE_UNAVAILABLE,
   type RestrictedRuntimeCapability,
 } from '@kortix/api-contract';
 
 export { RELEASE_PROFILE_UNAVAILABLE } from '@kortix/api-contract';
-export type { RestrictedRuntimeCapability } from '@kortix/api-contract';
+export type { OpenOpcReleaseProfileId, RestrictedRuntimeCapability } from '@kortix/api-contract';
 
 export const OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_ID =
-  'openopc-restricted-public-beta-v1' as const;
+  'openopc-restricted-public-beta-v1' as const satisfies OpenOpcReleaseProfileId;
 export const OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST =
-  'sha256:e548465c35cb5041b38092b2937164f2abecfb6781ab0e545532ce95f387956c' as const;
+  OPENOPC_RELEASE_PROFILE_DIGESTS[OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_ID];
+export const OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_ID =
+  'openopc-web-desktop-developer-beta-v2' as const satisfies OpenOpcReleaseProfileId;
+export const OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_DIGEST =
+  OPENOPC_RELEASE_PROFILE_DIGESTS[OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_ID];
 
-const ENABLED_CAPABILITIES = new Set<RestrictedRuntimeCapability>([
-  'studio.text.generate',
-  'studio.image.generate',
-  'studio.video.generate',
-  'module.wasi.execute',
-]);
+const PROFILE_CAPABILITIES: Readonly<
+  Record<OpenOpcReleaseProfileId, readonly RestrictedRuntimeCapability[]>
+> = {
+  [OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_ID]: [
+    'studio.text.generate',
+    'studio.image.generate',
+    'studio.video.generate',
+    'module.wasi.execute',
+  ],
+  [OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_ID]: [
+    'module.wasi.execute',
+    'module.app.render',
+    'module.ai.gateway',
+    'commerce.purchase',
+  ],
+};
 
 export interface RuntimeReleaseProfile {
-  readonly id: typeof OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_ID | null;
-  readonly digest: typeof OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST | null;
+  readonly id: OpenOpcReleaseProfileId | null;
+  readonly digest: `sha256:${string}` | null;
   readonly ready: boolean;
   readonly unavailableCode: typeof RELEASE_PROFILE_UNAVAILABLE;
   allows(capability: RestrictedRuntimeCapability): boolean;
@@ -39,19 +56,25 @@ export class ReleaseProfileUnavailableError extends Error {
 export function loadRuntimeReleaseProfile(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): RuntimeReleaseProfile {
-  const ready =
-    environment.OPENOPC_RELEASE_PROFILE_ID === OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_ID &&
-    environment.OPENOPC_RELEASE_PROFILE_DIGEST === OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST;
-  const profile = {
-    id: ready ? OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_ID : null,
-    digest: ready ? OPENOPC_RESTRICTED_PUBLIC_BETA_PROFILE_DIGEST : null,
+  const selectedProfile = OPENOPC_RELEASE_PROFILE_IDS.find(
+    (id) =>
+      environment.OPENOPC_RELEASE_PROFILE_ID === id &&
+      environment.OPENOPC_RELEASE_PROFILE_DIGEST === OPENOPC_RELEASE_PROFILE_DIGESTS[id],
+  );
+  const ready = selectedProfile !== undefined;
+  const enabledCapabilities = new Set<RestrictedRuntimeCapability>(
+    selectedProfile ? PROFILE_CAPABILITIES[selectedProfile] : [],
+  );
+  const runtimeProfile = {
+    id: ready ? selectedProfile : null,
+    digest: ready ? OPENOPC_RELEASE_PROFILE_DIGESTS[selectedProfile] : null,
     ready,
     unavailableCode: RELEASE_PROFILE_UNAVAILABLE,
     allows(capability: RestrictedRuntimeCapability): boolean {
-      return ready && ENABLED_CAPABILITIES.has(capability);
+      return ready && enabledCapabilities.has(capability);
     },
   } satisfies RuntimeReleaseProfile;
-  return Object.freeze(profile);
+  return Object.freeze(runtimeProfile);
 }
 
 export function assertRuntimeCapability(

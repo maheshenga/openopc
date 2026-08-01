@@ -46,6 +46,35 @@ test('runtime profile schemas accept only the protected public wire contract', (
   );
 });
 
+test('runtime profile status accepts both finite OpenOPC profile identities', () => {
+  expect(
+    ReleaseProfileStatusSchema.parse({
+      ready: true,
+      ready_for: 'openopc-web-desktop-developer-beta-v2',
+      release_profile_id: 'openopc-web-desktop-developer-beta-v2',
+      release_profile_digest: `sha256:${'b'.repeat(64)}`,
+    }),
+  ).toEqual({
+    ready: true,
+    ready_for: 'openopc-web-desktop-developer-beta-v2',
+    release_profile_id: 'openopc-web-desktop-developer-beta-v2',
+    release_profile_digest: `sha256:${'b'.repeat(64)}`,
+  });
+  expect(() =>
+    ReleaseProfileStatusSchema.parse({
+      ready: true,
+      ready_for: 'openopc-web-desktop-developer-beta-v3',
+      release_profile_id: 'openopc-web-desktop-developer-beta-v3',
+      release_profile_digest: `sha256:${'b'.repeat(64)}`,
+    }),
+  ).toThrow();
+  expect(RestrictedRuntimeCapabilitySchema.safeParse('module.ai.gateway').success).toBe(true);
+});
+
+test('v1 disabled-state evidence covers the developer AI gateway capability', () => {
+  expect(RESTRICTED_DISABLED_CAPABILITIES).toContain('module.ai.gateway');
+});
+
 test('disabled assessment schema rejects incomplete and self-described records', () => {
   const records = RESTRICTED_DISABLED_CAPABILITIES.map((capability) => ({
     capability,

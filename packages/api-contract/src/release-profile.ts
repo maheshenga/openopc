@@ -1,5 +1,20 @@
 import { z } from 'zod';
 
+export const OPENOPC_RELEASE_PROFILE_IDS = [
+  'openopc-restricted-public-beta-v1',
+  'openopc-web-desktop-developer-beta-v2',
+] as const;
+export type OpenOpcReleaseProfileId = (typeof OPENOPC_RELEASE_PROFILE_IDS)[number];
+
+export const OPENOPC_RELEASE_PROFILE_DIGESTS = {
+  'openopc-restricted-public-beta-v1':
+    'sha256:e548465c35cb5041b38092b2937164f2abecfb6781ab0e545532ce95f387956c',
+  'openopc-web-desktop-developer-beta-v2':
+    'sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03',
+} as const satisfies Record<OpenOpcReleaseProfileId, `sha256:${string}`>;
+
+export const OpenOpcReleaseProfileIdSchema = z.enum(OPENOPC_RELEASE_PROFILE_IDS);
+
 export const RESTRICTED_RUNTIME_CAPABILITIES = [
   'studio.text.generate',
   'studio.image.generate',
@@ -7,6 +22,7 @@ export const RESTRICTED_RUNTIME_CAPABILITIES = [
   'module.wasi.execute',
   'module.oci.execute',
   'module.app.render',
+  'module.ai.gateway',
   'commerce.purchase',
   'commerce.settlement',
   'native.mobile',
@@ -26,6 +42,7 @@ export type RestrictedRuntimeCapability =
   | 'module.wasi.execute'
   | 'module.oci.execute'
   | 'module.app.render'
+  | 'module.ai.gateway'
   | 'commerce.purchase'
   | 'commerce.settlement'
   | 'native.mobile'
@@ -41,6 +58,7 @@ export const RELEASE_PROFILE_UNAVAILABLE =
 export const RESTRICTED_DISABLED_CAPABILITIES = [
   'module.oci.execute',
   'module.app.render',
+  'module.ai.gateway',
   'commerce.purchase',
   'commerce.settlement',
   'native.mobile',
@@ -78,15 +96,15 @@ const GitShaSchema = z.string().regex(/^[a-f0-9]{40}$/);
 export const ReleaseProfileStatusSchema = z
   .object({
     ready: z.boolean(),
-    ready_for: z.literal('openopc-restricted-public-beta-v1').nullable(),
-    release_profile_id: z.literal('openopc-restricted-public-beta-v1').nullable(),
+    ready_for: OpenOpcReleaseProfileIdSchema.nullable(),
+    release_profile_id: OpenOpcReleaseProfileIdSchema.nullable(),
     release_profile_digest: Sha256DigestSchema.nullable(),
   })
   .strict()
   .superRefine((value, context) => {
     const readyIdentity =
-      value.ready_for === 'openopc-restricted-public-beta-v1' &&
-      value.release_profile_id === 'openopc-restricted-public-beta-v1' &&
+      value.ready_for !== null &&
+      value.ready_for === value.release_profile_id &&
       value.release_profile_digest !== null;
     const unavailableIdentity =
       value.ready_for === null &&

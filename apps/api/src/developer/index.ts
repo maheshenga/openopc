@@ -252,6 +252,7 @@ export const moduleCustomDomainHostApp = createModuleCustomDomainHostRoutes({
   hostService: moduleCustomDomainHostService,
   internalServiceKey: config.INTERNAL_SERVICE_KEY,
   environment: config.INTERNAL_KORTIX_ENV,
+  runtime: loadRuntimeReleaseProfile(),
 });
 registerDeveloperModuleMarketplaceSource(
   developerModuleDistributionEnabled ? developerModuleDistributionService : null,

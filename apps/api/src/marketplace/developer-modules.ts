@@ -4,7 +4,7 @@ import {
   assertReleaseRuntimeAllowed,
 } from '../developer/distribution';
 import type { DeveloperModuleRelease } from '../developer/releases';
-import { loadRuntimeReleaseProfile } from '../release-profile/runtime';
+import { type RuntimeReleaseProfile, loadRuntimeReleaseProfile } from '../release-profile/runtime';
 
 export const OPENOPC_MODULE_MARKETPLACE_ID = 'openopc-modules';
 export const OPENOPC_MODULE_MARKETPLACE_LABEL = 'OpenOPC Modules';
@@ -87,6 +87,7 @@ type PublicDeveloperModuleRelease = DeveloperModuleRelease & {
 
 function isPublicMarketplaceRelease(
   release: DeveloperModuleRelease,
+  runtime: RuntimeReleaseProfile,
 ): release is PublicDeveloperModuleRelease {
   if (
     release.status === 'published' &&
@@ -98,7 +99,7 @@ function isPublicMarketplaceRelease(
     ['declarative', 'sandboxed-web', 'server-adapter'].includes(release.manifest.execution.mode)
   ) {
     try {
-      assertReleaseRuntimeAllowed(release, loadRuntimeReleaseProfile());
+      assertReleaseRuntimeAllowed(release, runtime);
       return true;
     } catch {
       return false;
@@ -180,6 +181,7 @@ function detailOf(release: PublicDeveloperModuleRelease): DeveloperModuleMarketp
 
 export function createDeveloperModuleMarketplaceAdapter(
   source: DistributionSource | null,
+  runtime: RuntimeReleaseProfile = loadRuntimeReleaseProfile(),
 ): DeveloperModuleMarketplaceAdapter {
   return {
     async list(input) {
@@ -190,7 +192,7 @@ export function createDeveloperModuleMarketplaceAdapter(
         offset: Math.max(Math.trunc(input.offset), 0),
       });
       const items = page.releases
-        .filter(isPublicMarketplaceRelease)
+        .filter((release) => isPublicMarketplaceRelease(release, runtime))
         .map(itemOf)
         .filter((item) => matchesQuery(item, input.query))
         .sort((left, right) => left.id.localeCompare(right.id));
@@ -203,7 +205,7 @@ export function createDeveloperModuleMarketplaceAdapter(
       if (!releaseId) return null;
       try {
         const release = await source.getPublished({ releaseId });
-        return isPublicMarketplaceRelease(release) ? detailOf(release) : null;
+        return isPublicMarketplaceRelease(release, runtime) ? detailOf(release) : null;
       } catch {
         return null;
       }

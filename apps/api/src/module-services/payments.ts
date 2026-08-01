@@ -11,12 +11,15 @@ import {
 } from '../module-payments/orders';
 
 import { makeOpenApiApp } from '../openapi';
+import { rejectUnavailableCapability } from '../release-profile/routes';
+import { type RuntimeReleaseProfile, loadRuntimeReleaseProfile } from '../release-profile/runtime';
 import type { AppEnv } from '../types';
 import { requireModuleServiceOperation } from './service-auth';
 
 type PaymentOperation = 'orders.create' | 'orders.read' | 'refunds.create';
 
 export interface ModulePaymentRouteDependencies {
+  runtime: RuntimeReleaseProfile;
   requireCapability(
     authorization: string | undefined,
     operation: PaymentOperation,
@@ -37,6 +40,7 @@ export function configureModulePaymentOrderService(
 
 export function createRuntimeModulePaymentDependencies(): ModulePaymentRouteDependencies {
   return {
+    runtime: loadRuntimeReleaseProfile(),
     requireCapability: (authorization, operation) =>
       requireModuleServiceOperation(authorization, { service: 'payment', operation }),
     orderService: runtimeOrderService ?? unavailableOrderService,
@@ -45,6 +49,16 @@ export function createRuntimeModulePaymentDependencies(): ModulePaymentRouteDepe
 
 export function createModulePaymentRoutes(dependencies: ModulePaymentRouteDependencies) {
   const app = makeOpenApiApp<AppEnv>();
+
+  app.use('*', async (context, next) => {
+    const rejected = rejectUnavailableCapability(
+      context,
+      'commerce.purchase',
+      dependencies.runtime,
+    );
+    if (rejected) return rejected;
+    return next();
+  });
 
   app.post('/orders', async (context) => {
     const idempotencyKey = context.req.header('idempotency-key');

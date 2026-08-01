@@ -157,5 +157,150 @@
       "outcome": "not-run",
       "artifactPaths": []
     }
-  ]
+  ],
+  "developerBetaAcceptance": {
+    "schemaVersion": 2,
+    "records": [
+      {
+        "id": "web_core_login",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "desktop_core_login",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "module_install_consent_execute_revoke_rollback",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "web_sandbox_review_smoke",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "server_or_wasi_review_smoke",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "newapi_model_catalog",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "newapi_text_completion",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "newapi_streaming_usage_audit",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "zpay_create_callback_lookup_refund",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "zpay_duplicate_callback",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "zpay_expired_late_payment_disposition",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "capability_cross_tenant_and_revocation_rejection",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "custom_domain_dns_tls_and_host_routing",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      },
+      {
+        "id": "provider_failure_bounded_and_audited",
+        "releaseProfileId": "openopc-web-desktop-developer-beta-v2",
+        "releaseProfileDigest": "sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03",
+        "candidateCommit": "15ab2c274aeee06a3e088748882b1e51aea62b4b",
+        "recordedAt": "2026-08-01T00:00:00.000Z",
+        "referenceDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "outcome": "not-run",
+        "claims": []
+      }
+    ]
+  }
 }

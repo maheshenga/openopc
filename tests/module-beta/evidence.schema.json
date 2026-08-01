@@ -12,13 +12,17 @@
       "minItems": 12,
       "maxItems": 12,
       "items": { "$ref": "#/$defs/evidenceRecord" }
-    }
+    },
+    "developerBetaAcceptance": { "$ref": "#/$defs/developerBetaAcceptance" }
   },
   "allOf": [
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G1" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G1" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -27,7 +31,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G2" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G2" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -36,7 +43,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G3" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G3" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -45,7 +55,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G4" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G4" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -54,7 +67,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G5" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G5" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -63,7 +79,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G6" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G6" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -72,7 +91,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G7" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G7" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -81,7 +103,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G8" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G8" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -90,7 +115,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G9" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G9" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -99,7 +127,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G10" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G10" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -108,7 +139,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G11" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G11" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -117,7 +151,10 @@
     {
       "properties": {
         "records": {
-          "contains": { "properties": { "gate": { "const": "G12" } }, "required": ["gate"] },
+          "contains": {
+            "properties": { "gate": { "const": "G12" } },
+            "required": ["gate"]
+          },
           "minContains": 1,
           "maxContains": 1
         }
@@ -125,6 +162,73 @@
     }
   ],
   "$defs": {
+    "developerBetaAcceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "records"],
+      "properties": {
+        "schemaVersion": { "const": 2 },
+        "records": {
+          "type": "array",
+          "minItems": 14,
+          "maxItems": 14,
+          "items": { "$ref": "#/$defs/developerBetaRecord" }
+        }
+      }
+    },
+    "developerBetaRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "releaseProfileId",
+        "releaseProfileDigest",
+        "candidateCommit",
+        "recordedAt",
+        "referenceDigest",
+        "outcome",
+        "claims"
+      ],
+      "properties": {
+        "id": {
+          "enum": [
+            "web_core_login",
+            "desktop_core_login",
+            "module_install_consent_execute_revoke_rollback",
+            "web_sandbox_review_smoke",
+            "server_or_wasi_review_smoke",
+            "newapi_model_catalog",
+            "newapi_text_completion",
+            "newapi_streaming_usage_audit",
+            "zpay_create_callback_lookup_refund",
+            "zpay_duplicate_callback",
+            "zpay_expired_late_payment_disposition",
+            "capability_cross_tenant_and_revocation_rejection",
+            "custom_domain_dns_tls_and_host_routing",
+            "provider_failure_bounded_and_audited"
+          ]
+        },
+        "releaseProfileId": {
+          "const": "openopc-web-desktop-developer-beta-v2"
+        },
+        "releaseProfileDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "candidateCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "recordedAt": { "type": "string", "format": "date-time" },
+        "referenceDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "outcome": { "enum": ["not-run", "passed", "failed"] },
+        "claims": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "evidenceRecord": {
       "type": "object",
       "additionalProperties": false,
@@ -168,7 +272,10 @@
       },
       "allOf": [
         {
-          "if": { "properties": { "outcome": { "const": "passed" } }, "required": ["outcome"] },
+          "if": {
+            "properties": { "outcome": { "const": "passed" } },
+            "required": ["outcome"]
+          },
           "then": {
             "properties": {
               "command": { "type": "string", "minLength": 1 },

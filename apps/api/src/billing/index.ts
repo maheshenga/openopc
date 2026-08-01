@@ -1,11 +1,14 @@
+import { timingSafeEqual } from 'node:crypto';
 import { createRoute, z } from '@hono/zod-openapi';
 import { AUTO_TOPUP_DEFAULT_AMOUNT, AUTO_TOPUP_DEFAULT_THRESHOLD } from '@kortix/shared';
-import { timingSafeEqual } from 'node:crypto';
 import type { Context } from 'hono';
 import { config } from '../config';
 import { supabaseAuth } from '../middleware/auth';
 import { errors, json, makeOpenApiApp } from '../openapi';
-import { rejectUnavailableCapability } from '../release-profile/routes';
+import {
+  rejectPlatformCreditPurchase,
+  rejectUnavailableCapability,
+} from '../release-profile/routes';
 import type { AppEnv } from '../types';
 
 import { accountDeletionRouter } from './routes/account-deletion';
@@ -47,7 +50,10 @@ billingApp.route('/webhook', webhooksRouter);
 // restricted releases cannot reach account, repository, or Stripe code.
 for (const [path, capability] of RESTRICTED_COMMERCIAL_ROUTES) {
   billingApp.use(path, async (c, next) => {
-    const rejected = rejectUnavailableCapability(c, capability);
+    const rejected =
+      capability === 'commerce.purchase'
+        ? rejectPlatformCreditPurchase(c)
+        : rejectUnavailableCapability(c, capability);
     if (rejected) return rejected;
     return next();
   });
@@ -72,7 +78,11 @@ billingApp.route('/account-state', accountStateRouter);
 // never hit Stripe, never get blocked by credits, never see subscription UI.
 // Account-state (above) already returns the "Local (Unlimited)" mock.
 billingApp.use('*', async (c, next) => {
-  if (c.req.path.includes('/account-state') || c.req.path.includes('/webhooks') || c.req.path.includes('/cron/')) {
+  if (
+    c.req.path.includes('/account-state') ||
+    c.req.path.includes('/webhooks') ||
+    c.req.path.includes('/cron/')
+  ) {
     return next();
   }
   if (!config.KORTIX_BILLING_INTERNAL_ENABLED) {

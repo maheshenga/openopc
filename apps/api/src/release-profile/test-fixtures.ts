@@ -6,12 +6,20 @@ import {
 
 const PROFILE_DIGEST = 'sha256:e548465c35cb5041b38092b2937164f2abecfb6781ab0e545532ce95f387956c';
 
+const DEVELOPER_PROFILE_DIGEST =
+  'sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03';
+
 export const RESTRICTED_RUNTIME_TEST_PROFILE = loadRuntimeReleaseProfile({
   OPENOPC_RELEASE_PROFILE_ID: 'openopc-restricted-public-beta-v1',
   OPENOPC_RELEASE_PROFILE_DIGEST: PROFILE_DIGEST,
 });
 
 export const NON_READY_RUNTIME_TEST_PROFILE = loadRuntimeReleaseProfile({});
+
+export const DEVELOPER_RUNTIME_TEST_PROFILE = loadRuntimeReleaseProfile({
+  OPENOPC_RELEASE_PROFILE_ID: 'openopc-web-desktop-developer-beta-v2',
+  OPENOPC_RELEASE_PROFILE_DIGEST: DEVELOPER_PROFILE_DIGEST,
+});
 
 function serverOwnedRuntimeTestProfile(
   capabilities: readonly RestrictedRuntimeCapability[],

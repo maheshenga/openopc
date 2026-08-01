@@ -1,12 +1,15 @@
 # OpenOPC Web/Desktop Developer-Module Extension Design
 
 **Date:** 2026-08-01
-**Status:** Proposed; implementation has not started
+**Status:** Approved; implementation complete locally; deployment pending
 
-**Release-scope note:** The current restricted public-beta profile excludes
-real developer-application payments. This design is a proposed scope expansion;
-payment remains disabled until the release profile is revised and the payment
-acceptance evidence in this document is complete.
+**Release-scope note:** `openopc-restricted-public-beta-v1` remains immutable and
+continues to exclude developer-application payments. The separately identified
+`openopc-web-desktop-developer-beta-v2` profile enables reviewed Web/Desktop
+module execution, the platform AI gateway, and buyer-side module payments while
+keeping settlement, payouts, mobile-native capabilities, and all unlisted
+capabilities disabled. Defining v2 is not a readiness claim: public beta remains
+blocked until the same-candidate acceptance evidence in this document is complete.
 
 ## Goal
 
@@ -84,24 +87,43 @@ OpenOPC provides an official TypeScript/JavaScript developer SDK plus a
 versioned REST/OpenAPI contract for other languages. A versioned manifest
 extension declares the immutable artifact, runtime profile, SDK API version,
 entry points, optional descriptive labels, requested permissions, and scoped
-capabilities. The target shape is:
+platform services. The extension is a schema-v3 `openopc` namespace, rather
+than a new shape for the existing `capabilities` field. That existing field is
+already an array of developer-owned capability descriptors and remains
+available unchanged for module-defined APIs.
+
+The concrete v3 shape is:
 
 ```json
 {
-  "module_id": "developer.example.app",
-  "sdk_api_version": "v1",
-  "capabilities": {
-    "ai": ["models.read", "chat.stream"],
-    "payment": ["orders.create", "orders.read"]
+  "schemaVersion": 3,
+  "id": "developer.example.app",
+  "version": "1.0.0",
+  "publisher": { "id": "developer-example" },
+  "locales": ["zh-CN"],
+  "compatibility": { "platform": ">=1.0.0", "registry": ">=3.0.0" },
+  "execution": { "mode": "sandboxed-web", "entry": "dist/index.html" },
+  "verification": { "profile": "sandboxed-web" },
+  "openopc": {
+    "sdkApiVersion": "v1",
+    "catalog": { "labels": ["h5", "game"] },
+    "services": {
+      "ai": { "operations": ["models.read", "text.generate", "text.stream"] },
+      "payment": { "operations": ["orders.create", "orders.read", "refunds.create"] }
+    }
   }
 }
 ```
 
-Capabilities are optional. An application that needs AI must declare `ai` and
-use the OpenOPC AI API; an application that needs payment must declare
-`payment` and use the OpenOPC Payment API. Applications that need neither may
-request neither. No application may substitute a direct model-provider or
-payment-provider integration for a declared platform capability.
+Schema v2 parsing remains supported for already-published releases. Its fixed
+`category` values remain legacy descriptive metadata only. Schema v3 does not
+use a category for routing or authorization; `openopc.catalog.labels` are
+searchable descriptions only. `openopc.services` is optional. An application
+that needs AI must declare `services.ai` and use the OpenOPC AI API; an
+application that needs payment must declare `services.payment` and use the
+OpenOPC Payment API. Applications that need neither may declare neither. No
+application may substitute a direct model-provider or payment-provider
+integration for a declared platform service.
 
 The SDK receives a short-lived capability token through the Web/Desktop bridge
 or a server-side API exchange. The token is bound to tenant, project, module
@@ -113,10 +135,17 @@ audit event, and follows the existing runtime drain/revocation behavior.
 
 External network access remains restricted to reviewed declared domains. The
 platform AI and payment endpoints are capability APIs, not declared third-party
-egress exceptions. A user may bind a personal or team-owned domain only after
-DNS `TXT`/`CNAME` ownership verification and HTTPS validation. A binding is
-scoped to the owning tenant and module release, is auditable, and never changes
-artifact permissions or capability grants.
+egress exceptions. A custom-domain binding is optional: a module remains usable
+through the normal Web/Desktop host when no domain is configured. When a user
+chooses to bind a personal or team-owned domain, the platform requires DNS
+`TXT`/`CNAME` ownership verification and HTTPS validation. A binding is scoped
+to the owning tenant, deployment environment, and module release, is auditable,
+and never changes artifact permissions or capability grants.
+
+Only reviewed `sandboxed-web` releases are exposed through the optional static
+custom-domain host. WASI, service-connector, and desktop-native releases keep
+their normal platform-mediated execution path and are not made publicly
+addressable by a custom hostname.
 
 ## Platform AI connector
 
@@ -150,11 +179,16 @@ integration service, not a fixed commerce module type and not a credential
 bundle supplied by a developer.
 
 The public-beta payment capability supports idempotent order creation, payment
-parameters, signed asynchronous callback processing, order lookup, order
-closure, refund requests, and refund-result records. The connector alone holds
-Z-Pay and downstream merchant credentials. Modules call only the OpenOPC
-Payment API with a `payment` capability token; they cannot call Z-Pay, Alipay,
-or WeChat directly.
+parameters, signed asynchronous callback processing, order lookup, local
+expiry, refund requests, and refund-result records. The published Z-Pay
+documentation exposes creation, lookup, refund, and callback APIs, but no
+provider-side order-close API. Therefore OpenOPC must not expose or advertise
+`orders.close` in this beta. An expired local order remains auditable; a later
+valid provider callback is recorded as a late payment and routes to the refund
+and support workflow instead of silently treating the checkout as cancelled.
+The connector alone holds Z-Pay and downstream merchant credentials. Modules
+call only the OpenOPC Payment API with a `payment` capability token; they
+cannot call Z-Pay, Alipay, or WeChat directly.
 
 Developer-application payments use a separate order, callback, audit, and
 authorization boundary from the existing Stripe subscription, credit, and
@@ -196,8 +230,12 @@ not changed by this product design.
 
 ## Public-beta acceptance
 
-The payment-expanded Web/Desktop beta is accepted only after its release profile
-is revised and all of the following are evidenced on the same candidate commit:
+The `openopc-web-desktop-developer-beta-v2` Web/Desktop beta is accepted only
+after all of the following are evidenced on the same candidate commit. The
+machine-checkable evidence ledger records the profile id/digest, candidate
+commit, timestamp, and a redacted artifact/reference digest for each flow. A
+ledger containing provider credentials, `orders.close`, settlement/payout
+claims, or direct browser/Desktop calls to NewAPI or Z-Pay is invalid.
 
 - ordinary user login and core Web workflow work without Desktop;
 - the packaged Windows Desktop login and core workflow work;
@@ -210,8 +248,8 @@ is revised and all of the following are evidenced on the same candidate commit:
   streaming AI call through the NewAPI connector, with budget and audit
   evidence;
 - an SDK module completes a controlled Alipay or WeChat payment through the
-  payment connector, including signed callback, query, closure, and refund
-  result evidence;
+  payment connector, including signed callback, duplicate callback, query,
+  local-expiry/late-callback handling, and refund-result evidence;
 - undeclared, expired, revoked, or cross-tenant AI/payment capability tokens
   are rejected;
 - `new-api` and Z-Pay failures, duplicate callbacks, and module revocation have
@@ -233,6 +271,8 @@ the full OpenOPC product specification is complete.
 - unreviewed developer publication or self-signing;
 - developer split payments, withdrawals, payouts, settlement, tax handling,
   or developer-owned merchant credentials;
+- a provider-side order-close claim until Z-Pay publishes a supported close
+  operation and it passes a separate payment acceptance cycle;
 - embedding, copying, or taking ownership of the independently operated
   `new-api` site;
 - native mobile applications;

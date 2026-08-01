@@ -1,8 +1,13 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import type { AppEnv } from '../../types';
+import { BillingError } from '../../errors';
+import { auth, errors, json, makeOpenApiApp } from '../../openapi';
+import {
+  rejectPlatformCreditPurchase,
+  rejectUnavailableCapability,
+} from '../../release-profile/routes';
+import { resolveScopedAccountId } from '../../shared/resolve-account';
 import { getStripe } from '../../shared/stripe';
-import { getOrCreateStripeCustomer } from '../services/subscriptions';
-import { canPurchaseCredits, resolveCreditPriceId } from '../services/tiers';
+import type { AppEnv } from '../../types';
 import { getCreditAccount } from '../repositories/credit-accounts';
 import {
   getTransactions,
@@ -10,18 +15,14 @@ import {
   getUsageRecords,
   insertPurchase,
 } from '../repositories/transactions';
-import { BillingError } from '../../errors';
-import { resolveScopedAccountId } from '../../shared/resolve-account';
 import { resolveBillingWriteAccountId } from '../require-billing-write';
-import { makeOpenApiApp, json, auth, errors } from '../../openapi';
-import { rejectUnavailableCapability } from '../../release-profile/routes';
+import { getOrCreateStripeCustomer } from '../services/subscriptions';
+import { canPurchaseCredits, resolveCreditPriceId } from '../services/tiers';
 
 export const paymentsRouter = makeOpenApiApp<AppEnv>();
 
-paymentsRouter.use('/purchase-credits', async (c, next) => {
-  const rejected = rejectUnavailableCapability(c, 'commerce.purchase');
-  if (rejected) return rejected;
-  return next();
+paymentsRouter.use('/purchase-credits', async (c) => {
+  return rejectPlatformCreditPurchase(c);
 });
 paymentsRouter.use('/auto-topup/configure', async (c, next) => {
   const rejected = rejectUnavailableCapability(c, 'commerce.settlement');
@@ -90,14 +91,16 @@ paymentsRouter.openapi(
     const creditPriceId = resolveCreditPriceId(amount);
     const lineItems = creditPriceId
       ? [{ price: creditPriceId, quantity: 1 }]
-      : [{
-          price_data: {
-            currency: 'usd',
-            unit_amount: Math.round(amount * 100),
-            product_data: { name: `$${amount} Credits` },
+      : [
+          {
+            price_data: {
+              currency: 'usd',
+              unit_amount: Math.round(amount * 100),
+              product_data: { name: `$${amount} Credits` },
+            },
+            quantity: 1,
           },
-          quantity: 1,
-        }];
+        ];
 
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
@@ -164,7 +167,10 @@ paymentsRouter.openapi(
     const offset = Number(c.req.query('offset') ?? 0);
     const typeFilterParam = c.req.query('type_filter') || undefined;
     const typeFilter = typeFilterParam?.includes(',')
-      ? typeFilterParam.split(',').map((value: string) => value.trim()).filter(Boolean)
+      ? typeFilterParam
+          .split(',')
+          .map((value: string) => value.trim())
+          .filter(Boolean)
       : typeFilterParam;
 
     const { rows, total } = await getTransactions(accountId, limit, offset, typeFilter);

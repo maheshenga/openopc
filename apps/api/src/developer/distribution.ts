@@ -126,6 +126,10 @@ export function assertReleaseRuntimeAllowed(
   runtime: RuntimeReleaseProfile,
   allowRestrictedRevoke = false,
 ): void {
+  if (release.manifest.execution.mode === 'sandboxed-web') {
+    assertRuntimeCapability('module.app.render', runtime);
+    return;
+  }
   if (release.manifest.execution.mode !== 'server-adapter') return;
   if (release.runtime_kind === 'wasi-component') {
     assertRuntimeCapability('module.wasi.execute', runtime);

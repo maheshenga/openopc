@@ -2,6 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import type { ModuleServiceCapabilityClaimsV1 } from '@kortix/api-contract';
 import type { AuthedPrincipal } from '@kortix/llm-gateway';
 
+import {
+  DEVELOPER_RUNTIME_TEST_PROFILE,
+  RESTRICTED_RUNTIME_TEST_PROFILE,
+} from '../release-profile/test-fixtures';
 import { type ModuleAiDependencies, type ModuleAiGateway, createModuleAiRoutes } from './ai';
 import { createModuleServicesApp } from './app';
 import { ModuleServiceCapabilityError } from './capability-grants';
@@ -64,6 +68,7 @@ function fixture(input?: {
   rejection?: ModuleServiceCapabilityError;
   newApiConfigured?: boolean;
   stream?: boolean;
+  runtime?: ModuleAiDependencies['runtime'];
 }) {
   const operations = input?.operations ?? ['models.read', 'text.generate', 'text.stream'];
   const calls = {
@@ -128,7 +133,8 @@ function fixture(input?: {
     gateway: () => gateway,
     managedModels: [MANAGED_MODEL],
     newApiConfigured: () => input?.newApiConfigured ?? true,
-  } as ModuleAiDependencies;
+    runtime: input?.runtime ?? DEVELOPER_RUNTIME_TEST_PROFILE,
+  };
   return { app: createModuleAiRoutes(dependencies), calls, dependencies };
 }
 
@@ -141,6 +147,24 @@ function chatBody(stream?: boolean) {
 }
 
 describe('module AI service facade', () => {
+  test('rejects every AI operation when the deployment profile has no AI gateway capability', async () => {
+    const { app, calls } = fixture({
+      operations: ['models.read'],
+      runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    });
+    const response = await app.request('/models', {
+      headers: { authorization: AUTHORIZATION },
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.ai.gateway',
+    });
+    expect(calls.capabilityOperations).toHaveLength(0);
+    expect(calls.listCount).toBe(0);
+  });
+
   test('mounts the AI facade under the module-services application', async () => {
     const { dependencies } = fixture({ operations: ['models.read'] });
     const app = createModuleServicesApp(dependencies);

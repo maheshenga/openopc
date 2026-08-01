@@ -58,7 +58,7 @@ import { startAccessControlCache, stopAccessControlCache } from './shared/access
 import { startTmpReaper, stopTmpReaper } from './snapshots/tmp-reaper';
 import { startLeaderElection, stopLeaderElection, isLeader, runsSingletonWorkers } from './shared/leader-election';
 import { marketplaceApp } from './marketplace';
-import { developerApp } from './developer';
+import { developerApp, moduleCustomDomainHostApp, moduleCustomDomainInternalApp } from './developer';
 import { moduleRuntimeApp } from './module-runtime';
 import { createModulePaymentsApp } from './module-payments/app';
 import { modulePaymentOrderService, moduleServicesApp } from './module-services';
@@ -723,6 +723,8 @@ app.route(
   }),
 ); // Public, verified Z-Pay callback only
 app.route('/v1/module-services', moduleServicesApp); // Developer module AI/payment service facade
+app.route('/v1/internal/module-domains', moduleCustomDomainInternalApp); // Worker-only custom hostname resolver
+app.route('/v1', moduleCustomDomainHostApp); // Worker-authenticated immutable custom-domain module host
 registerSunaMigrationRoutes(projectsApp); // /v1/projects/suna-migration/* (OG Suna → opencode, user-triggered)
 app.route('/v1/projects', projectsApp); // /v1/projects — Git-backed Kortix projects
 app.route('/v1/marketplace', marketplaceApp); // /v1/marketplace — browse the registry catalog

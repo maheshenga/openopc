@@ -1,0 +1,15 @@
+main = "worker.mjs"
+compatibility_date = "2026-06-01"
+workers_dev = false
+
+# Custom Hostnames and routes are applied manually in staging first. Keep the
+# API origin and internal key as Worker secrets; never put either in this file.
+#
+# wrangler secret put OPENOPC_MODULE_CUSTOM_HOSTNAME_ORIGIN
+# wrangler secret put INTERNAL_SERVICE_KEY
+
+[vars]
+# Set this per deployment environment; it is an allowlisted OpenOPC-owned suffix,
+# not a user/module-controlled origin selector.
+# OPENOPC_MODULE_CUSTOM_HOSTNAME_SUFFIX = "openopc.example"
+# No provider credentials belong in source control.

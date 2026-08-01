@@ -8983,6 +8983,118 @@ export const developerModulePaymentRefunds = kortixSchema.table(
   ],
 );
 
+export const moduleCustomDomainBindings = kortixSchema.table(
+  'module_custom_domain_bindings',
+  {
+    bindingId: uuid('binding_id').defaultRandom().primaryKey(),
+    environment: varchar('environment', { length: 16 })
+      .$type<'dev' | 'staging' | 'prod' | 'preview'>()
+      .notNull(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    releaseId: uuid('release_id').notNull(),
+    hostname: varchar('hostname', { length: 253 }).notNull(),
+    hostnameAscii: varchar('hostname_ascii', { length: 253 }).notNull(),
+    state: varchar('state', { length: 32 }).notNull(),
+    verificationTokenHash: varchar('verification_token_hash', { length: 71 }).notNull(),
+    cloudflareCustomHostnameId: varchar('cloudflare_custom_hostname_id', { length: 128 }),
+    cnameTarget: varchar('cname_target', { length: 253 }).notNull(),
+    failureCode: varchar('failure_code', { length: 128 }),
+    createdBy: uuid('created_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'module_custom_domain_bindings_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'module_custom_domain_bindings_installation_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.releaseId, table.accountId],
+      foreignColumns: [developerModuleReleases.releaseId, developerModuleReleases.accountId],
+      name: 'module_custom_domain_bindings_release_account_fk',
+    }).onDelete('restrict'),
+    uniqueIndex('module_custom_domain_bindings_hostname_unique').on(table.hostnameAscii),
+    unique('module_custom_domain_bindings_identity_unique').on(
+      table.bindingId,
+      table.accountId,
+      table.projectId,
+      table.installationId,
+      table.releaseId,
+    ),
+    index('idx_module_custom_domain_bindings_project_installation').on(
+      table.accountId,
+      table.projectId,
+      table.installationId,
+      table.createdAt,
+    ),
+    index('idx_module_custom_domain_bindings_active_hostname')
+      .on(table.environment, table.hostnameAscii, table.state)
+      .where(sql`${table.state} = 'active'`),
+    check(
+      'module_custom_domain_bindings_environment_check',
+      sql`${table.environment} IN ('dev', 'staging', 'prod', 'preview')`,
+    ),
+    check(
+      'module_custom_domain_bindings_hostname_check',
+      sql`length(${table.hostnameAscii}) BETWEEN 1 AND 253
+        AND ${table.hostnameAscii} = lower(${table.hostnameAscii})
+        AND ${table.hostnameAscii} ~ '^[a-z0-9][a-z0-9.-]*[a-z0-9]$'
+        AND ${table.hostnameAscii} !~ '[.][.]'
+        AND ${table.hostnameAscii} !~ '(^|[.])-'
+        AND ${table.hostnameAscii} !~ '-($|[.])'`,
+    ),
+    check(
+      'module_custom_domain_bindings_hash_check',
+      sql`${table.verificationTokenHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      'module_custom_domain_bindings_cname_check',
+      sql`length(${table.cnameTarget}) BETWEEN 1 AND 253
+        AND ${table.cnameTarget} = lower(${table.cnameTarget})`,
+    ),
+    check(
+      'module_custom_domain_bindings_state_check',
+      sql`${table.state} IN ('requested', 'dns_pending', 'hostname_pending', 'active', 'failed', 'disabled')`,
+    ),
+    check(
+      'module_custom_domain_bindings_provider_state_check',
+      sql`(
+        ${table.state} IN ('requested', 'dns_pending')
+        AND ${table.cloudflareCustomHostnameId} IS NULL
+      ) OR (
+        ${table.state} = 'hostname_pending'
+        AND ${table.cloudflareCustomHostnameId} IS NOT NULL
+      ) OR (
+        ${table.state} = 'active'
+        AND ${table.cloudflareCustomHostnameId} IS NOT NULL
+      ) OR ${table.state} IN ('failed', 'disabled')`,
+    ),
+    check(
+      'module_custom_domain_bindings_failure_code_check',
+      sql`${table.failureCode} IS NULL
+        OR (${table.failureCode} !~* 'bearer'
+          AND ${table.failureCode} !~* 'token'
+          AND ${table.failureCode} !~* 'key')`,
+    ),
+  ],
+);
+
 export const moduleRunners = kortixSchema.table(
   'module_runners',
   {

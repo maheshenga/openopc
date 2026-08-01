@@ -5,6 +5,21 @@ import { config } from '../config';
 import { assertAuthorized } from '../iam/dispatcher';
 import { registerDeveloperModuleMarketplaceSource } from '../marketplace/developer-modules';
 import { supabaseAuth } from '../middleware/auth';
+import { createModuleCustomDomainInternalRoutes } from '../module-domains/app';
+import {
+  ModuleCustomDomainBindingService,
+  createNodeAuthoritativeDnsResolver,
+} from '../module-domains/bindings';
+import { createDrizzleModuleCustomDomainBindingRepository } from '../module-domains/bindings.drizzle';
+import {
+  createCloudflareCustomHostnamePort,
+  parseModuleDomainOperatorConfig,
+} from '../module-domains/cloudflare';
+import {
+  ModuleCustomDomainStaticHostService,
+  createModuleCustomDomainHostRoutes,
+} from '../module-domains/host';
+import { createDrizzleModuleCustomDomainHostRepository } from '../module-domains/host.drizzle';
 import { createRuntimeArtifactS3Store } from '../module-runtime/runtime-artifacts.s3';
 import { loadRuntimeReleaseProfile } from '../release-profile/runtime';
 import { db } from '../shared/db';
@@ -188,6 +203,55 @@ export const projectModuleInstallationService = new ProjectModuleInstallationSer
   platformVersion: process.env.OPENOPC_PLATFORM_VERSION ?? '1.0.0',
   registryVersion: '1.0.0',
   runtime: runtimeReleaseProfile,
+});
+
+function configuredHostname(value: string): string | null {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return null;
+  }
+}
+
+const moduleCustomDomainOperatorConfig = parseModuleDomainOperatorConfig({
+  accountId: config.OPENOPC_CLOUDFLARE_ACCOUNT_ID,
+  zoneId: config.OPENOPC_CLOUDFLARE_ZONE_ID,
+  apiToken: config.OPENOPC_CLOUDFLARE_CUSTOM_HOSTNAME_API_TOKEN,
+  cnameTarget: config.OPENOPC_MODULE_CUSTOM_HOSTNAME_TARGET,
+  origin: config.OPENOPC_MODULE_CUSTOM_HOSTNAME_ORIGIN,
+  controlledSuffix: config.OPENOPC_MODULE_CUSTOM_HOSTNAME_SUFFIX,
+});
+export const moduleCustomDomainBindingRepository =
+  createDrizzleModuleCustomDomainBindingRepository(db);
+const moduleCustomDomainHostRepository = createDrizzleModuleCustomDomainHostRepository(db);
+export const moduleCustomDomainBindingService = moduleCustomDomainOperatorConfig
+  ? new ModuleCustomDomainBindingService({
+      repository: moduleCustomDomainBindingRepository,
+      dns: createNodeAuthoritativeDnsResolver(),
+      cloudflare: createCloudflareCustomHostnamePort(moduleCustomDomainOperatorConfig),
+      cnameTarget: moduleCustomDomainOperatorConfig.cnameTarget,
+      environment: config.INTERNAL_KORTIX_ENV,
+      platformHostnames: [
+        configuredHostname(config.KORTIX_URL),
+        configuredHostname(config.FRONTEND_URL),
+        configuredHostname(config.OPENOPC_MODULE_CUSTOM_HOSTNAME_ORIGIN),
+      ].filter((value): value is string => value !== null),
+    })
+  : null;
+export const moduleCustomDomainHostService = moduleCustomDomainOperatorConfig
+  ? new ModuleCustomDomainStaticHostService({
+      repository: moduleCustomDomainHostRepository,
+      artifactStore,
+    })
+  : null;
+export const moduleCustomDomainInternalApp = createModuleCustomDomainInternalRoutes({
+  bindingService: moduleCustomDomainBindingService,
+  internalServiceKey: config.INTERNAL_SERVICE_KEY,
+});
+export const moduleCustomDomainHostApp = createModuleCustomDomainHostRoutes({
+  hostService: moduleCustomDomainHostService,
+  internalServiceKey: config.INTERNAL_SERVICE_KEY,
+  environment: config.INTERNAL_KORTIX_ENV,
 });
 registerDeveloperModuleMarketplaceSource(
   developerModuleDistributionEnabled ? developerModuleDistributionService : null,

@@ -1,4 +1,8 @@
-import { projectModuleInstallationService } from '../../developer';
+import {
+  moduleCustomDomainBindingService,
+  projectModuleInstallationService,
+} from '../../developer';
+import { createModuleCustomDomainProjectRoutes } from '../../module-domains/app';
 import {
   createModuleServiceProjectRoutes,
   moduleServiceCapabilityBroker,
@@ -24,5 +28,14 @@ projectsApp.route(
     assertProjectCapability,
     consentManager: moduleServiceConsentManager,
     capabilityBroker: moduleServiceCapabilityBroker,
+  }),
+);
+
+projectsApp.route(
+  '/',
+  createModuleCustomDomainProjectRoutes({
+    loadProjectForUser,
+    assertProjectCapability,
+    bindingService: moduleCustomDomainBindingService,
   }),
 );

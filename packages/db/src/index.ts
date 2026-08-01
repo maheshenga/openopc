@@ -295,6 +295,7 @@ export {
   developerModulePaymentOrders,
   developerModulePaymentCallbacks,
   developerModulePaymentRefunds,
+  moduleCustomDomainBindings,
   moduleRunners,
   moduleRunnerProfiles,
   moduleExecutions,

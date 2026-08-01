@@ -43,13 +43,12 @@ function actionStep(workflowJob: WorkflowJob, action: string): WorkflowStep {
 
 function assertJobGuard(workflow: Workflow, id: string, pathGuard: string): void {
   const condition = job(workflow, id).if;
-  expect(condition, id).toContain(pathGuard);
-  expect(condition, id).toContain(REMOTE_DEPLOY_GUARD);
+  expect(condition, id).toBe(`${pathGuard} && ${REMOTE_DEPLOY_GUARD}`);
 }
 
 test('Deploy Dev only runs inherited server infrastructure when explicitly enabled', async () => {
   const workflow = await parseWorkflow();
-  for (const id of ['build-api', 'tag-api', 'scan-api', 'migrate-db', 'deploy-ecs', 'deploy-api']) {
+  for (const id of ['build-api', 'tag-api', 'supply-chain', 'migrate-db', 'deploy-api-ecs', 'deploy-api']) {
     assertJobGuard(workflow, id, "needs.detect-changes.outputs.api == 'true'");
   }
   for (const id of ['build-gateway', 'tag-gateway', 'deploy-gateway']) {

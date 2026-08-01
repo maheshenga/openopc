@@ -1,24 +1,19 @@
 name: Deploy Dev
 
-# DEV pipeline. `main` is the dev branch: every push auto-deploys the things that
-# change on most commits — API, frontend, CLI — as a DEV build versioned
+# DEV build pipeline. `main` changes can produce a DEV build versioned
 # `<next>-dev.<sha8>`, where <next> is one patch above the latest published
-# release tag (see the dev-version job). So dev tracks prod automatically and
-# `main` carries no release-version bump.
+# release tag (see the dev-version job). `main` carries no release-version bump.
+# Inherited remote server infrastructure is opt-in:
+# `OPENOPC_DEV_SERVER_DEPLOY_ENABLED=true` is required for API/gateway image
+# publication, migration, scanning, and deployment jobs.
 #
-#   - API image   → when OPENOPC_DEV_SERVER_DEPLOY_ENABLED=true, publish
-#                   kortix/kortix-api:dev-<sha8> + :dev-latest and deploy to dev
-#                   EKS via GitOps: the deploy-api job bumps
-#                   infra/k8s/envs/dev/values.yaml to :dev-<sha8> and Argo CD rolls
-#                   the Deployment (the workflow waits for it). dev-api.kortix.com
-#                   is a Cloudflare Worker routing to dev-api-eks
-#                   (see infra/cloudflare/workers/api-router).
-#   - Frontend    → the standalone build always runs for frontend changes; image
-#                   publishing is enabled only by OPENOPC_DEV_SERVER_DEPLOY_ENABLED=true.
-#                   dev.kortix.com itself is deployed by Vercel from `main` via
-#                   Vercel's own Git integration — no deploy step.
+#   - API/gateway → remote image publication and server infrastructure are optional.
+#   - Frontend    → standalone output is always verified for frontend changes;
+#                   image publication is optional.
 #   - CLI         → 4 cross-compiled binaries published to the mutable
 #                   `dev-latest` GitHub prerelease (default API base dev-api).
+#   - Web hosting  → outside this workflow and unverified here; this workflow
+#                   makes no claim about an online deployment.
 #
 # Desktop is intentionally NOT here — it's an Electron shell that changes
 # rarely and needs slow signed macOS/Windows runners, so it lives in its own
@@ -203,7 +198,7 @@ jobs:
           echo "image=kortix/kortix-api:dev-${SHA8}" >> "$GITHUB_OUTPUT"
 
   # ── Supply chain: scan, SBOM, sign, provenance (SLSA) on the immutable tag ──
-  scan-api:
+  supply-chain:
     name: Scan + SBOM + sign API image
     needs: [detect-changes, tag-api]
     if: needs.detect-changes.outputs.api == 'true' && vars.OPENOPC_DEV_SERVER_DEPLOY_ENABLED == 'true'
@@ -300,7 +295,7 @@ jobs:
   # Secrets Manager blob (the same blob external-secrets syncs into EKS), so the
   # ECS and EKS env contracts can never drift. When EKS is retired, delete the
   # deploy-api (EKS) job and this becomes the sole API deploy.
-  deploy-ecs:
+  deploy-api-ecs:
     name: Deploy API to dev (ECS Fargate)
     needs: [detect-changes, tag-api, migrate-db]
     if: needs.detect-changes.outputs.api == 'true' && vars.OPENOPC_DEV_SERVER_DEPLOY_ENABLED == 'true'
@@ -673,11 +668,9 @@ jobs:
           done
           echo "::warning::dev gateway not rolled out to :${TAG} (likely missing ACM cert ARN in gateway-values, or Argo lag)."
 
-  # ── Build + push the multi-arch frontend image ──────────────────────────────
-  # dev.kortix.com is served by Vercel (auto-deploys from `main`); this image is
-  # for self-hosters, so there is no deploy step here.
+  # ── Verify standalone frontend output; optionally publish an image ──────────
   build-frontend:
-    name: Build frontend image (multi-arch)
+    name: Verify frontend standalone output (optional image publication)
     needs: [detect-changes, dev-version]
     if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest

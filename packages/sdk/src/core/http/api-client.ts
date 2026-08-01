@@ -30,6 +30,8 @@ export interface ApiClientOptions {
   showErrors?: boolean;
   errorContext?: ErrorContext;
   timeout?: number;
+  /** Optional request-scoped transport; defaults to the current global fetch. */
+  fetchImpl?: typeof globalThis.fetch;
 }
 
 export interface ApiResponse<T = any> {
@@ -92,11 +94,11 @@ async function makeRequest<T = any>(
   url: string,
   options: RequestInit & ApiClientOptions = {}
 ): Promise<ApiResponse<T>> {
-  const fetchImpl = globalThis.fetch.bind(globalThis);
   const {
     showErrors = true,
     errorContext,
     timeout = 30000,
+    fetchImpl = globalThis.fetch.bind(globalThis),
     ...fetchOptions
   } = options;
 

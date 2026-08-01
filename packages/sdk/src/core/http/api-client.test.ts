@@ -107,6 +107,44 @@ describe('makeRequest transport isolation', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test('uses a request-scoped transport instead of the process-global fetch', async () => {
+    configureKortix({
+      backendUrl: 'http://api.test/v1',
+      getToken: async () => 'test-token',
+    });
+
+    const originalFetch = globalThis.fetch;
+    let globalFetchCalls = 0;
+    let requestFetchCalls = 0;
+    globalThis.fetch = (async () => {
+      globalFetchCalls += 1;
+      return new Response(JSON.stringify({ source: 'global' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+    const requestFetch = (async () => {
+      requestFetchCalls += 1;
+      return new Response(JSON.stringify({ source: 'request' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const response = await backendApi.get('/projects/abc/detail', {
+        fetchImpl: requestFetch,
+      });
+
+      expect(response.success).toBe(true);
+      expect(response.data).toEqual({ source: 'request' });
+      expect(requestFetchCalls).toBe(1);
+      expect(globalFetchCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 // Regression for prod TypeError "t.message.includes is not a function": a

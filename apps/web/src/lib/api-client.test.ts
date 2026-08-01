@@ -35,16 +35,16 @@ describe('backendApi', () => {
 
   test('uses bearer auth and omits browser cookies by default', async () => {
     const calls: RequestInit[] = [];
-    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+    const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
       calls.push(init ?? {});
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
-    }) as unknown as typeof fetch;
+    };
 
     const { backendApi } = await import('./api-client');
-    const res = await backendApi.get('/billing/account-state');
+    const res = await backendApi.get('/billing/account-state', { fetchImpl });
 
     expect(res.success).toBe(true);
     expect(calls).toHaveLength(1);
@@ -69,22 +69,22 @@ describe('setAdminBypass / isAdminBypassEnabled', () => {
 
   test('attaches x-kortix-admin-bypass to requests when enabled, omits it when disabled', async () => {
     const calls: RequestInit[] = [];
-    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+    const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
       calls.push(init ?? {});
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
-    }) as unknown as typeof fetch;
+    };
 
     const { backendApi, setAdminBypass } = await import('./api-client');
 
     setAdminBypass(true);
-    await backendApi.get('/projects/abc/detail');
+    await backendApi.get('/projects/abc/detail', { fetchImpl });
     expect((calls[0].headers as Record<string, string>)['x-kortix-admin-bypass']).toBe('1');
 
     setAdminBypass(false);
-    await backendApi.get('/projects/abc/detail');
+    await backendApi.get('/projects/abc/detail', { fetchImpl });
     expect((calls[1].headers as Record<string, string>)['x-kortix-admin-bypass']).toBeUndefined();
   });
 });

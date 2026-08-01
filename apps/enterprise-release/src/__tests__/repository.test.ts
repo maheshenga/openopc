@@ -18,6 +18,7 @@ import {
 
 const roots: string[] = [];
 let server: ReturnType<typeof Bun.serve> | undefined;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 afterEach(() => {
   server?.stop(true);
@@ -62,6 +63,10 @@ function tempRoot(): string {
   return root;
 }
 
+function currentTestTime(): Date {
+  return new Date(Math.floor(Date.now() / 1000) * 1000);
+}
+
 function serve(root: string): URL {
   server = Bun.serve({
     port: 0,
@@ -78,12 +83,13 @@ describe('enterprise TUF repository', () => {
   test('builds a threshold-root repository consumed by the real updater client', async () => {
     const root = tempRoot();
     const signingKeys = keys();
-    bootstrapRepository(root, signingKeys, new Date('2026-07-13T00:00:00Z'));
+    const now = currentTestTime();
+    bootstrapRepository(root, signingKeys, now);
     const stable = Buffer.from('{"version":"0.9.84-e1"}\n');
     publishTargets(root, signingKeys, [{
       path: 'channels/stable.json', bytes: stable,
       custom: { kind: 'kortix-enterprise-channel', channel: 'stable', version: '0.9.84-e1' },
-    }], rootDigest(root), new Date('2026-07-13T01:00:00Z'));
+    }], rootDigest(root), now);
     const rootBytes = readFileSync(join(root, 'metadata/1.root.json'));
     const client = await TrustedRepository.open({
       repositoryUrl: serve(root).toString(),
@@ -114,11 +120,18 @@ describe('enterprise TUF repository', () => {
   test('the real updater rejects tampered bundle bytes before returning an installable artifact', async () => {
     const root = tempRoot();
     const signingKeys = keys();
-    bootstrapRepository(root, signingKeys, new Date('2026-07-13T00:00:00Z'));
+    const now = currentTestTime();
+    bootstrapRepository(root, signingKeys, now);
     const target = 'releases/0.9.84-e1/supabase.tar.gz';
     const bundle = Buffer.from('certified Supabase bundle');
     const digest = createHash('sha256').update(bundle).digest('hex');
-    publishTargets(root, signingKeys, [{ path: target, bytes: bundle }], rootDigest(root), new Date('2026-07-13T01:00:00Z'));
+    publishTargets(
+      root,
+      signingKeys,
+      [{ path: target, bytes: bundle }],
+      rootDigest(root),
+      now,
+    );
     writeFileSync(join(root, 'targets', consistentTargetPath(target, digest)), Buffer.from('tampered Supabase bundle'));
 
     const client = await TrustedRepository.open({
@@ -175,7 +188,8 @@ describe('enterprise TUF repository', () => {
   test('refreshes only timestamp metadata and remains consumable by the real updater', async () => {
     const root = tempRoot();
     const signingKeys = keys();
-    bootstrapRepository(root, signingKeys, new Date('2026-07-13T00:00:00Z'));
+    const now = currentTestTime();
+    bootstrapRepository(root, signingKeys, now);
     const snapshotBefore = readFileSync(join(root, 'metadata/snapshot.json'));
     const targetsBefore = readFileSync(join(root, 'metadata/targets.json'));
 
@@ -183,10 +197,13 @@ describe('enterprise TUF repository', () => {
       root,
       signingKeys.timestamp,
       rootDigest(root),
-      new Date('2026-07-13T06:00:00Z'),
+      now,
     );
 
-    expect(result).toEqual({ timestampVersion: 2, expires: '2026-07-20T06:00:00Z' });
+    const expectedExpiry = new Date(now.getTime() + SEVEN_DAYS_MS)
+      .toISOString()
+      .replace('.000Z', 'Z');
+    expect(result).toEqual({ timestampVersion: 2, expires: expectedExpiry });
     expect(readFileSync(join(root, 'metadata/snapshot.json'))).toEqual(snapshotBefore);
     expect(readFileSync(join(root, 'metadata/targets.json'))).toEqual(targetsBefore);
 

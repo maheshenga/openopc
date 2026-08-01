@@ -72,6 +72,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY ${SERVICE} ./${SERVICE}
 COPY apps/studio-worker ./apps/studio-worker
 COPY packages/api-contract ./packages/api-contract
+COPY packages/module-runtime-contracts ./packages/module-runtime-contracts
 COPY packages/product-brand ./packages/product-brand
 COPY packages/shared ./packages/shared
 COPY packages/llm-catalog ./packages/llm-catalog
@@ -154,6 +155,7 @@ COPY --from=deps /app/packages/db/scripts/migrate.ts ./packages/db/scripts/migra
 COPY --from=deps /app/packages/db/drizzle/0000_bootstrap.sql ./packages/db/drizzle/0000_bootstrap.sql
 COPY --from=deps /app/packages/agent-tunnel/src ./packages/agent-tunnel/src
 COPY --from=deps /app/packages/agent-tunnel/package.json ./packages/agent-tunnel/package.json
+COPY --from=deps /app/packages/module-runtime-contracts ./packages/module-runtime-contracts
 COPY --from=deps /app/packages/intelligence-contracts ./packages/intelligence-contracts
 COPY --from=deps /app/packages/intelligence-orchestration ./packages/intelligence-orchestration
 COPY --from=deps /app/packages/starter/src ./packages/starter/src

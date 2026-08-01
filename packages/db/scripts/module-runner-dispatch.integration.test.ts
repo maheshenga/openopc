@@ -567,6 +567,29 @@ describe.skipIf(!dockerAvailable)('module Runner dispatch - real PostgreSQL/API/
           registrationIdentity: async () => ({ certificateThumbprint: '0'.repeat(64) }),
         });
 
+        const cargoTest = [
+          'cargo',
+          '+1.97.1',
+          'test',
+          '--manifest-path',
+          moduleRunnerManifest,
+          '--test',
+          'dispatcher_live',
+        ];
+        const cargoCwd = resolve(import.meta.dir, '..');
+        const prebuilt = Bun.spawnSync([...cargoTest, '--no-run'], {
+          cwd: cargoCwd,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        if (prebuilt.exitCode !== 0) {
+          const prebuildStdout = prebuilt.stdout.toString();
+          const prebuildStderr = prebuilt.stderr.toString();
+          throw new Error(
+            `dispatcher_live prebuild exited ${prebuilt.exitCode}\nstdout:\n${prebuildStdout}\nstderr:\n${prebuildStderr}`,
+          );
+        }
+
         let injectedFinalizeFailures = 0;
         const requestLogs: Array<{ path: string; runnerId: string | null; status: number }> = [];
         server = Bun.serve({
@@ -590,19 +613,13 @@ describe.skipIf(!dockerAvailable)('module Runner dispatch - real PostgreSQL/API/
         const runnerDeadlineMs = Date.now() + 120_000;
         const cargo = Bun.spawn(
           [
-            'cargo',
-            '+1.97.1',
-            'test',
-            '--manifest-path',
-            moduleRunnerManifest,
-            '--test',
-            'dispatcher_live',
+            ...cargoTest,
             '--',
             '--ignored',
             '--nocapture',
           ],
           {
-            cwd: resolve(import.meta.dir, '..'),
+            cwd: cargoCwd,
             env: {
               ...process.env,
               OPENOPC_DISPATCH_TEST_SERVER_URL: `http://127.0.0.1:${server.port}/`,

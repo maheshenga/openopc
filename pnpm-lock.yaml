@@ -19561,7 +19561,7 @@ packages:
       react: 16.12.0
       react-dom: 16.12.0(react@16.12.0)
       semver: 7.8.5
-      simply-deferred: git@github.com+Expensify/simply-deferred/77a08a95754660c7bd6e0b6979fdf84e8e831bf5
+      simply-deferred: git/github.com+Expensify/simply-deferred/77a08a95754660c7bd6e0b6979fdf84e8e831bf5
       ua-parser-js: 1.0.41
     dev: false
 
@@ -30052,8 +30052,8 @@ packages:
     name: '@agentpress/shared'
     dev: false
 
-  git@github.com+Expensify/simply-deferred/77a08a95754660c7bd6e0b6979fdf84e8e831bf5:
-    resolution: {commit: 77a08a95754660c7bd6e0b6979fdf84e8e831bf5, repo: git@github.com:Expensify/simply-deferred.git, type: git}
+  git/github.com+Expensify/simply-deferred/77a08a95754660c7bd6e0b6979fdf84e8e831bf5:
+    resolution: {commit: 77a08a95754660c7bd6e0b6979fdf84e8e831bf5, repo: https://github.com/Expensify/simply-deferred.git, type: git}
     name: simply-deferred
     version: 3.0.0
     dev: false

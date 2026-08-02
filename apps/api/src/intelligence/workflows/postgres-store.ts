@@ -344,9 +344,7 @@ export function createPostgresWorkflowStore(database: Database): WorkflowPort {
             updatedAt: run.updated_at,
             terminalAt: run.terminal_at,
           })
-          .onConflictDoNothing({
-            target: [intelligenceWorkflowRuns.projectId, intelligenceWorkflowRuns.idempotencyKey],
-          })
+          .onConflictDoNothing()
           .returning();
         const row =
           inserted[0] ??

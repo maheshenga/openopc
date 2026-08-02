@@ -1,6 +1,6 @@
 {
   "generatedAt": "static",
-  "count": 593,
+  "count": 594,
   "routes": [
     {
       "method": "GET",
@@ -1079,6 +1079,14 @@
       "path": "/v1/marketplace/sources/:id"
     },
     {
+      "method": "GET",
+      "path": "/v1/module-host/releases/:releaseId"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-host/releases/:releaseId/*"
+    },
+    {
       "method": "POST",
       "path": "/v1/module-runtime/artifacts/fetch"
     },
@@ -1105,14 +1113,6 @@
     {
       "method": "POST",
       "path": "/v1/module-runtime/runners/register"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/module-host/releases/:releaseId"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/module-host/releases/:releaseId/*"
     },
     {
       "method": "POST",
@@ -1737,6 +1737,10 @@
     {
       "method": "POST",
       "path": "/v1/projects/:projectId/modules/:installationId/domains/:bindingId/verify"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/projects/:projectId/modules/:installationId/launch"
     },
     {
       "method": "POST",

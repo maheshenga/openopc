@@ -20,6 +20,9 @@ import {
   createModuleCustomDomainHostRoutes,
 } from '../module-domains/host';
 import { createDrizzleModuleCustomDomainHostRepository } from '../module-domains/host.drizzle';
+import { ProjectModuleLaunchService } from '../module-domains/launch';
+import { createDrizzleProjectModuleLaunchRepository } from '../module-domains/launch.drizzle';
+import { parseModuleAppHostConfiguration } from '../module-domains/platform-host-config';
 import { createRuntimeArtifactS3Store } from '../module-runtime/runtime-artifacts.s3';
 import { loadRuntimeReleaseProfile } from '../release-profile/runtime';
 import { db } from '../shared/db';
@@ -120,7 +123,14 @@ async function resolveDeveloperAccountId(
 
 const artifactRepository: DeveloperModuleArtifactRepository =
   createDrizzleDeveloperModuleArtifactRepository(db);
-const runtimeReleaseProfile = loadRuntimeReleaseProfile();
+export const runtimeReleaseProfile = loadRuntimeReleaseProfile();
+export const moduleAppHostConfiguration = parseModuleAppHostConfiguration(
+  config.OPENOPC_MODULE_APP_BASE_DOMAIN,
+);
+export const projectModuleLaunchService = new ProjectModuleLaunchService({
+  repository: createDrizzleProjectModuleLaunchRepository(db),
+  hostConfiguration: moduleAppHostConfiguration,
+});
 export const developerApplicationService = new DeveloperApplicationService({
   repository: createDrizzleDeveloperApplicationRepository(db),
   currentPolicyVersions: {

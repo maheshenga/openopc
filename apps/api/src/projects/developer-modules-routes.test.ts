@@ -7,6 +7,14 @@ import {
   type ProjectModuleInstallationTransition,
 } from '../developer/installations';
 import { PROJECT_ACTIONS } from '../iam/actions';
+import {
+  type ProjectModuleLaunchDescriptor,
+  ProjectModuleLaunchError,
+} from '../module-domains/launch';
+import {
+  COMPLETE_RUNTIME_TEST_PROFILE,
+  NON_READY_RUNTIME_TEST_PROFILE,
+} from '../release-profile/test-fixtures';
 import { createProjectDeveloperModuleRoutes } from './routes/developer-modules';
 
 const PROJECT_ID = '10000000-0000-4000-a000-000000000001';
@@ -15,10 +23,22 @@ const OTHER_ACCOUNT_ID = '20000000-0000-4000-a000-000000000009';
 const USER_ID = '30000000-0000-4000-a000-000000000003';
 const RELEASE_V1 = '40000000-0000-4000-a000-000000000004';
 const RELEASE_V2 = '40000000-0000-4000-a000-000000000005';
+const INSTALLATION_ID = '50000000-0000-4000-a000-000000000006';
+
+const LAUNCH_DESCRIPTOR: ProjectModuleLaunchDescriptor = {
+  installation_id: INSTALLATION_ID,
+  release_id: RELEASE_V1,
+  install_revision: 1,
+  module_id: 'acme.recruiting',
+  module_version: '1.0.0',
+  execution_mode: 'sandboxed-web',
+  url: `https://r-${RELEASE_V1}.modules.openopc.example/`,
+  origin: `https://r-${RELEASE_V1}.modules.openopc.example`,
+};
 
 const transition = (releaseId = RELEASE_V1): ProjectModuleInstallationTransition => ({
   installation: {
-    installation_id: '50000000-0000-4000-a000-000000000006',
+    installation_id: INSTALLATION_ID,
     project_id: PROJECT_ID,
     account_id: ACCOUNT_ID,
     module_id: 'acme.recruiting',
@@ -32,7 +52,7 @@ const transition = (releaseId = RELEASE_V1): ProjectModuleInstallationTransition
   },
   event: {
     installation_event_id: '60000000-0000-4000-a000-000000000007',
-    installation_id: '50000000-0000-4000-a000-000000000006',
+    installation_id: INSTALLATION_ID,
     project_id: PROJECT_ID,
     account_id: ACCOUNT_ID,
     sequence: releaseId === RELEASE_V1 ? 1 : 2,
@@ -52,7 +72,8 @@ function appWith(overrides: Record<string, unknown> = {}) {
     loads: Array<{ projectId: string; action: string }>;
     capabilities: Array<{ action: string; accountId: string; projectId: string }>;
     commands: Array<Record<string, unknown>>;
-  } = { loads: [], capabilities: [], commands: [] };
+    launches: Array<{ accountId: string; projectId: string; installationId: string }>;
+  } = { loads: [], capabilities: [], commands: [], launches: [] };
 
   const app = createProjectDeveloperModuleRoutes({
     loadProjectForUser: async (_context, projectId, action) => {
@@ -79,6 +100,17 @@ function appWith(overrides: Record<string, unknown> = {}) {
         return transition(RELEASE_V1);
       },
     },
+    launchService: {
+      resolve: async (input: {
+        accountId: string;
+        projectId: string;
+        installationId: string;
+      }) => {
+        calls.launches.push(input);
+        return LAUNCH_DESCRIPTOR;
+      },
+    },
+    runtime: COMPLETE_RUNTIME_TEST_PROFILE,
     ...overrides,
   });
 
@@ -86,6 +118,97 @@ function appWith(overrides: Record<string, unknown> = {}) {
 }
 
 describe('project developer module routes', () => {
+  test('returns the server-authoritative launch descriptor through project read gates', async () => {
+    const { app, calls } = appWith();
+
+    const response = await app.request(`/${PROJECT_ID}/modules/${INSTALLATION_ID}/launch`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(LAUNCH_DESCRIPTOR);
+    expect(calls.loads).toEqual([{ projectId: PROJECT_ID, action: 'read' }]);
+    expect(calls.capabilities).toContainEqual({
+      action: PROJECT_ACTIONS.PROJECT_CUSTOMIZE_READ,
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+    });
+    expect(calls.launches).toEqual([
+      {
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        installationId: INSTALLATION_ID,
+      },
+    ]);
+  });
+
+  test('maps a missing launch candidate to an opaque project module error', async () => {
+    const { app } = appWith({
+      launchService: {
+        resolve: async () => {
+          throw new ProjectModuleLaunchError('PROJECT_MODULE_NOT_FOUND', 404);
+        },
+      },
+    });
+
+    const response = await app.request(`/${PROJECT_ID}/modules/${INSTALLATION_ID}/launch`);
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'PROJECT_MODULE_NOT_FOUND' });
+  });
+
+  test.each([
+    [409, 'PROJECT_MODULE_INACTIVE'],
+    [409, 'PROJECT_MODULE_NOT_LAUNCHABLE'],
+    [409, 'PROJECT_MODULE_LAUNCH_STALE'],
+    [503, 'PROJECT_MODULE_HOST_UNAVAILABLE'],
+  ] as const)('maps launch service errors to %i %s', async (status, code) => {
+    const { app } = appWith({
+      launchService: {
+        resolve: async () => {
+          throw new ProjectModuleLaunchError(code, status);
+        },
+      },
+    });
+
+    const response = await app.request(`/${PROJECT_ID}/modules/${INSTALLATION_ID}/launch`);
+
+    expect(response.status).toBe(status);
+    expect(await response.json()).toEqual({ error: code });
+  });
+
+  test('rejects a malformed launch installation id before resolution', async () => {
+    const { app, calls } = appWith();
+
+    const response = await app.request(`/${PROJECT_ID}/modules/not-a-uuid/launch`);
+
+    expect(response.status).toBe(400);
+    expect(calls.launches).toEqual([]);
+  });
+
+  test('keeps a missing project opaque before launch resolution', async () => {
+    const { app, calls } = appWith({
+      loadProjectForUser: async () => null,
+    });
+
+    const response = await app.request(`/${PROJECT_ID}/modules/${INSTALLATION_ID}/launch`);
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Not found' });
+    expect(calls.launches).toEqual([]);
+  });
+
+  test('fails closed when module app rendering is unavailable for the runtime profile', async () => {
+    const { app, calls } = appWith({ runtime: NON_READY_RUNTIME_TEST_PROFILE });
+
+    const response = await app.request(`/${PROJECT_ID}/modules/${INSTALLATION_ID}/launch`);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      capability: 'module.app.render',
+    });
+    expect(calls.launches).toEqual([]);
+  });
+
   test('lists modules through project read and customize-read gates', async () => {
     const { app, calls } = appWith({
       installationService: {
@@ -303,6 +426,8 @@ describe('project developer module routes', () => {
         update: async () => transition(RELEASE_V2),
         rollback: async () => transition(RELEASE_V1),
       },
+      launchService: { resolve: async () => LAUNCH_DESCRIPTOR },
+      runtime: COMPLETE_RUNTIME_TEST_PROFILE,
     });
     const deniedResponse = await denied.request(`/${PROJECT_ID}/modules`);
     expect(deniedResponse.status).toBe(403);

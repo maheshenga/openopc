@@ -7,7 +7,14 @@ import {
   type ProjectModuleInstallationService,
 } from '../../developer/installations';
 import { PROJECT_ACTIONS } from '../../iam/actions';
+import type {
+  ProjectModuleLaunchDescriptor,
+  ProjectModuleLaunchService,
+} from '../../module-domains/launch';
+import { ProjectModuleLaunchError } from '../../module-domains/launch';
 import { auth, errors, json, makeOpenApiApp } from '../../openapi';
+import { rejectUnavailableCapability } from '../../release-profile/routes';
+import type { RuntimeReleaseProfile } from '../../release-profile/runtime';
 import type { AppEnv } from '../../types';
 
 type LoadedProject = { row: { accountId: string; projectId: string }; userId: string };
@@ -31,6 +38,8 @@ export interface ProjectDeveloperModuleRouteDependencies {
     ProjectModuleInstallationService,
     'list' | 'history' | 'install' | 'update' | 'rollback'
   >;
+  launchService: Pick<ProjectModuleLaunchService, 'resolve'>;
+  runtime: RuntimeReleaseProfile;
 }
 
 const moduleId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
@@ -43,12 +52,29 @@ const mutationBody = z
     account_id: z.string().optional(),
   })
   .strict();
+const launchDescriptorSchema = z.object({
+  installation_id: z.string().uuid(),
+  release_id: z.string().uuid(),
+  install_revision: z.number().int().nonnegative(),
+  module_id: z.string(),
+  module_version: z.string(),
+  execution_mode: z.literal('sandboxed-web'),
+  url: z.string().url(),
+  origin: z.string().url(),
+});
 
 function installationErrorResponse(context: Context<AppEnv>, error: unknown): Response | null {
   if (error instanceof ProjectModuleInstallationError) {
     return context.json({ error: error.code }, error.status);
   }
   if (error instanceof DeveloperModuleDistributionError) {
+    return context.json({ error: error.code }, error.status);
+  }
+  return null;
+}
+
+function launchErrorResponse(context: Context<AppEnv>, error: unknown): Response | null {
+  if (error instanceof ProjectModuleLaunchError) {
     return context.json({ error: error.code }, error.status);
   }
   return null;
@@ -78,6 +104,52 @@ export function createProjectDeveloperModuleRoutes(
   dependencies: ProjectDeveloperModuleRouteDependencies,
 ) {
   const app = makeOpenApiApp<AppEnv>();
+
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/{projectId}/modules/{installationId}/launch',
+      tags: ['developer'],
+      summary: 'Resolve an installed developer module launch descriptor',
+      ...auth,
+      request: {
+        params: z.object({ projectId: z.string(), installationId: z.string().uuid() }),
+      },
+      responses: {
+        200: json(launchDescriptorSchema, 'Project module launch descriptor'),
+        ...errors(403, 404, 409, 503),
+      },
+    }),
+    // biome-ignore lint/suspicious/noExplicitAny: Shared auth/error helpers widen OpenAPIHono status unions.
+    async (context: any) => {
+      const params = context.req.valid('param');
+      const loaded = await loadAndAuthorize(
+        context,
+        dependencies,
+        params.projectId,
+        PROJECT_ACTIONS.PROJECT_CUSTOMIZE_READ,
+      );
+      if (loaded instanceof Response) return loaded;
+      const rejected = rejectUnavailableCapability(
+        context,
+        'module.app.render',
+        dependencies.runtime,
+      );
+      if (rejected) return rejected;
+      try {
+        const descriptor: ProjectModuleLaunchDescriptor = await dependencies.launchService.resolve({
+          accountId: loaded.row.accountId,
+          projectId: params.projectId,
+          installationId: params.installationId,
+        });
+        return context.json(descriptor, 200);
+      } catch (error) {
+        const response = launchErrorResponse(context, error);
+        if (response) return response;
+        throw error;
+      }
+    },
+  );
 
   app.openapi(
     createRoute({

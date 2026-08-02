@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   DEVELOPER_APPLICATION_REVIEW_PERMISSION,
+  type DeveloperApplication,
   DeveloperApplicationError,
   DeveloperApplicationService,
   createMemoryDeveloperApplicationRepository,
@@ -52,7 +53,136 @@ function harness(input?: { organizations?: DeveloperOrganization[] }) {
   };
 }
 
+function adminReadHarness() {
+  const olderOrganization: DeveloperOrganization = {
+    ...invitedOrganization(),
+    name: 'Older Studio',
+    updated_at: '2026-08-03T07:00:00.000Z',
+  };
+  const newerOrganization: DeveloperOrganization = {
+    ...invitedOrganization(),
+    organization_id: '20000000-0000-4000-a000-000000000002',
+    account_id: OTHER_ACCOUNT_ID,
+    name: 'Newest Studio',
+    updated_at: '2026-08-03T08:00:00.000Z',
+  };
+  const application = (
+    applicationId: string,
+    accountId: string,
+    organizationId: string,
+    updatedAt: string,
+  ): DeveloperApplication => ({
+    application_id: applicationId,
+    account_id: accountId,
+    organization_id: organizationId,
+    state: 'submitted',
+    revision: 0,
+    policy_versions: POLICIES,
+    submitted_at: updatedAt,
+    decided_at: null,
+    suspended_at: null,
+    decision_reason: null,
+    created_by: APPLICANT_ID,
+    updated_by: null,
+    created_at: updatedAt,
+    updated_at: updatedAt,
+  });
+  const repository = createMemoryDeveloperApplicationRepository({
+    organizations: [olderOrganization, newerOrganization],
+    applications: [
+      application(
+        '40000000-0000-4000-a000-000000000001',
+        ACCOUNT_ID,
+        olderOrganization.organization_id,
+        '2026-08-03T07:00:00.000Z',
+      ),
+      application(
+        '40000000-0000-4000-a000-000000000002',
+        OTHER_ACCOUNT_ID,
+        newerOrganization.organization_id,
+        '2026-08-03T08:00:00.000Z',
+      ),
+    ],
+  });
+  return {
+    repository,
+    service: new DeveloperApplicationService({
+      repository,
+      currentPolicyVersions: POLICIES,
+      now: () => NOW,
+    }),
+  };
+}
+
 describe('DeveloperApplicationService', () => {
+  test('lists the submitted Admin queue with an opaque deterministic cursor', async () => {
+    const { service } = adminReadHarness();
+
+    const first = await service.adminList({ state: 'submitted', limit: 1 });
+    expect(first.applications).toHaveLength(1);
+    expect(first.applications[0]).toEqual({
+      application: expect.objectContaining({ state: 'submitted' }),
+      organization: expect.objectContaining({ name: 'Newest Studio' }),
+    });
+    expect(first.next_cursor).toBeString();
+
+    const second = await service.adminList({
+      state: 'submitted',
+      limit: 1,
+      cursor: first.next_cursor,
+    });
+    expect(second.applications[0]?.organization.name).toBe('Older Studio');
+    expect(second.next_cursor).toBeNull();
+
+    await expect(service.adminList({ cursor: 'not-a-valid-cursor' })).rejects.toMatchObject({
+      code: 'DEVELOPER_APPLICATION_INPUT_INVALID',
+      status: 400,
+    });
+  });
+
+  test('assembles one Admin detail with policy acceptance and audit history', async () => {
+    const { service } = harness({ organizations: [invitedOrganization()] });
+    const submitted = await service.submit({
+      actor: { accountId: ACCOUNT_ID, userId: APPLICANT_ID },
+      organizationName: 'Acme Studio',
+      policyVersions: POLICIES,
+    });
+
+    await expect(
+      service.adminGet({ applicationId: submitted.application.application_id }),
+    ).resolves.toEqual({
+      application: submitted.application,
+      organization: expect.objectContaining({ name: 'Acme Studio' }),
+      policy_acceptances: expect.arrayContaining([
+        expect.objectContaining({ policy: 'acceptable_use' }),
+        expect.objectContaining({ policy: 'module_rules' }),
+      ]),
+      history: [expect.objectContaining({ action: 'developer_application.submitted' })],
+    });
+    await expect(
+      service.adminGet({ applicationId: '90000000-0000-4000-a000-999999999999' }),
+    ).rejects.toMatchObject({ code: 'DEVELOPER_APPLICATION_NOT_FOUND', status: 404 });
+  });
+
+  test('allows the submitting platform administrator to approve their own application', async () => {
+    const { service } = harness();
+    const { application } = await service.submit({
+      actor: { accountId: ACCOUNT_ID, userId: APPLICANT_ID },
+      organizationName: 'Owner Studio',
+      policyVersions: POLICIES,
+    });
+
+    await expect(
+      service.decide({
+        actorUserId: APPLICANT_ID,
+        applicationId: application.application_id,
+        decision: 'approve',
+        expectedRevision: 0,
+        reason: 'Platform owner verified the application',
+      }),
+    ).resolves.toMatchObject({ state: 'approved', revision: 1 });
+  });
+
   test('submits against the invitation organization and stores exact policy acceptances', async () => {
     const { repository, service } = harness({ organizations: [invitedOrganization()] });
 

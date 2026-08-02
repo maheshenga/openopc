@@ -179,6 +179,8 @@ describe('module static host frame policy', () => {
         'https://app.openopc.example/path',
         'https://app.openopc.example/?query=1',
         'https://app.openopc.example/#fragment',
+        'https://*.example.com',
+        'https://*',
         undefined,
       ]),
     ).toEqual([

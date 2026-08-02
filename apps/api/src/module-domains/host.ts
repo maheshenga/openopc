@@ -58,6 +58,7 @@ export function parseModuleFrameAncestors(
         url.password ||
         url.search ||
         url.hash ||
+        url.hostname.includes('*') ||
         url.pathname !== '/' ||
         (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))
       ) {

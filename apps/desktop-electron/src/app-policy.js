@@ -26,17 +26,92 @@ const APP_PATH_PREFIXES = [
   '/debug',
 ];
 
-function isPreviewHost(host) {
-  return host.endsWith('.localhost') || host === 'kortix.cloud' || host.endsWith('.kortix.cloud');
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+function isLoopbackHost(hostname) {
+  return LOOPBACK_HOSTS.has(hostname);
 }
 
-function isMainAppHost(host) {
-  return (
-    host === 'localhost' ||
-    host === '127.0.0.1' ||
-    host === 'kortix.com' ||
-    host.endsWith('.kortix.com')
-  );
+function isLegacyKortixHost(hostname) {
+  return hostname === 'kortix.com' || hostname.endsWith('.kortix.com');
+}
+
+function normalizeOpenOpcDesktopUrl(value, options = {}) {
+  if (typeof value !== 'string' || value.length === 0 || value !== value.trim()) return null;
+
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+
+  if (
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname !== '/projects' ||
+    isLegacyKortixHost(url.hostname)
+  ) {
+    return null;
+  }
+
+  if (url.protocol === 'https:') return `${url.origin}/projects`;
+  if (url.protocol === 'http:' && options.allowLoopback === true && isLoopbackHost(url.hostname)) {
+    return `${url.origin}/projects`;
+  }
+  return null;
+}
+
+function createOpenOpcFrontendSubmenu({ isPackaged, onLocal, onCustom, onReset }) {
+  return {
+    label: 'Frontend URL',
+    submenu: [
+      ...(isPackaged
+        ? []
+        : [
+            {
+              label: 'Local (localhost:3000)',
+              click: onLocal,
+            },
+            { type: 'separator' },
+          ]),
+      {
+        label: 'Custom URL…',
+        click: onCustom,
+      },
+      {
+        label: 'Reset to Default',
+        click: onReset,
+      },
+    ],
+  };
+}
+
+function resolveOpenOpcDesktopDefault(input = {}) {
+  const env = input.env && typeof input.env === 'object' ? input.env : {};
+  const metadata = input.metadata && typeof input.metadata === 'object' ? input.metadata : {};
+  const isPackaged = input.isPackaged === true;
+
+  if (isPackaged) {
+    const normalized = normalizeOpenOpcDesktopUrl(metadata.openopcDefaultUrl);
+    if (!normalized) throw new Error('OPENOPC_DESKTOP_URL_REQUIRED');
+    return normalized;
+  }
+
+  const explicit =
+    (typeof env.OPENOPC_DESKTOP_URL === 'string' && env.OPENOPC_DESKTOP_URL) ||
+    (typeof env.OPENOPC_DESKTOP_DEFAULT_URL === 'string' && env.OPENOPC_DESKTOP_DEFAULT_URL) ||
+    metadata.openopcDefaultUrl ||
+    'http://localhost:3000/projects';
+  const normalized = normalizeOpenOpcDesktopUrl(explicit, { allowLoopback: true });
+  if (!normalized) throw new Error('OPENOPC_DESKTOP_URL_INVALID');
+  return normalized;
+}
+
+function isPreviewHost(host) {
+  return host.endsWith('.localhost') || host === 'kortix.cloud' || host.endsWith('.kortix.cloud');
 }
 
 function isAppPath(pathname) {
@@ -57,7 +132,7 @@ function shouldLoadInApp(urlStr, configuredUrl) {
   if (url.pathname.startsWith('/auth/v1/')) return false;
   if (isPreviewHost(url.hostname)) return true;
   if (configuredUrl && isTrustedAppSender(configuredUrl, urlStr)) return true;
-  return isMainAppHost(url.hostname) && isAppPath(url.pathname);
+  return false;
 }
 
 function shouldRegisterProtocol(env = process.env) {
@@ -98,10 +173,6 @@ function isOpenOpcModuleServiceUrl(urlStr, configuredUrl) {
   }
 }
 
-function isLoopbackHost(hostname) {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
-}
-
 function normalizeDownloadUrl(value) {
   if (typeof value !== 'string' || !value || value !== value.trim()) return null;
 
@@ -128,12 +199,14 @@ function downloadFromWebContents(webContents, value) {
 }
 
 module.exports = {
+  createOpenOpcFrontendSubmenu,
   downloadFromWebContents,
-  isMainAppHost,
   isLocalGrantOperation,
   isOpenOpcModuleServiceUrl,
   isTrustedAppSender,
+  normalizeOpenOpcDesktopUrl,
   normalizeDownloadUrl,
+  resolveOpenOpcDesktopDefault,
   shouldLoadInApp,
   shouldRegisterProtocol,
 };

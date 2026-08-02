@@ -5,9 +5,12 @@ const vm = require('node:vm');
 
 const {
   downloadFromWebContents,
+  createOpenOpcFrontendSubmenu,
   isLocalGrantOperation,
   isOpenOpcModuleServiceUrl,
   isTrustedAppSender,
+  normalizeOpenOpcDesktopUrl,
+  resolveOpenOpcDesktopDefault,
   normalizeDownloadUrl,
   shouldLoadInApp,
   shouldRegisterProtocol,
@@ -170,12 +173,20 @@ describe('desktop local-grant IPC policy', () => {
 });
 
 describe('desktop app navigation policy', () => {
-  test('keeps project Image Studio routes inside the OpenOPC window', () => {
-    expect(shouldLoadInApp('https://kortix.com/projects/project-1/studio/image')).toBe(true);
+  test('keeps authenticated project routes inside the configured OpenOPC window', () => {
+    const configured = 'https://app.openopc.example/projects';
+
     expect(
-      shouldLoadInApp('https://dev.kortix.com/projects/project-1/studio/image?task=task-1'),
+      shouldLoadInApp('https://app.openopc.example/projects/project-1/studio/image', configured),
     ).toBe(true);
-    expect(shouldLoadInApp('http://localhost:3000/projects/project-1/studio/image')).toBe(true);
+    expect(shouldLoadInApp('https://app.openopc.example/projects/P1/modules/I1', configured)).toBe(
+      true,
+    );
+    expect(
+      shouldLoadInApp('http://localhost:3000/projects/project-1/studio/image', configured),
+    ).toBe(false);
+    expect(shouldLoadInApp('https://kortix.com/projects/project-1/studio/image')).toBe(false);
+    expect(shouldLoadInApp('https://dev.kortix.com/projects/project-1/studio/image')).toBe(false);
   });
 
   test('keeps marketing and provider OAuth navigations outside the app window', () => {
@@ -206,6 +217,145 @@ describe('desktop app navigation policy', () => {
       expect(shouldLoadInApp(workflowUrl, configured)).toBe(true);
       expect(isTrustedAppSender(configured, workflowUrl)).toBe(true);
     }
+  });
+});
+
+describe('OpenOPC desktop URL policy', () => {
+  test('hides loopback frontend access from packaged builds', () => {
+    const callbacks = {
+      local: () => {},
+      custom: () => {},
+      reset: () => {},
+    };
+
+    const packaged = createOpenOpcFrontendSubmenu({
+      isPackaged: true,
+      onLocal: callbacks.local,
+      onCustom: callbacks.custom,
+      onReset: callbacks.reset,
+    });
+    expect(packaged.submenu.some((item) => item.label === 'Local (localhost:3000)')).toBe(false);
+    expect(packaged.submenu[0]).toMatchObject({ label: 'Custom URL…' });
+    expect(packaged.submenu.some((item) => item.label === 'Custom URL…')).toBe(true);
+    expect(packaged.submenu.some((item) => item.label === 'Reset to Default')).toBe(true);
+
+    const development = createOpenOpcFrontendSubmenu({
+      isPackaged: false,
+      onLocal: callbacks.local,
+      onCustom: callbacks.custom,
+      onReset: callbacks.reset,
+    });
+    expect(development.submenu.some((item) => item.label === 'Local (localhost:3000)')).toBe(true);
+  });
+
+  test('normalizes one exact HTTPS projects root', () => {
+    expect(normalizeOpenOpcDesktopUrl('https://app.openopc.example/projects')).toBe(
+      'https://app.openopc.example/projects',
+    );
+  });
+
+  test('rejects legacy hosts, credentials, non-project paths, and unsafe schemes', () => {
+    const invalid = [
+      'https://kortix.com/projects',
+      'https://dev.kortix.com/projects',
+      'http://app.openopc.example/projects',
+      'https://user:secret@app.openopc.example/projects',
+      'https://app.openopc.example/',
+      'https://app.openopc.example/projects/other',
+      'https://app.openopc.example/projects?token=x',
+      'https://app.openopc.example/projects#fragment',
+      ' https://app.openopc.example/projects',
+      'https://app.openopc.example/projects ',
+    ];
+
+    for (const value of invalid) expect(normalizeOpenOpcDesktopUrl(value)).toBeNull();
+  });
+
+  test('allows loopback HTTP only for explicit unpackaged development', () => {
+    expect(
+      normalizeOpenOpcDesktopUrl('http://localhost:3000/projects', { allowLoopback: true }),
+    ).toBe('http://localhost:3000/projects');
+    expect(normalizeOpenOpcDesktopUrl('http://localhost:3000/projects')).toBeNull();
+  });
+
+  test('requires packaged metadata and ignores legacy environment and metadata keys', () => {
+    expect(() =>
+      resolveOpenOpcDesktopDefault({
+        isPackaged: true,
+        env: {
+          OPENOPC_DESKTOP_URL: 'https://attacker.openopc.example/projects',
+          KORTIX_DESKTOP_DEFAULT_URL: 'https://kortix.com/projects',
+          KORTIX_DESKTOP_URL: 'https://kortix.com/projects',
+        },
+        metadata: { kortixDefaultUrl: 'https://kortix.com/projects' },
+      }),
+    ).toThrow();
+
+    expect(
+      resolveOpenOpcDesktopDefault({
+        isPackaged: true,
+        env: {
+          OPENOPC_DESKTOP_URL: 'https://attacker.openopc.example/projects',
+          KORTIX_DESKTOP_URL: 'https://kortix.com/projects',
+        },
+        metadata: { openopcDefaultUrl: 'https://app.openopc.example/projects' },
+      }),
+    ).toBe('https://app.openopc.example/projects');
+  });
+
+  test('uses explicit OpenOPC development environment and defaults to loopback', () => {
+    expect(
+      resolveOpenOpcDesktopDefault({
+        isPackaged: false,
+        env: { OPENOPC_DESKTOP_URL: 'https://app.openopc.example/projects' },
+        metadata: {},
+      }),
+    ).toBe('https://app.openopc.example/projects');
+    expect(resolveOpenOpcDesktopDefault({ isPackaged: false, env: {}, metadata: {} })).toBe(
+      'http://localhost:3000/projects',
+    );
+  });
+
+  test('keeps privileged and authenticated deep links on the exact configured origin only', () => {
+    const configured = 'https://app.openopc.example/projects';
+    const authenticated = 'https://app.openopc.example/projects/P1/modules/I1';
+
+    expect(shouldLoadInApp(authenticated, configured)).toBe(true);
+    expect(isTrustedAppSender(configured, authenticated)).toBe(true);
+    expect(shouldLoadInApp('https://legacy.kortix.com/projects/P1/modules/I1', configured)).toBe(
+      false,
+    );
+    expect(
+      shouldLoadInApp('https://sibling.openopc.example/projects/P1/modules/I1', configured),
+    ).toBe(false);
+    expect(
+      isTrustedAppSender(configured, 'https://sibling.openopc.example/projects/P1/modules/I1'),
+    ).toBe(false);
+  });
+
+  test('locks production source and workflow policy to OpenOPC configuration', () => {
+    const sources = [
+      readDesktopFile(path.join('src', 'main.js')),
+      readDesktopFile(path.join('src', 'app-policy.js')),
+      readDesktopFile('package.json'),
+      readDesktopFile('README.md'),
+      readRepoFile(path.join('.github', 'workflows', 'desktop.yml')),
+      readRepoFile(path.join('.github', 'workflows', 'deploy-prod.yml')),
+      readRepoFile(path.join('.github', 'workflows', 'ci.yml')),
+    ];
+    for (const source of sources) {
+      expect(source).not.toContain('https://kortix.com/projects');
+      expect(source).not.toContain('https://dev.kortix.com/projects');
+      expect(source).not.toContain('kortixDefaultUrl');
+      expect(source).not.toContain('KORTIX_DESKTOP_URL');
+    }
+
+    const desktopWorkflow = readRepoFile(path.join('.github', 'workflows', 'desktop.yml'));
+    const productionWorkflow = readRepoFile(path.join('.github', 'workflows', 'deploy-prod.yml'));
+    const ciWorkflow = readRepoFile(path.join('.github', 'workflows', 'ci.yml'));
+    expect(desktopWorkflow).toContain('vars.OPENOPC_WEB_URL');
+    expect(productionWorkflow).toContain('vars.OPENOPC_WEB_URL');
+    expect(ciWorkflow.match(/https:\/\/web\.openopc\.invalid\/projects/g)).toHaveLength(1);
   });
 });
 

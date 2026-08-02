@@ -4,8 +4,9 @@ An **Electron** build of the OpenOPC desktop shell, built as a 1:1 behavioral
 port of the Tauri shell (`apps/desktop`). It exists so we can compare the two
 side by side and pick whichever is less quirky to maintain.
 
-Both shells are thin native wrappers around the **remote** web app
-(`http://localhost:3000` in dev, `https://kortix.com` in prod). They share the
+Both shells are thin native wrappers around the **remote** OpenOPC Web app
+(`http://localhost:3000` in dev, the configured HTTPS OpenOPC Web URL in a
+release). They share the
 same web codebase unchanged — see "Parity" below.
 
 ## Why an Electron port?
@@ -38,17 +39,17 @@ pnpm dev:desktop-electron     # repo root: launch the Electron shell → :3000
 Point it at a different backend without a rebuild:
 
 ```bash
-pnpm --filter @kortix/desktop-electron dev:dev-env    # https://dev.kortix.com
-pnpm --filter @kortix/desktop-electron dev:prod-env   # https://kortix.com
-# or:
-OPENOPC_DESKTOP_URL=https://kortix.com/projects pnpm --filter @kortix/desktop-electron dev
+# or use an explicit OpenOPC Web URL during an unpackaged local run:
+OPENOPC_DESKTOP_URL=https://app.openopc.example/projects pnpm --filter @kortix/desktop-electron dev
 ```
 
-The legacy `KORTIX_DESKTOP_URL` variable remains accepted for existing installations.
+`OPENOPC_DESKTOP_URL` is for unpackaged local runs. Release workflows read the
+`OPENOPC_WEB_URL` repository variable and bake it into packaged metadata.
 
-At runtime you can also switch via the native **OpenOPC → Frontend URL** menu
-(Production / Dev / Local / Custom… / Reset). The choice is remembered across
-launches (stored in `userData/frontend_url`).
+At runtime you can also switch via the native **OpenOPC → Frontend URL** menu.
+Unpackaged development runs include Local / Custom… / Reset; packaged builds
+expose only HTTPS Custom… / Reset. The choice is remembered across launches
+(stored in `userData/frontend_url`).
 
 ### Testing login (the `kortix://` deep link)
 

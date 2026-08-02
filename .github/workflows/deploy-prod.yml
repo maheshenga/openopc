@@ -397,7 +397,7 @@ jobs:
     needs: version
     runs-on: ${{ matrix.runner }}
     env:
-      DESKTOP_URL: https://kortix.com/projects
+      DESKTOP_URL: ${{ vars.OPENOPC_WEB_URL }}
     strategy:
       fail-fast: false
       matrix:
@@ -488,6 +488,32 @@ jobs:
       - name: Prepare Electron runtime and sidecar
         run: pnpm --filter @kortix/desktop-electron run setup
 
+      - name: Validate OpenOPC Web URL
+        shell: bash
+        run: |
+          node <<'NODE'
+          const value = process.env.DESKTOP_URL || '';
+          let url;
+          try {
+            url = new URL(value);
+          } catch {
+            throw new Error('OPENOPC_WEB_URL must be a valid URL');
+          }
+          const canonical = `${url.origin}/projects`;
+          if (
+            url.protocol !== 'https:' ||
+            url.hostname.endsWith('.invalid') ||
+            url.username ||
+            url.password ||
+            url.pathname !== '/projects' ||
+            url.search ||
+            url.hash ||
+            value !== canonical
+          ) {
+            throw new Error('OPENOPC_WEB_URL must be canonical HTTPS with the exact /projects path');
+          }
+          NODE
+
       # electron-builder signs (+ notarizes on macOS) when CSC_*/APPLE_API_*
       # are present; empty → unsigned. Version + prod URL are baked in here.
       - name: Build desktop installer (Electron)
@@ -496,7 +522,7 @@ jobs:
           pnpm --filter @kortix/desktop-electron exec electron-builder ${{ matrix.eb_flag }} \
             --publish never \
             --config.extraMetadata.version="${{ needs.version.outputs.version }}" \
-            --config.extraMetadata.kortixDefaultUrl="$DESKTOP_URL" \
+            --config.extraMetadata.openopcDefaultUrl="$DESKTOP_URL" \
             --config.extraMetadata.kortixUpdateChannel="stable"
         env:
           CSC_LINK: ${{ steps.sign.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE || '' }}

@@ -492,24 +492,9 @@ jobs:
         shell: bash
         run: |
           node <<'NODE'
+          const { normalizeOpenOpcReleaseUrl } = require('./apps/desktop-electron/src/app-policy');
           const value = process.env.DESKTOP_URL || '';
-          let url;
-          try {
-            url = new URL(value);
-          } catch {
-            throw new Error('OPENOPC_WEB_URL must be a valid URL');
-          }
-          const canonical = `${url.origin}/projects`;
-          if (
-            url.protocol !== 'https:' ||
-            url.hostname.endsWith('.invalid') ||
-            url.username ||
-            url.password ||
-            url.pathname !== '/projects' ||
-            url.search ||
-            url.hash ||
-            value !== canonical
-          ) {
+          if (!normalizeOpenOpcReleaseUrl(value)) {
             throw new Error('OPENOPC_WEB_URL must be canonical HTTPS with the exact /projects path');
           }
           NODE

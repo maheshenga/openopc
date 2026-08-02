@@ -46,22 +46,32 @@ function normalizeOpenOpcDesktopUrl(value, options = {}) {
     return null;
   }
 
+  const canonical = `${url.origin}/projects`;
   if (
     url.username ||
     url.password ||
     url.search ||
     url.hash ||
     url.pathname !== '/projects' ||
-    isLegacyKortixHost(url.hostname)
+    isLegacyKortixHost(url.hostname) ||
+    value !== canonical
   ) {
     return null;
   }
 
-  if (url.protocol === 'https:') return `${url.origin}/projects`;
+  if (url.protocol === 'https:') return canonical;
   if (url.protocol === 'http:' && options.allowLoopback === true && isLoopbackHost(url.hostname)) {
-    return `${url.origin}/projects`;
+    return canonical;
   }
   return null;
+}
+
+function normalizeOpenOpcReleaseUrl(value) {
+  const normalized = normalizeOpenOpcDesktopUrl(value);
+  if (!normalized) return null;
+  const hostname = new URL(normalized).hostname;
+  if (hostname === 'invalid' || hostname.endsWith('.invalid')) return null;
+  return normalized;
 }
 
 function createOpenOpcFrontendSubmenu({ isPackaged, onLocal, onCustom, onReset }) {
@@ -205,6 +215,7 @@ module.exports = {
   isOpenOpcModuleServiceUrl,
   isTrustedAppSender,
   normalizeOpenOpcDesktopUrl,
+  normalizeOpenOpcReleaseUrl,
   normalizeDownloadUrl,
   resolveOpenOpcDesktopDefault,
   shouldLoadInApp,

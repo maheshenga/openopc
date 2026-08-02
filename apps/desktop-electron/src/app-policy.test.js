@@ -10,6 +10,7 @@ const {
   isOpenOpcModuleServiceUrl,
   isTrustedAppSender,
   normalizeOpenOpcDesktopUrl,
+  normalizeOpenOpcReleaseUrl,
   resolveOpenOpcDesktopDefault,
   normalizeDownloadUrl,
   shouldLoadInApp,
@@ -271,6 +272,30 @@ describe('OpenOPC desktop URL policy', () => {
     for (const value of invalid) expect(normalizeOpenOpcDesktopUrl(value)).toBeNull();
   });
 
+  test('rejects non-canonical URL input instead of silently rewriting it', () => {
+    const nonCanonical = [
+      'https://APP.OPENOPC.EXAMPLE/projects',
+      'https://app.openopc.example:443/projects',
+      'https://app.openopc.example/projects?',
+      'https://app.openopc.example/projects#',
+    ];
+
+    for (const value of nonCanonical) expect(normalizeOpenOpcDesktopUrl(value)).toBeNull();
+  });
+
+  test('rejects legacy and reserved release workflow targets', () => {
+    expect(normalizeOpenOpcReleaseUrl('https://app.openopc.example/projects')).toBe(
+      'https://app.openopc.example/projects',
+    );
+    for (const value of [
+      'https://kortix.com/projects',
+      'https://invalid/projects',
+      'https://web.openopc.invalid/projects',
+    ]) {
+      expect(normalizeOpenOpcReleaseUrl(value)).toBeNull();
+    }
+  });
+
   test('allows loopback HTTP only for explicit unpackaged development', () => {
     expect(
       normalizeOpenOpcDesktopUrl('http://localhost:3000/projects', { allowLoopback: true }),
@@ -355,6 +380,8 @@ describe('OpenOPC desktop URL policy', () => {
     const ciWorkflow = readRepoFile(path.join('.github', 'workflows', 'ci.yml'));
     expect(desktopWorkflow).toContain('vars.OPENOPC_WEB_URL');
     expect(productionWorkflow).toContain('vars.OPENOPC_WEB_URL');
+    expect(desktopWorkflow).toContain('normalizeOpenOpcReleaseUrl');
+    expect(productionWorkflow).toContain('normalizeOpenOpcReleaseUrl');
     expect(ciWorkflow.match(/https:\/\/web\.openopc\.invalid\/projects/g)).toHaveLength(1);
   });
 });

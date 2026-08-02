@@ -2,8 +2,11 @@ import {
   type ProjectModuleInstallation,
   type ProjectModuleInstallationEvent,
   type ProjectModuleInstallationTransition,
+  type ProjectModuleLaunchDescriptor,
   type ProjectModuleMutationOptions,
   backendApi,
+  getMarketplaceCatalogItem,
+  getProjectModuleLaunch,
   installProjectModule,
   listMarketplaceCatalogItems,
   listProjectModuleInstallationHistory,
@@ -63,6 +66,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+export function isSandboxedWebModuleManifest(manifest: unknown): boolean {
+  return (
+    isRecord(manifest) &&
+    manifest.schemaVersion === 3 &&
+    isRecord(manifest.execution) &&
+    manifest.execution.mode === 'sandboxed-web' &&
+    typeof manifest.execution.entry === 'string'
+  );
+}
+
 /** Read only the signed v3 service declarations; malformed or legacy manifests fail closed. */
 export function moduleServiceDeclarations(manifest: unknown): ModuleServiceDeclaration[] {
   if (!isRecord(manifest) || manifest.schemaVersion !== 3 || !isRecord(manifest.openopc)) return [];
@@ -120,6 +133,13 @@ export async function listProjectModuleHistory(
   return (await listProjectModuleInstallationHistory(projectId, moduleId)).history;
 }
 
+export function getProjectModuleLaunchDescriptor(
+  projectId: string,
+  installationId: string,
+): Promise<ProjectModuleLaunchDescriptor> {
+  return getProjectModuleLaunch(projectId, installationId);
+}
+
 function asPublishedRelease(value: Record<string, unknown>): PublishedProjectModuleRelease | null {
   const releaseId = value.release_id;
   const moduleId = value.module_id;
@@ -164,6 +184,18 @@ export async function listPublishedProjectModuleReleases(): Promise<
         left.module_version.localeCompare(right.module_version) ||
         left.release_id.localeCompare(right.release_id),
     );
+}
+
+export async function getPublishedProjectModuleRelease(
+  releaseId: string,
+): Promise<PublishedProjectModuleRelease> {
+  const release = asPublishedRelease(
+    await getMarketplaceCatalogItem(`openopc-module:${releaseId}`),
+  );
+  if (!release || release.release_id !== releaseId) {
+    throw new Error('Published project module release is unavailable');
+  }
+  return release;
 }
 
 function mutationOptions(idempotencyKey?: string): ProjectModuleMutationOptions | undefined {

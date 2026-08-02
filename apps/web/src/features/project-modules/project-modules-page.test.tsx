@@ -8,6 +8,8 @@ import {
   projectModuleRollbackTargets,
 } from './project-modules-page';
 
+const PROJECT_ID = '50000000-0000-4000-a000-000000000000';
+
 const INSTALLATION: ProjectModuleInstallation = {
   installation_id: '51000000-0000-4000-a000-000000000001',
   project_id: 'project-1',
@@ -93,6 +95,7 @@ const noop = () => undefined;
 function renderView(overrides: Partial<Parameters<typeof ProjectModulesView>[0]> = {}): string {
   return renderToStaticMarkup(
     <ProjectModulesView
+      projectId={PROJECT_ID}
       state="ready"
       modules={[INSTALLATION]}
       releases={RELEASES}
@@ -110,6 +113,46 @@ function renderView(overrides: Partial<Parameters<typeof ProjectModulesView>[0]>
 }
 
 describe('Project modules workbench', () => {
+  test('renders Open module only for active sandboxed Web releases with a signed manifest', () => {
+    const sandboxedRelease: PublishedProjectModuleRelease = {
+      ...RELEASES[1],
+      manifest: {
+        schemaVersion: 3,
+        execution: {
+          mode: 'sandboxed-web',
+          entry: 'web/index.html',
+        },
+      },
+    };
+
+    const html = renderView({ releases: [RELEASES[0], sandboxedRelease, RELEASES[2]] });
+    expect(html).toContain(`/projects/${PROJECT_ID}/modules/${INSTALLATION.installation_id}`);
+    expect(html).toContain('Open module');
+
+    expect(
+      renderView({
+        releases: [
+          RELEASES[0],
+          {
+            ...sandboxedRelease,
+            manifest: {
+              schemaVersion: 3,
+              execution: { mode: 'declarative' },
+            },
+          },
+          RELEASES[2],
+        ],
+      }),
+    ).not.toContain('Open module');
+    expect(
+      renderView({
+        modules: [{ ...INSTALLATION, status: 'blocked' }],
+        releases: [RELEASES[0], sandboxedRelease, RELEASES[2]],
+      }),
+    ).not.toContain('Open module');
+    expect(renderView()).not.toContain('Open module');
+  });
+
   test('renders loading, empty, and recoverable error states', () => {
     expect(renderView({ state: 'loading', modules: [], releases: [] })).toContain(
       'Loading installed modules',

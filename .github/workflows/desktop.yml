@@ -36,8 +36,8 @@ jobs:
     name: Build dev desktop ${{ matrix.target_pretty }}
     runs-on: ${{ matrix.runner }}
     env:
-      # Baked into the app so the shell points at dev by default.
-      DESKTOP_URL: https://dev.kortix.com/projects
+      # Baked into the app after validating the operator-owned OpenOPC Web URL.
+      DESKTOP_URL: ${{ vars.OPENOPC_WEB_URL }}
       # Distinct bundle id so a dev install can sit beside a prod install.
       DESKTOP_APP_ID: com.kortix.desktop.dev
     strategy:
@@ -140,13 +140,24 @@ jobs:
       - name: Prepare Electron runtime and sidecar
         run: pnpm --filter @kortix/desktop-electron run setup
 
+      - name: Validate OpenOPC Web URL
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { normalizeOpenOpcReleaseUrl } = require('./apps/desktop-electron/src/app-policy');
+          const value = process.env.DESKTOP_URL || '';
+          if (!normalizeOpenOpcReleaseUrl(value)) {
+            throw new Error('OPENOPC_WEB_URL must be canonical HTTPS with the exact /projects path');
+          }
+          NODE
+
       - name: Build desktop installer (Electron)
         shell: bash
         run: |
           pnpm --filter @kortix/desktop-electron exec electron-builder ${{ matrix.eb_flag }} \
             --publish never \
             --config.extraMetadata.version="${{ steps.ver.outputs.version }}" \
-            --config.extraMetadata.kortixDefaultUrl="$DESKTOP_URL" \
+            --config.extraMetadata.openopcDefaultUrl="$DESKTOP_URL" \
             --config.extraMetadata.kortixUpdateChannel="dev" \
             --config.productName="OpenOPC Dev" \
             --config.extraMetadata.productName="OpenOPC Dev" \
@@ -227,6 +238,6 @@ jobs:
           generate_release_notes: false
           body: |
             Mutable DEV desktop build for `${{ github.sha }}`.
-            Defaults to `https://dev.kortix.com/projects`.
+            The default Web target is baked from the `OPENOPC_WEB_URL` repository variable.
           files: |
             release/*

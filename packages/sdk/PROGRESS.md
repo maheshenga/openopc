@@ -1045,3 +1045,51 @@ type snapshot -> unchanged, snapshot test passed
 
 **Shippable to production: YES** for the Task 3 SDK surface. The enclosing module Runner execution
 bundle and dispatch plan remains **NOT YET** because Tasks 4-8 are pending.
+
+---
+
+### 2026-08-02 - session `openopc-module-launch` (claim)
+
+Claimed Task 7 from
+`docs/superpowers/plans/2026-08-02-openopc-module-public-beta-closure.md`.
+The SDK change is strictly additive: export `ProjectModuleLaunchDescriptor`, add
+`getProjectModuleLaunch(projectId, installationId)`, and bind
+`kortix.project(projectId).modules.launch(installationId)`. Existing exports and
+the package version remain unchanged. Implementation will follow RED -> GREEN ->
+REFACTOR and finish with focused tests, typecheck, the full SDK suite, and the
+packed-install smoke gate.
+
+**Status:** IN PROGRESS.
+
+---
+
+### 2026-08-02 - session `openopc-module-launch` (completion)
+
+Completed Task 7's additive project module launch client in `5a424f1d2`.
+The SDK now exports `ProjectModuleLaunchDescriptor` and
+`getProjectModuleLaunch(projectId, installationId)`, and binds the transport as
+`kortix.project(projectId).modules.launch(installationId)`. The descriptor uses
+the server-issued launch URL verbatim and does not expose module service
+credentials. Existing exports and the package version remain unchanged.
+
+**RED -> GREEN evidence**
+
+```
+transport RED -> 0 pass, 1 fail, 1 error; missing getProjectModuleLaunch export
+transport GREEN -> 1 pass, 0 fail, 2 expect() calls, 1 file
+facade RED -> 0 pass, 1 fail; project(id).modules.launch was undefined
+facade GREEN -> 1 pass, 0 fail, 1 expect() call, 1 file
+```
+
+**Final SDK gates**
+
+```
+focused SDK tests -> 71 pass, 0 fail, 281 expect() calls, 4 files
+pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
+pnpm.cmd --filter @kortix/sdk test -> 1173 pass, 0 fail, 5516 expect() calls, 89 files
+pnpm.cmd --filter @kortix/sdk run smoke:install -> Install smoke test passed
+runtime snapshot -> 2 entry additions (getProjectModuleLaunch at root and projects-client), 0 removals
+type snapshot -> 4 entry additions (ProjectModuleLaunchDescriptor + getProjectModuleLaunch at root and projects-client), 0 removals
+```
+
+**Shippable to production: YES** for the additive Task 7 SDK surface.

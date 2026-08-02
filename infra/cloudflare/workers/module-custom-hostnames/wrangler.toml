@@ -2,14 +2,22 @@ main = "worker.mjs"
 compatibility_date = "2026-06-01"
 workers_dev = false
 
-# Custom Hostnames and routes are applied manually in staging first. Keep the
-# API origin and internal key as Worker secrets; never put either in this file.
+# DNS, certificates, routes, secrets, and deployment are applied manually in
+# staging after this source change. Never put secret values in this file.
 #
 # wrangler secret put OPENOPC_MODULE_CUSTOM_HOSTNAME_ORIGIN
 # wrangler secret put INTERNAL_SERVICE_KEY
 
 [vars]
+# The platform release route is *.OPENOPC_MODULE_APP_BASE_DOMAIN/*; the Worker
+# accepts only exact r-<canonical-release-uuid> labels for direct release routing.
+# Requests are sent only to OPENOPC_MODULE_HOST_ORIGIN. Both values are
+# environment-owned fixed configuration, never module input.
+# OPENOPC_MODULE_APP_BASE_DOMAIN = "modules.openopc.example"
+# OPENOPC_MODULE_HOST_ORIGIN = "https://module-origin.openopc.example"
+
 # Set this per deployment environment; it is an allowlisted OpenOPC-owned suffix,
-# not a user/module-controlled origin selector.
+# not a user/module-controlled origin selector. It is needed only for the
+# optional Cloudflare Custom Hostnames resolver path.
 # OPENOPC_MODULE_CUSTOM_HOSTNAME_SUFFIX = "openopc.example"
 # No provider credentials belong in source control.

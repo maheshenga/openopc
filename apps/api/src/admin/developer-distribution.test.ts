@@ -3,6 +3,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
 import { HTTPException } from 'hono/http-exception';
 
+import { RESTRICTED_RUNTIME_TEST_PROFILE } from '../release-profile/test-fixtures';
 import {
   DeveloperModuleDistributionService,
   createMemoryDeveloperModuleDistributionRepository,
@@ -17,6 +18,12 @@ import type { AuditEventInput } from '../shared/audit';
 import type { AppEnv } from '../types';
 import { createAdminDecisionAuthorizer } from './admin-authorization';
 import { registerAdminDeveloperDistributionRoutes } from './developer-distribution';
+
+const testPermissions = {
+  async requirePermission() {
+    return {} as never;
+  },
+};
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const CREATOR_ID = '20000000-0000-4000-a000-000000000002';
@@ -90,6 +97,8 @@ function service(input?: {
 }) {
   const signingPort = signer();
   return new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    permissions: testPermissions,
     repository: createMemoryDeveloperModuleDistributionRepository({
       releases: [input?.release ?? release()],
       publisherAccountMembers: (input?.members ?? []).map((userId) => ({
@@ -301,7 +310,7 @@ describe('admin developer module distribution API', () => {
     expect(noReason.status).toBe(400);
   });
 
-  test('denies publisher-account admins and returns stale conflicts as code-only errors', async () => {
+  test('allows publisher-account platform admins and returns stale conflicts as code-only errors', async () => {
     const app = appHarness({ service: service({ members: [MEMBER_ADMIN_ID] }) });
     const selfAction = await actionRequest(
       app,
@@ -319,9 +328,10 @@ describe('admin developer module distribution API', () => {
       expected_revision: 99,
     });
 
-    expect(selfAction.status).toBe(403);
+    expect(selfAction.status).toBe(200);
     expect(await selfAction.json()).toEqual({
-      error: 'DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED',
+      release: expect.objectContaining({ status: 'signed', review_revision: 3 }),
+      event: expect.objectContaining({ action: 'sign' }),
     });
     expect(stale.status).toBe(409);
     expect(await stale.json()).toEqual({ error: 'DEVELOPER_DISTRIBUTION_CONFLICT' });

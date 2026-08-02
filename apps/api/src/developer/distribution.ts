@@ -208,11 +208,14 @@ export class DeveloperModuleDistributionService {
       signer?: ModuleSigningPort | null;
       verifiers?: readonly ModuleVerificationPort[];
       trustGate?: Pick<DeveloperModuleTrustGate, 'evaluate'>;
-      permissions?: DeveloperPublisherPermissionPort;
+      permissions: DeveloperPublisherPermissionPort;
       now?: () => Date;
       runtime?: RuntimeReleaseProfile;
     },
   ) {
+    if (!input.permissions) {
+      throw new Error('DEVELOPER_PUBLISHER_PERMISSION_PORT_REQUIRED');
+    }
     this.signer = input.signer ?? null;
     this.now = input.now ?? (() => new Date());
     const verifiers = input.verifiers ?? (this.signer ? [this.signer] : []);
@@ -229,21 +232,15 @@ export class DeveloperModuleDistributionService {
     release: DeveloperModuleRelease,
     actorUserId: string,
   ): Promise<void> {
-    if (this.input.permissions) {
-      await this.input.permissions.requirePermission(
-        release.publisher_id,
-        {
-          accountId: release.account_id,
-          userId: actorUserId,
-          platformAdmin: true,
-        },
-        'platform_review',
-      );
-      return;
-    }
-    if (await this.input.repository.isPublisherAccountMember(release.account_id, actorUserId)) {
-      fail('DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED', 403);
-    }
+    await this.input.permissions.requirePermission(
+      release.publisher_id,
+      {
+        accountId: release.account_id,
+        userId: actorUserId,
+        platformAdmin: true,
+      },
+      'platform_review',
+    );
   }
 
   private async replayCompletedTransition(
@@ -297,7 +294,10 @@ export class DeveloperModuleDistributionService {
         toStatus: 'signed',
         reason: null,
       });
-      if (replay) return replay;
+      if (replay) {
+        await this.requirePlatformReview(current, input.actorUserId);
+        return replay;
+      }
     }
     const release = assertExpectedRelease(current, input.expectedStatus, input.expectedRevision);
     await this.requirePlatformReview(release, input.actorUserId);
@@ -357,7 +357,10 @@ export class DeveloperModuleDistributionService {
         toStatus: 'published',
         reason: null,
       });
-      if (replay) return replay;
+      if (replay) {
+        await this.requirePlatformReview(current, input.actorUserId);
+        return replay;
+      }
     }
     const release = assertExpectedRelease(current, input.expectedStatus, input.expectedRevision);
     await this.requirePlatformReview(release, input.actorUserId);
@@ -407,7 +410,10 @@ export class DeveloperModuleDistributionService {
         toStatus: 'revoked',
         reason,
       });
-      if (replay) return replay;
+      if (replay) {
+        await this.requirePlatformReview(current, input.actorUserId);
+        return replay;
+      }
     }
     const release = assertExpectedRelease(current, input.expectedStatus, input.expectedRevision);
     await this.requirePlatformReview(release, input.actorUserId);

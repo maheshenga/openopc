@@ -21,18 +21,38 @@ import {
   createEd25519ModuleVerificationPort,
   verifyDeveloperModuleReleaseTrustSignature,
 } from './module-signing';
-import { DeveloperPublisherError } from './publishers';
+import {
+  type DeveloperPublisherAuthority,
+  DeveloperPublisherError,
+  type DeveloperPublisherPermissionPort,
+} from './publishers';
 import { type DeveloperModuleRelease, canonicalDeveloperModuleManifestDigest } from './releases';
 import { type DeveloperModuleReviewRepository, DeveloperModuleReviewService } from './reviews';
+
+const testPermissions = {
+  async requirePermission() {
+    return {} as never;
+  },
+};
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const ADMIN_ID = '20000000-0000-4000-a000-000000000004';
 const RELEASE_ID = '30000000-0000-4000-a000-000000000003';
 const NOW = new Date('2026-07-24T15:00:00.000Z');
 
+const platformPermissions: DeveloperPublisherPermissionPort = {
+  async requirePermission(_publisherId, actor, permission) {
+    if (permission === 'platform_review' && actor.platformAdmin) {
+      return {} as DeveloperPublisherAuthority;
+    }
+    throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_FORBIDDEN', 403);
+  },
+};
+
 test('release profile rejection happens before distribution repository or signer access', async () => {
   let calls = 0;
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: NON_READY_RUNTIME_TEST_PROFILE,
     repository: {
       async getAdmin() {
@@ -255,6 +275,7 @@ test.each([
 
     const signFixture = countedDistributionFixture(serverAdapterRelease(runtimeKind));
     const signService = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: signFixture.repository,
       signer: signFixture.signer,
@@ -272,6 +293,7 @@ test.each([
 
     const publishFixture = countedDistributionFixture(serverAdapterRelease(runtimeKind, 'signed'));
     const publishService = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: publishFixture.repository,
       signer: publishFixture.signer,
@@ -289,6 +311,7 @@ test.each([
 
     const getFixture = countedDistributionFixture(serverAdapterRelease(runtimeKind, 'published'));
     const getService = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: getFixture.repository,
     });
@@ -299,6 +322,7 @@ test.each([
 
     const replayFixture = countedDistributionFixture(serverAdapterRelease(runtimeKind, 'signed'));
     const replayService = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: replayFixture.repository,
       signer: replayFixture.signer,
@@ -323,6 +347,7 @@ test('restricted published list excludes OCI and old-null server adapters from p
   const oldNull = serverAdapterRelease(null, 'published');
   oldNull.release_id = '30000000-0000-4000-a000-000000000009';
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository: createMemoryDeveloperModuleDistributionRepository({
       releases: [wasi, oci, oldNull],
@@ -347,6 +372,7 @@ test.each([
       now: () => NOW,
     });
     const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository,
     });
@@ -374,6 +400,7 @@ test.each([
   async (status, revision) => {
     const fixture = countedDistributionFixture(serverAdapterRelease(null, status, revision));
     const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: fixture.repository,
     });
@@ -409,6 +436,7 @@ test('module.oci.execute is the only future-profile authorization delta for the 
   const ociTarget = serverAdapterRelease('oci-image');
   const deniedFixture = countedDistributionFixture(ociTarget);
   const deniedService = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: FUTURE_WASI_RUNTIME_TEST_PROFILE,
     repository: deniedFixture.repository,
     signer: deniedFixture.signer,
@@ -433,6 +461,7 @@ test('module.oci.execute is the only future-profile authorization delta for the 
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: FUTURE_OCI_RUNTIME_TEST_PROFILE,
     repository,
     signer,
@@ -475,6 +504,7 @@ test.each([
   async (_label, runtime) => {
     const fixture = countedDistributionFixture(serverAdapterRelease(null));
     const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime,
       repository: fixture.repository,
       signer: fixture.signer,
@@ -501,6 +531,7 @@ test('signs approved declarative release and publishes only after verification',
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
@@ -546,6 +577,7 @@ test('binds server runtime descriptor evidence into the release signature', asyn
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer,
@@ -572,6 +604,7 @@ test('checks Publisher platform-review authority before signing or publishing', 
     now: () => NOW,
   });
   const allowed = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
@@ -615,7 +648,7 @@ test('checks Publisher platform-review authority before signing or publishing', 
   );
 });
 
-test('denies signing by a publisher-account member', async () => {
+test('allows a Publisher-member platform administrator to sign and publish their own release', async () => {
   const repository = createMemoryDeveloperModuleDistributionRepository({
     releases: [release()],
     publisherAccountMembers: [{ accountId: ACCOUNT_ID, userId: ADMIN_ID }],
@@ -626,22 +659,43 @@ test('denies signing by a publisher-account member', async () => {
     repository,
     signer: signingPort(),
     trustGate: trustGate(),
+    permissions: platformPermissions,
     now: () => NOW,
   });
 
-  await expect(
-    service.sign({
-      releaseId: RELEASE_ID,
-      actorUserId: ADMIN_ID,
-      expectedStatus: 'approved',
-      expectedRevision: 2,
-    }),
-  ).rejects.toEqual(
-    expect.objectContaining({
-      code: 'DEVELOPER_DISTRIBUTION_SELF_ACTION_DENIED',
-      status: 403,
-    }),
-  );
+  const signed = await service.sign({
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'approved',
+    expectedRevision: 2,
+  });
+  expect(signed.release).toMatchObject({
+    status: 'signed',
+    signature_algorithm: 'ed25519',
+    signature_key_id: expect.any(String),
+    signature: expect.any(String),
+    signature_payload_digest: expect.any(String),
+  });
+
+  const published = await service.publish({
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'signed',
+    expectedRevision: 3,
+  });
+  expect(published.release.status).toBe('published');
+});
+
+test('requires the publisher permission port', () => {
+  const repository = createMemoryDeveloperModuleDistributionRepository({ releases: [release()] });
+
+  expect(
+    () =>
+      new DeveloperModuleDistributionService({
+        repository,
+        permissions: undefined as never,
+      }),
+  ).toThrow('DEVELOPER_PUBLISHER_PERMISSION_PORT_REQUIRED');
 });
 
 test('fails closed when the module signer is unavailable without mutating the release', async () => {
@@ -650,6 +704,7 @@ test('fails closed when the module signer is unavailable without mutating the re
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     repository,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     now: () => NOW,
@@ -683,6 +738,7 @@ test.each(['queued', 'running', 'failed', 'inconclusive', 'cancelled', 'stale-po
       now: () => NOW,
     });
     const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository,
       signer: {
@@ -718,6 +774,7 @@ test('rejects a legacy server-adapter release with no reviewed WASI metadata', a
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
@@ -754,6 +811,7 @@ test('has no schema-1 signature fallback when publishing persisted releases', as
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     verifiers: [signer],
@@ -791,6 +849,7 @@ test.each([
     },
   };
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer,
@@ -831,6 +890,7 @@ test('rejects stale distribution commands without signing', async () => {
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: guardedSigner,
@@ -860,6 +920,7 @@ test('revokes a published release with an immutable emergency event', async () =
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
@@ -917,6 +978,7 @@ test('rejects publication when the persisted manifest no longer matches its dige
     },
   };
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
@@ -989,6 +1051,7 @@ test('combines review and distribution history by release revision', async () =>
     },
   };
   const service = new DeveloperModuleReviewService({
+    permissions: testPermissions,
     repository: reviewRepository,
     distributionRepository,
   });
@@ -1013,6 +1076,7 @@ test('replays the same successful sign command idempotently', async () => {
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: countingSigner,
@@ -1042,6 +1106,7 @@ test('replays the same successful publish command idempotently', async () => {
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
@@ -1083,6 +1148,7 @@ test('replays the same successful revoke command idempotently', async () => {
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     repository,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     now: () => NOW,
@@ -1104,6 +1170,122 @@ test('replays the same successful revoke command idempotently', async () => {
   );
 });
 
+test('rechecks platform-review authority before replaying a completed sign command', async () => {
+  let denied = false;
+  const permissions = {
+    async requirePermission() {
+      if (denied) throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_SUSPENDED', 409);
+      return {} as never;
+    },
+  };
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [release()],
+    now: () => NOW,
+  });
+  const service = new DeveloperModuleDistributionService({
+    permissions,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    repository,
+    signer: signingPort(),
+    trustGate: trustGate(),
+    now: () => NOW,
+  });
+  const command = {
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'approved' as const,
+    expectedRevision: 2,
+  };
+
+  await service.sign(command);
+  denied = true;
+
+  await expect(service.sign(command)).rejects.toMatchObject({
+    code: 'DEVELOPER_PUBLISHER_SUSPENDED',
+    status: 409,
+  });
+  expect(await repository.history(ACCOUNT_ID, RELEASE_ID)).toHaveLength(1);
+});
+
+test('rechecks platform-review authority before replaying a completed publish command', async () => {
+  let denied = false;
+  const permissions = {
+    async requirePermission() {
+      if (denied) throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_SUSPENDED', 409);
+      return {} as never;
+    },
+  };
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [release()],
+    now: () => NOW,
+  });
+  const service = new DeveloperModuleDistributionService({
+    permissions,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    repository,
+    signer: signingPort(),
+    trustGate: trustGate(),
+    now: () => NOW,
+  });
+  await service.sign({
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'approved',
+    expectedRevision: 2,
+  });
+  const command = {
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'signed' as const,
+    expectedRevision: 3,
+  };
+
+  await service.publish(command);
+  denied = true;
+
+  await expect(service.publish(command)).rejects.toMatchObject({
+    code: 'DEVELOPER_PUBLISHER_SUSPENDED',
+    status: 409,
+  });
+  expect(await repository.history(ACCOUNT_ID, RELEASE_ID)).toHaveLength(2);
+});
+
+test('rechecks platform-review authority before replaying a completed revoke command', async () => {
+  let denied = false;
+  const permissions = {
+    async requirePermission() {
+      if (denied) throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_SUSPENDED', 409);
+      return {} as never;
+    },
+  };
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [release('published', 4)],
+    now: () => NOW,
+  });
+  const service = new DeveloperModuleDistributionService({
+    permissions,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    repository,
+    now: () => NOW,
+  });
+  const command = {
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'published' as const,
+    expectedRevision: 4,
+    reason: 'Verified emergency takedown.',
+  };
+
+  await service.revoke(command);
+  denied = true;
+
+  await expect(service.revoke(command)).rejects.toMatchObject({
+    code: 'DEVELOPER_PUBLISHER_SUSPENDED',
+    status: 409,
+  });
+  expect(await repository.history(ACCOUNT_ID, RELEASE_ID)).toHaveLength(1);
+});
+
 test('maps signer failures to a code-only unavailable error without partial state', async () => {
   const signer = signingPort();
   const failingSigner = {
@@ -1117,6 +1299,7 @@ test('maps signer failures to a code-only unavailable error without partial stat
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: failingSigner,
@@ -1154,6 +1337,7 @@ test('discards generated signature state when the repository event write conflic
     },
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
@@ -1186,6 +1370,7 @@ test('fails publication when the persisted signature key is no longer available'
   });
   const originalSigner = signingPort();
   await new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: originalSigner,
@@ -1204,6 +1389,7 @@ test('fails publication when the persisted signature key is no longer available'
     publicKey,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: rotatedSigner,
@@ -1238,6 +1424,7 @@ test('publishes with a retained verification-only key after signer rotation', as
     publicKey: previous.publicKey,
   });
   await new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: previousSigner,
@@ -1251,6 +1438,7 @@ test('publishes with a retained verification-only key after signer rotation', as
   });
   const rotatedSigner = signingPort();
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: rotatedSigner,
@@ -1287,6 +1475,7 @@ test('lists and reads only published module releases', async () => {
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     repository,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     now: () => NOW,
@@ -1319,6 +1508,7 @@ test('searches published v3 releases by catalog label before pagination', async 
     },
   };
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     repository: createMemoryDeveloperModuleDistributionRepository({ releases: [published] }),
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
   });
@@ -1340,6 +1530,7 @@ test('filters server runtime kinds before published-list pagination and counting
     },
   } as never;
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     repository,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
   });
@@ -1370,6 +1561,7 @@ test('rejects an invalid persisted detached signature', async () => {
     },
   };
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository,
     signer: signingPort(),
@@ -1406,6 +1598,7 @@ test('rejects revocation reasons that contain credentials or unsafe text', async
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     repository,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     now: () => NOW,
@@ -1434,6 +1627,7 @@ test('rejects a changed revocation target after a successful command', async () 
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     repository,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     now: () => NOW,
@@ -1466,6 +1660,7 @@ test('revokes a signed release without inventing a publication timestamp', async
     now: () => NOW,
   });
   const service = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     repository,
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     now: () => NOW,

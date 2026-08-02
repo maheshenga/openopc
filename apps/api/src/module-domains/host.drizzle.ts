@@ -5,15 +5,83 @@ import {
   moduleCustomDomainBindings,
   projectModuleInstallations,
 } from '@kortix/db';
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, sql } from 'drizzle-orm';
 
-import type { ModuleCustomDomainHostRepository, ModuleCustomDomainStaticRelease } from './host';
+import type {
+  ModuleCustomDomainHostRepository,
+  ModuleCustomDomainStaticRelease,
+  ModulePlatformHostRepository,
+} from './host';
 
 function entryPath(manifest: Record<string, unknown>): string | null {
   const execution = manifest.execution;
   if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return null;
   const value = execution as Record<string, unknown>;
-  return value.mode === 'sandboxed-web' && typeof value.entry === 'string' ? value.entry : null;
+  return value.mode === 'sandboxed-web' && typeof value.entry === 'string' && value.entry.length > 0
+    ? value.entry
+    : null;
+}
+
+function platformEntryPath(manifest: Record<string, unknown>): string | null {
+  return manifest.schemaVersion === 3 ? entryPath(manifest) : null;
+}
+
+export function createDrizzleModulePlatformHostRepository(
+  db: Database,
+): ModulePlatformHostRepository {
+  return {
+    async loadPublishedSandboxedWebRelease(input) {
+      const [row] = await db
+        .select({
+          releaseId: developerModuleReleases.releaseId,
+          storageKey: developerModuleArtifacts.storageKey,
+          artifactDigest: developerModuleArtifacts.artifactDigest,
+          artifactSize: developerModuleArtifacts.sizeBytes,
+          manifest: developerModuleReleases.manifest,
+        })
+        .from(developerModuleReleases)
+        .innerJoin(
+          developerModuleArtifacts,
+          and(
+            eq(developerModuleArtifacts.artifactId, developerModuleReleases.artifactId),
+            eq(developerModuleArtifacts.accountId, developerModuleReleases.accountId),
+            eq(developerModuleArtifacts.artifactDigest, developerModuleReleases.artifactDigest),
+          ),
+        )
+        .where(
+          and(
+            eq(developerModuleReleases.releaseId, input.releaseId),
+            eq(developerModuleReleases.status, 'published'),
+            isNull(developerModuleReleases.revokedAt),
+            sql`${developerModuleReleases.manifest}->>'schemaVersion' = ${'3'}`,
+            sql`${developerModuleReleases.manifest}->'execution'->>'mode' = ${'sandboxed-web'}`,
+            sql`coalesce(${developerModuleReleases.manifest}->'execution'->>'entry', '') <> ''`,
+            eq(developerModuleReleases.signatureAlgorithm, 'ed25519'),
+            isNotNull(developerModuleReleases.signatureKeyId),
+            isNotNull(developerModuleReleases.signature),
+            isNotNull(developerModuleReleases.signaturePayloadDigest),
+            isNotNull(developerModuleReleases.signedAt),
+            isNotNull(developerModuleReleases.publishedAt),
+            isNotNull(developerModuleReleases.artifactId),
+            isNotNull(developerModuleReleases.artifactDigest),
+            isNotNull(developerModuleArtifacts.storageKey),
+            isNotNull(developerModuleArtifacts.artifactDigest),
+            gt(developerModuleArtifacts.sizeBytes, 0),
+          ),
+        )
+        .limit(1);
+      if (!row) return null;
+      const entry = platformEntryPath(row.manifest);
+      if (!entry) return null;
+      return {
+        releaseId: row.releaseId,
+        storageKey: row.storageKey,
+        artifactDigest: row.artifactDigest as `sha256:${string}`,
+        artifactSize: row.artifactSize,
+        entryPath: entry,
+      };
+    },
+  };
 }
 
 export function createDrizzleModuleCustomDomainHostRepository(

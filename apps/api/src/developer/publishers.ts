@@ -563,7 +563,6 @@ export class DeveloperPublisherService implements DeveloperPublisherPermissionPo
     }
     if (permission === 'platform_review') {
       if (!actor.platformAdmin) fail('DEVELOPER_PUBLISHER_FORBIDDEN', 403);
-      if (authority.member) fail('DEVELOPER_SEGREGATION_OF_DUTIES_REQUIRED', 403);
       return authority;
     }
     if (!authority.member || !ROLE_PERMISSIONS[authority.member.role].has(permission)) {

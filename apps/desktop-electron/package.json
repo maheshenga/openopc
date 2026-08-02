@@ -11,8 +11,6 @@
     "build:sidecar": "pnpm --filter @openopc/desktop-agent build:sidecar",
     "setup": "node scripts/ensure-runtime.js && pnpm run build:sidecar",
     "dev": "pnpm run setup && OPENOPC_DESKTOP_URL=http://localhost:3000/projects electron .",
-    "dev:dev-env": "pnpm run setup && OPENOPC_DESKTOP_URL=https://dev.kortix.com/projects electron .",
-    "dev:prod-env": "pnpm run setup && OPENOPC_DESKTOP_URL=https://kortix.com/projects electron .",
     "test:node": "node --test src/tunnel-profile-store.test.js src/tunnel-pairing.test.js src/tunnel-runtime-supervisor.test.js",
     "test": "pnpm run test:node && bun test ./src",
     "pack": "pnpm run setup && electron-builder --dir",

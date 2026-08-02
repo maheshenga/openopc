@@ -94,6 +94,11 @@ import {
 } from './intelligence/workflows/runtime';
 import { createReleaseProfileRouter, releaseProfileReadiness } from './release-profile/routes';
 import { loadRuntimeReleaseProfile } from './release-profile/runtime';
+import {
+  combineModuleAppHostReadiness,
+  moduleAppHostReadiness,
+  parseModuleAppHostConfiguration,
+} from './module-domains/platform-host-config';
 
 // ─── Process-level crash guards ───────────────────────────────────────────────
 // A stray rejected promise or throw escaping any fire-and-forget path — the
@@ -443,7 +448,13 @@ app.get('/v1/health/live', livenessHandler);
 
 app.get('/readyz', (c) => {
   const runtime = loadRuntimeReleaseProfile();
-  return c.json(releaseProfileReadiness(runtime), runtime.ready ? 200 : 503);
+  const host = moduleAppHostReadiness({
+    renderingEnabled: runtime.allows('module.app.render'),
+    configuration: parseModuleAppHostConfiguration(config.OPENOPC_MODULE_APP_BASE_DOMAIN),
+    internalServiceKey: config.INTERNAL_SERVICE_KEY,
+  });
+  const readiness = combineModuleAppHostReadiness(releaseProfileReadiness(runtime), host);
+  return c.json(readiness, readiness.ready ? 200 : 503);
 });
 app.route('/v1', createReleaseProfileRouter());
 

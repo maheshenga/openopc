@@ -32,8 +32,11 @@ const { setupAutoUpdates, checkForUpdatesInteractive } = require('./updater');
 const { DESKTOP_CHROME_JS, configureNativeWindowControls } = require('./window-chrome');
 const {
   downloadFromWebContents,
+  createOpenOpcFrontendSubmenu,
   isLocalGrantOperation,
   isTrustedAppSender,
+  normalizeOpenOpcDesktopUrl,
+  resolveOpenOpcDesktopDefault,
   shouldLoadInApp,
   shouldRegisterProtocol,
 } = require('./app-policy');
@@ -41,7 +44,6 @@ const {
   LEGACY_DESKTOP_IDENTIFIERS,
   PRODUCT_BRAND,
   legacyUserDataName,
-  openOpcEnv,
 } = require('./product-brand');
 const {
   createLocalGrantController,
@@ -58,30 +60,23 @@ app.setPath('userData', path.join(app.getPath('appData'), legacyUserDataName(app
 /* ─── Config ──────────────────────────────────────────────────────────── */
 
 // A packaged app has no build-time env at runtime, so CI bakes the target URL
-// into package.json (electron-builder --config.extraMetadata.kortixDefaultUrl).
-// Dev builds → dev.kortix.com; prod → kortix.com.
+// into package.json under the OpenOPC-only metadata key.
 function bakedDefaultUrl() {
   try {
     const metadata = require('../package.json');
-    return metadata.openopcDefaultUrl || metadata.kortixDefaultUrl || null;
+    return metadata.openopcDefaultUrl || null;
   } catch {
     return null;
   }
 }
 
-// Default target URL precedence:
-//   1. KORTIX_DESKTOP_DEFAULT_URL env (local dev convenience)
-//   2. value baked into package.json at build time (CI dev vs prod)
-//   3. production kortix.com
-// A runtime KORTIX_DESKTOP_URL / the Frontend-URL menu still overrides this.
-const DEFAULT_URL =
-  openOpcEnv('OPENOPC_DESKTOP_DEFAULT_URL', 'KORTIX_DESKTOP_DEFAULT_URL') ||
-  bakedDefaultUrl() ||
-  'https://kortix.com/projects';
-
-const PRESET_PROD = 'https://kortix.com/projects';
-const PRESET_DEV = 'https://dev.kortix.com/projects';
 const PRESET_LOCAL = 'http://localhost:3000/projects';
+
+const DEFAULT_URL = resolveOpenOpcDesktopDefault({
+  env: app.isPackaged ? {} : process.env,
+  metadata: { openopcDefaultUrl: bakedDefaultUrl() },
+  isPackaged: app.isPackaged === true,
+});
 
 const URL_SCHEME = LEGACY_DESKTOP_IDENTIFIERS.urlScheme;
 // Matches DESKTOP_UA_TOKEN in apps/web/src/lib/desktop.ts and the
@@ -104,8 +99,8 @@ function overridePath() {
 
 function readUrlOverride() {
   try {
-    const raw = fs.readFileSync(overridePath(), 'utf8').trim();
-    return raw || null;
+    const raw = fs.readFileSync(overridePath(), 'utf8');
+    return normalizeOpenOpcDesktopUrl(raw, { allowLoopback: app.isPackaged !== true });
   } catch {
     return null;
   }
@@ -130,7 +125,12 @@ function clearUrlOverride() {
 }
 
 function appBaseUrl() {
-  return openOpcEnv('OPENOPC_DESKTOP_URL', 'KORTIX_DESKTOP_URL') || DEFAULT_URL;
+  if (app.isPackaged) return DEFAULT_URL;
+  return resolveOpenOpcDesktopDefault({
+    env: process.env,
+    metadata: { openopcDefaultUrl: bakedDefaultUrl() },
+    isPackaged: false,
+  });
 }
 
 /** Effective URL the window should load — persisted override beats the default. */
@@ -415,53 +415,26 @@ function buildMenu() {
 
   // Hidden, nested dev switcher so the backend the app points at can change
   // without a rebuild — mirrors the Tauri "Frontend URL" submenu.
-  const frontendSubmenu = {
-    label: 'Frontend URL',
-    submenu: [
-      {
-        label: 'Production (kortix.com)',
-        click: () => {
-          writeUrlOverride(PRESET_PROD);
-          navigateMainWindow(PRESET_PROD);
-        },
-      },
-      {
-        label: 'Dev (dev.kortix.com)',
-        click: () => {
-          writeUrlOverride(PRESET_DEV);
-          navigateMainWindow(PRESET_DEV);
-        },
-      },
-      {
-        label: 'Local (localhost:3000)',
-        click: () => {
-          writeUrlOverride(PRESET_LOCAL);
-          navigateMainWindow(PRESET_LOCAL);
-        },
-      },
-      { type: 'separator' },
-      {
-        label: 'Custom URL…',
-        // Native menus can't take text input — ask the web layer to pop the
-        // same tiny prompt the Tauri shell uses, which calls back via the
-        // set_frontend_url IPC.
-        click: () => {
-          if (!mainWindow) return;
-          mainWindow.webContents.executeJavaScript(
-            "window.dispatchEvent(new CustomEvent('kortix-open-frontend-url'))",
-          );
-          mainWindow.focus();
-        },
-      },
-      {
-        label: 'Reset to Default',
-        click: () => {
-          clearUrlOverride();
-          navigateMainWindow(appBaseUrl());
-        },
-      },
-    ],
-  };
+  const frontendSubmenu = createOpenOpcFrontendSubmenu({
+    isPackaged: app.isPackaged === true,
+    onLocal: () => {
+      writeUrlOverride(PRESET_LOCAL);
+      navigateMainWindow(PRESET_LOCAL);
+    },
+    // Native menus can't take text input — ask the web layer to pop the same
+    // tiny prompt the Tauri shell uses, which calls back via set_frontend_url.
+    onCustom: () => {
+      if (!mainWindow) return;
+      mainWindow.webContents.executeJavaScript(
+        "window.dispatchEvent(new CustomEvent('kortix-open-frontend-url'))",
+      );
+      mainWindow.focus();
+    },
+    onReset: () => {
+      clearUrlOverride();
+      navigateMainWindow(appBaseUrl());
+    },
+  });
 
   const template = [
     ...(isMac
@@ -694,20 +667,14 @@ function registerIpc() {
       case 'get_frontend_url':
         return resolveAppUrl();
       case 'set_frontend_url': {
-        const raw = String(args.url || '').trim();
+        const raw = args.url;
         if (!raw) throw new Error('URL is empty');
-        const candidate = raw.includes('://') ? raw : `https://${raw}`;
-        let parsed;
-        try {
-          parsed = new URL(candidate);
-        } catch (e) {
-          throw new Error(`Invalid URL: ${e}`);
-        }
-        if (!/^https?:$/.test(parsed.protocol)) {
-          throw new Error('URL must use http or https');
-        }
-        writeUrlOverride(candidate);
-        navigateMainWindow(candidate);
+        const normalized = normalizeOpenOpcDesktopUrl(raw, {
+          allowLoopback: app.isPackaged !== true,
+        });
+        if (!normalized) throw new Error('Invalid OpenOPC Web URL');
+        writeUrlOverride(normalized);
+        navigateMainWindow(normalized);
         return null;
       }
       default:

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { HTTPException } from 'hono/http-exception';
 
+import { RESTRICTED_RUNTIME_TEST_PROFILE } from '../release-profile/test-fixtures';
 import {
   DeveloperModuleDistributionService,
   createMemoryDeveloperModuleDistributionRepository,
@@ -20,6 +21,12 @@ import type { AuditEventInput } from '../shared/audit';
 import type { AppEnv } from '../types';
 import { createAdminDecisionAuthorizer } from './admin-authorization';
 import { registerAdminDeveloperReviewRoutes } from './developer-reviews';
+
+const testPermissions = {
+  async requirePermission() {
+    return {} as never;
+  },
+};
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const CREATOR_ID = '20000000-0000-4000-a000-000000000002';
@@ -112,6 +119,7 @@ async function pendingService(input?: { members?: string[] }) {
     })(),
   });
   const service = new DeveloperModuleReviewService({
+    permissions: testPermissions,
     repository,
     trustGate: { evaluate: async () => ({ ok: true, evidence: TRUST_EVIDENCE }) },
     now: () => NOW,
@@ -164,6 +172,8 @@ function appHarness(input: {
     distributionService:
       input.distributionService ??
       new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    permissions: testPermissions,
         repository: createMemoryDeveloperModuleDistributionRepository(),
       }),
     distributionEnabled: true,
@@ -281,7 +291,7 @@ describe('admin developer module review API', () => {
     expect(JSON.stringify(audits)).not.toMatch(/retention|manifest|evidence/i);
   });
 
-  test('approves only with complete human evidence and denies publisher-account members', async () => {
+  test('approves a Publisher-member platform administrator only with complete human evidence', async () => {
     const service = await pendingService({ members: [MEMBER_ADMIN_ID] });
     const app = appHarness({ service });
     const body = {
@@ -313,12 +323,8 @@ describe('admin developer module review API', () => {
       },
     );
 
-    expect(selfApproval.status).toBe(403);
+    expect(selfApproval.status).toBe(200);
     expect(await selfApproval.json()).toEqual({
-      error: 'DEVELOPER_REVIEW_SELF_APPROVAL_DENIED',
-    });
-    expect(approval.status).toBe(200);
-    expect(await approval.json()).toEqual({
       release: expect.objectContaining({ status: 'approved', review_revision: 2 }),
       event: expect.objectContaining({
         action: 'approve',
@@ -336,6 +342,8 @@ describe('admin developer module review API', () => {
         ],
       }),
     });
+    expect(approval.status).toBe(409);
+    expect(await approval.json()).toEqual({ error: 'DEVELOPER_REVIEW_CONFLICT' });
   });
 
   test('returns code-only not-found, stale, reason, and evidence failures', async () => {
@@ -442,6 +450,8 @@ describe('admin developer module review API', () => {
   test('reuses review-decisions to revoke signed releases through the distribution service', async () => {
     const audits: AuditEventInput[] = [];
     const distributionService = new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    permissions: testPermissions,
       repository: createMemoryDeveloperModuleDistributionRepository({
         releases: [release('signed', 3)],
         now: () => NOW,
@@ -489,6 +499,8 @@ describe('admin developer module review API', () => {
     const app = appHarness({
       service,
       distributionService: new DeveloperModuleDistributionService({
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    permissions: testPermissions,
         repository: createMemoryDeveloperModuleDistributionRepository(),
       }),
     });

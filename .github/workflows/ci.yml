@@ -494,9 +494,10 @@ jobs:
         run: pnpm --filter @kortix/desktop-electron run setup
 
       - name: Build Linux desktop installer (Electron, unsigned)
-        run: pnpm --filter @kortix/desktop-electron exec electron-builder --linux --publish never
+        run: |
+          pnpm --filter @kortix/desktop-electron exec electron-builder --linux --publish never \
+            --config.extraMetadata.openopcDefaultUrl="https://web.openopc.invalid/projects"
         env:
-          KORTIX_DESKTOP_DEFAULT_URL: https://dev.kortix.com/projects
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Verify installer exists

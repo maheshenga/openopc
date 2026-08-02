@@ -1,6 +1,8 @@
 import {
   moduleCustomDomainBindingService,
   projectModuleInstallationService,
+  projectModuleLaunchService,
+  runtimeReleaseProfile,
 } from '../../developer';
 import { createModuleCustomDomainProjectRoutes } from '../../module-domains/app';
 import {
@@ -18,6 +20,8 @@ projectsApp.route(
     loadProjectForUser,
     assertProjectCapability,
     installationService: projectModuleInstallationService,
+    launchService: projectModuleLaunchService,
+    runtime: runtimeReleaseProfile,
   }),
 );
 

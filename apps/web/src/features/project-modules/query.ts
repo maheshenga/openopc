@@ -11,6 +11,8 @@ import {
   type ModuleServiceConsent,
   type ModuleServiceConsentMutationInput,
   type OpenOpcServiceName,
+  getProjectModuleLaunchDescriptor,
+  getPublishedProjectModuleRelease,
   grantProjectModuleServiceConsent,
   installPublishedProjectModule,
   listInstalledProjectModules,
@@ -26,6 +28,9 @@ export const projectModuleKeys = {
   all: ['project-modules'] as const,
   installed: (projectId: string) => ['project-modules', projectId, 'installed'] as const,
   releases: () => ['project-modules', 'published-releases'] as const,
+  launch: (projectId: string, installationId: string) =>
+    ['project-modules', projectId, 'launch', installationId] as const,
+  release: (releaseId: string) => ['project-modules', 'published-release', releaseId] as const,
   history: (projectId: string, moduleId: string) =>
     ['project-modules', projectId, 'history', moduleId] as const,
   serviceConsents: (projectId: string, installationId: string) =>
@@ -46,6 +51,22 @@ export const projectModuleReleasesQuery = () => ({
   queryKey: projectModuleKeys.releases(),
   queryFn: listPublishedProjectModuleReleases,
   staleTime: 15_000,
+});
+
+export const projectModuleLaunchQuery = (projectId: string, installationId: string) => ({
+  queryKey: projectModuleKeys.launch(projectId, installationId),
+  queryFn: () => getProjectModuleLaunchDescriptor(projectId, installationId),
+  staleTime: 0,
+  retry: false,
+  refetchOnWindowFocus: true,
+  refetchInterval: 15_000,
+});
+
+export const projectModuleReleaseQuery = (releaseId: string) => ({
+  queryKey: projectModuleKeys.release(releaseId),
+  queryFn: () => getPublishedProjectModuleRelease(releaseId),
+  staleTime: 0,
+  retry: false,
 });
 
 export const projectModuleHistoryQuery = (projectId: string, moduleId: string) => ({
@@ -244,6 +265,11 @@ export type ProjectModuleUiErrorCode =
   | 'DEVELOPER_MODULE_NOT_PUBLISHED'
   | 'DEVELOPER_MODULE_REVOKED'
   | 'DEVELOPER_RELEASE_NOT_FOUND'
+  | 'PROJECT_MODULE_INACTIVE'
+  | 'PROJECT_MODULE_NOT_LAUNCHABLE'
+  | 'PROJECT_MODULE_LAUNCH_STALE'
+  | 'PROJECT_MODULE_HOST_UNAVAILABLE'
+  | 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE'
   | 'MODULE_SERVICE_CONSENT_REVOKED'
   | 'MODULE_SERVICE_INSTALLATION_STALE'
   | 'MODULE_SERVICE_RELEASE_REVOKED'
@@ -261,6 +287,11 @@ const PROJECT_MODULE_ERRORS = new Set<ProjectModuleUiErrorCode>([
   'DEVELOPER_MODULE_NOT_PUBLISHED',
   'DEVELOPER_MODULE_REVOKED',
   'DEVELOPER_RELEASE_NOT_FOUND',
+  'PROJECT_MODULE_INACTIVE',
+  'PROJECT_MODULE_NOT_LAUNCHABLE',
+  'PROJECT_MODULE_LAUNCH_STALE',
+  'PROJECT_MODULE_HOST_UNAVAILABLE',
+  'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
   'MODULE_SERVICE_CONSENT_REVOKED',
   'MODULE_SERVICE_INSTALLATION_STALE',
   'MODULE_SERVICE_RELEASE_REVOKED',

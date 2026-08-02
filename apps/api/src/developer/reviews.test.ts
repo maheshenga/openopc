@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 
-import { DeveloperPublisherError } from './publishers';
+import {
+  type DeveloperPublisherAuthority,
+  DeveloperPublisherError,
+  type DeveloperPublisherPermissionPort,
+} from './publishers';
 import type { DeveloperModuleRelease, DeveloperModuleReviewRequirement } from './releases';
 import {
   type DeveloperModuleHumanReviewEvidence,
@@ -9,6 +13,12 @@ import {
   DeveloperModuleReviewService,
   createMemoryDeveloperModuleReviewRepository,
 } from './reviews';
+
+const testPermissions = {
+  async requirePermission() {
+    return {} as never;
+  },
+};
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000009';
@@ -28,6 +38,15 @@ const TRUST_EVIDENCE = {
   runtime_descriptor_digest: null,
   runtime_kind: null,
 } as const;
+
+const platformPermissions: DeveloperPublisherPermissionPort = {
+  async requirePermission(_publisherId, actor, permission) {
+    if (permission === 'platform_review' && actor.platformAdmin) {
+      return {} as DeveloperPublisherAuthority;
+    }
+    throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_FORBIDDEN', 403);
+  },
+};
 
 type TrustState =
   | 'passed'
@@ -121,6 +140,7 @@ function harness(initialRelease = release(), trustState: TrustState = 'passed') 
   return {
     repository,
     service: new DeveloperModuleReviewService({
+    permissions: testPermissions,
       repository,
       trustGate: trustGate(trustState),
       now: () => NOW,
@@ -511,25 +531,44 @@ describe('developer module review service', () => {
     }
   });
 
-  test('denies approval by the release creator or any current publisher-account member', async () => {
-    for (const actorUserId of [CREATOR_ID, MEMBER_REVIEWER_ID]) {
-      const { service } = await pendingHarness();
-      await expect(
-        service.decide({
-          releaseId: RELEASE_ID,
-          actorUserId,
-          decision: 'approve',
-          expectedStatus: 'review_pending',
-          expectedRevision: 1,
-          evidence: completeEvidence(),
+  test('allows a Publisher-member platform administrator to approve their own release', async () => {
+    const { repository } = harness(release('review_pending', 1));
+    const service = new DeveloperModuleReviewService({
+      repository,
+      trustGate: trustGate(),
+      permissions: platformPermissions,
+      now: () => NOW,
+    });
+
+    const approved = await service.decide({
+      releaseId: RELEASE_ID,
+      actorUserId: CREATOR_ID,
+      decision: 'approve',
+      expectedStatus: 'review_pending',
+      expectedRevision: 1,
+      evidence: completeEvidence(),
+    });
+
+    expect(approved.release.status).toBe('approved');
+    expect(approved.event).toMatchObject({ actor_user_id: CREATOR_ID, action: 'approve' });
+    expect(approved.event.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ method: 'manual', outcome: 'passed' }),
+        expect.objectContaining({ method: 'system_attestation', outcome: 'passed' }),
+      ]),
+    );
+  });
+
+  test('requires the publisher permission port', () => {
+    const { repository } = harness();
+
+    expect(
+      () =>
+        new DeveloperModuleReviewService({
+          repository,
+          permissions: undefined as never,
         }),
-      ).rejects.toEqual(
-        expect.objectContaining({
-          code: 'DEVELOPER_REVIEW_SELF_APPROVAL_DENIED',
-          status: 403,
-        }),
-      );
-    }
+    ).toThrow('DEVELOPER_PUBLISHER_PERMISSION_PORT_REQUIRED');
   });
 
   test('checks unrelated platform-review authority before revoking an approved release', async () => {

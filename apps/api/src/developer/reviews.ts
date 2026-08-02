@@ -407,10 +407,13 @@ export class DeveloperModuleReviewService {
       repository: DeveloperModuleReviewRepository;
       distributionRepository?: Pick<DeveloperModuleDistributionRepository, 'history'>;
       trustGate?: Pick<DeveloperModuleTrustGate, 'evaluate'>;
-      permissions?: DeveloperPublisherPermissionPort;
+      permissions: DeveloperPublisherPermissionPort;
       now?: () => Date;
     },
   ) {
+    if (!input.permissions) {
+      throw new Error('DEVELOPER_PUBLISHER_PERMISSION_PORT_REQUIRED');
+    }
     this.now = input.now ?? (() => new Date());
   }
 
@@ -435,7 +438,7 @@ export class DeveloperModuleReviewService {
           : null;
     if (!transition) fail('DEVELOPER_REVIEW_TRANSITION_INVALID', 409);
 
-    await this.input.permissions?.requirePermission(
+    await this.input.permissions.requirePermission(
       release.publisher_id,
       { accountId: release.account_id, userId: input.actorUserId },
       'release',
@@ -477,25 +480,15 @@ export class DeveloperModuleReviewService {
       toStatus = 'changes_requested';
       reasonRequired = true;
     } else if (input.decision === 'approve' && release.status === 'review_pending') {
-      if (this.input.permissions) {
-        await this.input.permissions.requirePermission(
-          release.publisher_id,
-          {
-            accountId: release.account_id,
-            userId: input.actorUserId,
-            platformAdmin: true,
-          },
-          'platform_review',
-        );
-      } else {
-        const isPublisherMember = await this.input.repository.isPublisherAccountMember(
-          release.account_id,
-          input.actorUserId,
-        );
-        if (release.created_by === input.actorUserId || isPublisherMember) {
-          fail('DEVELOPER_REVIEW_SELF_APPROVAL_DENIED', 403);
-        }
-      }
+      await this.input.permissions.requirePermission(
+        release.publisher_id,
+        {
+          accountId: release.account_id,
+          userId: input.actorUserId,
+          platformAdmin: true,
+        },
+        'platform_review',
+      );
       toStatus = 'approved';
       reasonRequired = false;
       const humanEvidence = normalizeHumanEvidence(input.evidence, release, this.now());
@@ -505,7 +498,7 @@ export class DeveloperModuleReviewService {
         await automaticEvidence(release, this.input.trustGate),
       );
     } else if (input.decision === 'revoke' && release.status === 'approved') {
-      await this.input.permissions?.requirePermission(
+      await this.input.permissions.requirePermission(
         release.publisher_id,
         {
           accountId: release.account_id,

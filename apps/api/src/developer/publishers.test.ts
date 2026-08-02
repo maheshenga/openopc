@@ -310,7 +310,7 @@ describe('DeveloperPublisherService', () => {
     ).resolves.toEqual(expect.objectContaining({ status: 'active', authority_revision: 2 }));
   });
 
-  test('a Publisher actor cannot approve or sign their own release', async () => {
+  test('allows a platform administrator to review their own Publisher and denies a non-admin member', async () => {
     const { service } = harness();
 
     await expect(
@@ -319,17 +319,15 @@ describe('DeveloperPublisherService', () => {
         actor(OWNER_ID, { platformAdmin: true }),
         'platform_review',
       ),
-    ).rejects.toMatchObject({
-      code: 'DEVELOPER_SEGREGATION_OF_DUTIES_REQUIRED',
-      status: 403,
+    ).resolves.toMatchObject({
+      member: expect.objectContaining({ user_id: OWNER_ID, role: 'owner' }),
     });
     await expect(
-      service.requirePermission(
-        'acme',
-        actor(ADMIN_ID, { platformAdmin: true }),
-        'platform_review',
-      ),
-    ).resolves.toBeDefined();
+      service.requirePermission('acme', actor(OWNER_ID), 'platform_review'),
+    ).rejects.toMatchObject({
+      code: 'DEVELOPER_PUBLISHER_FORBIDDEN',
+      status: 403,
+    });
   });
 
   test('cross-tenant authority probes remain opaque', async () => {

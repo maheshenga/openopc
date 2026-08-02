@@ -32,6 +32,12 @@ import {
   createMemoryDeveloperModuleVerificationRepository,
 } from './verification';
 
+const testPermissions = {
+  async requirePermission() {
+    return {} as never;
+  },
+};
+
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000009';
 const USER_ID = '20000000-0000-4000-a000-000000000002';
@@ -132,6 +138,7 @@ const authenticatedApp = (
     reviewService:
       input.reviewService ??
       new DeveloperModuleReviewService({
+    permissions: testPermissions,
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
     verificationService: input.verificationService ?? emptyVerificationService(),
@@ -248,6 +255,7 @@ describe('developer module validation API', () => {
         artifacts,
       }),
       reviewService: new DeveloperModuleReviewService({
+    permissions: testPermissions,
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
       verificationService: emptyVerificationService(),
@@ -337,6 +345,7 @@ describe('developer module validation API', () => {
         artifacts,
       }),
       reviewService: new DeveloperModuleReviewService({
+    permissions: testPermissions,
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
       verificationService: emptyVerificationService(),
@@ -444,6 +453,7 @@ describe('developer module validation API', () => {
         },
       },
       reviewService: new DeveloperModuleReviewService({
+    permissions: testPermissions,
         repository: createMemoryDeveloperModuleReviewRepository(),
       }),
       verificationService: emptyVerificationService(),
@@ -462,6 +472,7 @@ describe('developer module validation API', () => {
   test('requires account write permission for submissions and review requests', async () => {
     const { artifact, artifactService, releaseService, seeded } = await seededReleaseFixture();
     const reviewService = new DeveloperModuleReviewService({
+    permissions: testPermissions,
       repository: createMemoryDeveloperModuleReviewRepository({ releases: [seeded.release] }),
     });
     const app = authenticatedApp({
@@ -499,6 +510,7 @@ describe('developer module validation API', () => {
   test('requests review and returns account-scoped immutable history', async () => {
     const { artifactService, releaseService, seeded } = await seededReleaseFixture();
     const reviewService = new DeveloperModuleReviewService({
+    permissions: testPermissions,
       repository: createMemoryDeveloperModuleReviewRepository({ releases: [seeded.release] }),
     });
     const app = authenticatedApp({ artifactService, releaseService, reviewService });
@@ -534,6 +546,7 @@ describe('developer module validation API', () => {
   test('rejects malformed, stale, and cross-account review requests with code-only errors', async () => {
     const { artifactService, releaseService, seeded } = await seededReleaseFixture();
     const reviewService = new DeveloperModuleReviewService({
+    permissions: testPermissions,
       repository: createMemoryDeveloperModuleReviewRepository({ releases: [seeded.release] }),
     });
     const app = authenticatedApp({ artifactService, releaseService, reviewService });

@@ -22,6 +22,12 @@ import {
 import { createEd25519ModuleSigningPort } from './module-signing';
 import { type DeveloperModuleRelease, canonicalDeveloperModuleManifestDigest } from './releases';
 
+const testPermissions = {
+  async requirePermission() {
+    return {} as never;
+  },
+};
+
 const PUBLISHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const PROJECT_ACCOUNT_ID = '10000000-0000-4000-a000-000000000009';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000002';
@@ -188,6 +194,7 @@ async function setup(
     })(),
   });
   const distributionService = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
     runtime,
     repository: distributionRepository,
     signer: signingPort,
@@ -297,6 +304,7 @@ test.each(
       published_at: NOW.toISOString(),
     });
     const distributionService = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: createMemoryDeveloperModuleDistributionRepository({ releases: [target] }),
     });
@@ -384,6 +392,7 @@ test('restricted profile lists an existing OCI installation as blocked without t
     runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
     repository: installationRepository,
     releaseService: new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
       repository: distributionRepository,
     }),
@@ -408,6 +417,7 @@ test('module.oci.execute is the specific installation authorization delta for th
     runtime: FUTURE_WASI_RUNTIME_TEST_PROFILE,
     repository: deniedInstallationRepository,
     releaseService: new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime: FUTURE_WASI_RUNTIME_TEST_PROFILE,
       repository: ociSetup.distributionRepository,
     }),
@@ -452,6 +462,7 @@ test.each([
       published_at: NOW.toISOString(),
     });
     const nullDistribution = new DeveloperModuleDistributionService({
+    permissions: testPermissions,
       runtime,
       repository: createMemoryDeveloperModuleDistributionRepository({ releases: [oldNull] }),
     });

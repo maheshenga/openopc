@@ -68,17 +68,28 @@ describe('desktop visible brand and compatibility identity', () => {
     ).toBe('https://kortix.example/projects');
   });
 
-  test('packages installers and shortcuts under the OpenOPC product name', () => {
+  test('packages installers and shortcuts under OpenOPC ownership', () => {
     const packageJson = JSON.parse(readDesktopFile('package.json'));
     const builder = readDesktopFile('electron-builder.yml');
+    const readme = readDesktopFile('README.md');
 
     expect(packageJson.productName).toBe('OpenOPC');
     expect(packageJson.description).toContain('OpenOPC');
-    expect(packageJson.author).toBe('Kortix AI Corp');
+    expect(packageJson.author).toBe('OpenOPC');
+    expect(packageJson.repository).toBe('https://github.com/maheshenga/openopc');
     expect(topLevelYamlScalar(builder, 'productName')).toBe('OpenOPC');
-    expect(topLevelYamlScalar(builder, 'copyright')).toBe('© Kortix AI Corp');
+    expect(topLevelYamlScalar(builder, 'copyright')).toBe('© OpenOPC');
+    expect(builder).toMatch(
+      /publish:\s*[\s\S]*provider: github\s*[\s\S]*owner: maheshenga\s*[\s\S]*repo: openopc/,
+    );
     expect(builder).toContain('title: OpenOPC ${version}');
     expect(builder).toContain('artifactName: ${productName}-Setup-${version}.${ext}');
+    expect(readme).toContain('maheshenga/openopc');
+
+    for (const source of [JSON.stringify(packageJson), builder, readme]) {
+      expect(source).not.toContain('Kortix AI Corp');
+      expect(source).not.toContain('kortix-ai/suna');
+    }
   });
 
   test('shows OpenOPC while the native shell starts', () => {

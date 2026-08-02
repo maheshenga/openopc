@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "OpenOPC desktop shell — Electron wrapper around the web app",
-  "author": "Kortix AI Corp",
-  "repository": "https://github.com/kortix-ai/suna",
+  "author": "OpenOPC",
+  "repository": "https://github.com/maheshenga/openopc",
   "main": "src/main.js",
   "scripts": {
     "build:sidecar": "pnpm --filter @openopc/desktop-agent build:sidecar",

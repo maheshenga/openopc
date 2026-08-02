@@ -46,6 +46,11 @@ OPENOPC_DESKTOP_URL=https://app.openopc.example/projects pnpm --filter @kortix/d
 `OPENOPC_DESKTOP_URL` is for unpackaged local runs. Release workflows read the
 `OPENOPC_WEB_URL` repository variable and bake it into packaged metadata.
 
+When `OPENOPC_WEB_URL` is absent, the Desktop workflow records a successful
+`Desktop release deferred` preflight and skips platform runners, artifacts,
+tags, and prerelease publication. Configuring a non-empty value re-enables the
+strict canonical HTTPS `/projects` validation before any installer build starts.
+
 At runtime you can also switch via the native **OpenOPC → Frontend URL** menu.
 Unpackaged development runs include Local / Custom… / Reset; packaged builds
 expose only HTTPS Custom… / Reset. The choice is remembered across launches
@@ -80,7 +85,8 @@ notarization are env-driven (`CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_API_KEY*`,
 
 The installed app self-updates via **electron-updater**, reading the `vX.Y.Z`
 **GitHub Releases** as its feed (the `publish: github` block in
-`electron-builder.yml` bakes an `app-update.yml` pointing at `kortix-ai/suna`).
+`electron-builder.yml` bakes an `app-update.yml` pointing at
+`maheshenga/openopc`).
 
 Flow (`src/updater.js`, wired from `src/main.js`):
 

@@ -57,6 +57,15 @@ test('project(id).modules binds project module lifecycle endpoints', async () =>
   ]);
 });
 
+test('project(id).modules binds the launch descriptor endpoint', async () => {
+  await kortix.project('PID123').modules.launch('INSTALL1');
+
+  expect(last()).toMatchObject({
+    url: 'http://test.local/projects/PID123/modules/INSTALL1/launch',
+    method: 'GET',
+  });
+});
+
 test('project(id).intelligence binds capability, task, and workflow endpoints', async () => {
   globalThis.fetch = mock(async (url: unknown, opts: { method?: string; body?: unknown } = {}) => {
     const requestUrl = String(url);

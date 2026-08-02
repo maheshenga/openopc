@@ -47,6 +47,17 @@ export interface ProjectModuleHistoryResponse {
   history: ProjectModuleInstallationEvent[];
 }
 
+export interface ProjectModuleLaunchDescriptor {
+  installation_id: string;
+  release_id: string;
+  install_revision: number;
+  module_id: string;
+  module_version: string;
+  execution_mode: 'sandboxed-web';
+  url: string;
+  origin: string;
+}
+
 export interface ProjectModuleInstallInput {
   release_id: string;
   expected_install_revision: 0;
@@ -71,7 +82,12 @@ export type ProjectModuleErrorCode =
   | 'DEVELOPER_MODULE_NOT_DISTRIBUTABLE'
   | 'DEVELOPER_MODULE_NOT_PUBLISHED'
   | 'DEVELOPER_MODULE_REVOKED'
-  | 'DEVELOPER_RELEASE_NOT_FOUND';
+  | 'DEVELOPER_RELEASE_NOT_FOUND'
+  | 'PROJECT_MODULE_INACTIVE'
+  | 'PROJECT_MODULE_NOT_LAUNCHABLE'
+  | 'PROJECT_MODULE_LAUNCH_STALE'
+  | 'PROJECT_MODULE_HOST_UNAVAILABLE'
+  | 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE';
 
 export interface ProjectModuleErrorResponse {
   error: ProjectModuleErrorCode;
@@ -105,6 +121,19 @@ export async function listProjectModuleInstallationHistory(
       `${projectPath(projectId)}/${encodeURIComponent(moduleId)}/history`,
     ),
     'Failed to list project module history',
+  );
+}
+
+/** Get the server-issued launch descriptor for one installed project module. */
+export async function getProjectModuleLaunch(
+  projectId: string,
+  installationId: string,
+): Promise<ProjectModuleLaunchDescriptor> {
+  return unwrap(
+    await backendApi.get<ProjectModuleLaunchDescriptor>(
+      `${projectPath(projectId)}/${encodeURIComponent(installationId)}/launch`,
+    ),
+    'Failed to launch project module',
   );
 }
 

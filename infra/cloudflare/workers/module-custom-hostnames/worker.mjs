@@ -79,6 +79,13 @@ function platformOrigin(env) {
   }
 }
 
+function hasPlatformConfiguration(env) {
+  return (
+    env?.OPENOPC_MODULE_APP_BASE_DOMAIN !== undefined ||
+    env?.OPENOPC_MODULE_HOST_ORIGIN !== undefined
+  );
+}
+
 function customHostnameOrigin(env) {
   if (typeof env?.OPENOPC_MODULE_CUSTOM_HOSTNAME_ORIGIN !== 'string') return null;
   if (typeof env?.OPENOPC_MODULE_CUSTOM_HOSTNAME_SUFFIX !== 'string') return null;
@@ -162,16 +169,18 @@ async function forwardToModuleOrigin(request, target, internalKey, identityHeade
 export default {
   async fetch(request, env) {
     const incoming = new URL(request.url);
+    const configuredPlatformOrigin = platformOrigin(env);
+    if (hasPlatformConfiguration(env) && !configuredPlatformOrigin) {
+      return configurationError();
+    }
     const releaseId = platformReleaseId(
       incoming.hostname,
       env?.OPENOPC_MODULE_APP_BASE_DOMAIN,
     );
     if (releaseId) {
-      const origin = platformOrigin(env);
-      if (!origin) return configurationError();
       if (incoming.protocol !== 'https:') return redirectToHttps(incoming);
 
-      const target = new URL(origin);
+      const target = new URL(configuredPlatformOrigin);
       target.pathname = `/v1/module-host/platform/releases/${releaseId}${
         incoming.pathname === '/' ? '' : incoming.pathname
       }`;

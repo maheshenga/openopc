@@ -132,6 +132,29 @@ describe('module custom hostname worker', () => {
     }
   });
 
+  test('does not fall through to the custom resolver when platform configuration is present but invalid', async () => {
+    const requests = [];
+    globalThis.fetch = async (request) => {
+      requests.push(request.clone());
+      return Response.json({
+        binding_id: BINDING_ID,
+        route_path: `/v1/module-host/releases/${RELEASE_ID}`,
+      });
+    };
+
+    const response = await worker.fetch(
+      new Request(`https://r-${RELEASE_ID}.modules.openopc.example/`),
+      {
+        ...env,
+        OPENOPC_MODULE_APP_BASE_DOMAIN: 'Modules.openopc.example',
+        OPENOPC_MODULE_HOST_ORIGIN: 'https://module-origin.openopc.example',
+      },
+    );
+
+    assert.equal(response.status, 500);
+    assert.equal(requests.length, 0);
+  });
+
   test('preserves a platform POST body and query while replacing forged identities', async () => {
     let upstreamBody = '';
     globalThis.fetch = async (request) => {

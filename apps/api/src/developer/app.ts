@@ -220,7 +220,7 @@ const DeveloperModuleTrustQuerySchema = z
   .strict();
 const DigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/);
 
-const DeveloperOrganizationSchema = z.object({
+export const DeveloperOrganizationSchema = z.object({
   organization_id: z.string().uuid(),
   account_id: z.string().uuid(),
   name: z.string(),

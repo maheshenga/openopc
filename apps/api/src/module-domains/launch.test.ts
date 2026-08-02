@@ -209,11 +209,22 @@ test.each([
 
 test.each([
   [
-    'declarative profile',
+    'unsupported execution mode',
     launchCandidate({
       manifest: {
         ...sandboxedWebManifest(),
-        execution: { mode: 'declarative' },
+        execution: {
+          mode: 'declarative',
+          entry: 'dist/index.html',
+        } as unknown as RegistryModuleManifest['execution'],
+      },
+    }),
+  ],
+  [
+    'unsupported verification profile',
+    launchCandidate({
+      manifest: {
+        ...sandboxedWebManifest(),
         verification: { profile: 'declarative' },
       },
     }),

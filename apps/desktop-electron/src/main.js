@@ -667,10 +667,9 @@ function registerIpc() {
       case 'get_frontend_url':
         return resolveAppUrl();
       case 'set_frontend_url': {
-        const raw = String(args.url || '').trim();
+        const raw = args.url;
         if (!raw) throw new Error('URL is empty');
-        const candidate = raw.includes('://') ? raw : `https://${raw}`;
-        const normalized = normalizeOpenOpcDesktopUrl(candidate, {
+        const normalized = normalizeOpenOpcDesktopUrl(raw, {
           allowLoopback: app.isPackaged !== true,
         });
         if (!normalized) throw new Error('Invalid OpenOPC Web URL');

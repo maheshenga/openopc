@@ -55,10 +55,21 @@ export function platformReleaseId(hostname, baseDomain) {
     : null;
 }
 
+function isPlatformNamespace(hostname, baseDomain) {
+  if (!canonicalBaseDomain(baseDomain)) return false;
+  return hostname === baseDomain || hostname.endsWith(`.${baseDomain}`);
+}
+
+function hasExplicitHttpsPort(value) {
+  const authority = /^https:\/\/([^/?#]*)/i.exec(value)?.[1];
+  return typeof authority === 'string' && /:\d+$/.test(authority);
+}
+
 function platformOrigin(env) {
   if (!canonicalBaseDomain(env?.OPENOPC_MODULE_APP_BASE_DOMAIN)) return null;
   if (!validInternalKey(env)) return null;
   if (typeof env?.OPENOPC_MODULE_HOST_ORIGIN !== 'string') return null;
+  if (hasExplicitHttpsPort(env.OPENOPC_MODULE_HOST_ORIGIN)) return null;
   try {
     const origin = new URL(env.OPENOPC_MODULE_HOST_ORIGIN);
     if (
@@ -192,6 +203,9 @@ export default {
         'X-OpenOPC-Module-Release',
         releaseId,
       );
+    }
+    if (isPlatformNamespace(incoming.hostname, env.OPENOPC_MODULE_APP_BASE_DOMAIN)) {
+      return notFound();
     }
 
     const origin = customHostnameOrigin(env);

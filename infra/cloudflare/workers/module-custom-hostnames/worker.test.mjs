@@ -90,21 +90,25 @@ describe('module custom hostname worker', () => {
     }
   });
 
-  test('fails closed for platform-looking hosts that are not exact canonical release hosts', async () => {
+  test('reserves the platform namespace before custom resolution in dual mode', async () => {
     for (const url of [
       'https://r-40000000-0000-6000-a000-000000000004.modules.openopc.example/',
       `https://r-${RELEASE_ID}.extra.modules.openopc.example/`,
-      `https://r-${RELEASE_ID}.modules.openopc.example.attacker.example/`,
+      'https://customer.modules.openopc.example/',
       'https://modules.openopc.example/',
     ]) {
-      let fetched = false;
-      globalThis.fetch = async () => {
-        fetched = true;
-        return new Response('unexpected');
+      const requests = [];
+      globalThis.fetch = async (request) => {
+        requests.push(request.clone());
+        return Response.json({
+          binding_id: BINDING_ID,
+          route_path: `/v1/module-host/releases/${RELEASE_ID}`,
+        });
       };
-      const response = await worker.fetch(new Request(url), platformEnv);
-      assert.equal(response.status, 500);
-      assert.equal(fetched, false);
+      const response = await worker.fetch(new Request(url), { ...env, ...platformEnv });
+      assert.equal(response.status, 404);
+      assert.equal(await response.text(), 'Not Found');
+      assert.equal(requests.length, 0);
     }
   });
 
@@ -112,6 +116,7 @@ describe('module custom hostname worker', () => {
     for (const invalidEnv of [
       { ...platformEnv, INTERNAL_SERVICE_KEY: '' },
       { ...platformEnv, OPENOPC_MODULE_HOST_ORIGIN: 'http://module-origin.openopc.example' },
+      { ...platformEnv, OPENOPC_MODULE_HOST_ORIGIN: 'https://module-origin.openopc.example:443' },
       { ...platformEnv, OPENOPC_MODULE_HOST_ORIGIN: 'https://module-origin.openopc.example/path' },
       { ...platformEnv, OPENOPC_MODULE_APP_BASE_DOMAIN: 'https://modules.openopc.example' },
       { ...platformEnv, OPENOPC_MODULE_APP_BASE_DOMAIN: 'modules.openopc.example:443' },

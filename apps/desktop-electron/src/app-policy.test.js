@@ -119,6 +119,39 @@ describe('desktop visible brand and compatibility identity', () => {
     expect(desktopWorkflow).not.toContain('productName="Kortix Dev"');
     expect(productionWorkflow).toContain('--arg header "🚀 OpenOPC ${TAG} is live (EKS)"');
   });
+
+  test('defers desktop publication until an operator-owned Web URL exists', () => {
+    const desktopWorkflow = readRepoFile(path.join('.github', 'workflows', 'desktop.yml'));
+    const preflightStart = desktopWorkflow.indexOf('\n  preflight:\n');
+    const buildStart = desktopWorkflow.indexOf('\n  build:\n');
+    const publishStart = desktopWorkflow.indexOf('\n  publish:\n');
+
+    expect(preflightStart).not.toBe(-1);
+    expect(buildStart).toBeGreaterThan(preflightStart);
+    expect(publishStart).toBeGreaterThan(buildStart);
+
+    const preflightBlock = desktopWorkflow.slice(preflightStart, buildStart);
+    const buildBlock = desktopWorkflow.slice(buildStart, publishStart);
+
+    expect(preflightBlock).toContain('name: Desktop release preflight');
+    expect(preflightBlock).toContain('enabled: ${{ steps.release.outputs.enabled }}');
+    expect(preflightBlock).toContain('if [ -z "$DESKTOP_URL" ]; then');
+    expect(preflightBlock).toContain('echo "configured=false" >> "$GITHUB_OUTPUT"');
+    expect(preflightBlock).toContain('echo "configured=true" >> "$GITHUB_OUTPUT"');
+    expect(preflightBlock).toContain('## Desktop release deferred');
+    expect(preflightBlock).toContain("if: steps.config.outputs.configured == 'true'");
+    expect(preflightBlock).toContain('normalizeOpenOpcReleaseUrl');
+    expect(preflightBlock.indexOf('normalizeOpenOpcReleaseUrl')).toBeLessThan(
+      preflightBlock.indexOf('id: release'),
+    );
+    expect(buildBlock).not.toContain('- name: Validate OpenOPC Web URL');
+    expect(desktopWorkflow).toContain("if: needs.preflight.outputs.enabled == 'true'");
+    expect(desktopWorkflow).toContain('needs: [preflight, build]');
+    expect(desktopWorkflow).toContain(
+      "if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.enabled == 'true' && needs.build.result != 'cancelled'",
+    );
+    expect(desktopWorkflow.match(/- name: Validate OpenOPC Web URL/g)).toHaveLength(1);
+  });
 });
 
 describe('desktop protocol registration policy', () => {

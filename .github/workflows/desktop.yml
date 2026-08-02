@@ -32,8 +32,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  preflight:
+    name: Desktop release preflight
+    runs-on: ubuntu-22.04
+    env:
+      DESKTOP_URL: ${{ vars.OPENOPC_WEB_URL }}
+    outputs:
+      enabled: ${{ steps.release.outputs.enabled }}
+    steps:
+      - name: Inspect OpenOPC Web URL configuration
+        id: config
+        shell: bash
+        run: |
+          if [ -z "$DESKTOP_URL" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Desktop release deferred"
+              echo
+              echo '`OPENOPC_WEB_URL` is not configured, so installer build and publication were skipped.'
+              echo 'Configure it to the canonical HTTPS `/projects` URL after Web deployment is ready.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.config.outputs.configured == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.config.outputs.configured == 'true'
+        with:
+          node-version: 22
+
+      - name: Validate OpenOPC Web URL
+        if: steps.config.outputs.configured == 'true'
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { normalizeOpenOpcReleaseUrl } = require('./apps/desktop-electron/src/app-policy');
+          const value = process.env.DESKTOP_URL || '';
+          if (!normalizeOpenOpcReleaseUrl(value)) {
+            throw new Error('OPENOPC_WEB_URL must be canonical HTTPS with the exact /projects path');
+          }
+          NODE
+
+      - name: Export Desktop release gate
+        id: release
+        if: success()
+        shell: bash
+        env:
+          CONFIGURED: ${{ steps.config.outputs.configured }}
+        run: echo "enabled=$CONFIGURED" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build dev desktop ${{ matrix.target_pretty }}
+    needs: preflight
+    if: needs.preflight.outputs.enabled == 'true'
     runs-on: ${{ matrix.runner }}
     env:
       # Baked into the app after validating the operator-owned OpenOPC Web URL.
@@ -140,17 +194,6 @@ jobs:
       - name: Prepare Electron runtime and sidecar
         run: pnpm --filter @kortix/desktop-electron run setup
 
-      - name: Validate OpenOPC Web URL
-        shell: bash
-        run: |
-          node <<'NODE'
-          const { normalizeOpenOpcReleaseUrl } = require('./apps/desktop-electron/src/app-policy');
-          const value = process.env.DESKTOP_URL || '';
-          if (!normalizeOpenOpcReleaseUrl(value)) {
-            throw new Error('OPENOPC_WEB_URL must be canonical HTTPS with the exact /projects path');
-          }
-          NODE
-
       - name: Build desktop installer (Electron)
         shell: bash
         run: |
@@ -191,10 +234,10 @@ jobs:
   # ── Publish/refresh the mutable `desktop-dev-latest` prerelease ─────────────
   publish:
     name: Publish desktop-dev-latest
-    needs: build
+    needs: [preflight, build]
     # Publish whatever installers built — a single OS's signing failure shouldn't
     # discard the others.
-    if: always() && needs.build.result != 'cancelled'
+    if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.enabled == 'true' && needs.build.result != 'cancelled'
     runs-on: ubuntu-22.04
     permissions:
       contents: write

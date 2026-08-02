@@ -68,17 +68,28 @@ describe('desktop visible brand and compatibility identity', () => {
     ).toBe('https://kortix.example/projects');
   });
 
-  test('packages installers and shortcuts under the OpenOPC product name', () => {
+  test('packages installers and shortcuts under OpenOPC ownership', () => {
     const packageJson = JSON.parse(readDesktopFile('package.json'));
     const builder = readDesktopFile('electron-builder.yml');
+    const readme = readDesktopFile('README.md');
 
     expect(packageJson.productName).toBe('OpenOPC');
     expect(packageJson.description).toContain('OpenOPC');
-    expect(packageJson.author).toBe('Kortix AI Corp');
+    expect(packageJson.author).toBe('OpenOPC');
+    expect(packageJson.repository).toBe('https://github.com/maheshenga/openopc');
     expect(topLevelYamlScalar(builder, 'productName')).toBe('OpenOPC');
-    expect(topLevelYamlScalar(builder, 'copyright')).toBe('© Kortix AI Corp');
+    expect(topLevelYamlScalar(builder, 'copyright')).toBe('© OpenOPC');
+    expect(builder).toMatch(
+      /publish:\s*[\s\S]*provider: github\s*[\s\S]*owner: maheshenga\s*[\s\S]*repo: openopc/,
+    );
     expect(builder).toContain('title: OpenOPC ${version}');
     expect(builder).toContain('artifactName: ${productName}-Setup-${version}.${ext}');
+    expect(readme).toContain('maheshenga/openopc');
+
+    for (const source of [JSON.stringify(packageJson), builder, readme]) {
+      expect(source).not.toContain('Kortix AI Corp');
+      expect(source).not.toContain('kortix-ai/suna');
+    }
   });
 
   test('shows OpenOPC while the native shell starts', () => {
@@ -118,6 +129,39 @@ describe('desktop visible brand and compatibility identity', () => {
     expect(desktopWorkflow).toContain('--config.extraMetadata.productName="OpenOPC Dev"');
     expect(desktopWorkflow).not.toContain('productName="Kortix Dev"');
     expect(productionWorkflow).toContain('--arg header "🚀 OpenOPC ${TAG} is live (EKS)"');
+  });
+
+  test('defers desktop publication until an operator-owned Web URL exists', () => {
+    const desktopWorkflow = readRepoFile(path.join('.github', 'workflows', 'desktop.yml'));
+    const preflightStart = desktopWorkflow.indexOf('\n  preflight:\n');
+    const buildStart = desktopWorkflow.indexOf('\n  build:\n');
+    const publishStart = desktopWorkflow.indexOf('\n  publish:\n');
+
+    expect(preflightStart).not.toBe(-1);
+    expect(buildStart).toBeGreaterThan(preflightStart);
+    expect(publishStart).toBeGreaterThan(buildStart);
+
+    const preflightBlock = desktopWorkflow.slice(preflightStart, buildStart);
+    const buildBlock = desktopWorkflow.slice(buildStart, publishStart);
+
+    expect(preflightBlock).toContain('name: Desktop release preflight');
+    expect(preflightBlock).toContain('enabled: ${{ steps.release.outputs.enabled }}');
+    expect(preflightBlock).toContain('if [ -z "$DESKTOP_URL" ]; then');
+    expect(preflightBlock).toContain('echo "configured=false" >> "$GITHUB_OUTPUT"');
+    expect(preflightBlock).toContain('echo "configured=true" >> "$GITHUB_OUTPUT"');
+    expect(preflightBlock).toContain('## Desktop release deferred');
+    expect(preflightBlock).toContain("if: steps.config.outputs.configured == 'true'");
+    expect(preflightBlock).toContain('normalizeOpenOpcReleaseUrl');
+    expect(preflightBlock.indexOf('normalizeOpenOpcReleaseUrl')).toBeLessThan(
+      preflightBlock.indexOf('id: release'),
+    );
+    expect(buildBlock).not.toContain('- name: Validate OpenOPC Web URL');
+    expect(desktopWorkflow).toContain("if: needs.preflight.outputs.enabled == 'true'");
+    expect(desktopWorkflow).toContain('needs: [preflight, build]');
+    expect(desktopWorkflow).toContain(
+      "if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.enabled == 'true' && needs.build.result != 'cancelled'",
+    );
+    expect(desktopWorkflow.match(/- name: Validate OpenOPC Web URL/g)).toHaveLength(1);
   });
 });
 

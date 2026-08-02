@@ -7,7 +7,7 @@
 # unsigned local builds work for testing; CI injects the secrets.
 appId: com.kortix.desktop
 productName: OpenOPC
-copyright: © Kortix AI Corp
+copyright: © OpenOPC
 
 # Publish target. We never auto-publish from electron-builder (CI uploads the
 # artifacts itself with --publish never), but a concrete provider is REQUIRED:
@@ -15,8 +15,8 @@ copyright: © Kortix AI Corp
 # crashes generating update metadata (computeChannelNames → channel of null).
 publish:
   provider: github
-  owner: kortix-ai
-  repo: suna
+  owner: maheshenga
+  repo: openopc
 
 directories:
   output: dist

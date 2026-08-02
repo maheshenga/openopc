@@ -131,7 +131,7 @@ export function ProjectModuleHostView({
         ref={iframeRef}
         src={descriptor.url}
         title={`${release.item_name} module`}
-        sandbox="allow-scripts allow-same-origin"
+        sandbox="allow-scripts allow-forms allow-same-origin"
         referrerPolicy="no-referrer"
         className="min-h-0 w-full flex-1 border-0 bg-background"
       />

@@ -68,7 +68,7 @@ describe('project module host view', () => {
     expect(html).toContain(DESCRIPTOR.module_id);
     expect(html).toContain(DESCRIPTOR.module_version);
     expect(html).toContain(`src="${DESCRIPTOR.url}"`);
-    expect(html).toContain('sandbox="allow-scripts allow-same-origin"');
+    expect(html).toContain('sandbox="allow-scripts allow-forms allow-same-origin"');
     expect(html).toContain('referrerPolicy="no-referrer"');
     expect(html).toContain('title="Recruiting workflow module"');
     expect(html).not.toContain('allow-top-navigation');

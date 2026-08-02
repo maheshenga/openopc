@@ -5,15 +5,7 @@ import type {
   ProjectModuleInstallationEvent,
   ProjectModuleInstallationTransition,
 } from '@kortix/sdk';
-import {
-  ExternalLink,
-  History,
-  PackageOpen,
-  RotateCcw,
-  ShieldCheck,
-  Upload,
-  X,
-} from 'lucide-react';
+import { ExternalLink, History, PackageOpen, RotateCcw, ShieldCheck, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 

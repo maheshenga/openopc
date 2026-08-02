@@ -65,7 +65,7 @@ function createHarness(
         return { token: 'v4.public.short-lived', expiresAt: '2026-08-01T00:05:00.000Z' };
       }),
     now: () => Date.parse('2026-08-01T00:00:00.000Z'),
-    maxRequestsPerMinute: overrides.maxRequestsPerMinute ?? 2,
+    maxRequestsPerMinute: overrides.maxRequestsPerMinute,
   });
   return {
     bridge,
@@ -127,7 +127,7 @@ describe('module service host bridge', () => {
   });
 
   test('rejects foreign origins, invalid request ids, and requests beyond the per-installation limit', async () => {
-    const { bridge, calls, source } = createHarness();
+    const { bridge, calls, source } = createHarness({ maxRequestsPerMinute: 2 });
 
     await expect(
       bridge.handleMessage({ ...request(source), origin: 'https://attacker.example' }),
@@ -180,7 +180,7 @@ describe('module service host bridge', () => {
   });
 
   test('enforces the default 30 request per minute limit', async () => {
-    const { bridge, calls, source } = createHarness({ maxRequestsPerMinute: 30 });
+    const { bridge, calls, source } = createHarness();
 
     for (let index = 1; index <= 31; index += 1) {
       await bridge.handleMessage(

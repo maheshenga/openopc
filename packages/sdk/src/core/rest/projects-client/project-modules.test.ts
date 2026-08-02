@@ -2,6 +2,7 @@ import { beforeEach, expect, mock, test } from 'bun:test';
 
 import { configureKortix } from '../../http/config';
 import {
+  type ProjectModuleErrorCode,
   type ProjectModuleErrorResponse,
   getProjectModuleLaunch,
   installProjectModule,
@@ -54,6 +55,24 @@ test('project module wire types expose transition and stable error-code shapes',
   };
 
   expect(error.error).toBe('PROJECT_MODULE_INSTALL_CONFLICT');
+});
+
+test('project module launch error codes remain stable', () => {
+  const codes = [
+    'PROJECT_MODULE_INACTIVE',
+    'PROJECT_MODULE_NOT_LAUNCHABLE',
+    'PROJECT_MODULE_LAUNCH_STALE',
+    'PROJECT_MODULE_HOST_UNAVAILABLE',
+    'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+  ] as const satisfies readonly ProjectModuleErrorCode[];
+
+  expect(codes).toEqual([
+    'PROJECT_MODULE_INACTIVE',
+    'PROJECT_MODULE_NOT_LAUNCHABLE',
+    'PROJECT_MODULE_LAUNCH_STALE',
+    'PROJECT_MODULE_HOST_UNAVAILABLE',
+    'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+  ]);
 });
 
 test('project module launch encodes the installation and returns the server descriptor', async () => {

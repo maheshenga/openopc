@@ -17,12 +17,18 @@ import {
 } from '../module-domains/cloudflare';
 import {
   ModuleCustomDomainStaticHostService,
+  ModulePlatformStaticHostService,
   createModuleCustomDomainHostRoutes,
+  parseModuleFrameAncestors,
 } from '../module-domains/host';
-import { createDrizzleModuleCustomDomainHostRepository } from '../module-domains/host.drizzle';
+import {
+  createDrizzleModuleCustomDomainHostRepository,
+  createDrizzleModulePlatformHostRepository,
+} from '../module-domains/host.drizzle';
 import { ProjectModuleLaunchService } from '../module-domains/launch';
 import { createDrizzleProjectModuleLaunchRepository } from '../module-domains/launch.drizzle';
 import { parseModuleAppHostConfiguration } from '../module-domains/platform-host-config';
+import { StaticModuleReleaseReader } from '../module-domains/static-release-reader';
 import { createRuntimeArtifactS3Store } from '../module-runtime/runtime-artifacts.s3';
 import { loadRuntimeReleaseProfile } from '../release-profile/runtime';
 import { db } from '../shared/db';
@@ -234,6 +240,12 @@ const moduleCustomDomainOperatorConfig = parseModuleDomainOperatorConfig({
 export const moduleCustomDomainBindingRepository =
   createDrizzleModuleCustomDomainBindingRepository(db);
 const moduleCustomDomainHostRepository = createDrizzleModuleCustomDomainHostRepository(db);
+const staticModuleReleaseReader = new StaticModuleReleaseReader({ artifactStore });
+const modulePlatformHostRepository = createDrizzleModulePlatformHostRepository(db);
+export const modulePlatformHostService = new ModulePlatformStaticHostService({
+  repository: modulePlatformHostRepository,
+  reader: staticModuleReleaseReader,
+});
 export const moduleCustomDomainBindingService = moduleCustomDomainOperatorConfig
   ? new ModuleCustomDomainBindingService({
       repository: moduleCustomDomainBindingRepository,
@@ -251,7 +263,7 @@ export const moduleCustomDomainBindingService = moduleCustomDomainOperatorConfig
 export const moduleCustomDomainHostService = moduleCustomDomainOperatorConfig
   ? new ModuleCustomDomainStaticHostService({
       repository: moduleCustomDomainHostRepository,
-      artifactStore,
+      reader: staticModuleReleaseReader,
     })
   : null;
 export const moduleCustomDomainInternalApp = createModuleCustomDomainInternalRoutes({
@@ -260,6 +272,8 @@ export const moduleCustomDomainInternalApp = createModuleCustomDomainInternalRou
 });
 export const moduleCustomDomainHostApp = createModuleCustomDomainHostRoutes({
   hostService: moduleCustomDomainHostService,
+  platformHostService: modulePlatformHostService,
+  frameAncestors: parseModuleFrameAncestors([config.FRONTEND_URL]),
   internalServiceKey: config.INTERNAL_SERVICE_KEY,
   environment: config.INTERNAL_KORTIX_ENV,
   runtime: loadRuntimeReleaseProfile(),

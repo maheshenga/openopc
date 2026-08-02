@@ -1,30 +1,24 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 
-import { readRegistryModuleManifest } from '@kortix/registry';
-
-import {
-  type DeveloperArtifactStore,
-  parseDeveloperModuleArtifactPackage,
-  readDeveloperArtifactBytes,
-} from '../developer/artifacts';
 import { makeOpenApiApp } from '../openapi';
 import { rejectUnavailableCapability } from '../release-profile/routes';
 import type { RuntimeReleaseProfile } from '../release-profile/runtime';
 import type { AppEnv } from '../types';
 import type { ModuleCustomDomainEnvironment } from './bindings';
+import {
+  STATIC_MODULE_RELEASE_MAX_ARTIFACT_BYTES,
+  type StaticModuleRelease,
+  type StaticModuleReleaseReader,
+} from './static-release-reader';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SHA256_RE = /^sha256:[0-9a-f]{64}$/;
-export const MODULE_CUSTOM_DOMAIN_MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const CANONICAL_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+export const MODULE_CUSTOM_DOMAIN_MAX_ARTIFACT_BYTES = STATIC_MODULE_RELEASE_MAX_ARTIFACT_BYTES;
 
-export interface ModuleCustomDomainStaticRelease {
+export interface ModuleCustomDomainStaticRelease extends StaticModuleRelease {
   environment: ModuleCustomDomainEnvironment;
   bindingId: string;
-  releaseId: string;
-  storageKey: string;
-  artifactDigest: `sha256:${string}`;
-  artifactSize: number;
-  entryPath: string;
 }
 
 export interface ModuleCustomDomainHostRepository {
@@ -35,71 +29,53 @@ export interface ModuleCustomDomainHostRepository {
   }): Promise<ModuleCustomDomainStaticRelease | null>;
 }
 
-type StaticModuleAsset = Readonly<{
-  bytes: Uint8Array;
-  contentType: string;
-}>;
+export interface ModulePlatformHostRepository {
+  loadPublishedSandboxedWebRelease(input: {
+    releaseId: string;
+  }): Promise<StaticModuleRelease | null>;
+}
 
 function safeEqual(left: string, right: string): boolean {
-  const leftBytes = Buffer.from(left);
-  const rightBytes = Buffer.from(right);
-  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
+  const leftDigest = createHash('sha256').update(left).digest();
+  const rightDigest = createHash('sha256').update(right).digest();
+  return timingSafeEqual(leftDigest, rightDigest);
 }
 
-function digest(bytes: Uint8Array): `sha256:${string}` {
-  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-}
-
-function normalizedAssetPath(value: string, entryPath: string): string | null {
-  const requested = value.replace(/^\/+/, '');
-  if (!requested) return entryPath;
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(requested);
-  } catch {
-    return null;
+export function parseModuleFrameAncestors(
+  values: readonly (string | undefined)[],
+): readonly string[] {
+  const origins = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    try {
+      const url = new URL(value);
+      const loopback =
+        url.hostname === 'localhost' ||
+        url.hostname === '[::1]' ||
+        /^127(?:\.[0-9]{1,3}){3}$/.test(url.hostname);
+      if (
+        url.username ||
+        url.password ||
+        url.search ||
+        url.hash ||
+        url.pathname !== '/' ||
+        (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))
+      ) {
+        continue;
+      }
+      origins.add(url.origin);
+    } catch {
+      // Invalid operator configuration is omitted from the frame policy.
+    }
   }
-  if (
-    decoded.length === 0 ||
-    decoded.length > 512 ||
-    decoded.includes('\\') ||
-    decoded.includes('\0') ||
-    decoded.split('/').some((segment) => !segment || segment === '.' || segment === '..')
-  ) {
-    return null;
-  }
-  return decoded;
+  return [...origins];
 }
 
-function contentTypeFor(path: string): string {
-  const extension = path.slice(path.lastIndexOf('.')).toLowerCase();
-  return (
-    {
-      '.css': 'text/css; charset=utf-8',
-      '.gif': 'image/gif',
-      '.html': 'text/html; charset=utf-8',
-      '.ico': 'image/x-icon',
-      '.jpeg': 'image/jpeg',
-      '.jpg': 'image/jpeg',
-      '.js': 'text/javascript; charset=utf-8',
-      '.json': 'application/json; charset=utf-8',
-      '.mjs': 'text/javascript; charset=utf-8',
-      '.png': 'image/png',
-      '.svg': 'image/svg+xml',
-      '.txt': 'text/plain; charset=utf-8',
-      '.wasm': 'application/wasm',
-      '.webp': 'image/webp',
-      '.woff': 'font/woff',
-      '.woff2': 'font/woff2',
-    }[extension] ?? 'application/octet-stream'
-  );
-}
-
-function staticHostHeaders(contentType: string): Headers {
+function staticHostHeaders(contentType: string, frameAncestors: readonly string[]): Headers {
+  const framePolicy = frameAncestors.length > 0 ? frameAncestors.join(' ') : "'none'";
   return new Headers({
     'cache-control': 'no-store',
-    'content-security-policy':
-      "default-src 'self' data: blob:; base-uri 'none'; object-src 'none'; connect-src 'self'; form-action 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'",
+    'content-security-policy': `default-src 'self' data: blob:; base-uri 'none'; object-src 'none'; connect-src 'self'; form-action 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; frame-ancestors ${framePolicy}`,
     'content-type': contentType,
     'cross-origin-opener-policy': 'same-origin',
     'referrer-policy': 'no-referrer',
@@ -115,7 +91,7 @@ export class ModuleCustomDomainStaticHostService {
   constructor(
     private readonly input: {
       repository: ModuleCustomDomainHostRepository;
-      artifactStore: Pick<DeveloperArtifactStore, 'readCanonical'>;
+      reader: Pick<StaticModuleReleaseReader, 'read'>;
     },
   ) {}
 
@@ -124,55 +100,37 @@ export class ModuleCustomDomainStaticHostService {
     bindingId: string;
     releaseId: string;
     path: string;
-  }): Promise<StaticModuleAsset | null> {
+  }): ReturnType<StaticModuleReleaseReader['read']> {
     if (!UUID_RE.test(input.bindingId) || !UUID_RE.test(input.releaseId)) return null;
     const release = await this.input.repository.loadActiveSandboxedWebRelease({
       environment: input.environment,
       bindingId: input.bindingId,
       releaseId: input.releaseId,
     });
-    if (
-      !release ||
-      !SHA256_RE.test(release.artifactDigest) ||
-      !Number.isSafeInteger(release.artifactSize) ||
-      release.artifactSize <= 0 ||
-      release.artifactSize > MODULE_CUSTOM_DOMAIN_MAX_ARTIFACT_BYTES
-    ) {
-      return null;
-    }
-    const assetPath = normalizedAssetPath(input.path, release.entryPath);
-    if (!assetPath) return null;
+    if (!release) return null;
+    return this.input.reader.read(release, input.path);
+  }
+}
 
-    let artifactBytes: Uint8Array;
-    try {
-      artifactBytes = await readDeveloperArtifactBytes(
-        this.input.artifactStore.readCanonical(release.storageKey, {
-          maxBytes: MODULE_CUSTOM_DOMAIN_MAX_ARTIFACT_BYTES,
-        }),
-        release.artifactSize,
-      );
-    } catch {
-      return null;
-    }
-    if (digest(artifactBytes) !== release.artifactDigest) return null;
+export class ModulePlatformStaticHostService {
+  constructor(
+    private readonly input: {
+      repository: ModulePlatformHostRepository;
+      reader: Pick<StaticModuleReleaseReader, 'read'>;
+    },
+  ) {}
 
+  async read(input: {
+    releaseId: string;
+    path: string;
+  }): ReturnType<StaticModuleReleaseReader['read']> {
+    if (!CANONICAL_UUID_RE.test(input.releaseId)) return null;
     try {
-      const artifact = parseDeveloperModuleArtifactPackage(artifactBytes);
-      const manifest = readRegistryModuleManifest(artifact.item);
-      if (
-        !manifest ||
-        manifest.execution.mode !== 'sandboxed-web' ||
-        manifest.execution.entry !== release.entryPath
-      ) {
-        return null;
-      }
-      const file = artifact.files?.find(
-        (candidate) =>
-          candidate.target === assetPath &&
-          (candidate.kind === undefined || candidate.kind === 'file'),
-      );
-      if (!file) return null;
-      return { bytes: file.bytes, contentType: contentTypeFor(assetPath) };
+      const release = await this.input.repository.loadPublishedSandboxedWebRelease({
+        releaseId: input.releaseId,
+      });
+      if (!release || release.releaseId !== input.releaseId) return null;
+      return await this.input.reader.read(release, input.path);
     } catch {
       return null;
     }
@@ -181,6 +139,8 @@ export class ModuleCustomDomainStaticHostService {
 
 export interface ModuleCustomDomainHostRouteDependencies {
   hostService: Pick<ModuleCustomDomainStaticHostService, 'read'> | null;
+  platformHostService: Pick<ModulePlatformStaticHostService, 'read'> | null;
+  frameAncestors: readonly string[];
   internalServiceKey: string;
   environment: ModuleCustomDomainEnvironment;
   runtime: RuntimeReleaseProfile;
@@ -190,8 +150,8 @@ export function createModuleCustomDomainHostRoutes(
   dependencies: ModuleCustomDomainHostRouteDependencies,
 ) {
   const app = makeOpenApiApp<AppEnv>();
-  // biome-ignore lint/suspicious/noExplicitAny: Hono's path-specific handler generic is not reusable across both routes.
-  const handle = async (context: any) => {
+  // biome-ignore lint/suspicious/noExplicitAny: Hono's path-specific handler generic is not reusable across routes.
+  const rejectRequest = (context: any): Response | null => {
     const suppliedKey = context.req.header('X-Kortix-Internal-Key') ?? '';
     if (
       dependencies.internalServiceKey.length < 16 ||
@@ -199,27 +159,56 @@ export function createModuleCustomDomainHostRoutes(
     ) {
       return new Response('Unauthorized', { status: 401 });
     }
-    const rejected = rejectUnavailableCapability(
-      context,
-      'module.app.render',
-      dependencies.runtime,
-    );
+    return rejectUnavailableCapability(context, 'module.app.render', dependencies.runtime);
+  };
+  // biome-ignore lint/suspicious/noExplicitAny: Hono's path-specific handler generic is not reusable across both routes.
+  const handleCustomDomain = async (context: any) => {
+    const rejected = rejectRequest(context);
     if (rejected) return rejected;
     if (!dependencies.hostService) return notFound();
     const releaseId = context.req.param('releaseId');
     const bindingId = context.req.header('X-OpenOPC-Module-Domain-Binding') ?? '';
-    const asset = await dependencies.hostService.read({
-      environment: dependencies.environment,
-      bindingId,
+    let asset = null;
+    try {
+      asset = await dependencies.hostService.read({
+        environment: dependencies.environment,
+        bindingId,
+        releaseId,
+        path: context.req.param('*') ?? '',
+      });
+    } catch {
+      return notFound();
+    }
+    return asset
+      ? new Response(Buffer.from(asset.bytes), {
+          headers: staticHostHeaders(asset.contentType, dependencies.frameAncestors),
+        })
+      : notFound();
+  };
+  // biome-ignore lint/suspicious/noExplicitAny: Hono's path-specific handler generic is not reusable across both routes.
+  const handlePlatform = async (context: any) => {
+    const rejected = rejectRequest(context);
+    if (rejected) return rejected;
+    const releaseId = context.req.param('releaseId');
+    const trustedReleaseId = context.req.header('X-OpenOPC-Module-Release') ?? '';
+    if (!CANONICAL_UUID_RE.test(releaseId) || !safeEqual(trustedReleaseId, releaseId)) {
+      return notFound();
+    }
+    if (!dependencies.platformHostService) return notFound();
+    const asset = await dependencies.platformHostService.read({
       releaseId,
       path: context.req.param('*') ?? '',
     });
     return asset
-      ? new Response(Buffer.from(asset.bytes), { headers: staticHostHeaders(asset.contentType) })
+      ? new Response(Buffer.from(asset.bytes), {
+          headers: staticHostHeaders(asset.contentType, dependencies.frameAncestors),
+        })
       : notFound();
   };
-  app.get('/module-host/releases/:releaseId', handle);
-  app.get('/module-host/releases/:releaseId/*', handle);
+  app.get('/module-host/releases/:releaseId', handleCustomDomain);
+  app.get('/module-host/releases/:releaseId/*', handleCustomDomain);
+  app.get('/module-host/platform/releases/:releaseId', handlePlatform);
+  app.get('/module-host/platform/releases/:releaseId/*', handlePlatform);
   return app;
 }
 

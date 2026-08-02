@@ -1,9 +1,11 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 
 import {
   type ModuleServiceBridgeMessage,
+  type ModuleServiceBridgeOptions,
   type ModuleServiceTokenIssueInput,
   type ModuleServiceTokenRequest,
+  attachModuleServiceBridge,
   createModuleServiceBridge,
   createSandboxModuleServiceTokenAdapter,
 } from './module-service-bridge';
@@ -30,7 +32,11 @@ function request(
   };
 }
 
-function createHarness() {
+function createHarness(
+  overrides: Partial<
+    Pick<ModuleServiceBridgeOptions, 'issueToken' | 'maxRequestsPerMinute' | 'resolveCurrentState'>
+  > = {},
+) {
   const calls: ModuleServiceTokenIssueInput[] = [];
   const responses: unknown[] = [];
   const source = { postMessage: (payload: unknown) => responses.push(payload) };
@@ -51,13 +57,15 @@ function createHarness() {
       ai: ['models.read', 'text.generate'],
       payment: ['orders.create'],
     },
-    resolveCurrentState: async () => currentState,
-    issueToken: async (input) => {
-      calls.push(input);
-      return { token: 'v4.public.short-lived', expiresAt: '2026-08-01T00:05:00.000Z' };
-    },
+    resolveCurrentState: overrides.resolveCurrentState ?? (async () => currentState),
+    issueToken:
+      overrides.issueToken ??
+      (async (input) => {
+        calls.push(input);
+        return { token: 'v4.public.short-lived', expiresAt: '2026-08-01T00:05:00.000Z' };
+      }),
     now: () => Date.parse('2026-08-01T00:00:00.000Z'),
-    maxRequestsPerMinute: 2,
+    maxRequestsPerMinute: overrides.maxRequestsPerMinute ?? 2,
   });
   return {
     bridge,
@@ -169,6 +177,93 @@ describe('module service host bridge', () => {
 
     expect(calls).toEqual([]);
     expect(responses).toEqual([]);
+  });
+
+  test('enforces the default 30 request per minute limit', async () => {
+    const { bridge, calls, source } = createHarness({ maxRequestsPerMinute: 30 });
+
+    for (let index = 1; index <= 31; index += 1) {
+      await bridge.handleMessage(
+        request(source, {
+          requestId: `40000000-0000-4000-8000-${index.toString().padStart(12, '0')}`,
+        }),
+      );
+    }
+
+    expect(calls).toHaveLength(30);
+  });
+
+  test('rejects requests when current launch state cannot be resolved', async () => {
+    const { bridge, calls, responses, source } = createHarness({
+      resolveCurrentState: async () => Promise.reject(new Error('launch unavailable')),
+    });
+
+    await expect(bridge.handleMessage(request(source))).resolves.toBe(false);
+    expect(calls).toEqual([]);
+    expect(responses).toEqual([]);
+  });
+
+  test('posts no structured response when consent is absent or revoked', async () => {
+    for (const code of ['MODULE_SERVICE_CONSENT_REQUIRED', 'MODULE_SERVICE_CONSENT_REVOKED']) {
+      const issueToken = mock(async () => Promise.reject(Object.assign(new Error(code), { code })));
+      const { bridge, responses, source } = createHarness({ issueToken });
+
+      await expect(bridge.handleMessage(request(source))).resolves.toBe(false);
+      expect(issueToken).toHaveBeenCalledTimes(1);
+      expect(responses).toEqual([]);
+    }
+  });
+
+  test('rejects expired and overlong issued token lifetimes', async () => {
+    for (const expiresAt of ['2026-08-01T00:00:00.000Z', '2026-08-01T00:05:00.001Z']) {
+      const { bridge, responses, source } = createHarness({
+        issueToken: async () => ({ token: 'v4.public.short-lived', expiresAt }),
+      });
+
+      await expect(bridge.handleMessage(request(source))).resolves.toBe(false);
+      expect(responses).toEqual([]);
+    }
+  });
+
+  test('removes the host message listener during cleanup', async () => {
+    const listeners = new Set<(event: MessageEvent) => void>();
+    const source = { postMessage: () => undefined };
+    const issueToken = mock(async () => ({
+      token: 'v4.public.short-lived',
+      expiresAt: '2026-08-01T00:05:00.000Z',
+    }));
+    const target = {
+      addEventListener(_type: string, listener: EventListenerOrEventListenerObject) {
+        listeners.add(listener as (event: MessageEvent) => void);
+      },
+      removeEventListener(_type: string, listener: EventListenerOrEventListenerObject) {
+        listeners.delete(listener as (event: MessageEvent) => void);
+      },
+    } as unknown as Pick<Window, 'addEventListener' | 'removeEventListener'>;
+    const cleanup = attachModuleServiceBridge(target, {
+      moduleOrigin: MODULE_ORIGIN,
+      moduleSource: source,
+      projectId: PROJECT_ID,
+      installationId: INSTALLATION_ID,
+      releaseId: RELEASE_ID,
+      installRevision: 7,
+      declaredServices: { ai: ['models.read'] },
+      issueToken,
+      resolveCurrentState: async () => ({
+        projectId: PROJECT_ID,
+        installationId: INSTALLATION_ID,
+        releaseId: RELEASE_ID,
+        installRevision: 7,
+      }),
+      now: () => Date.parse('2026-08-01T00:00:00.000Z'),
+    });
+
+    cleanup();
+    for (const listener of listeners) listener(request(source) as unknown as MessageEvent);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(issueToken).not.toHaveBeenCalled();
+    expect(listeners.size).toBe(0);
   });
 
   test('provides the module SDK a strict postMessage getCapabilityToken adapter', async () => {

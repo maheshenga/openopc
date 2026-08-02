@@ -5,7 +5,16 @@ import type {
   ProjectModuleInstallationEvent,
   ProjectModuleInstallationTransition,
 } from '@kortix/sdk';
-import { History, PackageOpen, RotateCcw, ShieldCheck, Upload, X } from 'lucide-react';
+import {
+  ExternalLink,
+  History,
+  PackageOpen,
+  RotateCcw,
+  ShieldCheck,
+  Upload,
+  X,
+} from 'lucide-react';
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 
 import {
@@ -59,7 +68,7 @@ import type {
   OpenOpcServiceOperation,
   PublishedProjectModuleRelease,
 } from './client';
-import { moduleServiceDeclarations } from './client';
+import { isSandboxedWebModuleManifest, moduleServiceDeclarations } from './client';
 import { ModuleServiceConsentDialog } from './module-service-consent-dialog';
 import {
   projectModuleErrorCode,
@@ -117,6 +126,7 @@ function errorMessage(code: string | null): string {
 }
 
 export interface ProjectModulesViewProps {
+  projectId?: string;
   state: ProjectModulesPageState;
   modules: readonly ProjectModuleInstallation[];
   releases: readonly PublishedProjectModuleRelease[];
@@ -142,6 +152,7 @@ export interface ProjectModulesViewProps {
 }
 
 export function ProjectModulesView({
+  projectId,
   state,
   modules,
   releases,
@@ -348,6 +359,18 @@ export function ProjectModulesView({
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-2">
+                        {projectId &&
+                        active &&
+                        isSandboxedWebModuleManifest(activeRelease?.manifest) ? (
+                          <Button asChild size="xs" variant="outline" className="min-h-10">
+                            <Link
+                              href={`/projects/${projectId}/modules/${installation.installation_id}`}
+                            >
+                              <ExternalLink className="size-3.5 shrink-0" />
+                              Open module
+                            </Link>
+                          </Button>
+                        ) : null}
                         <Button
                           type="button"
                           size="xs"
@@ -719,6 +742,7 @@ export function ProjectModulesPage({ projectId }: { projectId: string }) {
 
   return (
     <ProjectModulesView
+      projectId={projectId}
       state={state}
       modules={modules}
       releases={releases}

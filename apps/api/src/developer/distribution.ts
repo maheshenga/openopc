@@ -294,7 +294,10 @@ export class DeveloperModuleDistributionService {
         toStatus: 'signed',
         reason: null,
       });
-      if (replay) return replay;
+      if (replay) {
+        await this.requirePlatformReview(current, input.actorUserId);
+        return replay;
+      }
     }
     const release = assertExpectedRelease(current, input.expectedStatus, input.expectedRevision);
     await this.requirePlatformReview(release, input.actorUserId);
@@ -354,7 +357,10 @@ export class DeveloperModuleDistributionService {
         toStatus: 'published',
         reason: null,
       });
-      if (replay) return replay;
+      if (replay) {
+        await this.requirePlatformReview(current, input.actorUserId);
+        return replay;
+      }
     }
     const release = assertExpectedRelease(current, input.expectedStatus, input.expectedRevision);
     await this.requirePlatformReview(release, input.actorUserId);
@@ -404,7 +410,10 @@ export class DeveloperModuleDistributionService {
         toStatus: 'revoked',
         reason,
       });
-      if (replay) return replay;
+      if (replay) {
+        await this.requirePlatformReview(current, input.actorUserId);
+        return replay;
+      }
     }
     const release = assertExpectedRelease(current, input.expectedStatus, input.expectedRevision);
     await this.requirePlatformReview(release, input.actorUserId);

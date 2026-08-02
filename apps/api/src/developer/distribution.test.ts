@@ -1170,6 +1170,122 @@ test('replays the same successful revoke command idempotently', async () => {
   );
 });
 
+test('rechecks platform-review authority before replaying a completed sign command', async () => {
+  let denied = false;
+  const permissions = {
+    async requirePermission() {
+      if (denied) throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_SUSPENDED', 409);
+      return {} as never;
+    },
+  };
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [release()],
+    now: () => NOW,
+  });
+  const service = new DeveloperModuleDistributionService({
+    permissions,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    repository,
+    signer: signingPort(),
+    trustGate: trustGate(),
+    now: () => NOW,
+  });
+  const command = {
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'approved' as const,
+    expectedRevision: 2,
+  };
+
+  await service.sign(command);
+  denied = true;
+
+  await expect(service.sign(command)).rejects.toMatchObject({
+    code: 'DEVELOPER_PUBLISHER_SUSPENDED',
+    status: 409,
+  });
+  expect(await repository.history(ACCOUNT_ID, RELEASE_ID)).toHaveLength(1);
+});
+
+test('rechecks platform-review authority before replaying a completed publish command', async () => {
+  let denied = false;
+  const permissions = {
+    async requirePermission() {
+      if (denied) throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_SUSPENDED', 409);
+      return {} as never;
+    },
+  };
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [release()],
+    now: () => NOW,
+  });
+  const service = new DeveloperModuleDistributionService({
+    permissions,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    repository,
+    signer: signingPort(),
+    trustGate: trustGate(),
+    now: () => NOW,
+  });
+  await service.sign({
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'approved',
+    expectedRevision: 2,
+  });
+  const command = {
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'signed' as const,
+    expectedRevision: 3,
+  };
+
+  await service.publish(command);
+  denied = true;
+
+  await expect(service.publish(command)).rejects.toMatchObject({
+    code: 'DEVELOPER_PUBLISHER_SUSPENDED',
+    status: 409,
+  });
+  expect(await repository.history(ACCOUNT_ID, RELEASE_ID)).toHaveLength(2);
+});
+
+test('rechecks platform-review authority before replaying a completed revoke command', async () => {
+  let denied = false;
+  const permissions = {
+    async requirePermission() {
+      if (denied) throw new DeveloperPublisherError('DEVELOPER_PUBLISHER_SUSPENDED', 409);
+      return {} as never;
+    },
+  };
+  const repository = createMemoryDeveloperModuleDistributionRepository({
+    releases: [release('published', 4)],
+    now: () => NOW,
+  });
+  const service = new DeveloperModuleDistributionService({
+    permissions,
+    runtime: RESTRICTED_RUNTIME_TEST_PROFILE,
+    repository,
+    now: () => NOW,
+  });
+  const command = {
+    releaseId: RELEASE_ID,
+    actorUserId: ADMIN_ID,
+    expectedStatus: 'published' as const,
+    expectedRevision: 4,
+    reason: 'Verified emergency takedown.',
+  };
+
+  await service.revoke(command);
+  denied = true;
+
+  await expect(service.revoke(command)).rejects.toMatchObject({
+    code: 'DEVELOPER_PUBLISHER_SUSPENDED',
+    status: 409,
+  });
+  expect(await repository.history(ACCOUNT_ID, RELEASE_ID)).toHaveLength(1);
+});
+
 test('maps signer failures to a code-only unavailable error without partial state', async () => {
   const signer = signingPort();
   const failingSigner = {

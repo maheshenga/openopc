@@ -1045,3 +1045,18 @@ type snapshot -> unchanged, snapshot test passed
 
 **Shippable to production: YES** for the Task 3 SDK surface. The enclosing module Runner execution
 bundle and dispatch plan remains **NOT YET** because Tasks 4-8 are pending.
+
+---
+
+### 2026-08-02 - session `openopc-module-launch` (claim)
+
+Claimed Task 7 from
+`docs/superpowers/plans/2026-08-02-openopc-module-public-beta-closure.md`.
+The SDK change is strictly additive: export `ProjectModuleLaunchDescriptor`, add
+`getProjectModuleLaunch(projectId, installationId)`, and bind
+`kortix.project(projectId).modules.launch(installationId)`. Existing exports and
+the package version remain unchanged. Implementation will follow RED -> GREEN ->
+REFACTOR and finish with focused tests, typecheck, the full SDK suite, and the
+packed-install smoke gate.
+
+**Status:** IN PROGRESS.

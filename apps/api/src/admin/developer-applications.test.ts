@@ -125,6 +125,26 @@ describe('admin developer application routes', () => {
     ]);
   });
 
+  test('publishes strict list and detail response contracts', async () => {
+    const { app } = await harness('aal1');
+    const document = app.getOpenAPIDocument({
+      openapi: '3.0.0',
+      info: { title: 'Developer application routes', version: 'test' },
+    });
+    const paths = document.paths as Record<string, any>;
+    const page = paths['/developer/applications'].get.responses['200'].content['application/json']
+      .schema;
+    const detail = paths['/developer/applications/{applicationId}'].get.responses['200'].content[
+      'application/json'
+    ].schema;
+
+    expect(page.additionalProperties).toBe(false);
+    expect(page.properties.applications.items.additionalProperties).toBe(false);
+    expect(detail.additionalProperties).toBe(false);
+    expect(detail.properties.policy_acceptances.items.additionalProperties).toBe(false);
+    expect(detail.properties.history.items.additionalProperties).toBe(false);
+  });
+
   test('rejects missing permission, missing detail reason, malformed cursor, and unknown IDs', async () => {
     const missingPermission = await harness('aal1', 'member');
     const missingDetailReason = await harness('aal1');

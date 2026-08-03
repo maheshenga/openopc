@@ -20,12 +20,12 @@ import {
 const AdminApplicationListItemSchema = z.object({
   application: DeveloperApplicationSchema,
   organization: DeveloperOrganizationSchema,
-});
+}).strict();
 
 const AdminApplicationPageSchema = z.object({
   applications: z.array(AdminApplicationListItemSchema),
   next_cursor: z.string().nullable(),
-});
+}).strict();
 
 const PolicyAcceptanceSchema = z.object({
   account_id: z.string().uuid(),
@@ -34,7 +34,7 @@ const PolicyAcceptanceSchema = z.object({
   version: z.string(),
   source: z.literal('developer_application'),
   accepted_at: z.string(),
-});
+}).strict();
 
 const ApplicationAuditEventSchema = z.object({
   action: z.enum([
@@ -52,12 +52,12 @@ const ApplicationAuditEventSchema = z.object({
   to_state: z.object({ state: z.enum(DEVELOPER_APPLICATION_STATES), revision: z.number().int() }),
   metadata: z.record(z.unknown()),
   created_at: z.string(),
-});
+}).strict();
 
 const AdminApplicationDetailSchema = AdminApplicationListItemSchema.extend({
   policy_acceptances: z.array(PolicyAcceptanceSchema),
   history: z.array(ApplicationAuditEventSchema),
-});
+}).strict();
 
 const ApplicationListQuerySchema = z
   .object({

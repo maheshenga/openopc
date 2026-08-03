@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import Loading from '@/components/ui/loading';
 import { Textarea } from '@/components/ui/textarea';
 import { EmptyState } from '@/features/layout/section/empty-state';
+import { ErrorState } from '@/features/layout/section/error-state';
 import { usePermission } from '@/lib/use-permission';
 import { useCurrentAccountStore } from '@/stores/current-account-store';
 
@@ -68,6 +69,7 @@ export interface DeveloperModuleSubmitViewProps {
   packageFileName?: string | null;
   packagePublishers?: readonly SelectableDeveloperPublisher[];
   packageAccessLoading?: boolean;
+  packageAccessError?: boolean;
   packagePublisherId?: string;
   packageState?: DeveloperModuleArtifactUploadState;
   onModeChange?: (mode: DeveloperModuleSubmitMode) => void;
@@ -79,6 +81,7 @@ export interface DeveloperModuleSubmitViewProps {
   onPackageFile?: (file: File) => void;
   onStartPackage?: () => void | Promise<void>;
   onCancelPackage?: () => void | Promise<void>;
+  onRetryPackageAccess?: () => unknown;
 }
 
 function packageStageLabel(stage: DeveloperModuleArtifactUploadState['stage']): string {
@@ -98,23 +101,27 @@ function DeveloperModulePackageUploadView({
   fileName,
   publishers,
   accessLoading,
+  accessError,
   publisherId,
   state,
   onPublisherIdChange,
   onFile,
   onStart,
   onCancel,
+  onRetryAccess,
 }: {
   canWrite: boolean;
   fileName: string | null;
   publishers: readonly SelectableDeveloperPublisher[];
   accessLoading: boolean;
+  accessError: boolean;
   publisherId: string;
   state: DeveloperModuleArtifactUploadState;
   onPublisherIdChange: (value: string) => void;
   onFile: (file: File) => void;
   onStart: () => void | Promise<void>;
   onCancel: () => void | Promise<void>;
+  onRetryAccess: () => unknown;
 }) {
   const active = ['hashing', 'requesting_upload', 'uploading', 'finalizing', 'submitting'].includes(
     state.stage,
@@ -150,6 +157,23 @@ function DeveloperModulePackageUploadView({
             <Loading />
             Loading Publisher access...
           </div>
+        ) : accessError ? (
+          <ErrorState
+            size="sm"
+            title="Publisher access unavailable"
+            description="Publisher access could not be loaded. Try again."
+            action={
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="min-h-10"
+                onClick={() => void onRetryAccess()}
+              >
+                Retry
+              </Button>
+            }
+          />
         ) : publishers.length > 0 ? (
           <div className="space-y-2">
             <label htmlFor="developer-module-publisher" className="text-sm font-medium">
@@ -218,7 +242,7 @@ function DeveloperModulePackageUploadView({
       ) : state.stage === 'submitted' ? null : (
         <Button
           type="button"
-          disabled={!fileName || !publisherId || publishers.length === 0}
+          disabled={accessError || !fileName || !publisherId || publishers.length === 0}
           onClick={() => void onStart()}
         >
           <Upload />
@@ -257,6 +281,7 @@ export function DeveloperModuleSubmitView({
   packageFileName = null,
   packagePublishers = [],
   packageAccessLoading = false,
+  packageAccessError = false,
   packagePublisherId = '',
   packageState = EMPTY_PACKAGE_STATE,
   onModeChange = () => undefined,
@@ -268,6 +293,7 @@ export function DeveloperModuleSubmitView({
   onPackageFile = () => undefined,
   onStartPackage = () => undefined,
   onCancelPackage = () => undefined,
+  onRetryPackageAccess = () => undefined,
 }: DeveloperModuleSubmitViewProps) {
   const confirmation = stage !== 'input' && item;
 
@@ -325,12 +351,14 @@ export function DeveloperModuleSubmitView({
           fileName={packageFileName}
           publishers={packagePublishers}
           accessLoading={packageAccessLoading}
+          accessError={packageAccessError}
           publisherId={packagePublisherId}
           state={packageState}
           onPublisherIdChange={onPackagePublisherIdChange}
           onFile={onPackageFile}
           onStart={onStartPackage}
           onCancel={onCancelPackage}
+          onRetryAccess={onRetryPackageAccess}
         />
       ) : !confirmation ? (
         <section className="space-y-5" aria-label="Module manifest input">
@@ -608,6 +636,7 @@ export function PublisherModuleSubmitPage() {
       packageFileName={packageFile?.name ?? null}
       packagePublishers={packagePublishers}
       packageAccessLoading={accessQuery.isLoading}
+      packageAccessError={accessQuery.isError}
       packagePublisherId={activePackageSelection.publisherId}
       packageState={packageState}
       onModeChange={setMode}
@@ -621,6 +650,7 @@ export function PublisherModuleSubmitPage() {
       onPackageFile={selectPackage}
       onStartPackage={submitPackage}
       onCancelPackage={() => packageController.cancel()}
+      onRetryPackageAccess={() => accessQuery.refetch()}
     />
   );
 }

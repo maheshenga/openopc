@@ -16,10 +16,7 @@ const ITEM = {
 
 const noop = () => undefined;
 
-function publisherOption(
-  publisherId: string,
-  displayName: string,
-): SelectableDeveloperPublisher {
+function publisherOption(publisherId: string, displayName: string): SelectableDeveloperPublisher {
   return {
     publisher: {
       publisher_id: publisherId,
@@ -159,6 +156,53 @@ describe('Developer module submit view', () => {
     );
 
     expect(html).toContain('href="/developer/apply"');
+    expect(html).not.toContain('developer-module-publisher');
+    expect(html).not.toContain('Publisher ID');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Upload package<\/button>/);
+  });
+
+  test('shows a bounded Publisher access error with retry before confirmed-empty', () => {
+    const html = renderToStaticMarkup(
+      <DeveloperModuleSubmitView
+        mode="package"
+        stage="input"
+        text=""
+        item={null}
+        issues={[]}
+        inputErrorCode={null}
+        canWrite
+        pending={false}
+        packageFileName="module.openopc"
+        packagePublisherId=""
+        packagePublishers={[]}
+        packageAccessError
+        packageState={{
+          stage: 'idle',
+          fileName: null,
+          fileSize: 0,
+          progress: 0,
+          digest: null,
+          uploadId: null,
+          artifact: null,
+          submission: null,
+        }}
+        errorCode={null}
+        onModeChange={noop}
+        onTextChange={noop}
+        onValidate={noop}
+        onConfirm={noop}
+        onPackagePublisherIdChange={noop}
+        onPackageFile={noop}
+        onStartPackage={noop}
+        onCancelPackage={noop}
+        onRetryPackageAccess={noop}
+      />,
+    );
+
+    expect(html).toContain('Publisher access unavailable');
+    expect(html).toContain('Retry');
+    expect(html).toContain('min-h-10');
+    expect(html).not.toContain('href="/developer/apply"');
     expect(html).not.toContain('developer-module-publisher');
     expect(html).not.toContain('Publisher ID');
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Upload package<\/button>/);

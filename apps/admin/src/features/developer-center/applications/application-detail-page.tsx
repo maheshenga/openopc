@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { InfoBanner } from '@/components/ui/info-banner';
 import Loading from '@/components/ui/loading';
 import {
   Table,
@@ -161,20 +162,22 @@ export function AdminDeveloperApplicationDetailView({
       </header>
 
       {conflict ? (
-        <section className="border-kortix-orange/30 bg-kortix-orange/5 rounded-md border px-4 py-5 text-sm">
-          <p className="font-medium">Another administrator changed this application.</p>
-          <p className="text-muted-foreground mt-1 text-pretty">
-            Reload the current state and revision before recording a new decision.
-          </p>
-          <Button type="button" size="sm" variant="outline" className="mt-4 min-h-10" onClick={onReload}>
-            Reload latest application
-          </Button>
-        </section>
+        <InfoBanner
+          tone="warning"
+          title="Another administrator changed this application."
+          action={
+            <Button type="button" size="sm" variant="outline" className="min-h-10" onClick={onReload}>
+              Reload latest application
+            </Button>
+          }
+        >
+          Reload the current state and revision before recording a new decision.
+        </InfoBanner>
       ) : null}
       {errorCode && !conflict ? (
-        <div className="border-destructive/30 bg-destructive/5 rounded-md border px-4 py-3 text-sm">
+        <InfoBanner tone="destructive">
           {detailErrorMessage(errorCode)}
-        </div>
+        </InfoBanner>
       ) : null}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">

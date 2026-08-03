@@ -211,4 +211,21 @@ describe('Admin developer application pages', () => {
     expect(conflict).toContain('Reload latest application');
     expect(conflict).not.toContain('Retry decision');
   });
+
+  test('application detail alerts expose an accessible alert role', () => {
+    // Production break caught: hand-rolled status containers are not announced as alerts.
+    const conflict = renderToStaticMarkup(
+      <AdminDeveloperApplicationDetailView {...BASE_DETAIL_PROPS} conflict />,
+    );
+    const error = renderToStaticMarkup(
+      <AdminDeveloperApplicationDetailView
+        {...BASE_DETAIL_PROPS}
+        errorCode="DEVELOPER_APPLICATION_INPUT_INVALID"
+      />,
+    );
+
+    expect(conflict).toContain('role="alert"');
+    expect(conflict).toContain('Reload latest application');
+    expect(error).toContain('role="alert"');
+  });
 });

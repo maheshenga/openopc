@@ -87,11 +87,10 @@ export async function submitAdminDeveloperApplicationSuspension(
 }
 
 export async function refreshAdminDeveloperApplicationAfterConflict(
-  queryClient: Pick<QueryClient, 'removeQueries' | 'refetchQueries'>,
+  queryClient: Pick<QueryClient, 'resetQueries'>,
   applicationId: string,
 ): Promise<void> {
-  queryClient.removeQueries({ queryKey: adminDeveloperApplicationKeys.detail(applicationId) });
-  await queryClient.refetchQueries({ queryKey: adminDeveloperApplicationKeys.detail(applicationId) });
+  await queryClient.resetQueries({ queryKey: adminDeveloperApplicationKeys.detail(applicationId) });
 }
 
 function invalidateAdminDeveloperApplication(

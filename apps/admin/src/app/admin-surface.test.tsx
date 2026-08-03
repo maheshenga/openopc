@@ -19,6 +19,8 @@ const ADMIN_ROUTE_FILES = [
   'src/app/providers/page.tsx',
   'src/app/ops/page.tsx',
   'src/app/utils/page.tsx',
+  'src/app/developer-applications/page.tsx',
+  'src/app/developer-applications/[applicationId]/page.tsx',
   'src/app/developer-reviews/page.tsx',
   'src/app/developer-reviews/[releaseId]/page.tsx',
 ] as const;
@@ -73,6 +75,10 @@ test('rejects consumer routes while preserving Admin and framework paths', async
 
   expect(isAdminRequestPath('/')).toBeTrue();
   expect(isAdminRequestPath('/accounts')).toBeTrue();
+  expect(isAdminRequestPath('/developer-applications')).toBeTrue();
+  expect(
+    isAdminRequestPath('/developer-applications/10000000-0000-4000-a000-000000000001'),
+  ).toBeTrue();
   expect(isAdminRequestPath('/developer-reviews/10000000-0000-4000-a000-000000000001')).toBeTrue();
   expect(isAdminRequestPath('/_next/static/chunks/app.js')).toBeTrue();
   expect(isAdminRequestPath('/projects')).toBeFalse();

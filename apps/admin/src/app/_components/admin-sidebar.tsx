@@ -7,6 +7,7 @@ import { usePathname } from 'next/navigation';
 import {
   Activity,
   Boxes,
+  ClipboardList,
   PackageCheck,
   Users,
   Wrench,
@@ -56,6 +57,11 @@ export function AdminSidebar() {
       href: '/accounts',
       label: 'Accounts',
       icon: Users,
+    },
+    {
+      href: '/developer-applications',
+      label: tDeveloperCenter('admin.applications'),
+      icon: ClipboardList,
     },
     {
       href: '/developer-reviews',

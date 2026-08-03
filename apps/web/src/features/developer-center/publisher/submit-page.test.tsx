@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
+import type { SelectableDeveloperPublisher } from './access';
 import { DeveloperModuleSubmitView } from './submit-page';
 
 const ITEM = {
@@ -14,6 +15,44 @@ const ITEM = {
 };
 
 const noop = () => undefined;
+
+function publisherOption(
+  publisherId: string,
+  displayName: string,
+): SelectableDeveloperPublisher {
+  return {
+    publisher: {
+      publisher_id: publisherId,
+      account_id: 'account-1',
+      organization_id: 'organization-1',
+      slug: publisherId,
+      display_name: displayName,
+      status: 'active',
+      authority_revision: 0,
+      suspended_reason: null,
+      suspended_by: null,
+      suspended_at: null,
+      created_by: 'user-1',
+      created_at: '2026-08-03T08:00:00.000Z',
+      updated_at: '2026-08-03T08:00:00.000Z',
+    },
+    membership: {
+      member_id: `${publisherId}-member`,
+      account_id: 'account-1',
+      publisher_id: publisherId,
+      user_id: 'user-1',
+      role: 'owner',
+      revision: 0,
+      created_by: 'user-1',
+      created_at: '2026-08-03T08:00:00.000Z',
+      updated_by: null,
+      updated_at: '2026-08-03T08:00:00.000Z',
+    },
+  };
+}
+
+const PUBLISHER_A = publisherOption('acme', 'Acme Studio');
+const PUBLISHER_B = publisherOption('second', 'Second Studio');
 
 describe('Developer module submit view', () => {
   test('renders input, validation issues, and an upload control', () => {
@@ -41,7 +80,7 @@ describe('Developer module submit view', () => {
     expect(html).toContain('Package upload');
   });
 
-  test('renders the package upload mode with publisher identity and bounded progress', () => {
+  test('renders the package Publisher selector instead of a free-form Publisher ID', () => {
     const html = renderToStaticMarkup(
       <DeveloperModuleSubmitView
         mode="package"
@@ -54,6 +93,91 @@ describe('Developer module submit view', () => {
         pending={false}
         packageFileName="module.openopc"
         packagePublisherId="acme"
+        packagePublishers={[PUBLISHER_A, PUBLISHER_B]}
+        packageState={{
+          stage: 'idle',
+          fileName: null,
+          fileSize: 0,
+          progress: 0,
+          digest: null,
+          uploadId: null,
+          artifact: null,
+          submission: null,
+        }}
+        errorCode={null}
+        onModeChange={noop}
+        onTextChange={noop}
+        onValidate={noop}
+        onConfirm={noop}
+        onPackagePublisherIdChange={noop}
+        onPackageFile={noop}
+        onStartPackage={noop}
+        onCancelPackage={noop}
+      />,
+    );
+
+    expect(html).toContain('Publisher');
+    expect(html).toContain('Acme Studio');
+    expect(html).not.toContain('placeholder="acme"');
+    expect(html).not.toContain('Publisher ID');
+  });
+
+  test('shows the application path and disables package upload without an active owner Publisher', () => {
+    const html = renderToStaticMarkup(
+      <DeveloperModuleSubmitView
+        mode="package"
+        stage="input"
+        text=""
+        item={null}
+        issues={[]}
+        inputErrorCode={null}
+        canWrite
+        pending={false}
+        packageFileName="module.openopc"
+        packagePublisherId=""
+        packagePublishers={[]}
+        packageState={{
+          stage: 'idle',
+          fileName: null,
+          fileSize: 0,
+          progress: 0,
+          digest: null,
+          uploadId: null,
+          artifact: null,
+          submission: null,
+        }}
+        errorCode={null}
+        onModeChange={noop}
+        onTextChange={noop}
+        onValidate={noop}
+        onConfirm={noop}
+        onPackagePublisherIdChange={noop}
+        onPackageFile={noop}
+        onStartPackage={noop}
+        onCancelPackage={noop}
+      />,
+    );
+
+    expect(html).toContain('href="/developer/apply"');
+    expect(html).not.toContain('developer-module-publisher');
+    expect(html).not.toContain('Publisher ID');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Upload package<\/button>/);
+  });
+
+  test('disables the Publisher selector while an active package upload keeps cancel available', () => {
+    const html = renderToStaticMarkup(
+      <DeveloperModuleSubmitView
+        mode="package"
+        stage="input"
+        text=""
+        item={null}
+        issues={[]}
+        inputErrorCode={null}
+        canWrite
+        pending={false}
+        packageFileName="module.openopc"
+        packagePublisherId="acme"
+        packagePublishers={[PUBLISHER_A, PUBLISHER_B]}
         packageState={{
           stage: 'uploading',
           fileName: 'module.openopc',
@@ -76,12 +200,10 @@ describe('Developer module submit view', () => {
       />,
     );
 
-    expect(html).toContain('module.openopc');
-    expect(html).toContain('Publisher ID');
     expect(html).toContain('67%');
     expect(html).toContain('Uploading package');
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*id="developer-module-publisher"/);
     expect(html).toContain('Cancel upload');
-    expect(html).not.toContain('Paste JSON');
   });
 
   test('shows only the server-authoritative artifact digest after finalization', () => {

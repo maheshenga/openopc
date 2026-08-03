@@ -15,15 +15,24 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import Loading from '@/components/ui/loading';
 import { Textarea } from '@/components/ui/textarea';
+import { EmptyState } from '@/features/layout/section/empty-state';
 import { usePermission } from '@/lib/use-permission';
 import { useCurrentAccountStore } from '@/stores/current-account-store';
 
 import { DEVELOPER_MODULE_INPUT_MAX_BYTES, developerCenterErrorCode } from '../model';
 import {
+  type DeveloperPublisherSelection,
+  type SelectableDeveloperPublisher,
+  reconcilePublisherSelection,
+  selectableDeveloperPublishers,
+} from './access';
+import { useDeveloperPublisherAccess } from './access-query';
+import {
   type DeveloperModuleArtifactUploadState,
   createDeveloperModuleArtifactUploadController,
   defaultDeveloperModuleArtifactUploadDependencies,
 } from './artifact-upload-controller';
+import { DeveloperPublisherSelect } from './publisher-select';
 import {
   type DeveloperModuleSubmitControllerState,
   type SubmitControllerStage,
@@ -57,6 +66,8 @@ export interface DeveloperModuleSubmitViewProps {
   validating?: boolean;
   errorCode: string | null;
   packageFileName?: string | null;
+  packagePublishers?: readonly SelectableDeveloperPublisher[];
+  packageAccessLoading?: boolean;
   packagePublisherId?: string;
   packageState?: DeveloperModuleArtifactUploadState;
   onModeChange?: (mode: DeveloperModuleSubmitMode) => void;
@@ -85,6 +96,8 @@ function packageStageLabel(stage: DeveloperModuleArtifactUploadState['stage']): 
 function DeveloperModulePackageUploadView({
   canWrite,
   fileName,
+  publishers,
+  accessLoading,
   publisherId,
   state,
   onPublisherIdChange,
@@ -94,6 +107,8 @@ function DeveloperModulePackageUploadView({
 }: {
   canWrite: boolean;
   fileName: string | null;
+  publishers: readonly SelectableDeveloperPublisher[];
+  accessLoading: boolean;
   publisherId: string;
   state: DeveloperModuleArtifactUploadState;
   onPublisherIdChange: (value: string) => void;
@@ -130,18 +145,39 @@ function DeveloperModulePackageUploadView({
             }}
           />
         </label>
-        <div className="space-y-2">
-          <label htmlFor="developer-module-publisher" className="text-sm font-medium">
-            Publisher ID
-          </label>
-          <Input
-            id="developer-module-publisher"
-            value={publisherId}
-            placeholder="acme"
-            disabled={active}
-            onChange={(event) => onPublisherIdChange(event.target.value)}
+        {accessLoading ? (
+          <div className="text-muted-foreground flex min-h-10 items-center gap-2 text-sm">
+            <Loading />
+            Loading Publisher access...
+          </div>
+        ) : publishers.length > 0 ? (
+          <div className="space-y-2">
+            <label htmlFor="developer-module-publisher" className="text-sm font-medium">
+              Publisher
+            </label>
+            <DeveloperPublisherSelect
+              id="developer-module-publisher"
+              publishers={publishers}
+              value={publisherId}
+              disabled={active}
+              onValueChange={onPublisherIdChange}
+            />
+            <span className="sr-only">
+              {publishers.map((entry) => entry.publisher.display_name).join(', ')}
+            </span>
+          </div>
+        ) : (
+          <EmptyState
+            size="sm"
+            title="No active owner Publishers"
+            description="Apply for a Developer account, then create or join a Publisher as an owner."
+            action={
+              <Button asChild type="button" variant="outline" size="sm">
+                <Link href="/developer/apply">Open Developer application</Link>
+              </Button>
+            }
           />
-        </div>
+        )}
       </div>
 
       {state.stage !== 'idle' ? (
@@ -182,7 +218,7 @@ function DeveloperModulePackageUploadView({
       ) : state.stage === 'submitted' ? null : (
         <Button
           type="button"
-          disabled={!fileName || !publisherId.trim()}
+          disabled={!fileName || !publisherId || publishers.length === 0}
           onClick={() => void onStart()}
         >
           <Upload />
@@ -219,6 +255,8 @@ export function DeveloperModuleSubmitView({
   validating = false,
   errorCode,
   packageFileName = null,
+  packagePublishers = [],
+  packageAccessLoading = false,
   packagePublisherId = '',
   packageState = EMPTY_PACKAGE_STATE,
   onModeChange = () => undefined,
@@ -285,6 +323,8 @@ export function DeveloperModuleSubmitView({
         <DeveloperModulePackageUploadView
           canWrite={canWrite}
           fileName={packageFileName}
+          publishers={packagePublishers}
+          accessLoading={packageAccessLoading}
           publisherId={packagePublisherId}
           state={packageState}
           onPublisherIdChange={onPackagePublisherIdChange}
@@ -436,9 +476,13 @@ export function PublisherModuleSubmitPage() {
   const router = useRouter();
   const selectedAccountId = useCurrentAccountStore((state) => state.selectedAccountId);
   const writePermission = usePermission(selectedAccountId ?? undefined, 'account.write');
+  const accessQuery = useDeveloperPublisherAccess(selectedAccountId);
   const [mode, setMode] = useState<DeveloperModuleSubmitMode>('declarative');
   const [packageFile, setPackageFile] = useState<File | null>(null);
-  const [packagePublisherId, setPackagePublisherId] = useState('');
+  const [packageSelection, setPackageSelection] = useState<DeveloperPublisherSelection>({
+    accountId: selectedAccountId,
+    publisherId: '',
+  });
   const [packageState, setPackageState] =
     useState<DeveloperModuleArtifactUploadState>(EMPTY_PACKAGE_STATE);
   const controller = useMemo(
@@ -466,6 +510,12 @@ export function PublisherModuleSubmitPage() {
   const [validating, setValidating] = useState(false);
   const [fileError, setFileError] = useState<SubmitInputErrorCode | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const packagePublishers = selectableDeveloperPublishers(accessQuery.data);
+  const activePackageSelection = reconcilePublisherSelection(
+    packageSelection,
+    selectedAccountId,
+    accessQuery.data,
+  );
 
   const changeText = (value: string) => {
     setFileError(null);
@@ -526,12 +576,14 @@ export function PublisherModuleSubmitPage() {
   };
 
   const submitPackage = async () => {
-    if (!selectedAccountId || !packageFile || !packagePublisherId.trim()) return;
+    const publisherId = activePackageSelection.publisherId;
+    if (!selectedAccountId || !packageFile || !publisherId || packagePublishers.length === 0)
+      return;
     setErrorCode(null);
     try {
       const result = await packageController.start(packageFile, {
         accountId: selectedAccountId,
-        publisherId: packagePublisherId.trim(),
+        publisherId,
       });
       if (result) {
         router.push(`/developer/modules/${encodeURIComponent(result.release.release_id)}`);
@@ -554,14 +606,18 @@ export function PublisherModuleSubmitPage() {
       validating={validating}
       errorCode={errorCode}
       packageFileName={packageFile?.name ?? null}
-      packagePublisherId={packagePublisherId}
+      packagePublishers={packagePublishers}
+      packageAccessLoading={accessQuery.isLoading}
+      packagePublisherId={activePackageSelection.publisherId}
       packageState={packageState}
       onModeChange={setMode}
       onTextChange={changeText}
       onFile={loadFile}
       onValidate={validate}
       onConfirm={confirm}
-      onPackagePublisherIdChange={setPackagePublisherId}
+      onPackagePublisherIdChange={(publisherId) =>
+        setPackageSelection({ accountId: selectedAccountId, publisherId })
+      }
       onPackageFile={selectPackage}
       onStartPackage={submitPackage}
       onCancelPackage={() => packageController.cancel()}

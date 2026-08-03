@@ -9,6 +9,13 @@ export interface DeveloperPublisherSelection {
   publisherId: string;
 }
 
+export function publisherSelectionChanged(
+  current: DeveloperPublisherSelection,
+  next: DeveloperPublisherSelection,
+): boolean {
+  return current.accountId !== next.accountId || current.publisherId !== next.publisherId;
+}
+
 export function selectableDeveloperPublishers(
   access: DeveloperAccess | null | undefined,
 ): SelectableDeveloperPublisher[] {
@@ -23,13 +30,15 @@ export function reconcilePublisherSelection(
   accountId: string | null,
   access: DeveloperAccess | null | undefined,
 ): DeveloperPublisherSelection {
-  const options = selectableDeveloperPublishers(access);
+  const options = selectableDeveloperPublishers(
+    access?.account_id === accountId ? access : undefined,
+  );
   const currentIsValid =
     current.accountId === accountId &&
     options.some((entry) => entry.publisher.publisher_id === current.publisherId);
   if (currentIsValid) return current;
   return {
     accountId,
-    publisherId: options.length === 1 ? options[0]!.publisher.publisher_id : '',
+    publisherId: options.length === 1 ? (options[0]?.publisher.publisher_id ?? '') : '',
   };
 }

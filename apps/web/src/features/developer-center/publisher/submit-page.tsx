@@ -9,7 +9,7 @@ import {
 import { ArrowLeft, Box, FileJson, ShieldCheck, Upload, XCircle } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +24,7 @@ import { DEVELOPER_MODULE_INPUT_MAX_BYTES, developerCenterErrorCode } from '../m
 import {
   type DeveloperPublisherSelection,
   type SelectableDeveloperPublisher,
+  publisherSelectionChanged,
   reconcilePublisherSelection,
   selectableDeveloperPublishers,
 } from './access';
@@ -538,12 +539,37 @@ export function PublisherModuleSubmitPage() {
   const [validating, setValidating] = useState(false);
   const [fileError, setFileError] = useState<SubmitInputErrorCode | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  const packagePublishers = selectableDeveloperPublishers(accessQuery.data);
+  const accountAccess =
+    accessQuery.data?.account_id === selectedAccountId ? accessQuery.data : undefined;
+  const packagePublishers = selectableDeveloperPublishers(accountAccess);
   const activePackageSelection = reconcilePublisherSelection(
     packageSelection,
     selectedAccountId,
-    accessQuery.data,
+    accountAccess,
   );
+  const activePackageAccountId = activePackageSelection.accountId;
+  const activePackagePublisherId = activePackageSelection.publisherId;
+  const storedPackageAccountId = packageSelection.accountId;
+  const storedPackagePublisherId = packageSelection.publisherId;
+  useEffect(() => {
+    const activeSelection = {
+      accountId: activePackageAccountId,
+      publisherId: activePackagePublisherId,
+    };
+    if (
+      publisherSelectionChanged(
+        { accountId: storedPackageAccountId, publisherId: storedPackagePublisherId },
+        activeSelection,
+      )
+    ) {
+      setPackageSelection(activeSelection);
+    }
+  }, [
+    activePackageAccountId,
+    activePackagePublisherId,
+    storedPackageAccountId,
+    storedPackagePublisherId,
+  ]);
 
   const changeText = (value: string) => {
     setFileError(null);
@@ -636,7 +662,7 @@ export function PublisherModuleSubmitPage() {
       packageFileName={packageFile?.name ?? null}
       packagePublishers={packagePublishers}
       packageAccessLoading={accessQuery.isLoading}
-      packageAccessError={accessQuery.isError}
+      packageAccessError={accessQuery.isError || Boolean(accessQuery.data && !accountAccess)}
       packagePublisherId={activePackageSelection.publisherId}
       packageState={packageState}
       onModeChange={setMode}

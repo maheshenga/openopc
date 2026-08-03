@@ -19,7 +19,10 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
-import { adminDeveloperApplicationErrorCode, type AdminDeveloperApplicationListItem } from './client';
+import {
+  type AdminDeveloperApplicationListItem,
+  adminDeveloperApplicationErrorCode,
+} from './client';
 import { useAdminDeveloperApplicationQueue } from './query';
 
 export type AdminApplicationQueueState = 'loading' | 'error' | 'empty' | 'ready';
@@ -65,6 +68,18 @@ function queueErrorMessage(errorCode: string | null): string {
     return 'The application queue could not be loaded. Try again.';
   }
   return 'The application queue is temporarily unavailable. Reset the cursor or try again.';
+}
+
+export function recoverAdminDeveloperApplicationQueue(
+  cursor: string | null,
+  resetCursor: (cursor: null) => void,
+  refetch: () => void,
+): void {
+  if (cursor === null) {
+    refetch();
+    return;
+  }
+  resetCursor(null);
 }
 
 function applicationStateVariant(state: DeveloperApplicationState) {
@@ -263,7 +278,11 @@ export function AdminDeveloperApplicationQueuePage() {
       onNextPage={() => {
         if (queueQuery.data?.next_cursor) setCursor(queueQuery.data.next_cursor);
       }}
-      onResetCursor={() => setCursor(null)}
+      onResetCursor={() =>
+        recoverAdminDeveloperApplicationQueue(cursor, setCursor, () => {
+          void queueQuery.refetch();
+        })
+      }
       onOpenApplication={(applicationId) =>
         router.push(`/developer-applications/${encodeURIComponent(applicationId)}`)
       }

@@ -1,9 +1,13 @@
-import type { DeveloperOrganization } from '@kortix/sdk';
 import { expect, test } from 'bun:test';
+import type { DeveloperAccess, DeveloperOrganization } from '@kortix/sdk';
+import { QueryClient } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { SelectableDeveloperPublisher } from './access';
-import { DeveloperPublisherOnboardingView } from './onboarding-panel';
+import {
+  DeveloperPublisherOnboardingView,
+  cacheDeveloperPublisherCreation,
+} from './onboarding-panel';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const ORGANIZATION_ID = '20000000-0000-4000-a000-000000000002';
@@ -188,4 +192,29 @@ test('renders Publisher creation controls with a 40px hit height', () => {
     /<button[^>]*>.*Create another Publisher<\/button>/,
   )?.[0];
   expect(additionalButton).toContain('min-h-10');
+});
+
+test('keeps one refreshed Publisher entry and selects the returned ID after creation', () => {
+  const queryClient = new QueryClient();
+  const access: DeveloperAccess = {
+    account_id: ACCOUNT_ID,
+    user_id: USER_ID,
+    organization: ORGANIZATION,
+    invitations: [],
+    publishers: [PUBLISHER_A],
+  };
+  queryClient.setQueryData(['developer-publisher-access', ACCOUNT_ID], access);
+
+  const selection = cacheDeveloperPublisherCreation(queryClient, ACCOUNT_ID, {
+    publisher: PUBLISHER_A.publisher,
+    member: PUBLISHER_A.membership,
+  });
+  const cached = queryClient.getQueryData<DeveloperAccess>([
+    'developer-publisher-access',
+    ACCOUNT_ID,
+  ]);
+
+  expect(cached?.publishers).toHaveLength(1);
+  expect(cached?.publishers[0]?.publisher.publisher_id).toBe('acme');
+  expect(selection).toEqual({ accountId: ACCOUNT_ID, publisherId: 'acme' });
 });

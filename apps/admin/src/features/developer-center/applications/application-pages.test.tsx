@@ -1,9 +1,12 @@
-import { describe, expect, test } from 'bun:test';
-import type { AdminDeveloperApplicationDetail, AdminDeveloperApplicationListItem } from './client';
+import { describe, expect, mock, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { AdminDeveloperApplicationDetail, AdminDeveloperApplicationListItem } from './client';
 
 import { AdminDeveloperApplicationDetailView } from './application-detail-page';
-import { AdminDeveloperApplicationQueueView } from './application-queue-page';
+import {
+  AdminDeveloperApplicationQueueView,
+  recoverAdminDeveloperApplicationQueue,
+} from './application-queue-page';
 
 const ITEM: AdminDeveloperApplicationListItem = {
   application: {
@@ -156,6 +159,19 @@ describe('Admin developer application pages', () => {
 
     expect(html).toContain('Reset to first page');
     expect(html).not.toContain('DEVELOPER_APPLICATION_INPUT_INVALID');
+  });
+
+  test('retries a failed first page and resets only a non-first cursor', () => {
+    const resetCursor = mock(() => undefined);
+    const refetch = mock(() => undefined);
+
+    recoverAdminDeveloperApplicationQueue(null, resetCursor, refetch);
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(resetCursor).toHaveBeenCalledTimes(0);
+
+    recoverAdminDeveloperApplicationQueue('next-page', resetCursor, refetch);
+    expect(resetCursor).toHaveBeenCalledWith(null);
+    expect(refetch).toHaveBeenCalledTimes(1);
   });
 
   test('renders an empty queue state', () => {

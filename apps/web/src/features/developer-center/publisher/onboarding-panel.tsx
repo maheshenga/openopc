@@ -1,10 +1,10 @@
 'use client';
 
 import type { DeveloperAccess, DeveloperOrganization } from '@kortix/sdk';
-import { useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink, Plus } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { type FormEvent, useEffect, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { InfoBanner } from '@/components/ui/info-banner';
@@ -13,9 +13,9 @@ import Loading from '@/components/ui/loading';
 
 import { developerCenterErrorCode } from '../model';
 import {
+  type SelectableDeveloperPublisher,
   reconcilePublisherSelection,
   selectableDeveloperPublishers,
-  type SelectableDeveloperPublisher,
 } from './access';
 import {
   developerPublisherAccessKeys,
@@ -227,6 +227,36 @@ export interface DeveloperPublisherOnboardingPanelProps {
   canWrite: boolean;
 }
 
+interface DeveloperPublisherCreationResult {
+  publisher: DeveloperAccess['publishers'][number]['publisher'];
+  member: DeveloperAccess['publishers'][number]['membership'];
+}
+
+export function cacheDeveloperPublisherCreation(
+  queryClient: Pick<QueryClient, 'setQueryData'>,
+  accountId: string,
+  result: DeveloperPublisherCreationResult,
+) {
+  queryClient.setQueryData<DeveloperAccess>(
+    developerPublisherAccessKeys.account(accountId),
+    (current) => {
+      if (!current) return current;
+      const created = { publisher: result.publisher, membership: result.member };
+      const existingIndex = current.publishers.findIndex(
+        (entry) => entry.publisher.publisher_id === result.publisher.publisher_id,
+      );
+      return {
+        ...current,
+        publishers:
+          existingIndex === -1
+            ? [...current.publishers, created]
+            : current.publishers.map((entry, index) => (index === existingIndex ? created : entry)),
+      };
+    },
+  );
+  return { accountId, publisherId: result.publisher.publisher_id };
+}
+
 export function DeveloperPublisherOnboardingPanel({
   accountId,
   canWrite,
@@ -282,23 +312,10 @@ export function DeveloperPublisherOnboardingPanel({
       },
       {
         onSuccess: (result) => {
-          setSelection({ accountId, publisherId: result.publisher.publisher_id });
+          setSelection(cacheDeveloperPublisherCreation(queryClient, accountId, result));
           setCreateOpen(false);
           setSlug('');
           setDisplayName('');
-          queryClient.setQueryData<DeveloperAccess>(
-            developerPublisherAccessKeys.account(accountId),
-            (current) =>
-              current
-                ? {
-                    ...current,
-                    publishers: [
-                      ...current.publishers,
-                      { publisher: result.publisher, membership: result.member },
-                    ],
-                  }
-                : current,
-          );
         },
       },
     );

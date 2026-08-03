@@ -1,7 +1,11 @@
-import type { DeveloperAccess, DeveloperPublisher, DeveloperPublisherMember } from '@kortix/sdk';
 import { expect, test } from 'bun:test';
+import type { DeveloperAccess, DeveloperPublisher, DeveloperPublisherMember } from '@kortix/sdk';
 
-import { reconcilePublisherSelection, selectableDeveloperPublishers } from './access';
+import {
+  publisherSelectionChanged,
+  reconcilePublisherSelection,
+  selectableDeveloperPublishers,
+} from './access';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const ORGANIZATION_ID = '20000000-0000-4000-a000-000000000002';
@@ -94,4 +98,31 @@ test('drops suspended, membership-free, and previous-account selections', () => 
       access([activeOwner]),
     ),
   ).toEqual({ accountId: ACCOUNT_ID, publisherId: 'acme' });
+});
+
+test('fails closed for another account access payload', () => {
+  expect(
+    reconcilePublisherSelection(
+      { accountId: 'other-account', publisherId: '' },
+      'other-account',
+      access([activeOwner]),
+    ),
+  ).toEqual({ accountId: 'other-account', publisherId: '' });
+});
+
+test('persists an account transition so a multi-Publisher choice cannot revive on return', () => {
+  let stored = { accountId: ACCOUNT_ID as string | null, publisherId: 'second' };
+  const accountB = '40000000-0000-4000-a000-000000000004';
+  const inAccountB = reconcilePublisherSelection(stored, accountB, {
+    ...access([]),
+    account_id: accountB,
+  });
+  if (publisherSelectionChanged(stored, inAccountB)) stored = inAccountB;
+
+  const backInAccountA = reconcilePublisherSelection(
+    stored,
+    ACCOUNT_ID,
+    access([activeOwner, secondOwner]),
+  );
+  expect(backInAccountA).toEqual({ accountId: ACCOUNT_ID, publisherId: '' });
 });

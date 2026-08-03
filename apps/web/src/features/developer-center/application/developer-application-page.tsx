@@ -21,7 +21,12 @@ import { useCurrentAccountStore } from '@/stores/current-account-store';
 import { DeveloperPublisherOnboardingPanel } from '../publisher/onboarding-panel';
 
 export type DeveloperApplicationPageState =
-  'loading' | 'no_account' | 'permission_denied' | 'error' | 'available' | 'current';
+  | 'loading'
+  | 'no_account'
+  | 'permission_denied'
+  | 'error'
+  | 'available'
+  | 'current';
 
 export interface DeveloperApplicationViewProps {
   state: DeveloperApplicationPageState;

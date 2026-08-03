@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { InfoBanner } from '@/components/ui/info-banner';
 import { Input } from '@/components/ui/input';
 import Loading from '@/components/ui/loading';
 
@@ -105,7 +106,7 @@ function CreationForm({
           onChange={(event) => onDisplayNameChange(event.target.value)}
         />
       </div>
-      <Button type="submit" disabled={!canCreate}>
+      <Button type="submit" className="min-h-10" disabled={!canCreate}>
         {pending ? <Loading /> : null}
         {pending ? 'Creating...' : 'Create Publisher'}
       </Button>
@@ -147,24 +148,19 @@ export function DeveloperPublisherOnboardingView({
         </div>
       ) : null}
       {state === 'error' ? (
-        <div className="border-destructive border-l-2 py-1 pl-4 text-sm" role="alert">
-          <p className="font-medium">{errorCode ?? 'DEVELOPER_REQUEST_FAILED'}</p>
-          <p className="text-muted-foreground mt-1">Developer access is temporarily unavailable.</p>
-        </div>
+        <InfoBanner tone="destructive" title={errorCode ?? 'DEVELOPER_REQUEST_FAILED'}>
+          Developer access is temporarily unavailable.
+        </InfoBanner>
       ) : null}
       {state === 'ready' && errorCode ? (
-        <div className="border-destructive border-l-2 py-1 pl-4 text-sm" role="alert">
-          <p className="font-medium">{errorCode}</p>
-          <p className="text-muted-foreground mt-1">Try again after checking your connection.</p>
-        </div>
+        <InfoBanner tone="destructive" title={errorCode}>
+          Try again after checking your connection.
+        </InfoBanner>
       ) : null}
       {state === 'ready' && !organization ? (
-        <div className="border-destructive border-l-2 py-1 pl-4 text-sm" role="alert">
-          <p className="font-medium">DEVELOPER_ORGANIZATION_NOT_FOUND</p>
-          <p className="text-muted-foreground mt-1">
-            Publisher onboarding is unavailable until the approved organization is linked.
-          </p>
-        </div>
+        <InfoBanner tone="destructive" title="DEVELOPER_ORGANIZATION_NOT_FOUND">
+          Publisher onboarding is unavailable until the approved organization is linked.
+        </InfoBanner>
       ) : null}
       {state === 'ready' && organization ? (
         <div className="space-y-4">
@@ -192,6 +188,7 @@ export function DeveloperPublisherOnboardingView({
                     type="button"
                     variant="ghost"
                     size="sm"
+                    className="min-h-10"
                     onClick={() => onCreateOpenChange(!createOpen)}
                   >
                     <Plus />

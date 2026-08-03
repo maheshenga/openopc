@@ -150,3 +150,42 @@ test('renders read-only, loading, and bounded error states', () => {
     ),
   ).toContain('DEVELOPER_REQUEST_FAILED');
 });
+
+test('renders each bounded Publisher error through the shared accessible alert structure', () => {
+  for (const props of [
+    { state: 'error' as const, organization: ORGANIZATION, errorCode: 'DEVELOPER_REQUEST_FAILED' },
+    {
+      state: 'ready' as const,
+      organization: ORGANIZATION,
+      errorCode: 'DEVELOPER_VERIFICATION_REQUIRED',
+    },
+    { state: 'ready' as const, organization: null, errorCode: null },
+  ]) {
+    const html = renderToStaticMarkup(<DeveloperPublisherOnboardingView {...BASE} {...props} />);
+    expect(html).toMatch(
+      /(?:data-slot="alert"[^>]*role="alert"|role="alert"[^>]*data-slot="alert")/,
+    );
+    expect(html).toContain('data-slot="alert-title"');
+  }
+});
+
+test('renders Publisher creation controls with a 40px hit height', () => {
+  const firstPublisherHtml = renderToStaticMarkup(
+    <DeveloperPublisherOnboardingView
+      {...BASE}
+      publishers={[]}
+      slug="acme"
+      displayName="Acme Studio"
+    />,
+  );
+  const createButton = firstPublisherHtml.match(/<button[^>]*>Create Publisher<\/button>/)?.[0];
+  expect(createButton).toContain('min-h-10');
+
+  const additionalPublisherHtml = renderToStaticMarkup(
+    <DeveloperPublisherOnboardingView {...BASE} />,
+  );
+  const additionalButton = additionalPublisherHtml.match(
+    /<button[^>]*>.*Create another Publisher<\/button>/,
+  )?.[0];
+  expect(additionalButton).toContain('min-h-10');
+});

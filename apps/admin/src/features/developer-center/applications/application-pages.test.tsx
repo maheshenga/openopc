@@ -213,6 +213,14 @@ describe('Admin developer application pages', () => {
     expect(approved).not.toContain('Approve application');
   });
 
+  test('keeps application detail content shrinkable beside the scrollable policy table', () => {
+    const html = renderToStaticMarkup(
+      <AdminDeveloperApplicationDetailView {...BASE_DETAIL_PROPS} />,
+    );
+
+    expect(html).toMatch(/class="grid min-w-0 gap-6[^\"]*lg:grid-cols-/);
+  });
+
   test('application detail disables mutations without a reason and offers only a latest-data reload after conflict', () => {
     // Production break caught: a blank reason or stale conflict permits a mutation instead of requiring fresh administrator input.
     const emptyReason = renderToStaticMarkup(

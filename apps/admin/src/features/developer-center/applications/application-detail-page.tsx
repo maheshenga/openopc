@@ -180,8 +180,8 @@ export function AdminDeveloperApplicationDetailView({
         </InfoBanner>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="space-y-6">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="min-w-0 space-y-6">
           <section className="space-y-3" aria-label="Application details">
             <h2 className="text-base font-semibold">Application details</h2>
             <div className="bg-popover rounded-md border px-4 py-5">
@@ -271,7 +271,7 @@ export function AdminDeveloperApplicationDetailView({
           </section>
         </div>
 
-        <aside className="space-y-3" aria-label="Application decisions">
+        <aside className="min-w-0 space-y-3" aria-label="Application decisions">
           <h2 className="text-base font-semibold">Application decision</h2>
           <div className="bg-popover space-y-4 rounded-md border px-4 py-5">
             <Textarea

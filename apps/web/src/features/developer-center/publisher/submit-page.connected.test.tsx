@@ -1,10 +1,19 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { JSDOM } from 'jsdom';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 
 let selectedAccountId = 'account-a';
 let publisherAccess: unknown;
+let publisherAccessError = false;
+let publisherAccessLoading = false;
+
+beforeEach(() => {
+  selectedAccountId = 'account-a';
+  publisherAccess = undefined;
+  publisherAccessError = false;
+  publisherAccessLoading = false;
+});
 
 mock.module('next/link', () => ({
   default: ({ children, ...props }: { children: React.ReactNode }) => <a {...props}>{children}</a>,
@@ -26,8 +35,8 @@ mock.module('@/stores/current-account-store', () => ({
 mock.module('./access-query', () => ({
   useDeveloperPublisherAccess: () => ({
     data: publisherAccess,
-    isError: false,
-    isLoading: false,
+    isError: publisherAccessError,
+    isLoading: publisherAccessLoading,
     refetch: () => undefined,
   }),
 }));
@@ -69,10 +78,20 @@ function publisher(publisherId: string, accountId: string) {
   };
 }
 
-function access(accountId: string, publisherIds: string[]) {
+function access(
+  accountId: string,
+  publisherIds: string[],
+  packageUpload: boolean | undefined,
+) {
   return {
     account_id: accountId,
+    user_id: 'user-1',
+    organization: null,
+    invitations: [],
     publishers: publisherIds.map((publisherId) => publisher(publisherId, accountId)),
+    ...(packageUpload === undefined
+      ? {}
+      : { capabilities: { package_upload: packageUpload } }),
   };
 }
 
@@ -95,6 +114,113 @@ function installDom() {
 }
 
 describe('PublisherModuleSubmitPage package Publisher selection', () => {
+  test('shows package upload only for matching explicit true access', async () => {
+    const dom = installDom();
+    const container = document.getElementById('root');
+    if (!container) throw new Error('test root missing');
+    const root = createRoot(container);
+    const render = async () => {
+      await act(async () => {
+        root.render(<PublisherModuleSubmitPage />);
+      });
+    };
+    const packageTab = () =>
+      [...document.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Package upload',
+      );
+    const expectDeclarativeOnly = (state: string) => {
+      expect({ state, packageTab: packageTab()?.textContent }).toEqual({
+        state,
+        packageTab: undefined,
+      });
+      expect(document.querySelector('[aria-label="Module manifest input"]')).not.toBeNull();
+    };
+
+    try {
+      publisherAccess = access('account-a', ['a1'], true);
+      publisherAccessLoading = true;
+      await render();
+      expectDeclarativeOnly('loading');
+
+      publisherAccessLoading = false;
+      publisherAccessError = true;
+      await render();
+      expectDeclarativeOnly('error-with-stale-data');
+
+      publisherAccessError = false;
+      publisherAccess = access('account-b', ['b1'], true);
+      await render();
+      expectDeclarativeOnly('account-mismatch');
+
+      publisherAccess = access('account-a', ['a1'], undefined);
+      await render();
+      expectDeclarativeOnly('missing-capability');
+
+      publisherAccess = access('account-a', ['a1'], false);
+      await render();
+      expectDeclarativeOnly('explicit-false');
+
+      publisherAccess = access('account-a', ['a1'], true);
+      await render();
+      expect(packageTab()).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+    }
+  });
+
+  test('clears an idle package Publisher selection when capability is lost', async () => {
+    const dom = installDom();
+    const container = document.getElementById('root');
+    if (!container) throw new Error('test root missing');
+    const root = createRoot(container);
+    const render = async () => {
+      await act(async () => {
+        root.render(<PublisherModuleSubmitPage />);
+      });
+    };
+    const packageTab = () =>
+      [...document.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Package upload',
+      );
+    const publisherSelect = () => {
+      const element = document.getElementById('developer-module-publisher');
+      if (!(element instanceof HTMLSelectElement)) throw new Error('Publisher select missing');
+      return element;
+    };
+
+    try {
+      publisherAccess = access('account-a', ['a1', 'a2'], true);
+      await render();
+
+      await act(async () => {
+        packageTab()?.dispatchEvent(new Event('click', { bubbles: true }));
+      });
+      await act(async () => {
+        const select = publisherSelect();
+        select.value = 'a2';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      expect(publisherSelect().value).toBe('a2');
+
+      publisherAccess = access('account-a', ['a1', 'a2'], false);
+      await render();
+      expect(packageTab()).toBeUndefined();
+      expect(document.querySelector('[aria-label="Package upload"]')).toBeNull();
+      expect(document.querySelector('[aria-label="Module manifest input"]')).not.toBeNull();
+
+      publisherAccess = access('account-a', ['a1', 'a2'], true);
+      await render();
+      await act(async () => {
+        packageTab()?.dispatchEvent(new Event('click', { bubbles: true }));
+      });
+      expect(publisherSelect().value).toBe('');
+    } finally {
+      await act(async () => root.unmount());
+      dom.window.close();
+    }
+  });
+
   test('clears an old multi-Publisher choice after switching A to B and back to A', async () => {
     const dom = installDom();
     const container = document.getElementById('root');
@@ -113,7 +239,7 @@ describe('PublisherModuleSubmitPage package Publisher selection', () => {
 
     try {
       selectedAccountId = 'account-a';
-      publisherAccess = access('account-a', ['a1', 'a2']);
+      publisherAccess = access('account-a', ['a1', 'a2'], true);
       await render();
 
       await act(async () => {
@@ -132,12 +258,12 @@ describe('PublisherModuleSubmitPage package Publisher selection', () => {
       expect(publisherSelect().value).toBe('a2');
 
       selectedAccountId = 'account-b';
-      publisherAccess = access('account-b', ['b1', 'b2']);
+      publisherAccess = access('account-b', ['b1', 'b2'], true);
       await render();
       expect(publisherSelect().value).toBe('');
 
       selectedAccountId = 'account-a';
-      publisherAccess = access('account-a', ['a1', 'a2']);
+      publisherAccess = access('account-a', ['a1', 'a2'], true);
       await render();
       expect(publisherSelect().value).toBe('');
     } finally {

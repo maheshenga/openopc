@@ -56,6 +56,7 @@ function access(publishers: DeveloperAccess['publishers']): DeveloperAccess {
     organization: null,
     invitations: [],
     publishers,
+    capabilities: { package_upload: true },
   };
 }
 

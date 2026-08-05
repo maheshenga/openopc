@@ -57,6 +57,7 @@ const EMPTY_PACKAGE_STATE: DeveloperModuleArtifactUploadState = {
 };
 
 export interface DeveloperModuleSubmitViewProps {
+  packageUploadAvailable?: boolean;
   mode?: DeveloperModuleSubmitMode;
   stage: SubmitControllerStage;
   text: string;
@@ -269,6 +270,7 @@ function listValue(value: unknown): string {
 }
 
 export function DeveloperModuleSubmitView({
+  packageUploadAvailable = false,
   mode = 'declarative',
   stage,
   text,
@@ -296,6 +298,8 @@ export function DeveloperModuleSubmitView({
   onCancelPackage = () => undefined,
   onRetryPackageAccess = () => undefined,
 }: DeveloperModuleSubmitViewProps) {
+  const effectiveMode: DeveloperModuleSubmitMode =
+    packageUploadAvailable && mode === 'package' ? 'package' : 'declarative';
   const confirmation = stage !== 'input' && item;
 
   return (
@@ -329,24 +333,26 @@ export function DeveloperModuleSubmitView({
         <button
           type="button"
           role="tab"
-          aria-selected={mode === 'declarative'}
+          aria-selected={effectiveMode === 'declarative'}
           className="h-7 rounded-md px-3 text-sm font-medium aria-selected:bg-background aria-selected:shadow-sm"
           onClick={() => onModeChange('declarative')}
         >
           Declarative JSON
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === 'package'}
-          className="h-7 rounded-md px-3 text-sm font-medium aria-selected:bg-background aria-selected:shadow-sm"
-          onClick={() => onModeChange('package')}
-        >
-          Package upload
-        </button>
+        {packageUploadAvailable ? (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={effectiveMode === 'package'}
+            className="h-7 rounded-md px-3 text-sm font-medium aria-selected:bg-background aria-selected:shadow-sm"
+            onClick={() => onModeChange('package')}
+          >
+            Package upload
+          </button>
+        ) : null}
       </div>
 
-      {mode === 'package' ? (
+      {effectiveMode === 'package' ? (
         <DeveloperModulePackageUploadView
           canWrite={canWrite}
           fileName={packageFileName}
@@ -541,6 +547,10 @@ export function PublisherModuleSubmitPage() {
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const accountAccess =
     accessQuery.data?.account_id === selectedAccountId ? accessQuery.data : undefined;
+  const packageUploadAvailable =
+    !accessQuery.isLoading &&
+    !accessQuery.isError &&
+    accountAccess?.capabilities?.package_upload === true;
   const packagePublishers = selectableDeveloperPublishers(accountAccess);
   const activePackageSelection = reconcilePublisherSelection(
     packageSelection,
@@ -551,6 +561,7 @@ export function PublisherModuleSubmitPage() {
   const activePackagePublisherId = activePackageSelection.publisherId;
   const storedPackageAccountId = packageSelection.accountId;
   const storedPackagePublisherId = packageSelection.publisherId;
+  const packageRequestIdle = packageState.stage === 'idle';
   useEffect(() => {
     const activeSelection = {
       accountId: activePackageAccountId,
@@ -570,6 +581,14 @@ export function PublisherModuleSubmitPage() {
     storedPackageAccountId,
     storedPackagePublisherId,
   ]);
+  useEffect(() => {
+    if (packageUploadAvailable) return;
+    setMode('declarative');
+    if (!packageRequestIdle) return;
+
+    setPackageFile(null);
+    setPackageSelection({ accountId: selectedAccountId, publisherId: '' });
+  }, [packageRequestIdle, packageUploadAvailable, selectedAccountId]);
 
   const changeText = (value: string) => {
     setFileError(null);
@@ -649,6 +668,7 @@ export function PublisherModuleSubmitPage() {
 
   return (
     <DeveloperModuleSubmitView
+      packageUploadAvailable={packageUploadAvailable}
       mode={mode}
       stage={controllerState.stage}
       text={controllerState.text}

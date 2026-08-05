@@ -331,6 +331,9 @@ const DeveloperAccessSchema = z.object({
       membership: DeveloperPublisherMemberSchema.nullable(),
     }),
   ),
+  capabilities: z.object({
+    package_upload: z.boolean(),
+  }),
 });
 
 const DeveloperAccountQuerySchema = z.object({ account_id: z.string().uuid().optional() }).strict();
@@ -447,7 +450,12 @@ export type DeveloperAppDependencies = Readonly<{
   };
   artifactService: Pick<
     DeveloperModuleArtifactService,
-    'createDeclarative' | 'createUpload' | 'finalizeUploadResult' | 'cancelUpload' | 'getArtifact'
+    | 'createDeclarative'
+    | 'createUpload'
+    | 'finalizeUploadResult'
+    | 'cancelUpload'
+    | 'getArtifact'
+    | 'isPackageUploadAvailable'
   >;
   releaseService: Pick<DeveloperModuleReleaseService, 'submit' | 'list' | 'get'>;
   reviewService: Pick<DeveloperModuleReviewService, 'requestReview' | 'history'>;
@@ -687,12 +695,21 @@ export function createDeveloperApp(dependencies: DeveloperAppDependencies) {
       const accountId = await dependencies.resolveAccountId(context, 'query');
       context.set('accountId', accountId);
       await dependencies.authorizeAccount(context, accountId, ACCOUNT_ACTIONS.ACCOUNT_READ);
-      const access = await dependencies.publisherService.getDeveloperAccess({
-        accountId,
-        userId: context.get('userId'),
-        email: context.get('userEmail'),
-      });
-      return context.json(access, 200);
+      const [access, packageUploadAvailable] = await Promise.all([
+        dependencies.publisherService.getDeveloperAccess({
+          accountId,
+          userId: context.get('userId'),
+          email: context.get('userEmail'),
+        }),
+        dependencies.artifactService.isPackageUploadAvailable(),
+      ]);
+      return context.json(
+        {
+          ...access,
+          capabilities: { package_upload: packageUploadAvailable },
+        },
+        200,
+      );
     },
   );
 

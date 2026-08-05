@@ -440,15 +440,17 @@ export class DeveloperModuleArtifactService {
     this.trustInfrastructureReady = input.trustInfrastructureReady ?? (() => false);
   }
 
-  private async assertCodeModuleSubmissionEnabled(): Promise<void> {
-    if (!this.codeModulesEnabled) {
-      throw new DeveloperModuleArtifactError('DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED', 503);
-    }
+  async isPackageUploadAvailable(): Promise<boolean> {
+    if (!this.codeModulesEnabled) return false;
     try {
-      if (await this.trustInfrastructureReady()) return;
+      return (await this.trustInfrastructureReady()) === true;
     } catch {
-      // Readiness failures are intentionally indistinguishable from disabled infrastructure.
+      return false;
     }
+  }
+
+  private async assertCodeModuleSubmissionEnabled(): Promise<void> {
+    if (await this.isPackageUploadAvailable()) return;
     throw new DeveloperModuleArtifactError('DEVELOPER_TRUST_INFRASTRUCTURE_DISABLED', 503);
   }
 

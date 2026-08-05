@@ -74,12 +74,56 @@ describe('Developer module submit view', () => {
     expect(html).toContain('id');
     expect(html).toContain('Validate');
     expect(html).toContain('Declarative JSON');
-    expect(html).toContain('Package upload');
+    expect(html).not.toContain('Package upload');
+  });
+
+  test('renders package submission only for an explicit true capability', () => {
+    const enabled = renderToStaticMarkup(
+      <DeveloperModuleSubmitView
+        packageUploadAvailable
+        mode="package"
+        stage="input"
+        text=""
+        item={null}
+        issues={[]}
+        inputErrorCode={null}
+        canWrite
+        pending={false}
+        errorCode={null}
+        onTextChange={noop}
+        onValidate={noop}
+        onConfirm={noop}
+      />,
+    );
+    const disabled = renderToStaticMarkup(
+      <DeveloperModuleSubmitView
+        packageUploadAvailable={false}
+        mode="package"
+        stage="input"
+        text=""
+        item={null}
+        issues={[]}
+        inputErrorCode={null}
+        canWrite
+        pending={false}
+        errorCode={null}
+        onTextChange={noop}
+        onValidate={noop}
+        onConfirm={noop}
+      />,
+    );
+
+    expect(enabled).toContain('Package upload');
+    expect(enabled).toContain('aria-label="Package upload"');
+    expect(disabled).not.toContain('Package upload');
+    expect(disabled).not.toContain('aria-label="Package upload"');
+    expect(disabled).toContain('Module manifest input');
   });
 
   test('renders the package Publisher selector instead of a free-form Publisher ID', () => {
     const html = renderToStaticMarkup(
       <DeveloperModuleSubmitView
+        packageUploadAvailable
         mode="package"
         stage="input"
         text=""
@@ -122,6 +166,7 @@ describe('Developer module submit view', () => {
   test('shows the application path and disables package upload without an active owner Publisher', () => {
     const html = renderToStaticMarkup(
       <DeveloperModuleSubmitView
+        packageUploadAvailable
         mode="package"
         stage="input"
         text=""
@@ -164,6 +209,7 @@ describe('Developer module submit view', () => {
   test('shows a bounded Publisher access error with retry before confirmed-empty', () => {
     const html = renderToStaticMarkup(
       <DeveloperModuleSubmitView
+        packageUploadAvailable
         mode="package"
         stage="input"
         text=""
@@ -211,6 +257,7 @@ describe('Developer module submit view', () => {
   test('disables the Publisher selector while an active package upload keeps cancel available', () => {
     const html = renderToStaticMarkup(
       <DeveloperModuleSubmitView
+        packageUploadAvailable
         mode="package"
         stage="input"
         text=""
@@ -254,6 +301,7 @@ describe('Developer module submit view', () => {
     const digest = `sha256:${'a'.repeat(64)}` as const;
     const html = renderToStaticMarkup(
       <DeveloperModuleSubmitView
+        packageUploadAvailable
         mode="package"
         stage="input"
         text=""

@@ -202,6 +202,7 @@ test('keeps one refreshed Publisher entry and selects the returned ID after crea
     organization: ORGANIZATION,
     invitations: [],
     publishers: [PUBLISHER_A],
+    capabilities: { package_upload: true },
   };
   queryClient.setQueryData(['developer-publisher-access', ACCOUNT_ID], access);
 

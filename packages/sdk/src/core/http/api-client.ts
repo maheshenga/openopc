@@ -26,12 +26,20 @@ export interface ErrorContext {
   silent?: boolean;
 }
 
+/**
+ * Standard Fetch-compatible transport surface.
+ *
+ * Keep the SDK contract independent from runtime-specific additions on a
+ * global fetch function (for example Bun's `fetch.preconnect`).
+ */
+export type FetchImpl = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 export interface ApiClientOptions {
   showErrors?: boolean;
   errorContext?: ErrorContext;
   timeout?: number;
   /** Optional request-scoped transport; defaults to the current global fetch. */
-  fetchImpl?: typeof globalThis.fetch;
+  fetchImpl?: FetchImpl;
 }
 
 export interface ApiResponse<T = any> {

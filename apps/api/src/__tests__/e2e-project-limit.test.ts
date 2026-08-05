@@ -135,6 +135,7 @@ mock.module('../projects/git', () => ({
   diffStat: async () => ({ files: [], additions: 0, deletions: 0 }),
   getFileAtRef: async () => null,
   getMergeBase: async () => 'a'.repeat(40),
+  resolveBranchAheadState: async () => ({ ahead: false, commitsAhead: 0 }),
 }));
 
 mock.module('../snapshots/builder', () => ({

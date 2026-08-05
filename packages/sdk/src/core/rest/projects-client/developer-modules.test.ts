@@ -3,6 +3,7 @@ import { beforeEach, expect, mock, test } from 'bun:test';
 import { createKortix } from '../../client/kortix';
 import { configureKortix } from '../../http/config';
 import {
+  type DeveloperAccess,
   type DeveloperModuleRelease,
   acceptDeveloperInvitation,
   cancelDeveloperModuleArtifactUpload,
@@ -25,16 +26,18 @@ import {
 } from './developer-modules';
 
 let calls: Array<{ url: string; method: string; body: unknown }> = [];
+let responseBody: unknown;
 
 beforeEach(() => {
   calls = [];
+  responseBody = { valid: true, issues: [] };
   globalThis.fetch = mock(async (url: unknown, opts: { method?: string; body?: string } = {}) => {
     calls.push({
       url: String(url),
       method: opts.method ?? 'GET',
       body: opts.body ? JSON.parse(opts.body) : undefined,
     });
-    return new Response(JSON.stringify({ valid: true, issues: [] }), {
+    return new Response(JSON.stringify(responseBody), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
@@ -106,6 +109,34 @@ test('developer application SDK reads current policy state and submits exact acc
   ]);
 });
 
+test('createKortix exposes the developer application facade', async () => {
+  const kortix = createKortix({ backendUrl: 'http://test.local', getToken: async () => 'tok' });
+
+  await kortix.developer.application.current({ accountId: 'acc-1' });
+  await kortix.developer.application.submit({
+    accountId: 'acc-1',
+    organizationName: 'Acme Studio',
+    policyVersions: { moduleRules: '2026-07-28', acceptableUse: '2026-07-28' },
+  });
+
+  expect(calls).toEqual([
+    {
+      url: 'http://test.local/developer/applications/current?account_id=acc-1',
+      method: 'GET',
+      body: undefined,
+    },
+    {
+      url: 'http://test.local/developer/applications',
+      method: 'POST',
+      body: {
+        account_id: 'acc-1',
+        organization_name: 'Acme Studio',
+        policy_versions: { moduleRules: '2026-07-28', acceptableUse: '2026-07-28' },
+      },
+    },
+  ]);
+});
+
 test('developer Publisher SDK maps access, invitation, creation, list, and role updates', async () => {
   await getDeveloperAccess({ accountId: 'acc-1' });
   await acceptDeveloperInvitation('one-time-token', { accountId: 'acc-1' });
@@ -152,6 +183,28 @@ test('developer Publisher SDK maps access, invitation, creation, list, and role 
       url: 'http://test.local/developer/publishers/publisher%2Fwith%20slash/members/user%20with%20slash',
       method: 'PUT',
       body: { account_id: 'acc-1', role: 'release_manager', expected_revision: 2 },
+    },
+  ]);
+});
+
+test('developer access exposes the server-authoritative package upload capability', async () => {
+  responseBody = {
+    account_id: 'acc-1',
+    user_id: 'user-1',
+    organization: null,
+    invitations: [],
+    publishers: [],
+    capabilities: { package_upload: false },
+  };
+
+  const access: DeveloperAccess = await getDeveloperAccess({ accountId: 'acc-1' });
+
+  expect(access.capabilities.package_upload).toBe(false);
+  expect(calls).toEqual([
+    {
+      url: 'http://test.local/developer/access?account_id=acc-1',
+      method: 'GET',
+      body: undefined,
     },
   ]);
 });

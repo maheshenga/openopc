@@ -10,13 +10,15 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Building2, CheckCircle2, Clock3, ShieldAlert, XCircle } from 'lucide-react';
 import Link from 'next/link';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, type ReactNode, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import Loading from '@/components/ui/loading';
 import { usePermission } from '@/lib/use-permission';
 import { useCurrentAccountStore } from '@/stores/current-account-store';
+
+import { DeveloperPublisherOnboardingPanel } from '../publisher/onboarding-panel';
 
 export type DeveloperApplicationPageState =
   | 'loading'
@@ -41,6 +43,7 @@ export interface DeveloperApplicationViewProps {
     checked: boolean,
   ) => void;
   onSubmit: () => void;
+  approvedContent?: ReactNode;
 }
 
 export interface DeveloperApplicationFormState {
@@ -131,12 +134,12 @@ function ApplicationStatus({ application }: { application: DeveloperApplication 
   return (
     <section className="space-y-6 border-y py-8" aria-label="Developer application status">
       <div className="flex items-start gap-4">
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-foreground/5">
+        <div className="bg-foreground/5 flex size-10 shrink-0 items-center justify-center rounded-full">
           <Icon className="size-5" />
         </div>
         <div className="min-w-0">
           <h2 className="text-lg font-semibold">{presentation.title}</h2>
-          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
+          <p className="text-muted-foreground mt-1 max-w-2xl text-sm leading-6">
             {presentation.description}
           </p>
         </div>
@@ -144,15 +147,15 @@ function ApplicationStatus({ application }: { application: DeveloperApplication 
 
       <dl className="grid gap-x-8 gap-y-5 sm:grid-cols-3">
         <div>
-          <dt className="text-xs text-muted-foreground">Revision</dt>
+          <dt className="text-muted-foreground text-xs">Revision</dt>
           <dd className="mt-1 text-sm font-medium">Revision {application.revision}</dd>
         </div>
         <div>
-          <dt className="text-xs text-muted-foreground">Submitted</dt>
+          <dt className="text-muted-foreground text-xs">Submitted</dt>
           <dd className="mt-1 text-sm font-medium">{dateLabel(application.submitted_at)}</dd>
         </div>
         <div>
-          <dt className="text-xs text-muted-foreground">Policy versions</dt>
+          <dt className="text-muted-foreground text-xs">Policy versions</dt>
           <dd className="mt-1 text-sm font-medium">
             {application.policy_versions.moduleRules} · {application.policy_versions.acceptableUse}
           </dd>
@@ -162,7 +165,7 @@ function ApplicationStatus({ application }: { application: DeveloperApplication 
       {application.decision_reason ? (
         <div className="border-l-2 pl-4 text-sm">
           <p className="font-medium">Platform decision</p>
-          <p className="mt-1 leading-6 text-muted-foreground">{application.decision_reason}</p>
+          <p className="text-muted-foreground mt-1 leading-6">{application.decision_reason}</p>
         </div>
       ) : null}
 
@@ -174,7 +177,7 @@ function ApplicationStatus({ application }: { application: DeveloperApplication 
           </Link>
         </Button>
       ) : (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-muted-foreground text-sm">
           An application by itself does not grant module upload or release access.
         </p>
       )}
@@ -194,6 +197,7 @@ export function DeveloperApplicationView({
   onOrganizationNameChange,
   onPolicyAcceptedChange,
   onSubmit,
+  approvedContent,
 }: DeveloperApplicationViewProps) {
   const canSubmit =
     state === 'available' &&
@@ -213,37 +217,37 @@ export function DeveloperApplicationView({
     <main className="mx-auto w-full max-w-5xl space-y-8 px-4 py-8 md:px-8 md:py-10">
       <header className="max-w-3xl">
         <h1 className="text-2xl font-semibold tracking-tight">Developer application</h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+        <p className="text-muted-foreground mt-2 text-sm leading-6">
           Verify one organization before creating Publishers, uploading modules, or requesting a
           release.
         </p>
       </header>
 
       {errorCode ? (
-        <div className="border-l-2 border-destructive py-1 pl-4 text-sm">
+        <div className="border-destructive border-l-2 py-1 pl-4 text-sm">
           <p className="font-medium">{errorCode}</p>
-          <p className="mt-1 text-muted-foreground">Try again after checking your connection.</p>
+          <p className="text-muted-foreground mt-1">Try again after checking your connection.</p>
         </div>
       ) : null}
 
       {state === 'loading' ? (
-        <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
+        <div className="text-muted-foreground flex min-h-48 items-center justify-center gap-2 text-sm">
           <Loading />
           Loading developer application...
         </div>
       ) : null}
       {state === 'no_account' ? (
-        <p className="border-y py-12 text-center text-sm text-muted-foreground">
+        <p className="text-muted-foreground border-y py-12 text-center text-sm">
           Select an account to apply for developer access.
         </p>
       ) : null}
       {state === 'permission_denied' ? (
-        <p className="border-y py-12 text-center text-sm text-muted-foreground">
+        <p className="text-muted-foreground border-y py-12 text-center text-sm">
           You do not have permission to view developer admission for this account.
         </p>
       ) : null}
       {state === 'error' ? (
-        <p className="border-y py-12 text-center text-sm text-muted-foreground">
+        <p className="text-muted-foreground border-y py-12 text-center text-sm">
           Developer admission is temporarily unavailable.
         </p>
       ) : null}
@@ -266,7 +270,7 @@ export function DeveloperApplicationView({
                 disabled={!canWrite || pending}
                 onChange={(event) => onOrganizationNameChange(event.target.value)}
               />
-              <p className="text-xs leading-5 text-muted-foreground">
+              <p className="text-muted-foreground text-xs leading-5">
                 Invited applicants must use the same organization name already linked to the
                 account.
               </p>
@@ -277,7 +281,7 @@ export function DeveloperApplicationView({
               <label className="flex items-start gap-3 text-sm">
                 <input
                   type="checkbox"
-                  className="mt-0.5 size-4 rounded border-input accent-foreground"
+                  className="border-input accent-foreground mt-0.5 size-4 rounded"
                   checked={acceptedPolicies.moduleRules}
                   onChange={(event) => onPolicyAcceptedChange('moduleRules', event.target.checked)}
                 />
@@ -289,7 +293,7 @@ export function DeveloperApplicationView({
               <label className="flex items-start gap-3 text-sm">
                 <input
                   type="checkbox"
-                  className="mt-0.5 size-4 rounded border-input accent-foreground"
+                  className="border-input accent-foreground mt-0.5 size-4 rounded"
                   checked={acceptedPolicies.acceptableUse}
                   onChange={(event) =>
                     onPolicyAcceptedChange('acceptableUse', event.target.checked)
@@ -303,7 +307,7 @@ export function DeveloperApplicationView({
             </fieldset>
 
             {!canWrite ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-muted-foreground text-sm">
                 Account write permission is required to submit an application.
               </p>
             ) : null}
@@ -315,7 +319,7 @@ export function DeveloperApplicationView({
 
           <aside className="space-y-4 border-t pt-6 md:border-t-0 md:border-l md:pt-0 md:pl-8">
             <h2 className="text-sm font-semibold">What happens next</h2>
-            <ol className="space-y-4 text-sm text-muted-foreground">
+            <ol className="text-muted-foreground space-y-4 text-sm">
               <li>1. The platform reviews the account and organization.</li>
               <li>2. Organization verification is recorded once and shared with invitations.</li>
               <li>3. Publisher creation unlocks only after approval and verification.</li>
@@ -325,6 +329,7 @@ export function DeveloperApplicationView({
       ) : null}
 
       {state === 'current' && application ? <ApplicationStatus application={application} /> : null}
+      {state === 'current' && application?.state === 'approved' ? approvedContent : null}
     </main>
   );
 }
@@ -411,6 +416,14 @@ export function DeveloperApplicationPage() {
         })
       }
       onSubmit={() => submission.mutate()}
+      approvedContent={
+        selectedAccountId && currentQuery.data?.application?.state === 'approved' ? (
+          <DeveloperPublisherOnboardingPanel
+            accountId={selectedAccountId}
+            canWrite={writePermission.allowed}
+          />
+        ) : null
+      }
     />
   );
 }

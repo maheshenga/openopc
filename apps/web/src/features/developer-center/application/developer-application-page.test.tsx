@@ -1,6 +1,6 @@
-import { expect, test } from 'bun:test';
 import type { DeveloperApplication, DeveloperApplicationPolicyVersions } from '@kortix/sdk';
-import type { ComponentType } from 'react';
+import { expect, test } from 'bun:test';
+import type { ComponentType, ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const POLICIES: DeveloperApplicationPolicyVersions = {
@@ -40,6 +40,7 @@ type ViewProps = {
     checked: boolean,
   ) => void;
   onSubmit: () => void;
+  approvedContent?: ReactNode;
 };
 
 async function view(): Promise<ComponentType<ViewProps>> {
@@ -124,6 +125,24 @@ test('renders governed submitted, approved, rejected, and suspended states', asy
   expect(approved).toContain('Open Developer Center');
   expect(rejected).toContain('Organization details could not be verified.');
   expect(suspended).toContain('Verification needs to be renewed.');
+
+  const approvedWithContent = renderToStaticMarkup(
+    <View
+      state="current"
+      application={{ ...APPLICATION, state: 'approved', revision: 1 }}
+      currentPolicyVersions={POLICIES}
+      organizationName=""
+      acceptedPolicies={{ moduleRules: false, acceptableUse: false }}
+      canWrite
+      pending={false}
+      errorCode={null}
+      onOrganizationNameChange={noop}
+      onPolicyAcceptedChange={noop}
+      onSubmit={noop}
+      approvedContent={<div>Publisher onboarding ready</div>}
+    />,
+  );
+  expect(approvedWithContent).toContain('Publisher onboarding ready');
 });
 
 test('renders account, permission, loading, and recoverable error boundaries', async () => {

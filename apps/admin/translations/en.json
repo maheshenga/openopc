@@ -8,6 +8,7 @@
       "resubmit": "Resubmit for review"
     },
     "admin": {
+      "applications": "Developer applications",
       "moduleReviews": "Module reviews",
       "reviewQueue": "Review queue",
       "requestChanges": "Request changes",

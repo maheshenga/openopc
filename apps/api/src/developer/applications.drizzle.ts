@@ -6,7 +6,7 @@ import {
   developerOrganizations,
   policyAcceptances,
 } from '@kortix/db';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, or } from 'drizzle-orm';
 
 import type {
   DeveloperApplication,
@@ -255,6 +255,65 @@ export function createDrizzleDeveloperApplicationRepository(
         ok: true,
         value: application ? serializeDeveloperApplication(application) : null,
       };
+    },
+
+    async adminList({ state, limit, cursor }) {
+      const cursorCondition = cursor
+        ? or(
+            lt(developerApplications.updatedAt, cursor.updatedAt),
+            and(
+              eq(developerApplications.updatedAt, cursor.updatedAt),
+              lt(developerApplications.applicationId, cursor.applicationId),
+            ),
+          )
+        : undefined;
+      const rows = await database
+        .select({
+          application: developerApplications,
+          organization: developerOrganizations,
+        })
+        .from(developerApplications)
+        .innerJoin(
+          developerOrganizations,
+          and(
+            eq(developerOrganizations.organizationId, developerApplications.organizationId),
+            eq(developerOrganizations.accountId, developerApplications.accountId),
+          ),
+        )
+        .where(and(eq(developerApplications.state, state), cursorCondition))
+        .orderBy(desc(developerApplications.updatedAt), desc(developerApplications.applicationId))
+        .limit(limit + 1);
+      return {
+        applications: rows.slice(0, limit).map((row) => ({
+          application: serializeDeveloperApplication(row.application),
+          organization: serializeDeveloperOrganization(row.organization),
+        })),
+        hasMore: rows.length > limit,
+      };
+    },
+
+    async adminGet(applicationId) {
+      const [row] = await database
+        .select({
+          application: developerApplications,
+          organization: developerOrganizations,
+        })
+        .from(developerApplications)
+        .innerJoin(
+          developerOrganizations,
+          and(
+            eq(developerOrganizations.organizationId, developerApplications.organizationId),
+            eq(developerOrganizations.accountId, developerApplications.accountId),
+          ),
+        )
+        .where(eq(developerApplications.applicationId, applicationId))
+        .limit(1);
+      return row
+        ? {
+            application: serializeDeveloperApplication(row.application),
+            organization: serializeDeveloperOrganization(row.organization),
+          }
+        : null;
     },
 
     async decide(command) {

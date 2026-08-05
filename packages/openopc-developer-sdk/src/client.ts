@@ -15,11 +15,25 @@ import {
   ModuleServiceErrorResponseSchema,
   type OpenOpcServiceName,
   type OpenOpcServiceOperation,
-} from '@kortix/api-contract';
+} from './contracts.js';
+import { OpenOpcModuleRequestError, type OpenOpcModuleRequestErrorCode } from './errors.js';
 
 const MAX_TOKEN_LENGTH = 16_384;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
-const REQUEST_KEYS = new Set(['service', 'operation', 'method', 'path', 'body', 'idempotencyKey']);
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_STREAM_TIMEOUT_MS = 300_000;
+const MAX_REQUEST_TIMEOUT_MS = 600_000;
+const REQUEST_KEYS = new Set([
+  'service',
+  'operation',
+  'method',
+  'path',
+  'body',
+  'idempotencyKey',
+  'signal',
+  'timeoutMs',
+]);
+const REQUEST_OPTION_KEYS = new Set(['signal', 'timeoutMs']);
 const PROVIDER_SELECTION_KEYS = new Set([
   'provider',
   'baseUrl',
@@ -34,16 +48,25 @@ export type OpenOpcModuleFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
-export interface OpenOpcModuleClientOptions {
-  baseUrl: string;
-  getCapabilityToken(input: {
-    service: OpenOpcServiceName;
-    operation: OpenOpcServiceOperation;
-  }): Promise<string>;
-  fetch?: OpenOpcModuleFetch;
+export interface OpenOpcRequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
-export interface OpenOpcModuleTransportRequest {
+export interface OpenOpcModuleClientOptions {
+  baseUrl: string;
+  getCapabilityToken(
+    input: {
+      service: OpenOpcServiceName;
+      operation: OpenOpcServiceOperation;
+    },
+    options?: Pick<OpenOpcRequestOptions, 'signal'>,
+  ): Promise<string>;
+  fetch?: OpenOpcModuleFetch;
+  timeoutMs?: number;
+}
+
+export interface OpenOpcModuleTransportRequest extends OpenOpcRequestOptions {
   service: OpenOpcServiceName;
   operation: OpenOpcServiceOperation;
   method: 'GET' | 'POST';
@@ -114,14 +137,16 @@ export interface OpenOpcChatChunk {
 
 export interface OpenOpcAiClient {
   models: {
-    list(): Promise<{ data: OpenOpcModel[] }>;
+    list(options?: OpenOpcRequestOptions): Promise<{ data: OpenOpcModel[] }>;
   };
   chat: {
     create(
       input: OpenOpcChatCompletionRequest & { stream?: false },
+      options?: OpenOpcRequestOptions,
     ): Promise<OpenOpcChatCompletion>;
     create(
       input: OpenOpcChatCompletionRequest & { stream: true },
+      options?: OpenOpcRequestOptions,
     ): Promise<AsyncIterable<OpenOpcChatChunk>>;
   };
 }
@@ -131,14 +156,16 @@ export interface OpenOpcPaymentClient {
     create(
       input: CreateDeveloperPaymentOrderInput,
       idempotencyKey: string,
+      options?: OpenOpcRequestOptions,
     ): Promise<CreateDeveloperPaymentOrderResult>;
-    get(orderId: string): Promise<DeveloperPaymentOrderView>;
+    get(orderId: string, options?: OpenOpcRequestOptions): Promise<DeveloperPaymentOrderView>;
   };
   refunds: {
     create(
       orderId: string,
       input: CreateDeveloperPaymentRefundInput,
       idempotencyKey: string,
+      options?: OpenOpcRequestOptions,
     ): Promise<DeveloperPaymentRefundView>;
   };
 }
@@ -166,8 +193,143 @@ export class OpenOpcModuleServiceError extends Error {
   }
 }
 
+export { OpenOpcModuleRequestError };
+export type { OpenOpcModuleRequestErrorCode };
+
 function protocolError(message: string): never {
   throw new OpenOpcModuleProtocolError(message);
+}
+
+function isAbortSignalLike(value: unknown): value is AbortSignal {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as AbortSignal).aborted === 'boolean' &&
+    typeof (value as AbortSignal).addEventListener === 'function' &&
+    typeof (value as AbortSignal).removeEventListener === 'function'
+  );
+}
+
+function validateTimeoutMs(value: unknown): void {
+  if (
+    value !== undefined &&
+    (!Number.isSafeInteger(value) ||
+      (value as number) <= 0 ||
+      (value as number) > MAX_REQUEST_TIMEOUT_MS)
+  ) {
+    protocolError('OpenOPC module service request timeout is invalid');
+  }
+}
+
+function validateRequestOptions(options: OpenOpcRequestOptions): void {
+  if (options.signal !== undefined && !isAbortSignalLike(options.signal)) {
+    protocolError('OpenOPC module service request signal is invalid');
+  }
+  validateTimeoutMs(options.timeoutMs);
+}
+
+function withRequestOptions(
+  input: Omit<OpenOpcModuleTransportRequest, keyof OpenOpcRequestOptions>,
+  options?: OpenOpcRequestOptions,
+): OpenOpcModuleTransportRequest {
+  if (options === undefined) return input;
+  if (
+    !options ||
+    typeof options !== 'object' ||
+    Array.isArray(options) ||
+    Object.keys(options).some((key) => !REQUEST_OPTION_KEYS.has(key))
+  ) {
+    protocolError('OpenOPC module service request options are invalid');
+  }
+  validateRequestOptions(options);
+  return { ...input, signal: options.signal, timeoutMs: options.timeoutMs };
+}
+
+interface RequestContext {
+  signal: AbortSignal;
+  cleanup: () => void;
+  error: () => OpenOpcModuleRequestError;
+}
+
+function createRequestContext(
+  options: OpenOpcRequestOptions,
+  defaultTimeoutMs: number,
+): RequestContext {
+  validateRequestOptions(options);
+  const callerSignal = options.signal;
+  if (callerSignal?.aborted) {
+    throw new OpenOpcModuleRequestError('OPENOPC_MODULE_REQUEST_ABORTED');
+  }
+
+  const controller = new AbortController();
+  let timedOut = false;
+  let cleaned = false;
+  const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+  const onCallerAbort = () => {
+    controller.abort();
+    cleanup();
+  };
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+    cleanup();
+  }, timeoutMs);
+  callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
+
+  function cleanup() {
+    if (cleaned) return;
+    cleaned = true;
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', onCallerAbort);
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup,
+    error: () =>
+      new OpenOpcModuleRequestError(
+        timedOut ? 'OPENOPC_MODULE_REQUEST_TIMEOUT' : 'OPENOPC_MODULE_REQUEST_ABORTED',
+      ),
+  };
+}
+
+async function abortable<T>(operation: Promise<T>, context: RequestContext): Promise<T> {
+  if (context.signal.aborted) throw context.error();
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      context.signal.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(context.error());
+    };
+    context.signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+function requestFailure(error: unknown, context: RequestContext): never {
+  if (error instanceof OpenOpcModuleProtocolError) throw error;
+  if (error instanceof OpenOpcModuleServiceError) throw error;
+  if (error instanceof OpenOpcModuleRequestError) throw error;
+  if (context.signal.aborted) throw context.error();
+  throw new OpenOpcModuleRequestError('OPENOPC_MODULE_REQUEST_FAILED');
 }
 
 function normalizeBaseUrl(value: string): URL {
@@ -198,6 +360,7 @@ function validateRequest(input: OpenOpcModuleTransportRequest): void {
   ) {
     protocolError('OpenOPC module service request is invalid');
   }
+  validateRequestOptions(input);
   const capability = ModuleServiceCapabilityRequestSchema.safeParse({
     service: input.service,
     operations: [input.operation],
@@ -282,74 +445,83 @@ function parseJson(text: string): unknown {
   }
 }
 
-async function readResponseText(response: Response): Promise<string> {
+async function readResponseText(response: Response, context: RequestContext): Promise<string> {
   try {
-    return await response.text();
-  } catch {
-    protocolError('OpenOPC module service response failed');
+    return await abortable(response.text(), context);
+  } catch (error) {
+    requestFailure(error, context);
   }
 }
 
-async function* parseEventStream(response: Response): AsyncIterable<OpenOpcChatChunk> {
-  if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream')) {
-    protocolError('OpenOPC module service returned an invalid stream');
-  }
-  if (!response.body) protocolError('OpenOPC module service returned an invalid stream');
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let completed = false;
+async function* parseEventStream(
+  response: Response,
+  context: RequestContext,
+): AsyncIterable<OpenOpcChatChunk> {
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      if (buffer.length > MAX_RESPONSE_BYTES) {
-        protocolError('OpenOPC module service response is too large');
-      }
+    if (!response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream')) {
+      protocolError('OpenOPC module service returned an invalid stream');
+    }
+    if (!response.body) protocolError('OpenOPC module service returned an invalid stream');
 
-      let separator = /\r?\n\r?\n/.exec(buffer);
-      while (separator?.index !== undefined) {
-        const event = buffer.slice(0, separator.index);
-        buffer = buffer.slice(separator.index + separator[0].length);
-        const data = event
-          .split(/\r?\n/)
-          .filter((line) => line.startsWith('data:'))
-          .map((line) => line.slice(5).replace(/^ /, ''))
-          .join('\n');
-        if (data === '[DONE]') {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let completed = false;
+    try {
+      for (;;) {
+        const { done, value } = await abortable(reader.read(), context);
+        buffer += decoder.decode(value, { stream: !done });
+        if (buffer.length > MAX_RESPONSE_BYTES) {
+          protocolError('OpenOPC module service response is too large');
+        }
+
+        let separator = /\r?\n\r?\n/.exec(buffer);
+        while (separator?.index !== undefined) {
+          const event = buffer.slice(0, separator.index);
+          buffer = buffer.slice(separator.index + separator[0].length);
+          const data = event
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).replace(/^ /, ''))
+            .join('\n');
+          if (data === '[DONE]') {
+            completed = true;
+            return;
+          }
+          if (data) {
+            const parsed = parseJson(data);
+            if (
+              !parsed ||
+              typeof parsed !== 'object' ||
+              Array.isArray(parsed) ||
+              typeof (parsed as Record<string, unknown>).id !== 'string' ||
+              !Array.isArray((parsed as Record<string, unknown>).choices)
+            ) {
+              protocolError('OpenOPC module service returned an invalid stream');
+            }
+            yield parsed as OpenOpcChatChunk;
+          }
+          separator = /\r?\n\r?\n/.exec(buffer);
+        }
+        if (done) {
+          if (buffer.trim() !== '') {
+            protocolError('OpenOPC module service returned an invalid stream');
+          }
           completed = true;
           return;
         }
-        if (data) {
-          const parsed = parseJson(data);
-          if (
-            !parsed ||
-            typeof parsed !== 'object' ||
-            Array.isArray(parsed) ||
-            typeof (parsed as Record<string, unknown>).id !== 'string' ||
-            !Array.isArray((parsed as Record<string, unknown>).choices)
-          ) {
-            protocolError('OpenOPC module service returned an invalid stream');
-          }
-          yield parsed as OpenOpcChatChunk;
-        }
-        separator = /\r?\n\r?\n/.exec(buffer);
       }
-      if (done) {
-        if (buffer.trim() !== '') {
-          protocolError('OpenOPC module service returned an invalid stream');
-        }
-        completed = true;
-        return;
-      }
+    } catch (error) {
+      if (error instanceof OpenOpcModuleProtocolError) throw error;
+      requestFailure(error, context);
+    } finally {
+      // `reader.cancel()` is best effort; the lifecycle error above is the
+      // authoritative result when the consumer or platform aborts the stream.
+      if (!completed) await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
-  } catch (error) {
-    if (error instanceof OpenOpcModuleProtocolError) throw error;
-    protocolError('OpenOPC module service response stream failed');
   } finally {
-    if (!completed) await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+    context.cleanup();
   }
 }
 
@@ -364,121 +536,182 @@ export function createOpenOpcModuleClient(
   ) {
     protocolError('OpenOPC module client options are invalid');
   }
+  validateTimeoutMs(options.timeoutMs);
   const baseUrl = normalizeBaseUrl(options.baseUrl);
   const requestFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   if (typeof requestFetch !== 'function') {
     protocolError('OpenOPC module client options are invalid');
   }
 
-  const send = async (input: OpenOpcModuleTransportRequest): Promise<Response> => {
+  const send = async (
+    input: OpenOpcModuleTransportRequest,
+  ): Promise<{ response: Response; context: RequestContext }> => {
     validateRequest(input);
-    const token = validateToken(
-      await options.getCapabilityToken({ service: input.service, operation: input.operation }),
+    const context = createRequestContext(
+      input,
+      options.timeoutMs ??
+        (input.operation === 'text.stream'
+          ? DEFAULT_STREAM_TIMEOUT_MS
+          : DEFAULT_REQUEST_TIMEOUT_MS),
     );
-    const headers = new Headers({
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(input.idempotencyKey ? { 'Idempotency-Key': input.idempotencyKey } : {}),
-    });
-    let body: string | undefined;
-    if (input.body !== undefined) {
-      headers.set('Content-Type', 'application/json');
-      try {
-        body = JSON.stringify(input.body);
-      } catch {
-        protocolError('OpenOPC module service request body is invalid');
-      }
-      if (body === undefined) protocolError('OpenOPC module service request body is invalid');
-    }
-
-    let response: Response;
+    let handedOff = false;
     try {
-      response = await requestFetch(new URL(input.path, baseUrl), {
-        method: input.method,
-        headers,
-        body,
-        credentials: 'omit',
-        redirect: 'error',
-        referrerPolicy: 'no-referrer',
+      const token = validateToken(
+        await abortable(
+          Promise.resolve().then(() =>
+            options.getCapabilityToken(
+              {
+                service: input.service,
+                operation: input.operation,
+              },
+              { signal: context.signal },
+            ),
+          ),
+          context,
+        ),
+      );
+      const headers = new Headers({
+        Accept: input.operation === 'text.stream' ? 'text/event-stream' : 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(input.idempotencyKey ? { 'Idempotency-Key': input.idempotencyKey } : {}),
       });
-    } catch {
-      protocolError('OpenOPC module service request failed');
-    }
-    if (!response.ok) {
-      const payload = parseJson(await readResponseText(response));
-      const parsed = ModuleServiceErrorResponseSchema.safeParse(payload);
-      if (!parsed.success) {
-        protocolError('OpenOPC module service returned an invalid error response');
+      let body: string | undefined;
+      if (input.body !== undefined) {
+        headers.set('Content-Type', 'application/json');
+        try {
+          body = JSON.stringify(input.body);
+        } catch {
+          protocolError('OpenOPC module service request body is invalid');
+        }
+        if (body === undefined) protocolError('OpenOPC module service request body is invalid');
       }
-      throw new OpenOpcModuleServiceError(parsed.data.error, response.status);
+
+      const response = await abortable(
+        Promise.resolve().then(() =>
+          requestFetch(new URL(input.path, baseUrl), {
+            method: input.method,
+            headers,
+            body,
+            signal: context.signal,
+            credentials: 'omit',
+            redirect: 'error',
+            referrerPolicy: 'no-referrer',
+          }),
+        ),
+        context,
+      );
+      if (!response.ok) {
+        const payload = parseJson(await readResponseText(response, context));
+        const parsed = ModuleServiceErrorResponseSchema.safeParse(payload);
+        if (!parsed.success) {
+          protocolError('OpenOPC module service returned an invalid error response');
+        }
+        throw new OpenOpcModuleServiceError(parsed.data.error, response.status);
+      }
+      handedOff = true;
+      return { response, context };
+    } catch (error) {
+      requestFailure(error, context);
+    } finally {
+      if (!handedOff) context.cleanup();
     }
-    return response;
   };
 
   const request = async <T>(input: OpenOpcModuleTransportRequest): Promise<T> => {
-    const response = await send(input);
-    return parseJson(await readResponseText(response)) as T;
+    const sent = await send(input);
+    try {
+      return parseJson(await readResponseText(sent.response, sent.context)) as T;
+    } finally {
+      sent.context.cleanup();
+    }
   };
 
   async function createChat(
     input: OpenOpcChatCompletionRequest & { stream: true },
+    options?: OpenOpcRequestOptions,
   ): Promise<AsyncIterable<OpenOpcChatChunk>>;
   async function createChat(
     input: OpenOpcChatCompletionRequest & { stream?: false },
+    options?: OpenOpcRequestOptions,
   ): Promise<OpenOpcChatCompletion>;
   async function createChat(
     input: OpenOpcChatCompletionRequest,
+    options?: OpenOpcRequestOptions,
   ): Promise<OpenOpcChatCompletion | AsyncIterable<OpenOpcChatChunk>> {
     validateChatInput(input);
     if (input.stream === true) {
-      const response = await send({
-        service: 'ai',
-        operation: 'text.stream',
-        method: 'POST',
-        path: '/v1/module-services/ai/chat/completions',
-        body: input,
-      });
-      return parseEventStream(response);
+      const sent = await send(
+        withRequestOptions(
+          {
+            service: 'ai',
+            operation: 'text.stream',
+            method: 'POST',
+            path: '/v1/module-services/ai/chat/completions',
+            body: input,
+          },
+          options,
+        ),
+      );
+      return parseEventStream(sent.response, sent.context);
     }
-    return request<OpenOpcChatCompletion>({
-      service: 'ai',
-      operation: 'text.generate',
-      method: 'POST',
-      path: '/v1/module-services/ai/chat/completions',
-      body: input,
-    });
+    return request<OpenOpcChatCompletion>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'text.generate',
+          method: 'POST',
+          path: '/v1/module-services/ai/chat/completions',
+          body: input,
+        },
+        options,
+      ),
+    );
   }
 
   const createPaymentOrder = async (
     input: CreateDeveloperPaymentOrderInput,
     idempotencyKey: string,
+    options?: OpenOpcRequestOptions,
   ): Promise<CreateDeveloperPaymentOrderResult> => {
     if (!CreateDeveloperPaymentOrderInputSchema.safeParse(input).success) {
       protocolError('OpenOPC module payment order input is invalid');
     }
-    const value = await request<unknown>({
-      service: 'payment',
-      operation: 'orders.create',
-      method: 'POST',
-      path: '/v1/module-services/payments/orders',
-      body: input,
-      idempotencyKey,
-    });
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'payment',
+          operation: 'orders.create',
+          method: 'POST',
+          path: '/v1/module-services/payments/orders',
+          body: input,
+          idempotencyKey,
+        },
+        options,
+      ),
+    );
     const parsed = CreateDeveloperPaymentOrderResultSchema.safeParse(value);
     if (!parsed.success) protocolError('OpenOPC module payment response is invalid');
     return parsed.data;
   };
 
-  const getPaymentOrder = async (orderId: string): Promise<DeveloperPaymentOrderView> => {
+  const getPaymentOrder = async (
+    orderId: string,
+    options?: OpenOpcRequestOptions,
+  ): Promise<DeveloperPaymentOrderView> => {
     if (typeof orderId !== 'string' || orderId.length === 0) {
       protocolError('OpenOPC module payment order id is invalid');
     }
-    const value = await request<unknown>({
-      service: 'payment',
-      operation: 'orders.read',
-      method: 'GET',
-      path: `/v1/module-services/payments/orders/${encodeURIComponent(orderId)}`,
-    });
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'payment',
+          operation: 'orders.read',
+          method: 'GET',
+          path: `/v1/module-services/payments/orders/${encodeURIComponent(orderId)}`,
+        },
+        options,
+      ),
+    );
     const parsed = DeveloperPaymentOrderViewSchema.safeParse(value);
     if (!parsed.success) protocolError('OpenOPC module payment response is invalid');
     return parsed.data;
@@ -488,6 +721,7 @@ export function createOpenOpcModuleClient(
     orderId: string,
     input: CreateDeveloperPaymentRefundInput,
     idempotencyKey: string,
+    options?: OpenOpcRequestOptions,
   ): Promise<DeveloperPaymentRefundView> => {
     if (typeof orderId !== 'string' || orderId.length === 0) {
       protocolError('OpenOPC module payment order id is invalid');
@@ -495,14 +729,19 @@ export function createOpenOpcModuleClient(
     if (!CreateDeveloperPaymentRefundInputSchema.safeParse(input).success) {
       protocolError('OpenOPC module payment refund input is invalid');
     }
-    const value = await request<unknown>({
-      service: 'payment',
-      operation: 'refunds.create',
-      method: 'POST',
-      path: `/v1/module-services/payments/orders/${encodeURIComponent(orderId)}/refunds`,
-      body: input,
-      idempotencyKey,
-    });
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'payment',
+          operation: 'refunds.create',
+          method: 'POST',
+          path: `/v1/module-services/payments/orders/${encodeURIComponent(orderId)}/refunds`,
+          body: input,
+          idempotencyKey,
+        },
+        options,
+      ),
+    );
     const parsed = DeveloperPaymentRefundViewSchema.safeParse(value);
     if (!parsed.success) protocolError('OpenOPC module payment response is invalid');
     return parsed.data;
@@ -512,13 +751,18 @@ export function createOpenOpcModuleClient(
     request,
     ai: {
       models: {
-        list: () =>
-          request<{ data: OpenOpcModel[] }>({
-            service: 'ai',
-            operation: 'models.read',
-            method: 'GET',
-            path: '/v1/module-services/ai/models',
-          }),
+        list: (options?: OpenOpcRequestOptions) =>
+          request<{ data: OpenOpcModel[] }>(
+            withRequestOptions(
+              {
+                service: 'ai',
+                operation: 'models.read',
+                method: 'GET',
+                path: '/v1/module-services/ai/models',
+              },
+              options,
+            ),
+          ),
       },
       chat: { create: createChat },
     },

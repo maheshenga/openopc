@@ -94,7 +94,7 @@ Everything else is "run the same Helm charts in their account." These are the wo
 | --- | --- | --- |
 | **Agent sandboxes** | Daytona SaaS (`apps/api/src/platform/providers/daytona.ts`) | **Platinum** (`platform/providers/platinum.ts`) — our Cloud Hypervisor microVM provider, mirrors Daytona's contract 1:1 — deployed *inside* the VPC. **Tentpole workstream.** |
 | **LLM inference** | Gateway → Bedrock (Claude) + OpenRouter (rest) | **Bedrock-only** default (Claude in-region via VPC endpoint). OpenRouter opt-in / disabled. BYOK allowed. |
-| **App deployments** | Freestyle SaaS (`deployments/providers/freestyle.ts`) | Disable the deploy feature for the tenant, or point `FREESTYLE_API_URL` at a self-hosted endpoint. |
+| **Web application delivery** | Source artifacts only; hosted deployment is retired | Use customer-managed CI/CD and runtimes inside the VPC. |
 | **Auth / DB** | Supabase managed | RDS Postgres (Multi-AZ, customer KMS) + GoTrue. |
 
 **Tentpole:** Platinum must be a first-class *single-tenant deployable* product, not
@@ -197,7 +197,7 @@ cut prod release → soak on our cloud → promote-stable.yml (prod→stable, re
    account; run `self-host-e2e` with `ALLOWED_SANDBOX_PROVIDERS=platinum`. If not yet
    single-tenant deployable, this phase absorbs that build and the schedule pivots here.
 1. **Extract `modules/tenant/`** from `prod-eks`; add `modules/{platinum,rds-postgres,tenant-secrets}`; stand up `environments/tenants/_template`.
-2. **Bedrock-only gateway profile** + disable/replace Daytona/Freestyle/OpenRouter behind an enterprise config profile.
+2. **Bedrock-only gateway profile** + disable/replace Daytona and OpenRouter behind an enterprise config profile.
 3. **`stable` branch + `promote-stable.yml` + signed bundle + ECR-mirror fan-out** wired off `promote.yml`.
 4. **Per-tenant Argo app-of-apps + migration pre-sync hook;** dry-run the full "promote `stable` → tenant converges" loop on the throwaway account.
 5. **Break-glass role + observability + runbook,** then onboard the real customer.

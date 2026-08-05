@@ -25,7 +25,7 @@ function readDesktopFile(relativePath) {
 }
 
 function readRepoFile(relativePath) {
-  return readFileSync(path.join(repoRoot, relativePath), 'utf8');
+  return readFileSync(path.join(repoRoot, relativePath), 'utf8').replace(/\r\n?/g, '\n');
 }
 
 function topLevelYamlScalar(source, key) {

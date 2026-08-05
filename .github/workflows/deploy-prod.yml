@@ -254,6 +254,8 @@ jobs:
   #                           @kortix/llm-catalog@<version>, pinned in lockstep
   #   @kortix/executor-sdk  — the programmatic face of the Executor (alongside the
   #                           `kortix executor` CLI + `kortix executor mcp` server)
+  #   @openopc/developer-sdk — the self-contained module AI/payment SDK and
+  #                            browser capability-token adapter
   #
   # Each package declares its published (dist-pointing) layout in its own
   # publishConfig. scripts/publish-npm-package.sh builds it, stages that manifest
@@ -363,6 +365,10 @@ jobs:
             dir: sdk
           - pkg: '@kortix/executor-sdk'
             dir: executor-sdk
+          - pkg: '@openopc/developer-sdk'
+            dir: openopc-developer-sdk
+            required_publish: '1'
+            oidc_bootstrap_check: '1'
     steps:
       - uses: actions/checkout@v7
 
@@ -386,6 +392,11 @@ jobs:
         working-directory: packages/${{ matrix.dir }}
         env:
           VERSION: ${{ needs.version.outputs.version }}
+          # The OpenOPC SDK is a new public package. Its first run uses the
+          # restricted token only to create the npm package; subsequent runs
+          # authenticate as this GitHub Actions workflow through OIDC.
+          REQUIRED_PUBLISH: ${{ matrix.required_publish }}
+          NPM_OIDC_BOOTSTRAP_CHECK: ${{ matrix.oidc_bootstrap_check }}
           # Fallback only. Once Trusted Publishing is verified, delete the
           # NPM_TOKEN secret AND this line — OIDC needs no stored secret.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

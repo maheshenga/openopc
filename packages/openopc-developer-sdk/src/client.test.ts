@@ -74,6 +74,70 @@ describe('OpenOPC developer SDK transport', () => {
     ).toThrow(OpenOpcModuleProtocolError);
   });
 
+  test('normalizes a request timeout and aborts the platform fetch', async () => {
+    let fetchSignal: AbortSignal | undefined;
+    const client = createOpenOpcModuleClient({
+      baseUrl: 'https://platform.example.com',
+      timeoutMs: 5,
+      getCapabilityToken: async () => 'v4.public.module-token',
+      fetch: async (_input, init) => {
+        fetchSignal = init?.signal ?? undefined;
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return new Response('{}', { status: 200 });
+      },
+    });
+
+    await expect(
+      client.request({
+        service: 'ai',
+        operation: 'models.read',
+        method: 'GET',
+        path: '/v1/module-services/ai/models',
+      }),
+    ).rejects.toMatchObject({
+      name: 'OpenOpcModuleRequestError',
+      code: 'OPENOPC_MODULE_REQUEST_TIMEOUT',
+    });
+    expect(fetchSignal?.aborted).toBe(true);
+  });
+
+  test('propagates caller cancellation through capability acquisition', async () => {
+    const controller = new AbortController();
+    const client = createOpenOpcModuleClient({
+      baseUrl: 'https://platform.example.com',
+      timeoutMs: 100,
+      getCapabilityToken: async (_input, { signal } = {}) => {
+        await new Promise<never>((_resolve, reject) => {
+          const fallback = setTimeout(() => reject(new Error('fallback')), 40);
+          signal?.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(fallback);
+              reject(signal.reason ?? new Error('aborted'));
+            },
+            { once: true },
+          );
+        });
+        return 'v4.public.module-token';
+      },
+      fetch: async () => new Response('{}'),
+    });
+
+    const pending = client.request({
+      service: 'ai',
+      operation: 'models.read',
+      method: 'GET',
+      path: '/v1/module-services/ai/models',
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({
+      name: 'OpenOpcModuleRequestError',
+      code: 'OPENOPC_MODULE_REQUEST_ABORTED',
+    });
+  });
+
   test('requests a capability for the exact operation and sends only platform-owned headers', async () => {
     const capabilities: unknown[] = [];
     const requests: Array<{ url: string; init?: RequestInit }> = [];
@@ -268,8 +332,8 @@ describe('OpenOPC developer SDK transport', () => {
       }),
     ).rejects.toEqual(
       expect.objectContaining({
-        name: 'OpenOpcModuleProtocolError',
-        message: 'OpenOPC module service response failed',
+        name: 'OpenOpcModuleRequestError',
+        code: 'OPENOPC_MODULE_REQUEST_FAILED',
       }),
     );
   });

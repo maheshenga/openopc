@@ -30,6 +30,7 @@ type FakeInvite = {
 const state = { pending: [] as FakeInvite[] };
 const memberInserts: Array<Record<string, unknown>> = [];
 const inviteUpdates: Array<Record<string, unknown>> = [];
+const drizzleOrm = await import('drizzle-orm');
 
 const fakeDb = {
   // autoClaim does: db.select().from(accountInvitations).where(and(...)) → rows
@@ -56,9 +57,11 @@ const fakeDb = {
 };
 
 mock.module('drizzle-orm', () => ({
+  ...drizzleOrm,
   and: (...parts: unknown[]) => ({ op: 'and', parts }),
   eq: (column: unknown, value: unknown) => ({ op: 'eq', column, value }),
   gt: (column: unknown, value: unknown) => ({ op: 'gt', column, value }),
+  inArray: (column: unknown, values: unknown[]) => ({ op: 'inArray', column, values }),
   isNull: (column: unknown) => ({ op: 'isNull', column }),
   sql: (...args: unknown[]) => ({ op: 'sql', args }),
   count: (column?: unknown) => ({ op: 'count', column }),

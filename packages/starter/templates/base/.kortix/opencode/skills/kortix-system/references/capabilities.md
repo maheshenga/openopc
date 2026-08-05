@@ -52,7 +52,7 @@ schedule or trigger runs it end to end).
 | Code & data | A full Linux sandbox — run Python, Node, shell, install anything, process files |
 | Documents | Produces finished PDF, DOCX, PPTX, XLSX — formatted deliverables, not text dumps |
 | Media | Generates images and video, narration/text-to-speech, and transcription |
-| Websites & apps | Builds sites and web apps in the repo and deploys them as live apps |
+| Websites & apps | Builds sites and web apps in the repo with runnable source and tested previews |
 | Integrations | 3,000+ connectors plus MCP, OpenAPI, GraphQL, and raw HTTP — brokered server-side |
 | Secrets | Encrypted, scoped credentials injected at runtime, never shown to the model or logs |
 | Memory | A living, file-based company brain that compounds what it learns across sessions |
@@ -97,11 +97,10 @@ narrate a script, or transcribe a recording and summarize it.
 
 **Websites and apps.** Kortix builds websites and web apps directly in the
 project repo — from content sites and landing pages to dashboards and
-interactive web apps — and can deploy them as live apps from the project.
-Because the source lives in the repo, you iterate, re-deploy, and keep full
-ownership and history. App deployment is governed by the project manifest
-— see the `kortix-yaml.md` reference's `apps:` section for the deploy
-surface.
+interactive web apps. It can run, preview, and test them in the sandbox so
+you can iterate against working behavior. Because the source lives in the
+repo, you keep full ownership and history, then deliver it through your
+project's existing CI/CD and runtime.
 
 **Integrations and connectors.** Kortix reaches **3,000+ apps** through
 managed connectors, plus MCP servers, OpenAPI, GraphQL, and raw HTTP — all
@@ -159,7 +158,7 @@ see the `references/opencode/models.md` reference.
 - **A workforce, not one assistant.** Specialist agents run in parallel and
   compound a shared memory, rather than a single chat thread.
 - **Real output, not just chat.** Agents run on real machines and return
-  finished deliverables — decks, reports, code, deployed sites — and take
+  finished deliverables — decks, reports, code, working sites — and take
   real actions in connected tools.
 - **Reviewed self-improvement.** Every persistent change lands through a
   change request you approve, so the system gets better one auditable step

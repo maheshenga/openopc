@@ -119,6 +119,13 @@ export const GRANTABLE_KORTIX_CLI_ACTIONS: readonly string[] = [
   'project.review.read',
   'project.review.submit',
   'project.review.act',
+  'project.studio.jobs.read',
+  'project.studio.jobs.run',
+  'project.studio.jobs.cancel',
+  'project.studio.assets.read',
+  'project.studio.assets.write',
+  'project.studio.providers.use',
+  'project.studio.providers.manage',
 ];
 
 /**

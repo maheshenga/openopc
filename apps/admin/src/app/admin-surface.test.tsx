@@ -59,6 +59,26 @@ test('defines an independently buildable OpenOPC Admin package', () => {
   expect(existsSync(resolve(ADMIN_ROOT, 'tsconfig.json'))).toBeTrue();
 });
 
+test('resolves the Admin next-intl request module inside the independent build', async () => {
+  const configModule = (await import(resolve(ADMIN_ROOT, 'next.config.ts'))) as {
+    default: {
+      webpack?: (
+        config: { context: string; resolve: { alias: Record<string, string> } },
+        context: Record<string, never>,
+      ) => { context: string; resolve: { alias: Record<string, string> } };
+    };
+  };
+  expect(configModule.default.webpack).toBeFunction();
+
+  const webpackConfig = configModule.default.webpack?.(
+    { context: ADMIN_ROOT, resolve: { alias: {} } },
+    {},
+  );
+  const requestConfigPath = webpackConfig?.resolve.alias['next-intl/config'];
+  expect(requestConfigPath).toBe(resolve(ADMIN_ROOT, 'src/i18n/request.ts'));
+  expect(existsSync(requestConfigPath ?? '')).toBeTrue();
+});
+
 test('owns every current operator route and leaves no duplicate Web Admin subtree', () => {
   for (const routeFile of ADMIN_ROUTE_FILES) {
     expect(existsSync(resolve(ADMIN_ROOT, routeFile))).toBeTrue();

@@ -1471,7 +1471,7 @@ git commit -m "fix(desktop): require explicit OpenOPC web target"
 
 ## Final Verification Gate
 
-- [ ] **Step 1: Re-run all focused closure tests and record actual counts**
+- [x] **Step 1: Re-run all focused closure tests and record actual counts**
 
 ```powershell
 pnpm.cmd --filter kortix-api exec bun test --isolate src/developer/publishers.test.ts src/developer/reviews.test.ts src/developer/distribution.test.ts src/developer/installations.test.ts src/developer/release-lifecycle.test.ts src/projects/developer-modules-routes.test.ts src/module-domains/platform-host-config.test.ts src/module-domains/launch.test.ts src/module-domains/launch.drizzle.test.ts src/module-domains/static-release-reader.test.ts src/module-domains/host.test.ts src/module-domains/host.drizzle.test.ts src/module-domains/bindings.test.ts
@@ -1481,7 +1481,7 @@ pnpm.cmd --filter Kortix-Computer-Frontend exec bun test --isolate src/features/
 pnpm.cmd --filter @kortix/desktop-electron test
 ```
 
-- [ ] **Step 2: Run broader package gates**
+- [x] **Step 2: Run broader package gates**
 
 ```powershell
 pnpm.cmd --filter kortix-api typecheck
@@ -1495,7 +1495,7 @@ pnpm.cmd --filter Kortix-Computer-Frontend test
 
 Do not treat a zero-test run as green. Preserve exact output for any pre-existing failure and prove whether changed files are implicated.
 
-- [ ] **Step 3: Run static contract/security checks**
+- [x] **Step 3: Run static contract/security checks**
 
 ```powershell
 rg -n --no-heading "allow-top-navigation|allow-popups|allow-downloads" apps/web/src/features/project-modules/project-module-host-page.tsx
@@ -1506,7 +1506,7 @@ git diff --check
 
 Expected: the first three searches produce no matches and `git diff --check` exits 0.
 
-- [ ] **Step 4: Inspect the complete branch diff and protected-file boundary**
+- [x] **Step 4: Inspect the complete branch diff and protected-file boundary**
 
 ```powershell
 git diff --stat 36a3152bf30fa129965fe2958a440f3b6301691e..HEAD
@@ -1516,7 +1516,7 @@ git status --short --branch
 
 Expected: the protected `2026-08-01` plan remains exactly one untracked file and never appears in a commit. No secrets, generated installers, signing artifacts, deployment state, or unrelated files appear.
 
-- [ ] **Step 5: Report honest readiness**
+- [x] **Step 5: Report honest readiness**
 
 Code can be marked complete only when all focused tests and relevant package gates are green. Report these as still unverified and pending separate authorization:
 

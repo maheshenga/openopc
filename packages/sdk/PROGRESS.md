@@ -1618,3 +1618,136 @@ was performed.
 Exact candidate readiness remains **NOT YET** until the plans/evidence commit is
 created and the resulting HEAD reproduces the required gates from an isolated
 clean worktree.
+
+---
+
+### 2026-08-05 - OpenOPC exact candidate reproduction (Codex, BLOCKED)
+
+Created and tested local candidate
+`c27ab28ff4fde96addfc491dfcf6ba9850c1787f` in an isolated detached worktree.
+The candidate contains four local commits and remains unpushed and undeployed.
+
+```text
+ea657fe83 fix(api): stabilize the hermetic default suite
+28aeaa10a feat(openopc): complete the developer module workflow
+2c084a2a0 docs(openopc): record candidate freeze evidence
+c27ab28ff test(desktop): normalize workflow line endings
+```
+
+The last commit fixes a clean Windows checkout regression: the Desktop policy
+test previously split YAML only on LF, while the detached worktree checked the
+workflow out with CRLF. The one-file fix normalizes repository-file newlines;
+Desktop then passed Node `54/0` and Bun `123/0` in the exact candidate worktree.
+
+**Exact candidate evidence**
+
+```text
+tools -> Node v22.23.2; pnpm 8.11.0; Bun 1.3.14; Playwright 1.61.1
+offline frozen install -> exit 0
+focused API -> 225 pass, 0 fail, 621 expect() calls, 13 files
+custom-hostname Worker -> 13 pass, 0 fail, 1 suite
+focused SDK -> 72 pass, 0 fail, 282 expect() calls, 4 files
+focused Web -> 34 pass, 0 fail, 146 expect() calls, 5 files
+OpenOPC SDK -> 35 pass, 0 fail, 120 expect() calls, 5 files
+Desktop -> Node 54 pass; Bun 123 pass, 239 expect() calls, 10 files
+API/SDK/Web/OpenOPC SDK typechecks -> exit 0
+OpenOPC SDK build and both packed install/import smokes -> exit 0
+SDK full after packed-bundle generation -> 1176 pass, 0 skip, 0 fail,
+                                           5520 expect() calls, 89 files
+Web full -> 1236 pass, 0 fail, 3920 expect() calls, 177 files
+browser smoke -> allowed/attacker/direct-domain flows pass; cleanup ok
+static provider/origin/sandbox and risky-path scans -> zero matches
+candidate diff check -> exit 0; 85 files, 9247 insertions, 636 deletions
+Git fsck -> exit 0; dangling objects only, no broken or missing objects
+```
+
+The standard API full command remains red at `3771 pass / 14 skip / 4 fail /
+11825 expect() calls / 425 files`. The 14 skips are the known real PostgreSQL
+integration tests. The four failures map exactly to five paths frozen under
+Task 5 quarantine: the Windows Slack filename fix, manifest Studio permissions,
+the retired hosted-vendor enterprise text, and the Starter reference plus its
+generated embedding. Running the three failing files in the preserved root
+worktree, where those changes exist, passes `53/0/245`.
+
+Those five files remain unstaged and outside the candidate. Exact candidate
+readiness remains **NOT YET** pending explicit authorization to reclassify them
+or acceptance of a candidate with a red standard API gate. The isolated
+worktree is intentionally retained for the revised-SHA rerun. No push, PR,
+merge, npm publication, deployment, DNS change, Desktop release, or live
+AI/payment operation was performed.
+
+---
+
+### 2026-08-05 - OpenOPC final local candidate reproduction (Codex, COMPLETED)
+
+The user authorized the next frozen-plan step. Reclassified only the quarantined
+paths whose direct regression guards proved they were candidate dependencies,
+then closed two Windows clean-checkout newline failures and one non-hermetic
+marketplace fetch path. The final local candidate is:
+
+```text
+f1f2c665fa22470b8d4969358ad258006b0194b9
+```
+
+**Local candidate commits**
+
+```text
+ea657fe83 fix(api): stabilize the hermetic default suite
+28aeaa10a feat(openopc): complete the developer module workflow
+2c084a2a0 docs(openopc): record candidate freeze evidence
+c27ab28ff test(desktop): normalize workflow line endings
+ea640e0a7 fix(platform): close candidate regression gates
+1f0af7682 fix(starter): normalize embedded snapshot line endings
+aea872f28 chore(schema): sync grantable studio actions
+af77216b8 fix(web): sync studio action catalog
+4fa65152e test(schema): normalize generated file line endings
+1177d7224 chore(git): pin generated snapshots to lf
+f1f2c665f fix(api): keep marketplace fetches hermetic
+```
+
+**Exact candidate evidence**
+
+```text
+tools -> Node v22.23.2; pnpm 8.11.0; Bun 1.3.14; Playwright 1.61.1
+offline frozen install -> exit 0
+API closure -> 225 pass, 0 fail, 621 expect() calls, 13 files
+reclassified API regressions -> 53 pass, 0 fail, 245 expect() calls, 3 files
+marketplace transport -> 13 pass, 0 fail, 127 expect() calls; case 2.29ms
+custom-hostname Worker -> 13 pass, 0 fail
+SDK focused -> 72 pass, 0 fail, 282 expect() calls, 4 files
+Web focused -> 34 pass, 0 fail, 146 expect() calls, 5 files
+OpenOPC SDK -> 35 pass, 0 fail, 120 expect() calls, 5 files
+Desktop -> Node 54 pass; Bun 123 pass, 239 expect() calls, 10 files
+Starter -> 38 pass, 0 fail, 624 expect() calls, 5 files
+manifest schema -> 316 pass, 0 fail, 490 expect() calls, 7 files
+Web action catalog -> 14 pass, 0 fail, 101 expect() calls, 1 file
+API/SDK/Web/OpenOPC/Starter/manifest typechecks -> exit 0
+SDK bundles and OpenOPC build -> exit 0
+SDK and OpenOPC packed install/import/construct smokes -> exit 0
+API full -> 3775 pass, 14 PostgreSQL skips, 0 fail,
+            11837 expect() calls, 425 files
+SDK full -> 1176 pass, 0 fail, 5520 expect() calls, 89 files
+Web full -> 1236 pass, 0 fail, 3927 expect() calls, 177 files
+browser smoke -> allowed/attacker/direct-domain flows pass; cleanup ok
+Starter/schema generators -> reproducible with clean tracked status
+forbidden and risky-path scans -> zero matches
+candidate diff -> 11 commits, 99 files, 9341 insertions, 661 deletions
+Git fsck -> exit 0; dangling objects only, no missing/broken objects
+isolated candidate worktrees -> removed after exact-path validation
+```
+
+The first API full run on the penultimate candidate had one external-registry
+test hit the unchanged five-second timeout. An isolated rerun reproduced it.
+The external README/file readers were bypassing the already injectable fetch
+transport and therefore reached the real network. Both reads now use the
+existing `githubLoaderOptions.fetchImpl`; no test assertion, timeout, or skip
+was changed. The exact final candidate passed the unchanged standard command.
+
+The protected `2026-08-01` plan is absent from HEAD, the candidate diff, the
+index, and complete Git history. Other root-worktree changes remain preserved
+and unstaged. Exact local candidate readiness is **YES** for the SHA above.
+Production public-beta readiness remains **NOT YET** pending separately
+authorized push/review/merge, publication, DNS/certificate, deployment,
+production configuration, real module routing, live AI/payment validation, and
+Desktop release checks. No push, PR, merge, npm publication, deployment, DNS
+change, Desktop release, or live provider operation was performed.

@@ -210,8 +210,18 @@ Freeze evidence:
 ```text
 ea657fe83 fix(api): stabilize the hermetic default suite
 28aeaa10a feat(openopc): complete the developer module workflow
-Task 5 decision: quarantine every listed path
-protected plan: absent from both commits
+2c084a2a0 docs(openopc): record candidate freeze evidence
+c27ab28ff test(desktop): normalize workflow line endings
+ea640e0a7 fix(platform): close candidate regression gates
+1f0af7682 fix(starter): normalize embedded snapshot line endings
+aea872f28 chore(schema): sync grantable studio actions
+af77216b8 fix(web): sync studio action catalog
+4fa65152e test(schema): normalize generated file line endings
+1177d7224 chore(git): pin generated snapshots to lf
+f1f2c665f fix(api): keep marketplace fetches hermetic
+Task 5 decision: initially quarantined; later explicitly reclassified only the
+                 paths proved to be direct regression-gate dependencies
+protected plan: absent from every commit, the candidate diff, and complete history
 root worktree: preserved; no reset, clean, stash, push, or deployment
 ```
 
@@ -229,20 +239,51 @@ Recommended dependency order after approval:
 After the candidate SHA exists, create an isolated clean worktree at that SHA.
 Do not clean or reset the current root worktree.
 
-- [ ] Install with the committed lockfile using the repository's frozen/offline
+- [x] Install with the committed lockfile using the repository's frozen/offline
   policy where available.
-- [ ] Run API, SDK, Web, Worker, and Desktop focused closure suites.
-- [ ] Run API, SDK, and Web typechecks and full tests.
-- [ ] Run both SDK packed install/import smoke gates.
-- [ ] Run the browser-module Playwright smoke and verify nonblank desktop/mobile
+- [x] Run API, SDK, Web, Worker, and Desktop focused closure suites.
+- [x] Run API, SDK, and Web typechecks and full tests.
+- [x] Run both SDK packed install/import smoke gates.
+- [x] Run the browser-module Playwright smoke and verify nonblank desktop/mobile
   screenshots or canvas/page evidence where the harness produces them.
-- [ ] Run static provider/origin/sandbox scans and `git diff --check`.
-- [ ] Record exact counts, the candidate SHA, tool versions, and all real skips.
-- [ ] Remove the isolated worktree only after resolving and validating its exact
+- [x] Run static provider/origin/sandbox scans and `git diff --check`.
+- [x] Record exact counts, the candidate SHA, tool versions, and all real skips.
+- [x] Remove the isolated worktree only after resolving and validating its exact
   absolute path; never target the root worktree.
 
 A current dirty-worktree pass is supporting evidence, not a substitute for this
 exact-SHA reproduction.
+
+Exact-SHA reproduction completed successfully:
+
+```text
+candidate -> f1f2c665fa22470b8d4969358ad258006b0194b9
+tools -> Node v22.23.2; pnpm 8.11.0; Bun 1.3.14; Playwright 1.61.1
+offline frozen install -> exit 0
+focused -> API 225/0; Worker 13/0; SDK 72/0; Web 34/0
+reclassified API regressions -> 53/0/245, 3 files
+marketplace hermetic transport -> 13/0/127; external registry case 2.29ms
+Desktop -> Node 54/0; Bun 123/0
+OpenOPC SDK -> 35/0; typecheck/build/packed smoke exit 0
+Starter -> 38/0/624; manifest schema -> 316/0/490; Web catalog -> 14/0/101
+typechecks -> API, SDK, Web, OpenOPC SDK, Starter, and manifest schema exit 0
+SDK full after bundle smoke -> 1176 pass, 0 skip, 0 fail
+Web full -> 1236 pass, 0 fail, 3927 expect() calls, 177 files
+API full -> 3775 pass, 14 PostgreSQL skips, 0 fail,
+            11837 expect() calls, 425 files
+browser smoke -> allowed/attacker/direct-domain flows pass; cleanup ok
+Starter/schema generators -> reproducible; tracked status remains clean
+static scans and candidate diff check -> exit 0; 99 paths, zero risky paths
+Git fsck -> exit 0; dangling objects only, no missing/broken objects
+isolated candidate worktrees -> removed after exact-path validation
+```
+
+The first API full run on the penultimate candidate exposed one existing
+marketplace test that still bypassed its injected fetch transport and timed out
+at five seconds. The production reader was changed to use the existing
+`githubLoaderOptions.fetchImpl` seam for both external README and file reads.
+No assertion, skip, or timeout was changed. The unchanged focused test then ran
+in milliseconds and the standard full command passed on the final candidate.
 
 ## Task 8: Preserve The External Release Boundary
 
@@ -258,7 +299,7 @@ authorized production work:
 - controlled Z-Pay validation;
 - Desktop rebuild, signing, publication, installation, and public Web load.
 
-Local source readiness remains `YES`. Exact candidate readiness remains
-`NOT YET` until Task 7 completes on one recorded commit. Production
-public-beta readiness remains `NOT YET` until the separately authorized live
-release checks pass on that same commit.
+Local source readiness is `YES`. Exact local candidate readiness is `YES` for
+`f1f2c665fa22470b8d4969358ad258006b0194b9`. Production public-beta readiness
+remains `NOT YET` until the separately authorized live release checks pass on
+that same commit.

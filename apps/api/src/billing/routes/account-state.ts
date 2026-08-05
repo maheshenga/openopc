@@ -49,7 +49,6 @@ accountStateRouter.openapi(
     if (!hasDatabase) {
       return c.json({ ...buildLocalAccountState(), can_manage_billing: true });
     }
-    const accountId = await resolveScopedAccountId(c, 'query');
 
     // NOTE: legacy → per-seat migration is NOT auto-triggered on sign-in anymore.
     // Silently cancelling a customer's subs + creating a seat sub without consent
@@ -57,6 +56,7 @@ accountStateRouter.openapi(
     // seat-based pricing" (POST /v1/billing/claim-per-seat → maybeMigrateLegacyAccount).
 
     try {
+      const accountId = await resolveScopedAccountId(c, 'query');
       const state = await buildAccountState(accountId);
       // Billing disabled — return real data but never block the user
       if (!config.KORTIX_BILLING_INTERNAL_ENABLED) {
@@ -88,8 +88,8 @@ accountStateRouter.openapi(
     if (!hasDatabase) {
       return c.json({ ...buildLocalAccountState(), can_manage_billing: true });
     }
-    const accountId = await resolveScopedAccountId(c, 'query');
     try {
+      const accountId = await resolveScopedAccountId(c, 'query');
       const state = await buildMinimalAccountState(accountId);
       if (!config.KORTIX_BILLING_INTERNAL_ENABLED) {
         state.credits.can_run = true;

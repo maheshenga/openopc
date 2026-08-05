@@ -66,12 +66,14 @@ describe('saveSlackInstall', () => {
       projectId: 'proj-1',
       identifier: 'SLACK_BOT_TOKEN',
       name: 'SLACK_BOT_TOKEN',
+      scope: 'connector',
       valueEnc: 'enc:xoxb-test',
     });
     expect(insertedValues).toContainEqual({
       projectId: 'proj-1',
       identifier: 'SLACK_SIGNING_SECRET',
       name: 'SLACK_SIGNING_SECRET',
+      scope: 'connector',
       valueEnc: 'enc:signing-secret',
     });
   });

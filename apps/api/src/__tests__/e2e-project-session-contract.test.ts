@@ -24,10 +24,16 @@ const PROJECT_SANDBOX_TOKEN = 'kortix_sb_project_runtime';
 const ORIGINAL_KORTIX_GITHUB_OWNER = process.env.KORTIX_GITHUB_OWNER;
 const ORIGINAL_API_KEY_SECRET = process.env.API_KEY_SECRET;
 const ORIGINAL_KORTIX_URL = process.env.KORTIX_URL;
+const ORIGINAL_ALLOWED_SANDBOX_PROVIDERS = process.env.ALLOWED_SANDBOX_PROVIDERS;
+const ORIGINAL_PLATINUM_API_KEY = process.env.PLATINUM_API_KEY;
+const ORIGINAL_PLATINUM_API_URL = process.env.PLATINUM_API_URL;
 
 process.env.KORTIX_GITHUB_OWNER = TEST_GITHUB_OWNER;
 process.env.API_KEY_SECRET = 'test-project-secret-key-material-32-bytes';
 process.env.KORTIX_URL = 'https://api.test.kortix.local';
+process.env.ALLOWED_SANDBOX_PROVIDERS = 'daytona,platinum';
+process.env.PLATINUM_API_KEY = 'test-platinum-key';
+process.env.PLATINUM_API_URL = 'https://platinum.example.test';
 
 let branchCreateCalls = 0;
 let sandboxProvisionCalls = 0;
@@ -806,6 +812,21 @@ describe('project session API contract', () => {
       delete process.env.KORTIX_URL;
     } else {
       process.env.KORTIX_URL = ORIGINAL_KORTIX_URL;
+    }
+    if (ORIGINAL_ALLOWED_SANDBOX_PROVIDERS === undefined) {
+      delete process.env.ALLOWED_SANDBOX_PROVIDERS;
+    } else {
+      process.env.ALLOWED_SANDBOX_PROVIDERS = ORIGINAL_ALLOWED_SANDBOX_PROVIDERS;
+    }
+    if (ORIGINAL_PLATINUM_API_KEY === undefined) {
+      delete process.env.PLATINUM_API_KEY;
+    } else {
+      process.env.PLATINUM_API_KEY = ORIGINAL_PLATINUM_API_KEY;
+    }
+    if (ORIGINAL_PLATINUM_API_URL === undefined) {
+      delete process.env.PLATINUM_API_URL;
+    } else {
+      process.env.PLATINUM_API_URL = ORIGINAL_PLATINUM_API_URL;
     }
   });
 

@@ -42,6 +42,10 @@ mock.module('../billing/services/entitlements', () => ({
   },
 }));
 
+mock.module('../repositories/project-routing-policies', () => ({
+  getProjectRoutingPolicy: async () => null,
+}));
+
 mock.module('../projects/secrets', () => ({
   decryptProjectSecret: (_projectId: string, value: string) => value,
   encryptProjectSecret: (_projectId: string, value: string) => value,

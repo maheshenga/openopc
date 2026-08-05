@@ -61,6 +61,9 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Verify lockfile Git transports
+        run: bun test scripts/release/pnpm-lock-transport.test.ts
+
       - name: Install pnpm
         run: corepack enable pnpm
 

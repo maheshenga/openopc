@@ -115,7 +115,6 @@ import { kickStartupPreBuild } from './snapshots/builder';
 import { startTmpReaper, stopTmpReaper } from './snapshots/tmp-reaper';
 import { closeDefaultStudioApiRuntime } from './studio/default-routes';
 import {
-  getTunnelServiceStatus,
   startTunnelService,
   stopTunnelService,
   tunnelApp,

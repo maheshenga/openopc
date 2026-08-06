@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
 import type { DeveloperModuleTrustView } from '@kortix/sdk';
+import { describe, expect, test } from 'bun:test';
 
 import {
   DEVELOPER_MODULE_INPUT_MAX_BYTES,
@@ -67,6 +67,17 @@ describe('Developer Center model', () => {
     expect(
       developerCenterErrorCode({ body: { error: 'DEVELOPER_VERIFICATION_RETRY_NOT_ALLOWED' } }),
     ).toBe('DEVELOPER_VERIFICATION_RETRY_NOT_ALLOWED');
+
+    for (const code of [
+      'DEVELOPER_INPUT_INVALID',
+      'DEVELOPER_ORGANIZATION_NOT_FOUND',
+      'DEVELOPER_PUBLISHER_FORBIDDEN',
+      'DEVELOPER_VERIFICATION_REQUIRED',
+      'DEVELOPER_APPLICATION_APPROVAL_REQUIRED',
+      'DEVELOPER_AUTHORITY_CONFLICT',
+    ] as const) {
+      expect(developerCenterErrorCode({ body: { error: code } })).toBe(code);
+    }
   });
 
   test('derives complexity only from declared requirements', () => {

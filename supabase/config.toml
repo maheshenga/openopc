@@ -41,6 +41,15 @@ enable_signup = true
 enable_signup = true
 enable_confirmations = false
 
+# Admin step-up decisions require a real AAL2 session. Keep local development
+# aligned with that production boundary by allowing authenticator-app TOTP.
+[auth.mfa]
+max_enrolled_factors = 10
+
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+
 # GitHub OAuth — used by both /auth (sign-in) and the project import flow.
 # Requires a GitHub OAuth App with callback http://127.0.0.1:54321/auth/v1/callback.
 # Set SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID and

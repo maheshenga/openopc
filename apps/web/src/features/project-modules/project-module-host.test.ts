@@ -7,6 +7,7 @@ const PROJECT_ID = '10000000-0000-4000-8000-000000000001';
 const INSTALLATION_ID = '20000000-0000-4000-8000-000000000002';
 const RELEASE_ID = '30000000-0000-4000-8000-000000000003';
 const ORIGIN = 'https://modules.openopc.example';
+const BOOTSTRAP_REQUEST_ID = '60000000-0000-4000-8000-000000000006';
 
 const DESCRIPTOR: ProjectModuleLaunchDescriptor = {
   installation_id: INSTALLATION_ID,
@@ -49,6 +50,19 @@ function request(source: unknown, overrides: Record<string, unknown> = {}): Mess
   } as MessageEvent;
 }
 
+function bootstrapRequest(source: unknown, overrides: Record<string, unknown> = {}): MessageEvent {
+  return {
+    origin: ORIGIN,
+    source,
+    data: {
+      type: 'openopc.module.bootstrap.request',
+      requestId: BOOTSTRAP_REQUEST_ID,
+      sdkApiVersion: 'v1',
+      ...overrides,
+    },
+  } as MessageEvent;
+}
+
 function createEventTarget() {
   const listeners = new Set<(event: MessageEvent) => void>();
   return {
@@ -63,6 +77,7 @@ function createEventTarget() {
     dispatch(event: MessageEvent) {
       for (const listener of listeners) listener(event);
     },
+    listenerCount: () => listeners.size,
   };
 }
 
@@ -113,6 +128,58 @@ function createHarness(
 }
 
 describe('project module production host bridge', () => {
+  test('attaches bootstrap and capability bridges for one matching v1 manifest', async () => {
+    const harness = createHarness();
+    expect(harness.eventTarget.listenerCount()).toBe(2);
+    harness.eventTarget.dispatch(bootstrapRequest(harness.moduleSource));
+    expect(harness.posted[0]).toEqual({
+      targetOrigin: ORIGIN,
+      message: {
+        type: 'openopc.module.bootstrap.response',
+        requestId: BOOTSTRAP_REQUEST_ID,
+        sdkApiVersion: 'v1',
+      },
+    });
+
+    harness.eventTarget.dispatch(request(harness.moduleSource));
+    await flushBridge();
+    expect(harness.issueCapability).toHaveBeenCalledTimes(1);
+    expect(harness.posted[1]?.message).toMatchObject({
+      type: 'openopc.module-service.token.response',
+    });
+
+    harness.cleanup();
+    harness.cleanup();
+    expect(harness.eventTarget.listenerCount()).toBe(0);
+    harness.eventTarget.dispatch(bootstrapRequest(harness.moduleSource));
+    harness.eventTarget.dispatch(request(harness.moduleSource));
+    await flushBridge();
+    expect(harness.posted).toHaveLength(2);
+  });
+
+  test('requires a signed sandboxed-web schema-v3 v1 manifest for bootstrap and token issuance', async () => {
+    const missingOpenOpc = { ...MANIFEST };
+    delete (missingOpenOpc as { openopc?: unknown }).openopc;
+    const manifests = [
+      missingOpenOpc,
+      { ...MANIFEST, openopc: [] },
+      { ...MANIFEST, openopc: { ...MANIFEST.openopc, sdkApiVersion: 'v2' } },
+      { ...MANIFEST, schemaVersion: 2 },
+      { ...MANIFEST, execution: { mode: 'native', entry: 'web/index.html' } },
+      { ...MANIFEST, id: 'openopc.other' },
+    ];
+
+    for (const manifest of manifests) {
+      const harness = createHarness({ manifest });
+      harness.eventTarget.dispatch(bootstrapRequest(harness.moduleSource));
+      harness.eventTarget.dispatch(request(harness.moduleSource));
+      await flushBridge();
+      expect(harness.posted).toEqual([]);
+      expect(harness.issueCapability).not.toHaveBeenCalled();
+      harness.cleanup();
+    }
+  });
+
   test('issues one-operation capabilities to the exact reviewed iframe and cleans up', async () => {
     const harness = createHarness();
 

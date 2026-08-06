@@ -1843,7 +1843,7 @@ async function readExternalReadme(entry: CatalogEntry): Promise<string | null> {
       : skill.path;
     for (const ref of [ext.ref, "main", "master"].filter(Boolean) as string[]) {
       try {
-        const res = await githubFetch(
+        const res = await githubLoaderOptions.fetchImpl(
           rawGithubUrl(ext.owner, ext.repo, ref, full),
         );
         if (res.ok) return await res.text();
@@ -1961,7 +1961,7 @@ async function readExternalFile(
       : sourcePath;
     for (const ref of [ext.ref, "main", "master"].filter(Boolean) as string[]) {
       try {
-        const res = await githubFetch(
+        const res = await githubLoaderOptions.fetchImpl(
           rawGithubUrl(ext.owner, ext.repo, ref, full),
         );
         if (res.ok) return await res.text();

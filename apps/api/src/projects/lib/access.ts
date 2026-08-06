@@ -31,7 +31,7 @@ export async function enforceProjectQuota(
   if (limit >= Number.MAX_SAFE_INTEGER) return null;
 
   // Count only ACTIVE projects — an archived (soft-deleted) project must not
-  // permanently consume a free account's single slot.
+  // permanently consume one of a free account's slots.
   const [counted] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(projects)

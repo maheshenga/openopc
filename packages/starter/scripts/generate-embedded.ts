@@ -17,7 +17,7 @@
  * build regenerate it before compiling. `scaffold.test.ts` asserts the
  * snapshot is in sync so a stale commit fails CI.
  */
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 // Computed independently of src/index.ts so this script never imports the
@@ -33,6 +33,10 @@ const TEMPLATE_ROOTS = {
 interface RawFile {
   path: string;
   content: string;
+}
+
+export function normalizeTemplateText(content: string): string {
+  return content.replace(/\r\n?/g, '\n');
 }
 
 const IGNORED_DIRS = new Set([
@@ -67,7 +71,7 @@ function rawFiles(root: string): RawFile[] {
   return walk(root)
     .map((abs) => ({
       path: relative(root, abs).split(sep).join('/'),
-      content: readFileSync(abs, 'utf8'),
+      content: normalizeTemplateText(readFileSync(abs, 'utf8')),
     }))
     .sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -84,7 +88,7 @@ const OUTPUT_PATH = join(STARTER_ROOT, 'src', 'embedded.generated.json');
 
 if (import.meta.main) {
   const snapshot = buildEmbeddedSnapshot();
-  writeFileSync(OUTPUT_PATH, JSON.stringify(snapshot) + '\n', 'utf8');
+  writeFileSync(OUTPUT_PATH, `${JSON.stringify(snapshot)}\n`, 'utf8');
   const total = Object.values(snapshot).reduce((n, r) => n + r.files.length, 0);
   process.stdout.write(`Wrote ${OUTPUT_PATH} (${total} files)\n`);
 }

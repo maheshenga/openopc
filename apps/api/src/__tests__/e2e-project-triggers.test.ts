@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mockIamEngineAllowAll, mockIamMembershipSyncNoop } from './helpers/iam-mocks';
 import { createHmac, randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
@@ -19,6 +19,9 @@ const ACCOUNT_ID = '00000000-0000-4000-a000-000000000101';
 const PROJECT_ID = '00000000-0000-4000-a000-000000000201';
 const MANIFEST_PATH = 'kortix.yaml';
 const TEST_AUTH_KEY = '__KORTIX_E2E_AUTH__';
+const ORIGINAL_KORTIX_URL = process.env.KORTIX_URL;
+
+process.env.KORTIX_URL = 'https://api.test.kortix.local';
 
 // ─── In-memory git mock ─────────────────────────────────────────────────────
 // Every git read/write goes through this map so a test's "commitFile" is
@@ -516,6 +519,14 @@ function createApp() {
   });
   return app;
 }
+
+afterAll(() => {
+  if (ORIGINAL_KORTIX_URL === undefined) {
+    delete process.env.KORTIX_URL;
+  } else {
+    process.env.KORTIX_URL = ORIGINAL_KORTIX_URL;
+  }
+});
 
 // ─── Manifest seeding helpers ──────────────────────────────────────────────
 // All trigger config lives in `kortix.yaml` now. Tests seed manifest content

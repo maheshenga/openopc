@@ -11,7 +11,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 
 const SRC = join(import.meta.dir, '..');
 
@@ -37,7 +37,7 @@ function offenders(table: string, allow: (rel: string) => boolean): string[] {
   const hits: string[] = [];
   const re = insertOf(table);
   for (const file of tsFiles(SRC)) {
-    const rel = file.slice(SRC.length + 1);
+    const rel = relative(SRC, file).split(sep).join('/');
     if (rel.startsWith('__tests__/')) continue;
     if (allow(rel)) continue;
     if (re.test(readFileSync(file, 'utf8'))) hits.push(rel);

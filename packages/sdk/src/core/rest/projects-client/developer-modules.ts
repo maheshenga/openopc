@@ -389,6 +389,9 @@ export interface DeveloperAccess {
     publisher: DeveloperPublisher;
     membership: DeveloperPublisherMember | null;
   }>;
+  capabilities: {
+    package_upload: boolean;
+  };
 }
 
 export interface CreateDeveloperPublisherInput extends DeveloperModuleReleaseAccountOptions {

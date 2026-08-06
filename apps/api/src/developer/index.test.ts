@@ -991,6 +991,7 @@ describe('developer Publisher API', () => {
     expect(await access.json()).toEqual(
       expect.objectContaining({
         account_id: ACCOUNT_ID,
+        capabilities: { package_upload: true },
         publishers: [
           expect.objectContaining({
             publisher: expect.objectContaining({ publisher_id: 'acme-labs' }),
@@ -1003,5 +1004,32 @@ describe('developer Publisher API', () => {
     expect(await listed.json()).toEqual({
       publishers: [expect.objectContaining({ publisher_id: 'acme-labs' })],
     });
+  });
+
+  test('returns package upload false without failing developer access when trust is unavailable', async () => {
+    const artifactService = new DeveloperModuleArtifactService({
+      repository: createMemoryDeveloperModuleArtifactRepository(),
+      store: createMemoryDeveloperArtifactStore().store,
+      codeModulesEnabled: true,
+      trustInfrastructureReady: async () => {
+        throw new Error('trust worker unavailable');
+      },
+    });
+    const actions: string[] = [];
+    const response = await authenticatedApp({
+      artifactService,
+      authorizeAccount: async (_context, _accountId, action) => {
+        actions.push(action);
+      },
+    }).request(`/access?account_id=${ACCOUNT_ID}`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(
+      expect.objectContaining({
+        account_id: ACCOUNT_ID,
+        capabilities: { package_upload: false },
+      }),
+    );
+    expect(actions).toEqual([ACCOUNT_ACTIONS.ACCOUNT_READ]);
   });
 });

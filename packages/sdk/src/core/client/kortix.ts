@@ -289,6 +289,12 @@ export function createKortix(config: KortixPlatformConfig, opts?: { global?: boo
 
   /** Developer Center authoring APIs. Validation is pure and does not publish. */
   const developer = {
+    application: {
+      current: (...args: Parameters<typeof P.getCurrentDeveloperApplication>) =>
+        P.getCurrentDeveloperApplication(...args),
+      submit: (...args: Parameters<typeof P.submitDeveloperApplication>) =>
+        P.submitDeveloperApplication(...args),
+    },
     getAccess: (...args: Parameters<typeof P.getDeveloperAccess>) => P.getDeveloperAccess(...args),
     acceptInvitation: (...args: Parameters<typeof P.acceptDeveloperInvitation>) =>
       P.acceptDeveloperInvitation(...args),

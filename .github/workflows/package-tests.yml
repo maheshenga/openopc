@@ -61,6 +61,9 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Verify lockfile Git transports
+        run: bun test scripts/release/pnpm-lock-transport.test.ts
+
       - name: Install pnpm
         run: corepack enable pnpm
 
@@ -81,15 +84,16 @@ jobs:
       - name: Build + dry-pack publishable npm packages (release gate)
         run: |
           set -euo pipefail
-          # @kortix/intelligence-contracts, @kortix/llm-catalog, @kortix/sdk and
-          # @kortix/executor-sdk publish to npm on release (deploy-prod.yml).
+          # @kortix/intelligence-contracts, @kortix/llm-catalog, @kortix/sdk,
+          # @kortix/executor-sdk and @openopc/developer-sdk publish to npm on
+          # release (deploy-prod.yml).
           # Build + stage + dry-pack them on every PR
           # so a broken dist/ or published manifest fails here, not at release time.
           # The staging script asserts every publishConfig entrypoint exists in the
           # emitted dist/ and that workspace deps pin cleanly.
           node scripts/stage-npm-publish.test.mjs
-          for dir in intelligence-contracts llm-catalog sdk executor-sdk; do
-            echo "::group::@kortix/$dir build + stage + dry-pack"
+          for dir in intelligence-contracts llm-catalog sdk executor-sdk openopc-developer-sdk; do
+            echo "::group::packages/$dir build + stage + dry-pack"
             # @kortix/sdk's build:bundles also emits the tsup browser bundles
             # (dist/kortix.esm.min.js, dist/kortix.global.js) that
             # publishConfig.browser/unpkg/jsdelivr point at. stage-npm-publish.mjs
@@ -109,13 +113,14 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Install smoke test — pack, install, import (@kortix/sdk)
+      - name: Install smoke tests — pack, install, import public SDKs
         run: |
           set -euo pipefail
           # `npm pack --dry-run` above lists tarball CONTENTS. stage-npm-publish
           # asserts publishConfig paths exist in dist/. Neither proves the
           # published package actually RESOLVES and IMPORTS. This does.
           pnpm --filter @kortix/sdk run smoke:install
+          pnpm --filter @openopc/developer-sdk run smoke:install
 
       - name: Guard against focused tests
         run: |

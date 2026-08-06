@@ -74,9 +74,10 @@ export function parseModuleFrameAncestors(
 
 function staticHostHeaders(contentType: string, frameAncestors: readonly string[]): Headers {
   const framePolicy = frameAncestors.length > 0 ? frameAncestors.join(' ') : "'none'";
+  const connectPolicy = ["'self'", ...frameAncestors].join(' ');
   return new Headers({
     'cache-control': 'no-store',
-    'content-security-policy': `default-src 'self' data: blob:; base-uri 'none'; object-src 'none'; connect-src 'self'; form-action 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; frame-ancestors ${framePolicy}`,
+    'content-security-policy': `default-src 'self' data: blob:; base-uri 'none'; object-src 'none'; connect-src ${connectPolicy}; form-action 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; frame-ancestors ${framePolicy}`,
     'content-type': contentType,
     'cross-origin-opener-policy': 'same-origin',
     'referrer-policy': 'no-referrer',

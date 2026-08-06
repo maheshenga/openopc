@@ -292,6 +292,9 @@ describe('MCP face', () => {
       expect(listed.tools.slice(8).map((t: { name: string }) => t.name)).toEqual([
         'studio_capabilities',
         'studio_create_task',
+        'workflow_capabilities',
+        'workflow_start',
+        'workflow_status',
       ]);
 
       // connectors → catalog with per-connector tool counts.

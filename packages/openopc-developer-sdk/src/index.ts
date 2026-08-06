@@ -1,4 +1,5 @@
 export {
+  OpenOpcModuleRequestError,
   OpenOpcModuleProtocolError,
   OpenOpcModuleServiceError,
   createOpenOpcModuleClient,
@@ -12,7 +13,33 @@ export {
   type OpenOpcModuleClient,
   type OpenOpcModuleClientOptions,
   type OpenOpcModuleTransportRequest,
-} from './client';
+  type OpenOpcRequestOptions,
+} from './client.js';
+
+export type { OpenOpcModuleRequestErrorCode } from './errors.js';
+
+export {
+  CreateDeveloperPaymentOrderInputSchema,
+  CreateDeveloperPaymentOrderResultSchema,
+  CreateDeveloperPaymentRefundInputSchema,
+  DeveloperModulePaymentOrderStatusSchema,
+  DeveloperPaymentOrderViewSchema,
+  DeveloperPaymentRefundStatusSchema,
+  DeveloperPaymentRefundViewSchema,
+  ModulePaymentIdempotencyKeySchema,
+  ModuleServiceCapabilityRequestSchema,
+  ModuleServiceErrorCodeSchema,
+  ModuleServiceErrorResponseSchema,
+  MODULE_SERVICE_ERROR_CODES,
+  OpenOpcAiServiceOperationSchema,
+  OpenOpcPaymentServiceOperationSchema,
+  OpenOpcServiceNameSchema,
+  OpenOpcServiceOperationSchema,
+  OPENOPC_AI_SERVICE_OPERATIONS,
+  OPENOPC_PAYMENT_SERVICE_OPERATIONS,
+  OPENOPC_SERVICE_NAMES,
+  OPENOPC_SERVICE_OPERATIONS,
+} from './contracts.js';
 
 export type {
   CreateDeveloperPaymentOrderInput,
@@ -23,7 +50,45 @@ export type {
   DeveloperPaymentRefundStatus,
   DeveloperPaymentRefundView,
   ModulePaymentIdempotencyKey,
+  ModuleServiceCapabilityRequest,
   ModuleServiceErrorCode,
+  ModuleServiceErrorResponse,
+  OpenOpcAiServiceOperation,
+  OpenOpcPaymentServiceOperation,
   OpenOpcServiceName,
   OpenOpcServiceOperation,
-} from '@kortix/api-contract';
+} from './contracts.js';
+
+export {
+  OpenOpcBrowserCapabilityTokenProtocolError,
+  createOpenOpcBrowserCapabilityTokenAdapter,
+  createSandboxModuleServiceTokenAdapter,
+} from './browser-capability-token.js';
+
+export type {
+  OpenOpcBrowserCapabilityTokenAdapterOptions,
+  OpenOpcBrowserCapabilityTokenEvent,
+  OpenOpcBrowserCapabilityTokenEventTarget,
+  OpenOpcBrowserCapabilityTokenGetter,
+  OpenOpcBrowserCapabilityTokenHostWindow,
+  OpenOpcBrowserCapabilityTokenRequest,
+  OpenOpcBrowserCapabilityTokenRequestOptions,
+  OpenOpcBrowserCapabilityTokenResponse,
+  SandboxModuleServiceAdapterEvent,
+  SandboxModuleServiceAdapterEventTarget,
+  SandboxModuleServiceHostWindow,
+  SandboxModuleServiceTokenAdapterOptions,
+} from './browser-capability-token.js';
+
+export {
+  OpenOpcBrowserModuleBootstrapProtocolError,
+  createOpenOpcBrowserModuleClient,
+} from './browser-module-bootstrap.js';
+
+export type {
+  OpenOpcBrowserModuleBootstrapRequest,
+  OpenOpcBrowserModuleBootstrapResponse,
+  OpenOpcBrowserModuleClientOptions,
+  OpenOpcBrowserModuleParentWindow,
+  OpenOpcBrowserModuleWindow,
+} from './browser-module-bootstrap.js';

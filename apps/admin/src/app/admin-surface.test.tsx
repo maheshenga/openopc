@@ -19,6 +19,8 @@ const ADMIN_ROUTE_FILES = [
   'src/app/providers/page.tsx',
   'src/app/ops/page.tsx',
   'src/app/utils/page.tsx',
+  'src/app/developer-applications/page.tsx',
+  'src/app/developer-applications/[applicationId]/page.tsx',
   'src/app/developer-reviews/page.tsx',
   'src/app/developer-reviews/[releaseId]/page.tsx',
 ] as const;
@@ -57,6 +59,26 @@ test('defines an independently buildable OpenOPC Admin package', () => {
   expect(existsSync(resolve(ADMIN_ROOT, 'tsconfig.json'))).toBeTrue();
 });
 
+test('resolves the Admin next-intl request module inside the independent build', async () => {
+  const configModule = (await import(resolve(ADMIN_ROOT, 'next.config.ts'))) as {
+    default: {
+      webpack?: (
+        config: { context: string; resolve: { alias: Record<string, string> } },
+        context: Record<string, never>,
+      ) => { context: string; resolve: { alias: Record<string, string> } };
+    };
+  };
+  expect(configModule.default.webpack).toBeFunction();
+
+  const webpackConfig = configModule.default.webpack?.(
+    { context: ADMIN_ROOT, resolve: { alias: {} } },
+    {},
+  );
+  const requestConfigPath = webpackConfig?.resolve.alias['next-intl/config'];
+  expect(requestConfigPath).toBe(resolve(ADMIN_ROOT, 'src/i18n/request.ts'));
+  expect(existsSync(requestConfigPath ?? '')).toBeTrue();
+});
+
 test('owns every current operator route and leaves no duplicate Web Admin subtree', () => {
   for (const routeFile of ADMIN_ROUTE_FILES) {
     expect(existsSync(resolve(ADMIN_ROOT, routeFile))).toBeTrue();
@@ -73,6 +95,10 @@ test('rejects consumer routes while preserving Admin and framework paths', async
 
   expect(isAdminRequestPath('/')).toBeTrue();
   expect(isAdminRequestPath('/accounts')).toBeTrue();
+  expect(isAdminRequestPath('/developer-applications')).toBeTrue();
+  expect(
+    isAdminRequestPath('/developer-applications/10000000-0000-4000-a000-000000000001'),
+  ).toBeTrue();
   expect(isAdminRequestPath('/developer-reviews/10000000-0000-4000-a000-000000000001')).toBeTrue();
   expect(isAdminRequestPath('/_next/static/chunks/app.js')).toBeTrue();
   expect(isAdminRequestPath('/projects')).toBeFalse();

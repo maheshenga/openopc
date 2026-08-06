@@ -2,6 +2,7 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import { createGateway } from '@kortix/llm-gateway';
 import { Hono } from 'hono';
 import { config } from '../config';
+import type { AppEnv } from '../types';
 import { createInProcessGatewayHooks } from './hooks';
 import { createInternalGatewayRoutes } from './internal-routes';
 
@@ -26,7 +27,7 @@ export function getInProcessLlmGateway(): InProcessLlmGateway | null {
 //                      (direct calls here vs HTTP in the standalone service).
 //   /internal/gateway  Control-plane RPC the out-of-process gateway pod calls.
 //   /v1/llm-gateway/*  Reverse proxy to the standalone gateway (when configured).
-export function mountLlmGateway(app: OpenAPIHono): void {
+export function mountLlmGateway(app: OpenAPIHono<AppEnv>): void {
   const gateway = getInProcessLlmGateway();
   if (!gateway) {
     app.all('/v1/llm/*', (c) => c.json({ error: 'LLM gateway is disabled' }, 503));

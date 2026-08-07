@@ -24,7 +24,19 @@ const REQUEST_TYPE = 'openopc.module-service.token.request' as const;
 const RESPONSE_TYPE = 'openopc.module-service.token.response' as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SERVICE_OPERATIONS: Record<OpenOpcServiceName, readonly OpenOpcServiceOperation[]> = {
-  ai: ['models.read', 'text.generate', 'text.stream'],
+  ai: [
+    'models.read',
+    'text.generate',
+    'text.stream',
+    'images.models.read',
+    'images.estimates.create',
+    'images.jobs.create',
+    'images.jobs.read',
+    'images.jobs.cancel',
+    'images.assets.create',
+    'images.assets.read',
+    'images.assets.download',
+  ],
   payment: ['orders.create', 'orders.read', 'refunds.create'],
 };
 

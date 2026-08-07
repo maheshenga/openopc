@@ -19,6 +19,7 @@ export * from './capability-grants';
 export * from './capability-grants.drizzle';
 export * from './service-auth';
 export * from './payments';
+export * from './images';
 
 export const moduleServiceCapabilityRepository = createDrizzleModuleServiceCapabilityRepository(db);
 export const moduleServiceConsentManager = new ModuleServiceConsentManager({

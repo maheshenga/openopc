@@ -81,7 +81,19 @@ const OPENOPC_SERVICE_OPERATIONS: Record<
   OpenOpcModuleServiceName,
   readonly OpenOpcModuleServiceOperation[]
 > = {
-  ai: ['models.read', 'text.generate', 'text.stream'],
+  ai: [
+    'models.read',
+    'text.generate',
+    'text.stream',
+    'images.models.read',
+    'images.estimates.create',
+    'images.jobs.create',
+    'images.jobs.read',
+    'images.jobs.cancel',
+    'images.assets.create',
+    'images.assets.read',
+    'images.assets.download',
+  ],
   payment: ['orders.create', 'orders.read', 'refunds.create'],
 };
 

@@ -29,6 +29,11 @@ import {
   createModulePaymentRoutes,
   createRuntimeModulePaymentDependencies,
 } from './payments';
+import {
+  type ModuleImageDependencies,
+  createModuleImageRoutes,
+  createRuntimeModuleImageDependencies,
+} from './images';
 
 type LoadedProject = { row: { accountId: string; projectId: string }; userId: string };
 type LoadProjectForUser = (
@@ -327,9 +332,11 @@ export function createModuleServiceProjectRoutes(
 export function createModuleServicesApp(
   aiDependencies: ModuleAiDependencies = createRuntimeModuleAiDependencies(),
   paymentDependencies: ModulePaymentRouteDependencies = createRuntimeModulePaymentDependencies(),
+  imageDependencies: ModuleImageDependencies = createRuntimeModuleImageDependencies(),
 ) {
   const app = makeOpenApiApp<AppEnv>();
   app.route('/ai', createModuleAiRoutes(aiDependencies));
+  app.route('/ai/images', createModuleImageRoutes(imageDependencies));
   app.route('/payments', createModulePaymentRoutes(paymentDependencies));
   return app;
 }

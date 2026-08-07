@@ -8,6 +8,8 @@ import {
   ModulePaymentIdempotencyKeySchema,
   ModuleServiceCapabilityRequestSchema,
   ModuleServiceErrorResponseSchema,
+  OpenOpcImageEstimateRequestSchema,
+  OpenOpcImageModelSchema,
 } from '@kortix/api-contract';
 import {
   ModuleServiceCapabilityRequestSchema as InternalCapabilitySchema,
@@ -18,6 +20,8 @@ import {
   DeveloperPaymentOrderViewSchema as InternalOrderViewSchema,
   CreateDeveloperPaymentRefundInputSchema as InternalRefundInputSchema,
   DeveloperPaymentRefundViewSchema as InternalRefundViewSchema,
+  OpenOpcImageEstimateRequestSchema as InternalImageEstimateRequestSchema,
+  OpenOpcImageModelSchema as InternalImageModelSchema,
   OPENOPC_AI_SERVICE_OPERATIONS,
   OPENOPC_PAYMENT_SERVICE_OPERATIONS,
   OPENOPC_SERVICE_NAMES,
@@ -45,7 +49,19 @@ const ORDER_INPUT = {
 describe('OpenOPC public contracts', () => {
   test('exposes the exact service operation vocabulary', () => {
     expect(OPENOPC_SERVICE_NAMES).toEqual(['ai', 'payment']);
-    expect(OPENOPC_AI_SERVICE_OPERATIONS).toEqual(['models.read', 'text.generate', 'text.stream']);
+    expect(OPENOPC_AI_SERVICE_OPERATIONS).toEqual([
+      'models.read',
+      'text.generate',
+      'text.stream',
+      'images.models.read',
+      'images.estimates.create',
+      'images.jobs.create',
+      'images.jobs.read',
+      'images.jobs.cancel',
+      'images.assets.create',
+      'images.assets.read',
+      'images.assets.download',
+    ]);
     expect(OPENOPC_PAYMENT_SERVICE_OPERATIONS).toEqual([
       'orders.create',
       'orders.read',
@@ -120,6 +136,47 @@ describe('OpenOPC public contracts', () => {
     );
   });
 
+  test('keeps image model and estimate validation compatible with the platform contract', () => {
+    const model = {
+      id: 'img1/opaque-model:signature',
+      object: 'image_model' as const,
+      owned_by: 'openopc' as const,
+      name: 'OpenOPC Image',
+      capabilities: {
+        reference_images: true,
+        max_reference_images: 4,
+        supports_negative_prompt: true,
+        supports_seed: true,
+        aspect_ratios: ['1:1', '16:9'] as const,
+        qualities: ['standard', 'high'] as const,
+        max_output_count: 4,
+      },
+    };
+    const estimateRequest = {
+      model: model.id,
+      input: {
+        prompt: 'A clean product photograph',
+        reference_asset_ids: [],
+        aspect_ratio: '1:1' as const,
+        quality: 'standard' as const,
+        output_count: 1,
+      },
+    };
+
+    expect(InternalImageModelSchema.safeParse(model).success).toBe(
+      OpenOpcImageModelSchema.safeParse(model).success,
+    );
+    expect(InternalImageEstimateRequestSchema.safeParse(estimateRequest).success).toBe(
+      OpenOpcImageEstimateRequestSchema.safeParse(estimateRequest).success,
+    );
+    expect(
+      InternalImageEstimateRequestSchema.safeParse({
+        ...estimateRequest,
+        provider_config_id: 'provider-secret',
+      }).success,
+    ).toBe(false);
+  });
+
   test('rejects credentials and malformed payment values at the public boundary', () => {
     expect(
       InternalOrderInputSchema.safeParse({ ...ORDER_INPUT, merchant_key: 'secret' }).success,
@@ -132,7 +189,7 @@ describe('OpenOPC public contracts', () => {
   });
 
   test('publishes the operation-specific capability and error types', () => {
-    const aiOperation: OpenOpcAiServiceOperation = 'text.generate';
+    const aiOperation: OpenOpcAiServiceOperation = 'images.jobs.create';
     const paymentOperation: OpenOpcPaymentServiceOperation = 'orders.read';
     const capability: ModuleServiceCapabilityRequest = {
       service: 'ai',
@@ -142,7 +199,7 @@ describe('OpenOPC public contracts', () => {
       error: 'MODULE_SERVICE_UNAVAILABLE',
       message: 'temporarily unavailable',
     };
-    expect(capability.operations).toEqual(['text.generate']);
+    expect(capability.operations).toEqual(['images.jobs.create']);
     expect(paymentOperation).toBe('orders.read');
     expect(error.error).toBe('MODULE_SERVICE_UNAVAILABLE');
   });

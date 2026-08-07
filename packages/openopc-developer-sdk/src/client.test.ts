@@ -11,6 +11,8 @@ import {
   type OpenOpcChatCompletion,
   type OpenOpcChatCompletionRequest,
   type OpenOpcChatMessage,
+  type OpenOpcImageAsset,
+  type OpenOpcImageModel,
   type OpenOpcModel,
   OpenOpcModuleProtocolError,
   OpenOpcModuleServiceError,
@@ -273,6 +275,31 @@ describe('OpenOPC developer SDK transport', () => {
     }
   });
 
+  test('maps release-profile errors with the unavailable capability', async () => {
+    const client = createOpenOpcModuleClient({
+      baseUrl: 'https://platform.example.com',
+      getCapabilityToken: async () => 'v4.public.module-token',
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+            capability: 'module.ai.gateway',
+          }),
+          {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
+    });
+
+    await expect(client.ai.images.models.list()).rejects.toMatchObject({
+      name: 'OpenOpcModuleServiceError',
+      code: 'OPENOPC_CAPABILITY_UNAVAILABLE_FOR_RELEASE_PROFILE',
+      status: 503,
+      capability: 'module.ai.gateway',
+    });
+  });
+
   test('redacts unknown error bodies instead of reflecting provider payloads', async () => {
     const client = createOpenOpcModuleClient({
       baseUrl: 'https://platform.example.com',
@@ -433,6 +460,102 @@ describe('OpenOPC developer SDK transport', () => {
       { id: 'chunk-2', choices: [{ delta: { content: 'lo' } }] },
     ]);
     expect(capabilities).toEqual([{ service: 'ai', operation: 'text.stream' }]);
+  });
+
+  test('routes image catalog and binary asset calls through the platform transport', async () => {
+    const capabilities: unknown[] = [];
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const assetId = '90000000-0000-4000-8000-000000000009';
+    const imageModel = {
+      id: 'img1/opaque-model:signature',
+      object: 'image_model',
+      owned_by: 'openopc',
+      name: 'OpenOPC Image',
+      capabilities: {
+        reference_images: true,
+        max_reference_images: 4,
+        supports_negative_prompt: true,
+        supports_seed: true,
+        aspect_ratios: ['1:1'],
+        qualities: ['standard'],
+        max_output_count: 2,
+      },
+    } satisfies OpenOpcImageModel;
+    const imageAsset = {
+      asset_id: assetId,
+      source_job_id: null,
+      kind: 'image',
+      mime_type: 'image/png',
+      size_bytes: 4,
+      width: 1,
+      height: 1,
+      created_at: '2026-08-01T00:00:00.000Z',
+    } satisfies OpenOpcImageAsset;
+    const client = createOpenOpcModuleClient({
+      baseUrl: 'https://platform.example.com',
+      async getCapabilityToken(input) {
+        capabilities.push(input);
+        return 'v4.public.module-token';
+      },
+      async fetch(input, init) {
+        const url = String(input);
+        requests.push({ url, init });
+        if (url.endsWith('/images/models')) {
+          return new Response(JSON.stringify({ data: [imageModel] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.endsWith('/images/assets') && init?.method === 'POST') {
+          return new Response(JSON.stringify(imageAsset), {
+            status: 201,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.endsWith('/images/assets/list')) {
+          return new Response(JSON.stringify({ items: [imageAsset], next_cursor: null }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.endsWith(`/images/assets/${assetId}`)) {
+          return new Response(JSON.stringify(imageAsset), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.endsWith(`/images/assets/${assetId}/content`)) {
+          return new Response(new Uint8Array([1, 2, 3, 4]), {
+            status: 200,
+            headers: { 'content-type': 'image/png' },
+          });
+        }
+        return new Response('{}', { status: 404 });
+      },
+    });
+
+    await expect(client.ai.images.models.list()).resolves.toEqual({ data: [imageModel] });
+    const input = new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'image/png' });
+    await expect(client.ai.images.assets.create(input)).resolves.toEqual(imageAsset);
+    await expect(client.ai.images.assets.list()).resolves.toEqual({
+      items: [imageAsset],
+      next_cursor: null,
+    });
+    await expect(client.ai.images.assets.get(assetId)).resolves.toEqual(imageAsset);
+    const downloaded = await client.ai.images.assets.download(assetId);
+    expect(downloaded.type).toBe('image/png');
+    expect(new Uint8Array(await downloaded.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]));
+
+    expect(capabilities).toEqual([
+      { service: 'ai', operation: 'images.models.read' },
+      { service: 'ai', operation: 'images.assets.create' },
+      { service: 'ai', operation: 'images.assets.read' },
+      { service: 'ai', operation: 'images.assets.read' },
+      { service: 'ai', operation: 'images.assets.download' },
+    ]);
+    expect(new Headers(requests[1]?.init?.headers).get('content-type')).toBe('image/png');
+    expect(new Headers(requests[4]?.init?.headers).get('accept')).toBe('image/*');
+    expect(requests[1]?.init?.body).toBeInstanceOf(Blob);
   });
 
   test('parses CRLF-framed SSE events split across response chunks', async () => {

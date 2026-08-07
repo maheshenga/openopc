@@ -8577,14 +8577,22 @@ export const projectModuleServiceConsents = kortixSchema.table(
       'project_module_service_consents_operations_check',
       sql`jsonb_typeof(${table.operations}) = 'array'
         AND (
-          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream"]'::jsonb)
+          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream","images.models.read","images.estimates.create","images.jobs.create","images.jobs.read","images.jobs.cancel","images.assets.create","images.assets.read","images.assets.download"]'::jsonb)
           OR (${table.service} = 'payment' AND ${table.operations} <@ '["orders.create","orders.read","refunds.create"]'::jsonb)
         )
-        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 6
+        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 11
         AND jsonb_array_length(${table.operations}) =
           (CASE WHEN ${table.operations} @> '["models.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.generate"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.stream"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.models.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.estimates.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.jobs.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.jobs.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.jobs.cancel"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.assets.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.assets.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.assets.download"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.create"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END)`,
@@ -8680,14 +8688,22 @@ export const moduleServiceCapabilityGrants = kortixSchema.table(
       'module_service_capability_grants_operations_check',
       sql`jsonb_typeof(${table.operations}) = 'array'
         AND (
-          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream"]'::jsonb)
+          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream","images.models.read","images.estimates.create","images.jobs.create","images.jobs.read","images.jobs.cancel","images.assets.create","images.assets.read","images.assets.download"]'::jsonb)
           OR (${table.service} = 'payment' AND ${table.operations} <@ '["orders.create","orders.read","refunds.create"]'::jsonb)
         )
-        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 6
+        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 11
         AND jsonb_array_length(${table.operations}) =
           (CASE WHEN ${table.operations} @> '["models.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.generate"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.stream"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.models.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.estimates.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.jobs.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.jobs.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.jobs.cancel"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.assets.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.assets.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["images.assets.download"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.create"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END)`,
@@ -8772,7 +8788,7 @@ export const moduleServiceAuditEvents = kortixSchema.table(
     check(
       'module_service_audit_events_operation_check',
       sql`${table.operation} IS NULL
-        OR (${table.service} = 'ai' AND ${table.operation} IN ('models.read', 'text.generate', 'text.stream'))
+        OR (${table.service} = 'ai' AND ${table.operation} IN ('models.read', 'text.generate', 'text.stream', 'images.models.read', 'images.estimates.create', 'images.jobs.create', 'images.jobs.read', 'images.jobs.cancel', 'images.assets.create', 'images.assets.read', 'images.assets.download'))
         OR (${table.service} = 'payment' AND ${table.operation} IN ('orders.create', 'orders.read', 'refunds.create'))`,
     ),
     check(

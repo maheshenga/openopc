@@ -65,6 +65,47 @@ messages, or module-controlled storage.
 The request cannot select a provider, base URL, API key, or custom
 authorization header. Provider credentials remain in the platform gateway.
 
+### Images
+
+Image generation is also platform-mediated. The SDK exposes a provider-neutral
+catalog, estimate-before-submit flow, idempotent asynchronous jobs, job events,
+and project-scoped image assets:
+
+```ts
+const { data: models } = await openopc.ai.images.models.list();
+const model = models[0];
+if (!model) throw new Error('No approved image model is available');
+
+const input = {
+  prompt: 'A quiet coastal town at blue hour',
+  reference_asset_ids: [],
+  aspect_ratio: '16:9' as const,
+  quality: 'standard' as const,
+  output_count: 1,
+};
+const estimate = await openopc.ai.images.estimates.create({ model: model.id, input });
+const { job } = await openopc.ai.images.jobs.create(
+  {
+    model: model.id,
+    input,
+    estimate: {
+      estimate_id: estimate.estimate_id,
+      estimate_token: estimate.estimate_token,
+      max_approved_credits: estimate.max_approved_credits,
+    },
+  },
+  crypto.randomUUID(),
+);
+```
+
+Use `jobs.get()` or `jobs.events()` until the job reaches a terminal state,
+then download the returned asset with `assets.download(assetId)`. Upload local
+reference images with `assets.create(blob)`; the model catalog advertises when a
+model accepts references, negative prompts, and seeds. Model identifiers are
+opaque, short-lived capability-bound handles, not provider model names or
+configuration identifiers. The SDK never accepts a provider URL, provider key,
+or module-controlled network destination.
+
 ## Payments
 
 ```ts

@@ -88,6 +88,31 @@ const grantRow: ModuleServiceCapabilityGrant = {
   createdAt: NOW,
 };
 
+const consentRow: ModuleServiceConsent = {
+  consentId: CONSENT_ID,
+  accountId: ACCOUNT_ID,
+  projectId: PROJECT_ID,
+  installationId: INSTALLATION_ID,
+  releaseId: RELEASE_ID,
+  installRevision: 4,
+  service: 'ai',
+  operations: ['models.read'],
+  consentDigest: `sha256:${'c'.repeat(64)}`,
+  acceptedBy: USER_ID,
+  acceptedAt: NOW,
+  revokedBy: null,
+  revokedAt: null,
+};
+
+function prefixedRow(prefix: string, value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      `${prefix}${key.slice(0, 1).toUpperCase()}${key.slice(1)}`,
+      entry,
+    ]),
+  );
+}
+
 describe('module service capability Drizzle repository', () => {
   test('resolves the active release only through the exact tenant installation identity', async () => {
     const fixture = databaseFixture([[installationRow]]);
@@ -160,6 +185,36 @@ describe('module service capability Drizzle repository', () => {
       ]),
     );
     expect(allParams.some((value) => String(value).startsWith('v4.public.'))).toBe(false);
+  });
+
+  test('uses a PostgreSQL-safe alias when loading durable grant authorization', async () => {
+    const fixture = databaseFixture([
+      [
+        {
+          ...prefixedRow('grant', grantRow as unknown as Record<string, unknown>),
+          ...prefixedRow('consent', consentRow as unknown as Record<string, unknown>),
+          ...prefixedRow('installation', installationRow as unknown as Record<string, unknown>),
+          grantCreatedAt: '2026-08-01 00:00:00+00',
+          grantExpiresAt: '2026-08-01 00:05:00+00',
+          consentAcceptedAt: '2026-08-01 00:00:00+00',
+          installationSignedAt: '2026-08-01 00:00:00+00',
+        },
+      ],
+    ]);
+    const repository = createDrizzleModuleServiceCapabilityRepository(fixture.database);
+
+    await expect(repository.getAuthorization(GRANT_ID)).resolves.toEqual({
+      grant: grantRow,
+      consent: consentRow,
+      installation: installationRow,
+    });
+
+    expect(fixture.queries).toHaveLength(1);
+    expect(fixture.queries[0]?.sql).toContain(
+      'module_service_capability_grants capability_grant',
+    );
+    expect(fixture.queries[0]?.sql).not.toMatch(/\bgrant\./i);
+    expect(fixture.queries[0]?.params).toEqual([GRANT_ID]);
   });
 
   test('revokes the consent and every live grant before appending one audit event', async () => {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { StudioAsset, StudioErrorCode, StudioUpload } from '@kortix/api-contract';
 import {
   StudioImageValidationError,
@@ -173,6 +174,125 @@ export class StudioStorageService {
       signed_upload_url: signedUpload.url,
       signed_upload_headers: { ...signedUpload.headers },
     };
+  }
+
+  /**
+   * Accept a bounded image body from a trusted platform relay. The regular
+   * browser flow still uses signed uploads; module services cannot safely
+   * consume provider or object-store URLs, so they use this server-side path.
+   */
+  async createAssetFromBytes(input: {
+    accountId: string;
+    projectId: string;
+    actorUserId: string;
+    mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+    bytes: Uint8Array;
+  }): Promise<StudioAsset> {
+    if (
+      input.bytes.byteLength <= 0 ||
+      input.bytes.byteLength > MAX_IMAGE_BYTES ||
+      !IMAGE_EXTENSIONS[input.mimeType]
+    ) {
+      throw new StudioStorageServiceError(
+        input.bytes.byteLength > MAX_IMAGE_BYTES ? 'STUDIO_ASSET_TOO_LARGE' : 'STUDIO_ASSET_INVALID',
+      );
+    }
+    const bytes = input.bytes.slice();
+    const checksum = createHash('sha256').update(bytes).digest('hex');
+    let image: ValidatedStudioImage;
+    try {
+      image = await validateStudioImage({ bytes, mimeType: input.mimeType });
+    } catch (error) {
+      if (error instanceof StudioImageValidationError) {
+        throw new StudioStorageServiceError(error.code);
+      }
+      throw error;
+    }
+
+    await this.input.store.assertReady();
+    const uploadId = this.randomUUID();
+    const extension = IMAGE_EXTENSIONS[input.mimeType];
+    const objectKey =
+      `accounts/${input.accountId}/projects/${input.projectId}` +
+      `/uploads/${uploadId}/source.${extension}`;
+    await this.input.repository.createPendingUpload({
+      account_id: input.accountId,
+      project_id: input.projectId,
+      actor_user_id: input.actorUserId,
+      declared_mime_type: input.mimeType,
+      expected_size_bytes: bytes.byteLength,
+      expected_checksum_sha256: checksum,
+      upload_id: uploadId,
+      object_key: objectKey,
+      expires_at: new Date(this.now().getTime() + PENDING_UPLOAD_TTL_SECONDS * 1_000).toISOString(),
+    });
+    await runStorageDriverOperation(() =>
+      this.input.store.putObject({
+        key: objectKey,
+        body: byteStream(bytes),
+        content_type: input.mimeType,
+        size_bytes: bytes.byteLength,
+        checksum_sha256: checksum,
+        metadata: {},
+        if_none_match: '*',
+      }),
+    );
+    const asset = await this.finalizeUpload({
+      accountId: input.accountId,
+      projectId: input.projectId,
+      uploadId,
+    });
+    if (!asset || asset.width !== image.width || asset.height !== image.height) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    return asset;
+  }
+
+  async readAsset(input: {
+    accountId: string;
+    projectId: string;
+    assetId: string;
+  }): Promise<{ asset: StudioAsset; bytes: Uint8Array } | null> {
+    const asset = await this.input.repository.getAsset(input.projectId, input.assetId);
+    const extension = asset ? IMAGE_EXTENSIONS[asset.mime_type] : undefined;
+    const keyPrefix = `accounts/${input.accountId}/projects/${input.projectId}/`;
+    if (
+      !asset ||
+      asset.account_id !== input.accountId ||
+      asset.kind !== 'image' ||
+      !extension ||
+      asset.bucket !== this.input.store.namespace ||
+      !isSafeProjectObjectKey(asset.object_key, keyPrefix) ||
+      !Number.isSafeInteger(asset.size_bytes) ||
+      asset.size_bytes <= 0 ||
+      asset.size_bytes > MAX_IMAGE_BYTES ||
+      !/^[a-f0-9]{64}$/.test(asset.checksum_sha256)
+    ) {
+      return null;
+    }
+    await this.input.store.assertReady();
+    let stored: StudioStoredObject;
+    try {
+      stored = await this.input.store.getObject({ key: asset.object_key });
+    } catch (error) {
+      if (error instanceof StudioStorageUnavailableError) throw error;
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    if (
+      stored.namespace !== this.input.store.namespace ||
+      stored.key !== asset.object_key ||
+      stored.content_type !== asset.mime_type ||
+      stored.size_bytes !== asset.size_bytes ||
+      stored.checksum_sha256 !== asset.checksum_sha256
+    ) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    const bytes = await readObjectBody(stored.body, MAX_IMAGE_BYTES);
+    const checksum = createHash('sha256').update(bytes).digest('hex');
+    if (bytes.byteLength !== asset.size_bytes || checksum !== asset.checksum_sha256) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    return { asset, bytes };
   }
 
   async finalizeUpload(input: {

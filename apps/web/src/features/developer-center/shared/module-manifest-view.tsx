@@ -7,7 +7,19 @@ function permissionValue(value: unknown): string {
 
 type OpenOpcServices = Array<{ name: 'AI service' | 'Payment service'; operations: string[] }>;
 const SERVICE_OPERATIONS = {
-  ai: new Set(['models.read', 'text.generate', 'text.stream']),
+  ai: new Set([
+    'models.read',
+    'text.generate',
+    'text.stream',
+    'images.models.read',
+    'images.estimates.create',
+    'images.jobs.create',
+    'images.jobs.read',
+    'images.jobs.cancel',
+    'images.assets.create',
+    'images.assets.read',
+    'images.assets.download',
+  ]),
   payment: new Set(['orders.create', 'orders.read', 'refunds.create']),
 };
 

@@ -158,13 +158,42 @@ export type DefaultIntelligenceProjectRoutesInput = {
   agentTrustSource?: AgentTrustSource;
 };
 
-type DefaultStudioFoundationInput = {
+export type DefaultStudioFoundationInput = {
   env?: Record<string, string | undefined>;
   telemetry?: StudioTelemetry;
   runtime?: StudioApiRuntime;
   database?: Database;
   repository?: StudioRepository;
 };
+
+export type DefaultModuleImageRuntime = {
+  runtime: StudioApiRuntime;
+  repository: StudioRepository;
+  storageService: StudioStorageService | null;
+  credentialBindingExists: StudioCredentialBindingExists | undefined;
+  estimateSigningSecret: string;
+};
+
+/** Shared Studio dependencies for platform-mediated module image routes. */
+export function createDefaultModuleImageRuntime(
+  input: DefaultStudioFoundationInput = {},
+): DefaultModuleImageRuntime {
+  const { runtime, database, defaultRepository, repository } = assembleStudioRouteFoundation(input, {
+    preferDefaultRuntime: true,
+  });
+  const credentialBindingExists = runtime.enabled
+    ? createStudioCredentialBindingExists(database)
+    : undefined;
+  return {
+    runtime,
+    repository,
+    storageService: runtime.enabled
+      ? new StudioStorageService({ repository: defaultRepository, store: runtime.store })
+      : null,
+    credentialBindingExists,
+    estimateSigningSecret: config.API_KEY_SECRET,
+  };
+}
 
 export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRoutesInput = {}) {
   const { runtime, database, defaultRepository, repository } = assembleStudioRouteFoundation(input);

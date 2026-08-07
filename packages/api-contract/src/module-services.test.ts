@@ -12,6 +12,8 @@ import {
   ModuleServiceCapabilityRequestSchema,
   ModuleServiceConsentDeleteInputSchema,
   ModuleServiceErrorResponseSchema,
+  OpenOpcImageEstimateRequestSchema,
+  OpenOpcImageModelSchema,
   OpenOpcServiceOperationSchema,
   parseModuleServiceCapabilityClaims,
   parseModuleServiceConsentPutInput,
@@ -22,6 +24,7 @@ const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
 const INSTALLATION_ID = '30000000-0000-4000-a000-000000000001';
 const RELEASE_ID = '40000000-0000-4000-a000-000000000001';
 const CONSENT_ID = '50000000-0000-4000-a000-000000000001';
+const ACTOR_USER_ID = '60000000-0000-4000-a000-000000000001';
 
 function claims(): ModuleServiceCapabilityClaimsV1 {
   return {
@@ -40,17 +43,26 @@ function claims(): ModuleServiceCapabilityClaimsV1 {
     moduleVersion: '1.2.3',
     consentId: CONSENT_ID,
     grantId: '00000000-0000-4000-8000-000000000002',
+    actorUserId: ACTOR_USER_ID,
     service: 'ai',
     operations: ['models.read', 'text.generate'],
   };
 }
 
 describe('module service wire contract', () => {
-  test('accepts only the six public operation identifiers', () => {
+  test('accepts only the fourteen public operation identifiers', () => {
     for (const operation of [
       'models.read',
       'text.generate',
       'text.stream',
+      'images.models.read',
+      'images.estimates.create',
+      'images.jobs.create',
+      'images.jobs.read',
+      'images.jobs.cancel',
+      'images.assets.create',
+      'images.assets.read',
+      'images.assets.download',
       'orders.create',
       'orders.read',
       'refunds.create',
@@ -114,6 +126,49 @@ describe('module service wire contract', () => {
       ModuleServiceCapabilityClaimsV1Schema.safeParse({
         ...claims(),
         provider_url: 'https://new-api.example.com',
+      }).success,
+    ).toBe(false);
+  });
+
+  test('accepts provider-neutral image input and rejects provider configuration', () => {
+    const model = {
+      id: 'img1/opaque-model:signature',
+      object: 'image_model',
+      owned_by: 'openopc',
+      name: 'OpenOPC Image',
+      capabilities: {
+        reference_images: true,
+        max_reference_images: 4,
+        supports_negative_prompt: true,
+        supports_seed: true,
+        aspect_ratios: ['1:1', '4:3', '3:4', '16:9', '9:16'],
+        qualities: ['standard', 'high'],
+        max_output_count: 4,
+      },
+    };
+    const request = {
+      model: model.id,
+      input: {
+        prompt: 'A clean product photograph',
+        reference_asset_ids: [],
+        aspect_ratio: '1:1',
+        quality: 'standard',
+        output_count: 1,
+      },
+    };
+
+    expect(OpenOpcImageModelSchema.safeParse(model).success).toBe(true);
+    expect(OpenOpcImageEstimateRequestSchema.safeParse(request).success).toBe(true);
+    expect(
+      OpenOpcImageEstimateRequestSchema.safeParse({
+        ...request,
+        provider_config_id: 'provider-secret',
+      }).success,
+    ).toBe(false);
+    expect(
+      OpenOpcImageEstimateRequestSchema.safeParse({
+        ...request,
+        provider_url: 'https://provider.example.com',
       }).success,
     ).toBe(false);
   });

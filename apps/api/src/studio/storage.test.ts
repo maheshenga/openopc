@@ -238,6 +238,57 @@ describe('Studio storage service', () => {
     expect(replay).toEqual(first);
   });
 
+  test('creates and reads a tenant-scoped image asset from relayed bytes', async () => {
+    const repository = createMemoryStudioRepository({ now: () => NOW.toISOString() });
+    const store = new InMemoryStudioObjectStore({ namespace: 'private-studio', ready: true });
+    const service = new StudioStorageService({
+      repository,
+      store,
+      now: () => NOW,
+      randomUUID: () => UPLOAD_ID,
+    });
+
+    const asset = await service.createAssetFromBytes({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      actorUserId: ACTOR_USER_ID,
+      mimeType: 'image/png',
+      bytes: PNG,
+    });
+    const read = await service.readAsset({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      assetId: asset.asset_id,
+    });
+
+    expect(asset).toMatchObject({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      source_job_id: null,
+      kind: 'image',
+      mime_type: 'image/png',
+      size_bytes: PNG.byteLength,
+      width: 1,
+      height: 1,
+    });
+    expect(read?.asset).toEqual(asset);
+    expect(read?.bytes).toEqual(PNG);
+    await expect(
+      service.readAsset({
+        accountId: '10000000-0000-4000-a000-000000000099',
+        projectId: PROJECT_ID,
+        assetId: asset.asset_id,
+      }),
+    ).resolves.toBeNull();
+    await expect(
+      service.readAsset({
+        accountId: ACCOUNT_ID,
+        projectId: '20000000-0000-4000-a000-000000000099',
+        assetId: asset.asset_id,
+      }),
+    ).resolves.toBeNull();
+  });
+
   test('rejects stored size, checksum, MIME, magic, and dimension violations', async () => {
     const markup = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>');
     const oversizedDimensions = jpegWithDimensions(16_385, 1);

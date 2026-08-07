@@ -29,7 +29,14 @@ export type ModuleServiceCapabilityErrorCode =
   | 'MODULE_SERVICE_CAPABILITY_SCOPE_MISMATCH'
   | 'MODULE_SERVICE_OPERATION_DENIED'
   | 'MODULE_SERVICE_CONFLICT'
-  | 'MODULE_AI_PROVIDER_UNAVAILABLE';
+  | 'MODULE_AI_PROVIDER_UNAVAILABLE'
+  | 'MODULE_IMAGE_INVALID'
+  | 'MODULE_IMAGE_UNAVAILABLE'
+  | 'MODULE_IMAGE_NOT_FOUND'
+  | 'MODULE_IMAGE_ESTIMATE_EXPIRED'
+  | 'MODULE_IMAGE_IDEMPOTENCY_CONFLICT'
+  | 'MODULE_IMAGE_STORAGE_UNAVAILABLE'
+  | 'MODULE_IMAGE_JOB_NOT_CANCELLABLE';
 
 export class ModuleServiceCapabilityError extends Error {
   constructor(
@@ -558,6 +565,7 @@ export class ModuleServiceCapabilityBroker {
       moduleVersion: installation.moduleVersion,
       consentId: consent.consentId,
       grantId: this.createGrantId(),
+      actorUserId: input.actorUserId,
       service: request.data.service,
       operations: [...request.data.operations],
     } as ModuleServiceCapabilityClaimsV1;

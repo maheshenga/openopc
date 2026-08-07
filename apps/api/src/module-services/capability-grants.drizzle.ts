@@ -45,6 +45,21 @@ function nullableString(row: Row, camel: string, snake: string): string | null {
   return candidate === null || candidate === undefined ? null : String(candidate);
 }
 
+function timestampString(row: Row, camel: string, snake: string): string {
+  const candidate = value(row, camel, snake);
+  const parsed = candidate instanceof Date ? candidate : new Date(String(candidate));
+  if (!Number.isFinite(parsed.getTime())) {
+    throw new TypeError(`Invalid module service row timestamp ${camel}`);
+  }
+  return parsed.toISOString();
+}
+
+function nullableTimestampString(row: Row, camel: string, snake: string): string | null {
+  const candidate = value(row, camel, snake);
+  if (candidate === null || candidate === undefined) return null;
+  return timestampString(row, camel, snake);
+}
+
 function numberValue(row: Row, camel: string, snake: string): number {
   const candidate = Number(value(row, camel, snake));
   if (!Number.isSafeInteger(candidate)) {
@@ -61,6 +76,12 @@ function jsonValue(row: Row, camel: string, snake: string): unknown {
   } catch {
     return null;
   }
+}
+
+function prefixedKey(prefix: string, name: string): string {
+  return prefix
+    ? `${prefix}${name.slice(0, 1).toUpperCase()}${name.slice(1)}`
+    : name;
 }
 
 function operations(
@@ -88,7 +109,7 @@ function manifest(row: Row, camel = 'manifest'): RegistryModuleManifest {
 }
 
 function installation(row: Row, prefix = ''): ModuleServiceInstallationContext {
-  const key = (name: string) => `${prefix}${name}`;
+  const key = (name: string) => prefixedKey(prefix, name);
   const installationStatus = stringValue(row, key('installationStatus'), 'installation_status');
   if (installationStatus !== 'active' && installationStatus !== 'blocked') {
     throw new TypeError('Invalid module service installation status');
@@ -105,13 +126,13 @@ function installation(row: Row, prefix = ''): ModuleServiceInstallationContext {
     releaseStatus: stringValue(row, key('releaseStatus'), 'release_status'),
     signatureAlgorithm: nullableString(row, key('signatureAlgorithm'), 'signature_algorithm'),
     signature: nullableString(row, key('signature'), 'signature'),
-    signedAt: nullableString(row, key('signedAt'), 'signed_at'),
+    signedAt: nullableTimestampString(row, key('signedAt'), 'signed_at'),
     manifest: manifest(row, key('manifest')),
   };
 }
 
 function consent(row: Row, prefix = ''): ModuleServiceConsent {
-  const key = (name: string) => `${prefix}${name}`;
+  const key = (name: string) => prefixedKey(prefix, name);
   const service = stringValue(row, key('service'), 'service') as OpenOpcServiceName;
   return {
     consentId: stringValue(row, key('consentId'), 'consent_id'),
@@ -124,14 +145,14 @@ function consent(row: Row, prefix = ''): ModuleServiceConsent {
     operations: operations(row, service, key('operations')),
     consentDigest: stringValue(row, key('consentDigest'), 'consent_digest') as `sha256:${string}`,
     acceptedBy: stringValue(row, key('acceptedBy'), 'accepted_by'),
-    acceptedAt: stringValue(row, key('acceptedAt'), 'accepted_at'),
+    acceptedAt: timestampString(row, key('acceptedAt'), 'accepted_at'),
     revokedBy: nullableString(row, key('revokedBy'), 'revoked_by'),
-    revokedAt: nullableString(row, key('revokedAt'), 'revoked_at'),
+    revokedAt: nullableTimestampString(row, key('revokedAt'), 'revoked_at'),
   };
 }
 
 function grant(row: Row, prefix = ''): ModuleServiceCapabilityGrant {
-  const key = (name: string) => `${prefix}${name}`;
+  const key = (name: string) => prefixedKey(prefix, name);
   const service = stringValue(row, key('service'), 'service') as OpenOpcServiceName;
   return {
     grantId: stringValue(row, key('grantId'), 'grant_id'),
@@ -143,9 +164,9 @@ function grant(row: Row, prefix = ''): ModuleServiceCapabilityGrant {
     service,
     operations: operations(row, service, key('operations')),
     tokenHash: stringValue(row, key('tokenHash'), 'token_hash') as `sha256:${string}`,
-    expiresAt: stringValue(row, key('expiresAt'), 'expires_at'),
-    revokedAt: nullableString(row, key('revokedAt'), 'revoked_at'),
-    createdAt: stringValue(row, key('createdAt'), 'created_at'),
+    expiresAt: timestampString(row, key('expiresAt'), 'expires_at'),
+    revokedAt: nullableTimestampString(row, key('revokedAt'), 'revoked_at'),
+    createdAt: timestampString(row, key('createdAt'), 'created_at'),
   };
 }
 
@@ -182,18 +203,18 @@ const consentProjection = sql`
 `;
 
 const grantProjection = sql`
-  grant.grant_id AS "grantId",
-  grant.account_id AS "accountId",
-  grant.project_id AS "projectId",
-  grant.installation_id AS "installationId",
-  grant.release_id AS "releaseId",
-  grant.consent_id AS "consentId",
-  grant.service AS "service",
-  grant.operations AS "operations",
-  grant.token_hash AS "tokenHash",
-  grant.expires_at AS "expiresAt",
-  grant.revoked_at AS "revokedAt",
-  grant.created_at AS "createdAt"
+  capability_grant.grant_id AS "grantId",
+  capability_grant.account_id AS "accountId",
+  capability_grant.project_id AS "projectId",
+  capability_grant.installation_id AS "installationId",
+  capability_grant.release_id AS "releaseId",
+  capability_grant.consent_id AS "consentId",
+  capability_grant.service AS "service",
+  capability_grant.operations AS "operations",
+  capability_grant.token_hash AS "tokenHash",
+  capability_grant.expires_at AS "expiresAt",
+  capability_grant.revoked_at AS "revokedAt",
+  capability_grant.created_at AS "createdAt"
 `;
 
 async function appendAudit(
@@ -362,18 +383,18 @@ export function createDrizzleModuleServiceCapabilityRepository(
     async getAuthorization(grantId) {
       const result = await db.execute(sql`
         SELECT
-          grant.grant_id AS "grantGrantId",
-          grant.account_id AS "grantAccountId",
-          grant.project_id AS "grantProjectId",
-          grant.installation_id AS "grantInstallationId",
-          grant.release_id AS "grantReleaseId",
-          grant.consent_id AS "grantConsentId",
-          grant.service AS "grantService",
-          grant.operations AS "grantOperations",
-          grant.token_hash AS "grantTokenHash",
-          grant.expires_at AS "grantExpiresAt",
-          grant.revoked_at AS "grantRevokedAt",
-          grant.created_at AS "grantCreatedAt",
+          capability_grant.grant_id AS "grantGrantId",
+          capability_grant.account_id AS "grantAccountId",
+          capability_grant.project_id AS "grantProjectId",
+          capability_grant.installation_id AS "grantInstallationId",
+          capability_grant.release_id AS "grantReleaseId",
+          capability_grant.consent_id AS "grantConsentId",
+          capability_grant.service AS "grantService",
+          capability_grant.operations AS "grantOperations",
+          capability_grant.token_hash AS "grantTokenHash",
+          capability_grant.expires_at AS "grantExpiresAt",
+          capability_grant.revoked_at AS "grantRevokedAt",
+          capability_grant.created_at AS "grantCreatedAt",
           consent.consent_id AS "consentConsentId",
           consent.account_id AS "consentAccountId",
           consent.project_id AS "consentProjectId",
@@ -400,16 +421,16 @@ export function createDrizzleModuleServiceCapabilityRepository(
           release.signature AS "installationSignature",
           release.signed_at AS "installationSignedAt",
           release.manifest AS "installationManifest"
-        FROM kortix.module_service_capability_grants grant
+        FROM kortix.module_service_capability_grants capability_grant
         INNER JOIN kortix.project_module_service_consents consent
-          ON consent.consent_id = grant.consent_id
+          ON consent.consent_id = capability_grant.consent_id
         INNER JOIN kortix.project_module_installations installation
-          ON installation.installation_id = grant.installation_id
-         AND installation.project_id = grant.project_id
-         AND installation.account_id = grant.account_id
+          ON installation.installation_id = capability_grant.installation_id
+         AND installation.project_id = capability_grant.project_id
+         AND installation.account_id = capability_grant.account_id
         INNER JOIN kortix.developer_module_releases release
           ON release.release_id = installation.active_release_id
-        WHERE grant.grant_id = ${grantId}
+        WHERE capability_grant.grant_id = ${grantId}
         LIMIT 1
       `);
       const row = rows(result)[0];

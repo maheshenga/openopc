@@ -22,6 +22,8 @@ const dockerAvailable =
 if (integrationEnabled && !dockerAvailable) {
   throw new Error('STUDIO_POSTGRES_INTEGRATION=1 requires an available Docker daemon');
 }
+const postgresImage = process.env.STUDIO_POSTGRES_IMAGE?.trim() || 'postgres:16-alpine';
+const postgresUser = process.env.STUDIO_POSTGRES_USER?.trim() || 'postgres';
 const container = `kortix-studio-management-${crypto.randomUUID().slice(0, 8)}`;
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const OTHER_ACCOUNT_ID = '10000000-0000-4000-a000-000000000002';
@@ -48,7 +50,7 @@ function dockerPsql(sql: string) {
       'psql',
       '-X',
       '-U',
-      'postgres',
+      postgresUser,
       '-d',
       'testdb',
       '-v',
@@ -72,7 +74,7 @@ async function dockerPsqlScalar(query: string): Promise<string> {
       '-A',
       '-t',
       '-U',
-      'postgres',
+      postgresUser,
       '-d',
       'testdb',
       '-c',
@@ -149,7 +151,7 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
           'POSTGRES_DB=testdb',
           '-p',
           '127.0.0.1::5432',
-          'postgres:16-alpine',
+          postgresImage,
         ],
         { env: dockerEnvironment, stdout: 'pipe', stderr: 'pipe' },
       );
@@ -177,7 +179,7 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
             'psql',
             '-X',
             '-U',
-            'postgres',
+            postgresUser,
             '-d',
             'testdb',
             '-c',
@@ -229,6 +231,16 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );
+      CREATE TYPE kortix.studio_job_status AS ENUM (
+        'queued', 'running', 'succeeded', 'failed', 'cancelled'
+      );
+      CREATE TABLE kortix.studio_jobs (
+        job_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        account_id uuid NOT NULL REFERENCES kortix.accounts(account_id),
+        project_id uuid NOT NULL REFERENCES kortix.projects(project_id),
+        status kortix.studio_job_status NOT NULL DEFAULT 'queued',
+        input jsonb NOT NULL DEFAULT '{}'::jsonb
+      );
       CREATE TABLE kortix.studio_assets (
         asset_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         account_id uuid NOT NULL REFERENCES kortix.accounts(account_id),
@@ -263,7 +275,7 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
         expected_checksum_sha256 text NOT NULL,
         expires_at timestamptz NOT NULL,
         status text NOT NULL DEFAULT 'pending',
-        finalized_asset_id uuid REFERENCES kortix.studio_assets(asset_id),
+        finalized_asset_id uuid REFERENCES kortix.studio_assets(asset_id) ON DELETE SET NULL,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );
@@ -282,7 +294,9 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
         .trim()
         .match(/:(\d+)$/)?.[1];
       if (!mappedPort) throw new Error('PostgreSQL management fixture has no mapped port');
-      database = createDb(`postgres://postgres:test@127.0.0.1:${mappedPort}/testdb`, { max: 4 });
+      database = createDb(`postgres://${postgresUser}:test@127.0.0.1:${mappedPort}/testdb`, {
+        max: 4,
+      });
     } catch (error) {
       removeContainer();
       throw error;
@@ -626,6 +640,108 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
       { uploadId: pendingUploadId, status: 'pending' },
       { uploadId: expiredUploadId, status: 'pending' },
     ]);
+  }, 30_000);
+
+  test('persists direct asset retention and retryable deletion state in PostgreSQL', async () => {
+    if (!database) throw new Error('database fixture is unavailable');
+    const repository = createDrizzleStudioRepository(database);
+    const store = new InMemoryStudioObjectStore({ namespace: 'asset-lifecycle', ready: true });
+    const service = new StudioStorageService({
+      repository,
+      store,
+      randomUUID: () => '50000000-0000-4000-a000-000000000077',
+    });
+    const ownerKey = 'openopc-module-grant-id';
+    const ownerValue = '60000000-0000-4000-8000-000000000001';
+    const deletionMarker = { 'openopc-deletion-state': 'requested' };
+    const asset = await service.createDirectAsset({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      actorUserId: ACTOR_USER_ID,
+      bytes: PNG,
+      mimeType: 'image/png',
+      metadata: { [ownerKey]: ownerValue, 'openopc-retention': 'retained' },
+    });
+
+    const temporary = await repository.updateDirectAssetMetadata({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      asset_id: asset.asset_id,
+      expected_metadata: { [ownerKey]: ownerValue },
+      metadata_patch: { 'openopc-retention': 'temporary' },
+      forbidden_metadata_key: 'openopc-deletion-state',
+    });
+    expect(temporary?.metadata).toMatchObject({ 'openopc-retention': 'temporary' });
+
+    const activeJobId = '70000000-0000-4000-a000-000000000077';
+    await database.execute(sql`
+      INSERT INTO kortix.studio_jobs(job_id, account_id, project_id, status, input)
+      VALUES (
+        ${activeJobId}::uuid,
+        ${ACCOUNT_ID}::uuid,
+        ${PROJECT_ID}::uuid,
+        'queued',
+        ${JSON.stringify({ image: { reference_asset_ids: [asset.asset_id] } })}::jsonb
+      )
+    `);
+    const inUse = await repository.requestDirectAssetDeletion({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      asset_id: asset.asset_id,
+      expected_metadata: { [ownerKey]: ownerValue },
+      deletion_marker: deletionMarker,
+      deletion_metadata: {
+        ...deletionMarker,
+        'openopc-deletion-requested-at': '2026-08-08T08:00:00.000Z',
+      },
+    });
+    expect(inUse).toEqual({ outcome: 'in_use' });
+    await database.execute(sql`
+      UPDATE kortix.studio_jobs SET status = 'succeeded' WHERE job_id = ${activeJobId}::uuid
+    `);
+
+    const crossGrant = await repository.requestDirectAssetDeletion({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      asset_id: asset.asset_id,
+      expected_metadata: { [ownerKey]: '60000000-0000-4000-8000-000000000009' },
+      deletion_marker: deletionMarker,
+      deletion_metadata: deletionMarker,
+    });
+    expect(crossGrant).toEqual({ outcome: 'not_found' });
+    const requested = await repository.requestDirectAssetDeletion({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      asset_id: asset.asset_id,
+      expected_metadata: { [ownerKey]: ownerValue },
+      deletion_marker: deletionMarker,
+      deletion_metadata: {
+        ...deletionMarker,
+        'openopc-deletion-requested-at': '2026-08-08T08:00:00.000Z',
+      },
+    });
+    expect(requested).toMatchObject({
+      outcome: 'requested',
+      asset: {
+        asset_id: asset.asset_id,
+        metadata: {
+          'openopc-deletion-state': 'requested',
+          'openopc-deletion-requested-at': '2026-08-08T08:00:00.000Z',
+        },
+      },
+    });
+    const deleted = await repository.deleteRequestedDirectAsset({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      asset_id: asset.asset_id,
+      expected_metadata: {
+        [ownerKey]: ownerValue,
+        ...deletionMarker,
+      },
+      object_key: asset.object_key,
+    });
+    expect(deleted).toBe(true);
+    expect(await repository.getAsset(PROJECT_ID, asset.asset_id)).toBeNull();
   }, 30_000);
 
   test('finalizes one real upload atomically under concurrent replay', async () => {

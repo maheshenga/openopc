@@ -175,6 +175,21 @@ describe('module service wire contract', () => {
     ).toBe(true);
     expect(
       ModuleServiceErrorResponseSchema.safeParse({
+        error: 'OPENOPC_IMAGE_EVENT_HISTORY_UNAVAILABLE',
+      }).success,
+    ).toBe(true);
+    expect(
+      ModuleServiceErrorResponseSchema.safeParse({
+        error: 'OPENOPC_IMAGE_ESTIMATE_SETTLEMENT_FAILED',
+      }).success,
+    ).toBe(true);
+    expect(
+      ModuleServiceErrorResponseSchema.safeParse({
+        error: 'OPENOPC_IMAGE_ASSET_NOT_DELETABLE',
+      }).success,
+    ).toBe(true);
+    expect(
+      ModuleServiceErrorResponseSchema.safeParse({
         error: 'NEW_API_KEY_INVALID',
         provider_url: 'https://new-api.example.com',
       }).success,

@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const OPENOPC_RELEASE_PROFILE_IDS = [
   'openopc-restricted-public-beta-v1',
   'openopc-web-desktop-developer-beta-v2',
+  'openopc-image-studio-developer-beta-v3',
 ] as const;
 export type OpenOpcReleaseProfileId = (typeof OPENOPC_RELEASE_PROFILE_IDS)[number];
 
@@ -11,6 +12,8 @@ export const OPENOPC_RELEASE_PROFILE_DIGESTS = {
     'sha256:e548465c35cb5041b38092b2937164f2abecfb6781ab0e545532ce95f387956c',
   'openopc-web-desktop-developer-beta-v2':
     'sha256:28460381982dcfcfc67994c7f6fc091f920cffe82a23a7204e943c0693563b03',
+  'openopc-image-studio-developer-beta-v3':
+    'sha256:184ef4c2d10b8fe311b3b764c96c371c02295a67b445b0c5538b01e627a7267f',
 } as const satisfies Record<OpenOpcReleaseProfileId, `sha256:${string}`>;
 
 export const OpenOpcReleaseProfileIdSchema = z.enum(OPENOPC_RELEASE_PROFILE_IDS);

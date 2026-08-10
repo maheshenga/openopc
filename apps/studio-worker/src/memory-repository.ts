@@ -77,6 +77,7 @@ export function createMemoryStudioWorkerRepository(): StudioWorkerRepository & {
         actorUserId: crypto.randomUUID(),
         actorType: 'user',
         actingTokenId: null,
+        moduleServiceGrantId: null,
         agentName: null,
         sessionId: null,
         capability: 'image.generate',

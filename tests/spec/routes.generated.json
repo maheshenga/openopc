@@ -1,6 +1,6 @@
 {
   "generatedAt": "static",
-  "count": 594,
+  "count": 612,
   "routes": [
     {
       "method": "GET",
@@ -559,6 +559,14 @@
       "path": "/v1/admin/api/sandboxes/:sessionId/migrate"
     },
     {
+      "method": "GET",
+      "path": "/v1/admin/developer/applications"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/developer/applications/:applicationId"
+    },
+    {
       "method": "POST",
       "path": "/v1/admin/developer/applications/:applicationId/decision"
     },
@@ -1080,6 +1088,14 @@
     },
     {
       "method": "GET",
+      "path": "/v1/module-host/platform/releases/:releaseId"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-host/platform/releases/:releaseId/*"
+    },
+    {
+      "method": "GET",
       "path": "/v1/module-host/releases/:releaseId"
     },
     {
@@ -1117,6 +1133,62 @@
     {
       "method": "POST",
       "path": "/v1/module-services/ai/chat/completions"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/ai/images/assets"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-services/ai/images/assets"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-services/ai/images/assets/:assetId/delete"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/ai/images/assets/:assetId/download"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/ai/images/assets/:assetId/preview-url"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/ai/images/assets/:assetId/thumbnail-url"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-services/ai/images/assets/:assetId/retention"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-services/ai/images/estimates"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-services/ai/images/jobs"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/ai/images/jobs/:jobId"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/module-services/ai/images/jobs/:jobId/cancel"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/ai/images/jobs/:jobId/events"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/ai/images/jobs/:jobId/outputs"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/module-services/ai/images/models"
     },
     {
       "method": "GET",

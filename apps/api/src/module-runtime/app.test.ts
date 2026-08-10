@@ -444,7 +444,12 @@ test('forwards the exact project execution input without exposing it in the resp
   let received: unknown;
   appDependencies.executionService.create = async (command) => {
     received = command;
-    return createdExecution();
+    return {
+      ...createdExecution(),
+      deadlineAt: '2026-07-30 09:30:00+00',
+      createdAt: '2026-07-28 01:00:00+00',
+      updatedAt: '2026-07-28 01:00:00+00',
+    };
   };
   const app = createModuleRuntimeApp(appDependencies);
   const input = { prompt: 'bounded user value', count: 2 };
@@ -472,7 +477,51 @@ test('forwards the exact project execution input without exposing it in the resp
     deadlineAt: '2026-07-30T09:30:00.000Z',
     input,
   });
-  expect(await response.json()).not.toHaveProperty('input');
+  const body = await response.json();
+  expect(body).toMatchObject({
+    deadline_at: '2026-07-30T09:30:00.000Z',
+    created_at: '2026-07-28T01:00:00.000Z',
+    updated_at: '2026-07-28T01:00:00.000Z',
+    terminal_at: null,
+  });
+  expect(body).not.toHaveProperty('input');
+});
+
+test('normalizes PostgreSQL event timestamps on project execution reads', async () => {
+  const appDependencies = dependencies({
+    authenticateRunner: async () => unexpected(),
+    registrationIdentity: async () => unexpected(),
+  });
+  appDependencies.loadProjectForUser = async () => ({
+    row: { accountId: ACCOUNT_ID, projectId: PROJECT_ID },
+    userId: USER_ID,
+  });
+  appDependencies.executionService.events = async () => [
+    {
+      eventId: 'b0000000-0000-4000-a000-00000000000b',
+      executionId: EXECUTION_ID,
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      sequence: 1,
+      eventType: 'execution_created',
+      payload: { state: 'dispatchable' },
+      createdAt: '2026-07-28 09:00:00+08',
+    },
+  ];
+  const app = createModuleRuntimeApp(appDependencies);
+
+  const response = await app.request(
+    `/projects/${PROJECT_ID}/module-executions/${EXECUTION_ID}/events`,
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    events: [
+      expect.objectContaining({
+        created_at: '2026-07-28T01:00:00.000Z',
+      }),
+    ],
+  });
 });
 
 test('rejects missing, unknown, and alternate execution input transports', async () => {

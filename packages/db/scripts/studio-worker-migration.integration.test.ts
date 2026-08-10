@@ -27,6 +27,7 @@ const container = `kortix-studio-worker-migration-${crypto.randomUUID().slice(0,
 const migrationsDirectory = resolve(import.meta.dir, '..', 'migrations');
 const recoveryHardeningMigration = '20260717020000000_studio_recovery_hardening.sql';
 const pollingUnknownHoldMigration = '20260718010000000_studio_polling_unknown_hold.sql';
+const studioModuleServiceGrantsMigration = '20260806120000000_studio_module_service_grants.sql';
 let mappedPostgresPort = '';
 const silentMigrationLogger = {
   debug: (_message: string) => undefined,
@@ -251,6 +252,29 @@ const PRE_STUDIO_SCHEMA_WITH_EXISTING_ROLES = PRE_STUDIO_SCHEMA.replace(
   /\s*CREATE ROLE (?:anon|authenticated|service_role) NOLOGIN;/g,
   '',
 );
+
+// This suite isolates the Studio migration chain, so represent only the module-service
+// tables required by the later Studio grant-link migration. The full migration chain is
+// exercised separately by the fresh-database migration gate.
+const MODULE_SERVICE_MIGRATION_PREREQUISITES = `
+  CREATE TABLE kortix.project_module_service_consents (
+    consent_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    service varchar(16) NOT NULL,
+    operations jsonb NOT NULL
+  );
+
+  CREATE TABLE kortix.module_service_capability_grants (
+    grant_id uuid PRIMARY KEY,
+    service varchar(16) NOT NULL,
+    operations jsonb NOT NULL
+  );
+
+  CREATE TABLE kortix.module_service_audit_events (
+    event_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    service varchar(16) NOT NULL,
+    operation varchar(32)
+  );
+`;
 
 const CORE_FIXTURES = `
   INSERT INTO kortix.accounts(account_id) VALUES
@@ -803,6 +827,8 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
     await applyMigration('20260716120000000_studio_production_provider_storage.sql');
     await applyMigration(recoveryHardeningMigration);
     await applyMigration(pollingUnknownHoldMigration);
+    dockerPsql(MODULE_SERVICE_MIGRATION_PREREQUISITES);
+    await applyMigration(studioModuleServiceGrantsMigration);
     dockerPsql(CORE_FIXTURES);
   }, 150_000);
 
@@ -826,6 +852,21 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
             SELECT numeric_scale FROM information_schema.columns
             WHERE table_schema = 'kortix' AND table_name = 'credit_accounts'
               AND column_name = 'daily_credits_balance'
+          ),
+          'module_grant_column_exists', EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'kortix' AND table_name = 'studio_jobs'
+              AND column_name = 'module_service_grant_id'
+          ),
+          'module_grant_fk_exists', EXISTS (
+            SELECT 1 FROM pg_catalog.pg_constraint
+            WHERE conname = 'studio_jobs_module_service_grant_fk'
+              AND conrelid = 'kortix.studio_jobs'::regclass
+          ),
+          'module_actor_check_exists', EXISTS (
+            SELECT 1 FROM pg_catalog.pg_constraint
+            WHERE conname = 'studio_jobs_module_actor_check'
+              AND conrelid = 'kortix.studio_jobs'::regclass
           ),
           'finalizer_exists', to_regprocedure(
             'public.atomic_finalize_studio_job_success(uuid,uuid,text,numeric,jsonb,timestamp with time zone)'
@@ -959,6 +1000,9 @@ describe.skipIf(!dockerAvailable)('Studio worker migrations - real PostgreSQL', 
       studio_tables: 12,
       daily_precision: 12,
       daily_scale: 4,
+      module_grant_column_exists: true,
+      module_grant_fk_exists: true,
+      module_actor_check_exists: true,
       finalizer_exists: true,
       service_role_can_finalize: true,
       authenticated_can_finalize: false,

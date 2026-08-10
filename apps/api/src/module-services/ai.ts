@@ -1,4 +1,12 @@
-import type { ModuleServiceCapabilityClaimsV1 } from '@kortix/api-contract';
+import {
+  type ModuleServiceCapabilityClaimsV1,
+  OPENOPC_CHAT_MAX_IMAGE_BYTES,
+  OPENOPC_CHAT_MAX_IMAGE_PARTS,
+  OPENOPC_CHAT_MAX_TOTAL_IMAGE_BYTES,
+  OPENOPC_IMAGE_MIME_TYPES,
+  type OpenOpcChatCompletionRequest,
+  OpenOpcChatCompletionRequestSchema,
+} from '@kortix/api-contract';
 import type { AuthedPrincipal } from '@kortix/llm-gateway';
 
 import { createModuleServiceGatewayPrincipal } from '../llm-gateway/hooks';
@@ -93,7 +101,7 @@ export async function executeModuleServiceAiRequest(
       const models = modelCatalog(payload);
       if (!models) return moduleAiError('MODULE_AI_PROVIDER_UNAVAILABLE', 503);
       const data = dependencies.managedModels.flatMap((managed) => {
-        const model = publicModel(managed.id, models[managed.id]);
+        const model = publicModel(managed.id, models[managed.id], managed);
         return model ? [model] : [];
       });
       return jsonResponse({ data });
@@ -105,6 +113,16 @@ export async function executeModuleServiceAiRequest(
     const claims = await dependencies.requireCapability(input.authorization, operation);
     const managed = dependencies.managedModels.find((candidate) => candidate.id === parsed.model);
     if (!managed) return moduleAiError('MODULE_SERVICE_INPUT_INVALID', 400);
+    if (
+      managed.vision !== true &&
+      parsed.messages.some(
+        (message) =>
+          Array.isArray(message.content) &&
+          message.content.some((part) => part.type === 'image_url'),
+      )
+    ) {
+      return moduleAiError('MODULE_SERVICE_INPUT_INVALID', 400);
+    }
     if (managed.transport === 'new-api' && !dependencies.newApiConfigured()) {
       return moduleAiError('MODULE_AI_PROVIDER_UNAVAILABLE', 503);
     }
@@ -173,22 +191,15 @@ function moduleAiError(
   return jsonResponse({ error: code }, status);
 }
 
-function parseChatRequest(rawBody: string | undefined): { model: string; stream: boolean } | null {
+function parseChatRequest(rawBody: string | undefined): OpenOpcChatCompletionRequest | null {
   if (!rawBody) return null;
   try {
     const value = JSON.parse(rawBody) as unknown;
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const body = value as Record<string, unknown>;
-    if (
-      Object.keys(body).some((key) => PROVIDER_SELECTION_KEYS.has(key)) ||
-      typeof body.model !== 'string' ||
-      body.model.length === 0 ||
-      !Array.isArray(body.messages) ||
-      (body.stream !== undefined && typeof body.stream !== 'boolean')
-    ) {
-      return null;
-    }
-    return { model: body.model, stream: body.stream === true };
+    if (Object.keys(body).some((key) => PROVIDER_SELECTION_KEYS.has(key))) return null;
+    const parsed = OpenOpcChatCompletionRequestSchema.safeParse(value);
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
@@ -202,7 +213,11 @@ function modelCatalog(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function publicModel(id: string, value: unknown): Record<string, unknown> | null {
+function publicModel(
+  id: string,
+  value: unknown,
+  managed: ManagedModel,
+): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const source = value as Record<string, unknown>;
   if (typeof source.name !== 'string' || source.name.length === 0) return null;
@@ -229,6 +244,25 @@ function publicModel(id: string, value: unknown): Record<string, unknown> | null
     ) {
       model.limit = { context, output };
     }
+  }
+  const imageInputCapability = (purpose: 'vision' | 'attachment') => ({
+    max_images: OPENOPC_CHAT_MAX_IMAGE_PARTS,
+    max_bytes_per_image: OPENOPC_CHAT_MAX_IMAGE_BYTES,
+    max_total_bytes: OPENOPC_CHAT_MAX_TOTAL_IMAGE_BYTES,
+    accepted_mime_types: [...OPENOPC_IMAGE_MIME_TYPES],
+    purposes: [purpose],
+  });
+  const vision = managed.vision ? imageInputCapability('vision') : undefined;
+  const attachment =
+    managed.vision && source.attachment === true ? imageInputCapability('attachment') : undefined;
+  if (vision || attachment) {
+    model.capabilities = {
+      modalities: ['text', 'image'],
+      ...(vision ? { vision } : {}),
+      ...(attachment ? { attachment } : {}),
+    };
+  } else {
+    model.capabilities = { modalities: ['text'] };
   }
   return model;
 }

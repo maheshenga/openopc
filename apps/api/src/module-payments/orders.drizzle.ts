@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Database } from '@kortix/db';
 import { sql } from 'drizzle-orm';
 
+import { isoTimestamp, nullableIsoTimestamp } from '../shared/iso-timestamp';
 import {
   type DeveloperModulePaymentCheckout,
   DeveloperModulePaymentError,
@@ -38,6 +39,14 @@ function requiredString(row: Row, camel: string, snake: string): string {
 function optionalString(row: Row, camel: string, snake: string): string | null {
   const result = value(row, camel, snake);
   return result === null || result === undefined ? null : String(result);
+}
+
+function requiredTimestamp(row: Row, camel: string, snake: string): string {
+  return isoTimestamp(value(row, camel, snake), `payment row field ${camel}`);
+}
+
+function optionalTimestamp(row: Row, camel: string, snake: string): string | null {
+  return nullableIsoTimestamp(value(row, camel, snake), `payment row field ${camel}`);
 }
 
 function requiredNumber(row: Row, camel: string, snake: string): number {
@@ -85,10 +94,10 @@ export function mapDeveloperModulePaymentOrder(row: Row): DeveloperModulePayment
     idempotencyKey: requiredString(row, 'idempotencyKey', 'idempotency_key'),
     checkout: mapCheckout(row),
     providerFailureCode: optionalString(row, 'providerFailureCode', 'provider_failure_code'),
-    expiresAt: requiredString(row, 'expiresAt', 'expires_at'),
-    paidAt: optionalString(row, 'paidAt', 'paid_at'),
-    createdAt: requiredString(row, 'createdAt', 'created_at'),
-    updatedAt: requiredString(row, 'updatedAt', 'updated_at'),
+    expiresAt: requiredTimestamp(row, 'expiresAt', 'expires_at'),
+    paidAt: optionalTimestamp(row, 'paidAt', 'paid_at'),
+    createdAt: requiredTimestamp(row, 'createdAt', 'created_at'),
+    updatedAt: requiredTimestamp(row, 'updatedAt', 'updated_at'),
   };
 }
 
@@ -106,8 +115,8 @@ function mapRefund(row: Row): DeveloperModuleRefund {
         : null,
     status: requiredString(row, 'status', 'status') as DeveloperModulePaymentRefundStatus,
     requestedBy: requiredString(row, 'requestedBy', 'requested_by'),
-    requestedAt: requiredString(row, 'requestedAt', 'requested_at'),
-    resolvedAt: optionalString(row, 'resolvedAt', 'resolved_at'),
+    requestedAt: requiredTimestamp(row, 'requestedAt', 'requested_at'),
+    resolvedAt: optionalTimestamp(row, 'resolvedAt', 'resolved_at'),
   };
 }
 

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+const StudioTimestampSchema = z.string().datetime({ offset: true });
+
 export const STUDIO_JOB_STATES = ['queued', 'running', 'succeeded', 'failed', 'cancelled'] as const;
 export const StudioJobStateSchema = z.enum(STUDIO_JOB_STATES);
 export type StudioJobState = z.infer<typeof StudioJobStateSchema>;
@@ -78,7 +80,7 @@ export const StudioEstimateResponseSchema = z
   .object({
     estimate_id: z.string().uuid(),
     estimate_token: z.string().min(16),
-    expires_at: z.string(),
+    expires_at: StudioTimestampSchema,
     currency: z.literal('credits'),
     provider_cost_credits: z.number().nonnegative(),
     platform_cost_credits: z.number().nonnegative(),
@@ -104,6 +106,7 @@ export const StudioCreateJobRequestSchema = z
     estimate_token: z.string().min(16),
     idempotency_key: z.string().min(16).max(255),
     request_hash: z.string().min(16),
+    module_service_grant_id: z.string().uuid().optional(),
   })
   .strict();
 export type StudioCreateJobRequest = z.infer<typeof StudioCreateJobRequestSchema>;
@@ -139,7 +142,7 @@ export const StudioPricingCatalogEntrySchema = z
     version: z.number().int().positive(),
     active: z.boolean(),
     created_by_user_id: z.string().uuid().nullable(),
-    created_at: z.string().min(1),
+    created_at: StudioTimestampSchema,
   })
   .strict();
 export type StudioPricingCatalogEntry = z.infer<typeof StudioPricingCatalogEntrySchema>;
@@ -187,6 +190,7 @@ export const StudioErrorCodeSchema = z.enum([
   'STUDIO_WEBHOOK_SIGNATURE_INVALID',
   'STUDIO_WEBHOOK_REPLAYED',
   'STUDIO_EVENT_CURSOR_EXPIRED',
+  'STUDIO_MODULE_SERVICE_GRANT_INVALID',
   'STUDIO_INTERNAL_ERROR',
 ]);
 export type StudioErrorCode = z.infer<typeof StudioErrorCodeSchema>;
@@ -197,7 +201,8 @@ export const StudioJobSchema = z
     account_id: z.string().uuid(),
     project_id: z.string().uuid(),
     actor_user_id: z.string().uuid().nullable(),
-    actor_type: z.enum(['user', 'agent', 'system']),
+    actor_type: z.enum(['user', 'agent', 'system', 'module']),
+    module_service_grant_id: z.string().uuid().nullable(),
     capability: StudioCapabilitySchema,
     provider_config_id: z.string().uuid(),
     provider: z.string().min(1),
@@ -211,10 +216,10 @@ export const StudioJobSchema = z
     actual_credits: z.number().nonnegative().nullable(),
     error_code: StudioErrorCodeSchema.nullable(),
     error_message: z.string().nullable(),
-    created_at: z.string(),
-    updated_at: z.string(),
-    started_at: z.string().nullable(),
-    completed_at: z.string().nullable(),
+    created_at: StudioTimestampSchema,
+    updated_at: StudioTimestampSchema,
+    started_at: StudioTimestampSchema.nullable(),
+    completed_at: StudioTimestampSchema.nullable(),
   })
   .strict();
 export type StudioJob = z.infer<typeof StudioJobSchema>;
@@ -237,7 +242,7 @@ export const StudioJobEventSchema = z
       'billing-settled',
     ]),
     payload: z.record(z.string(), z.unknown()),
-    created_at: z.string(),
+    created_at: StudioTimestampSchema,
   })
   .strict();
 export type StudioJobEvent = z.infer<typeof StudioJobEventSchema>;
@@ -257,7 +262,7 @@ export const StudioAssetSchema = z
     width: z.number().int().positive().nullable(),
     height: z.number().int().positive().nullable(),
     metadata: z.record(z.string(), z.unknown()),
-    created_at: z.string(),
+    created_at: StudioTimestampSchema,
   })
   .strict();
 export type StudioAsset = z.infer<typeof StudioAssetSchema>;
@@ -294,7 +299,7 @@ export const StudioUploadSchema = z
     expected_checksum_sha256: z.string().min(32),
     signed_upload_url: z.string().url(),
     signed_upload_headers: StudioSignedUploadHeadersSchema,
-    expires_at: z.string(),
+    expires_at: StudioTimestampSchema,
     status: z.enum(['pending', 'finalized', 'expired']),
   })
   .strict();
@@ -321,8 +326,8 @@ export const StudioProviderConfigSchema = z
     credential_binding: StudioCredentialBindingSchema,
     capabilities: z.array(StudioCapabilitySchema),
     enabled: z.boolean(),
-    created_at: z.string(),
-    updated_at: z.string(),
+    created_at: StudioTimestampSchema,
+    updated_at: StudioTimestampSchema,
   })
   .strict();
 export type StudioProviderConfig = z.infer<typeof StudioProviderConfigSchema>;
@@ -408,7 +413,7 @@ export const StudioRecoveryResponseSchema = z
       'cancelled',
     ]),
     reservation_status: z.enum(['active', 'settled', 'released']),
-    hold_expires_at: z.string().min(1).nullable(),
+    hold_expires_at: StudioTimestampSchema.nullable(),
   })
   .strict();
 export type StudioRecoveryResponse = z.infer<typeof StudioRecoveryResponseSchema>;
@@ -453,7 +458,7 @@ export const StudioResolveBillingIncidentResponseSchema = z
     verified_cost_credits: z.number().finite().nonnegative(),
     potential_liability_credits: z.number().finite().nonnegative(),
     provider_liability_credits: z.number().finite().nonnegative(),
-    resolved_at: z.string().min(1),
+    resolved_at: StudioTimestampSchema,
     resolved_by_user_id: z.string().uuid(),
   })
   .strict();

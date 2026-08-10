@@ -1093,3 +1093,661 @@ type snapshot -> 4 entry additions (ProjectModuleLaunchDescriptor + getProjectMo
 ```
 
 **Shippable to production: YES** for the additive Task 7 SDK surface.
+
+---
+
+### 2026-08-04 - OpenOPC developer SDK release readiness (`Codex`)
+
+Completed the release-readiness slice for the independent `@openopc/developer-sdk`
+without changing the package version, publishing, or deploying. The package now
+owns a stable self-contained service/payment contract and no longer has a runtime
+dependency on the private `@kortix/api-contract` workspace package. The public
+entrypoint exports the contract constants/schemas/types, AI and payment client,
+and a browser `postMessage` capability-token adapter. The previous Web-local
+`createSandboxModuleServiceTokenAdapter` remains a compatibility re-export while
+the host-side bridge keeps its origin, source, consent, state, and rate-limit
+checks.
+
+The package is now public-package shaped (metadata, `publishConfig`, README,
+browser example, example typecheck, build, staged pack, and packed install/import
+smoke). `createKortix().developer.application.current/submit` now exposes the
+existing developer-application transports. The public type snapshot records only
+the additive `FetchImpl` entries at `.` and `./api-client`; no public names were
+removed. PR dry-pack/smoke and the production npm matrix include the OpenOPC
+package, with a one-time restricted-token bootstrap followed by GitHub Actions
+OIDC Trusted Publishing.
+
+**RED -> GREEN evidence**
+
+```
+contracts RED -> 0 pass, 1 error; local contracts module was absent
+contracts GREEN -> 18 pass, 0 fail, 65 expect() calls, 2 files
+public contract type exports RED -> typecheck reported 4 missing public members
+public contract type exports GREEN -> 22 pass, 0 fail, 83 expect() calls, 3 files
+browser adapter RED -> 0 pass, 1 error; public adapter export was absent
+browser adapter GREEN -> 3 pass, 0 fail, 11 expect() calls, 1 file
+developer facade RED -> 13 pass, 1 fail; developer.application was undefined
+developer facade GREEN -> 14 pass, 0 fail, 23 expect() calls, 1 file
+type snapshot RED -> FetchImpl added at . and ./api-client, 0 removals
+type snapshot GREEN -> 1 pass, 0 fail
+```
+
+**Final verification evidence**
+
+```
+pnpm.cmd --filter @openopc/developer-sdk test -> 22 pass, 0 fail, 83 expect() calls, 3 files
+pnpm.cmd --filter @openopc/developer-sdk typecheck -> exit 0 (including examples)
+pnpm.cmd --filter @openopc/developer-sdk build -> exit 0
+pnpm.cmd --filter @openopc/developer-sdk run smoke:install -> packed tarball installed/imported successfully
+pnpm.cmd --filter ./apps/web exec bun test src/features/project-modules/module-service-bridge.test.ts -> 11 pass, 0 fail, 39 expect() calls
+pnpm.cmd --filter ./apps/web typecheck -> exit 0
+pnpm.cmd --filter @kortix/sdk exec bun test developer facade + public snapshots -> 16 pass, 0 fail, 27 expect() calls
+pnpm.cmd --filter @kortix/sdk typecheck -> exit 0
+pnpm.cmd --filter @kortix/sdk test -> 1176 pass, 0 fail, 5520 expect() calls, 89 files
+pnpm.cmd --filter @kortix/sdk run smoke:install -> packed tarballs installed/imported successfully
+node scripts/stage-npm-publish.test.mjs -> 24 assertions; publish topology 28 assertions
+bash -n scripts/publish-npm-package.sh -> exit 0
+workflow YAML parse (package-tests.yml, deploy-prod.yml) -> passed
+Biome check (edited SDK/Web files) -> passed
+git diff --check -> passed
+```
+
+No live NewAPI request, payment-provider request, npm publication, Desktop
+rebuild, push, merge, or deployment was performed. Source/package readiness is
+**YES**; external npm publication and production/public-beta verification remain
+**NOT YET** until the operator completes the first-package bootstrap, configures
+the npm Trusted Publisher for `@openopc/developer-sdk`, and runs the approved
+live integration/release gates.
+
+---
+
+### 2026-08-04 - OpenOPC developer SDK request lifecycle (`Codex`)
+
+Added an additive request-lifecycle contract to `@openopc/developer-sdk` without
+publishing or deploying. Every AI/payment method and the low-level transport now
+accepts bounded `timeoutMs` and `AbortSignal` options. The client propagates one
+derived signal through capability acquisition, platform fetch, response-body
+reading, and SSE iteration; the browser capability adapter removes its pending
+message listener when cancelled. Transport failures expose only the stable
+`OpenOpcModuleRequestError` codes `OPENOPC_MODULE_REQUEST_ABORTED`,
+`OPENOPC_MODULE_REQUEST_TIMEOUT`, and `OPENOPC_MODULE_REQUEST_FAILED`.
+
+The existing capability getter's first `{ service, operation }` argument remains
+exactly unchanged. Lifecycle state is passed as an optional second argument, so
+strict third-party getters remain compatible. High-level request options are
+allowlisted and cannot replace the SDK-owned service, operation, path, body, or
+idempotency key.
+
+**RED -> GREEN evidence**
+
+```text
+client RED -> 15 pass, 2 fail, 51 expect() calls; timeout resolved instead of
+              rejecting and signal was rejected as an unknown request key
+browser RED -> 3 pass, 1 fail, 13 expect() calls; abort waited for legacy timeout
+client GREEN -> 17 pass, 0 fail, 52 expect() calls
+browser GREEN -> 4 pass, 0 fail, 14 expect() calls
+```
+
+**Final verification evidence**
+
+```text
+pnpm.cmd --filter @openopc/developer-sdk test -> 25 pass, 0 fail, 89 expect() calls
+pnpm.cmd --filter @openopc/developer-sdk typecheck -> exit 0, including browser example
+pnpm.cmd --filter @openopc/developer-sdk build -> exit 0
+pnpm.cmd --filter @openopc/developer-sdk run smoke:install -> packed install/import passed
+npm.cmd publish --dry-run --json -> exit 0, 24 packed entries
+published dist private-contract scan -> 0 matches
+Web module bridge + host view -> 15 pass, 0 fail, 68 expect() calls
+Web typecheck -> exit 0
+Biome (SDK + Web bridge) -> 11 files clean
+stage-npm-publish.test.mjs -> 24 assertions; publish topology 28 assertions
+git diff --check (SDK + Web bridge) -> exit 0
+```
+
+No live NewAPI request, payment-provider request, npm publication, Desktop
+rebuild, push, merge, or deployment was performed.
+
+---
+
+### 2026-08-04 - OpenOPC browser module bootstrap (Codex, IN PROGRESS)
+
+Approved spec:
+docs/superpowers/specs/2026-08-04-openopc-browser-module-bootstrap-design.md
+
+Scope: trusted iframe bootstrap, route-scoped browser transport, SDK docs,
+and deterministic browser verification. No publish, Desktop rebuild, push,
+merge, deployment, DNS, or live provider call is authorized.
+
+**Task 1 RED:**
+
+```text
+pnpm.cmd --filter @openopc/developer-sdk exec bun test src/browser-module-bootstrap.test.ts
+-> 0 pass, 1 fail, 1 error; Cannot find module './browser-module-bootstrap'
+```
+
+**Task 2 bridge RED:**
+
+```text
+pnpm.cmd --filter ./apps/web exec bun test src/features/project-modules/module-bootstrap-bridge.test.ts
+-> 0 pass, 1 fail, 1 error; Cannot find module './module-bootstrap-bridge'
+```
+
+**Task 2 production composition RED:**
+
+```text
+pnpm.cmd --filter ./apps/web exec bun test src/features/project-modules/project-module-host.test.ts
+-> 4 pass, 2 fail, 23 expect() calls; valid v1 host had one listener instead
+   of two, and invalid execution/schema manifests retained token declarations
+```
+
+**Task 3 CSP RED:**
+
+```text
+pnpm.cmd --filter kortix-api exec bun test src/module-domains/host.test.ts
+-> 14 pass, 1 fail, 46 expect() calls; connect-src omitted the validated
+   https://app.openopc.example origin
+```
+
+**Task 3 CORS RED:**
+
+```text
+pnpm.cmd --filter kortix-api exec bun test src/module-services/browser-cors.test.ts
+-> 0 pass, 1 fail, 1 error; Cannot find module './browser-cors'
+```
+
+---
+
+### 2026-08-05 - OpenOPC browser module bootstrap (Codex, COMPLETED)
+
+Completed the approved browser-module bootstrap slice without publication or
+deployment. The SDK now discovers its parent platform origin through a bounded
+bootstrap exchange, composes the existing capability-token and module-service
+clients, and exposes no public origin override. The Web host responds only to
+the exact reviewed iframe source and origin. The API static host CSP permits the
+validated platform origin, and route-scoped module-service CORS permits only
+canonical immutable release origins without credentials.
+
+**RED -> GREEN evidence**
+
+```text
+SDK bootstrap RED
+pnpm.cmd --filter @openopc/developer-sdk exec bun test src/browser-module-bootstrap.test.ts
+-> 0 pass, 1 fail, 1 error; Cannot find module './browser-module-bootstrap'
+
+SDK bootstrap GREEN
+pnpm.cmd --filter @openopc/developer-sdk test
+-> 35 pass, 0 fail, 120 expect() calls, 5 files
+
+Web bridge RED
+pnpm.cmd --filter ./apps/web exec bun test src/features/project-modules/module-bootstrap-bridge.test.ts
+-> 0 pass, 1 fail, 1 error; Cannot find module './module-bootstrap-bridge'
+
+Web production composition RED
+pnpm.cmd --filter ./apps/web exec bun test src/features/project-modules/project-module-host.test.ts
+-> 4 pass, 2 fail, 23 expect() calls; valid v1 host had one listener instead
+   of two, and invalid execution/schema manifests retained token declarations
+
+Web focused GREEN
+pnpm.cmd --filter ./apps/web exec bun test src/features/project-modules/module-bootstrap-bridge.test.ts src/features/project-modules/module-service-bridge.test.ts src/features/project-modules/project-module-host.test.ts src/features/project-modules/project-module-host-page.test.tsx
+-> 25 pass, 0 fail, 123 expect() calls, 4 files
+
+API CSP RED
+pnpm.cmd --filter kortix-api exec bun test src/module-domains/host.test.ts
+-> 14 pass, 1 fail, 46 expect() calls; connect-src omitted the validated
+   https://app.openopc.example origin
+
+API CORS RED
+pnpm.cmd --filter kortix-api exec bun test src/module-services/browser-cors.test.ts
+-> 0 pass, 1 fail, 1 error; Cannot find module './browser-cors'
+
+API focused GREEN
+pnpm.cmd --filter kortix-api exec bun test src/module-domains/platform-host-config.test.ts src/module-domains/host.test.ts src/module-services/browser-cors.test.ts src/module-services/app.test.ts
+-> 49 pass, 0 fail, 150 expect() calls, 4 files
+```
+
+**Browser smoke evidence**
+
+```text
+pnpm.cmd --filter ./apps/web run test:e2e:module-bootstrap -> exit 0
+allowed flow: bootstrap=1 token=1 models=1 OPTIONS=1 cookies=0 cleanup=ok
+attacker parent: bootstrap=0 token=0 network=0 CSP=blocked cleanup=ok
+direct custom domain: bootstrap rejected, network=0
+```
+
+Chromium 149 did not automatically emit a preflight through the local mocked
+transport. The passing browser fixture therefore performs one explicit OPTIONS
+contract probe; the Hono browser-cors unit suite separately verifies the actual
+preflight request and response headers. Automatic browser-generated preflight
+remains a live-environment verification item.
+
+**Package and regression evidence**
+
+```text
+pnpm.cmd --filter @openopc/developer-sdk typecheck -> exit 0, including example
+pnpm.cmd --filter @openopc/developer-sdk build -> exit 0
+pnpm.cmd --filter @openopc/developer-sdk run smoke:install
+-> packed tarball installed, imported, and constructed successfully
+pnpm.cmd --filter ./apps/web typecheck -> exit 0
+pnpm.cmd --filter kortix-api typecheck -> exit 0
+pnpm.cmd --filter @kortix/desktop-electron exec bun test src/app-policy.test.js
+-> 31 pass, 0 fail, 165 expect() calls, 1 file
+pnpm.cmd --filter @kortix/desktop-electron test
+-> Node: 54 pass, 0 fail; Bun: 123 pass, 0 fail, 239 expect() calls, 10 files
+pnpm.cmd --filter ./apps/web test
+-> 1236 pass, 0 fail, 3920 expect() calls, 177 files
+   (the first attempt hit a Bun 1.3.14 Windows runtime crash; immediate rerun passed)
+```
+
+The API full gate is not green. The ordinary Windows command first selected the
+system bash and could not resolve dotenvx. Running the same scripts/test.sh with
+explicit Git Bash and the workspace binary path executed the suite, but the
+encrypted repository .env has no available DOTENV_PRIVATE_KEY:
+
+```text
+API full suite -> 3174 pass, 14 skip, 577 fail, 9820 expect() calls, 425 files
+reason -> encrypted environment values could not be decrypted without the key
+```
+
+**Formatting, scan, and integrity evidence**
+
+```text
+Biome on the 24 changed/new narrow files excluding apps/api/src/index.ts
+-> clean, no fixes required
+Task 5 exact Biome command -> 22 errors, all from the pre-existing shared
+apps/api/src/index.ts formatting/noExplicitAny baseline
+git diff --check on the exact Task 5 paths -> exit 0
+forbidden-provider scan on only new bootstrap runtime/test/example/fixture files
+-> 0 matches
+forbidden-provider scan on the exact broad Task 5 paths -> 13 existing matches
+in provider-rejection/redaction tests and the existing SDK denylist
+origin-override scan -> only internal derived platformOrigin, hostOrigin, and
+baseUrl composition references in browser-module-bootstrap.ts; example has none
+git index -> empty
+```
+
+Source/package shippable is **NOT YET** under the strict Task 5 rule because the
+API full test and exact Biome/forbidden-string gates did not all pass. The
+browser-bootstrap slice itself has fresh focused, typecheck, build, packed
+install, Desktop policy, Web full-suite, API focused, CSP, CORS, spoofing,
+cleanup, and browser-flow evidence.
+
+Public-beta production readiness is **NOT YET**. No npm publication, live AI or
+payment-provider request, Desktop rebuild, DNS change, staging/production
+deployment, file staging, commit, push, or merge was performed.
+
+---
+
+### 2026-08-05 - OpenOPC browser module bootstrap Task 5 closure (Codex, COMPLETED)
+
+Closed the final gates for the already completed browser-module bootstrap slice.
+This append-only entry supersedes only the prior readiness verdict; it preserves
+the earlier RED and blocked-gate evidence as historical audit data.
+
+**RED evidence retained from Tasks 1-3**
+
+```text
+SDK bootstrap -> 0 pass, 1 fail, 1 error; browser-module-bootstrap was absent
+Web bridge -> 0 pass, 1 fail, 1 error; module-bootstrap-bridge was absent
+Web composition -> 4 pass, 2 fail, 23 expect() calls; bootstrap was not composed
+API CSP -> 14 pass, 1 fail, 46 expect() calls; validated Web origin was absent
+API CORS -> 0 pass, 1 fail, 1 error; browser-cors was absent
+```
+
+**Fresh focused and browser evidence**
+
+```text
+pnpm.cmd --filter @openopc/developer-sdk test
+-> 35 pass, 0 fail, 120 expect() calls, 5 files
+Web four-file module suite
+-> 25 pass, 0 fail, 123 expect() calls, 4 files
+API platform-host/CSP/CORS/module-service suite
+-> 49 pass, 0 fail, 150 expect() calls, 4 files
+Desktop policy suite
+-> 31 pass, 0 fail, 165 expect() calls, 1 file
+pnpm.cmd --filter ./apps/web run test:e2e:module-bootstrap -> exit 0
+allowed flow: bootstrap=1 token=1 models=1 OPTIONS=1 cookies=0 cleanup=ok
+attacker parent: bootstrap=0 token=0 network=0 CSP=blocked cleanup=ok
+direct custom domain: bootstrap rejected, network=0
+```
+
+**Fresh package and broad regression evidence**
+
+```text
+OpenOPC SDK typecheck, including examples -> exit 0
+OpenOPC SDK build -> exit 0
+OpenOPC SDK packed install/import/construct smoke -> exit 0
+Web typecheck -> exit 0
+API typecheck -> exit 0
+Desktop full -> Node 54 pass, 0 fail; Bun 123 pass, 0 fail,
+                239 expect() calls, 10 files
+Web full -> 1236 pass, 0 fail, 3927 expect() calls, 177 files
+API full -> 3775 pass, 14 skip, 0 fail, 11837 expect() calls, 425 files
+```
+
+The first post-format API full run had one unrelated marketplace test exceed its
+5-second timeout (`3774 pass, 14 skip, 1 fail`). Its isolated file immediately
+passed (`13 pass, 0 fail`), and the unmodified standard full command then passed
+with the final counts above. No test was changed, skipped, weakened, or filtered
+to obtain the final green gate.
+
+**Formatting, security, and boundary evidence**
+
+```text
+Task 5 exact Biome gate -> Checked 25 files; no fixes applied
+Task 5 scoped git diff --check -> exit 0 (line-ending warnings only)
+module-facing forbidden-provider scan -> no matches (rg exit 1)
+origin-option scan -> internal derived composition only; no public override
+exact diff audit -> no launch descriptor or @kortix/sdk contract change
+CORS audit -> canonical immutable release origins only; no custom domain and
+              no Access-Control-Allow-Credentials for module origins
+postMessage audit -> exact-origin host/token responses; the initial discovery
+                     request alone uses '*' before the host origin is known
+cleanup audit -> listeners, timers, iframe, pages, context, browser, and HTTPS
+                 service all have deterministic cleanup
+Desktop source -> unchanged
+git index -> empty
+```
+
+Automatic Chromium-generated preflight remains unverified because the local
+intercepted transport emitted none; the browser smoke used an explicit OPTIONS
+probe and the Hono suite verified an actual preflight request/response. The 14
+default-suite skips require a real PostgreSQL integration environment and were
+not executed as part of this bounded local slice.
+
+Source/package shippable is **YES** for the browser-module bootstrap slice.
+Public-beta production readiness remains **NOT YET**. No npm publication, live
+AI or payment-provider request, Desktop rebuild, DNS change, staging/production
+deployment, file staging, commit, push, or merge was performed.
+
+---
+
+### 2026-08-05 - OpenOPC module public-beta final local verification gate (Codex, COMPLETED)
+
+Completed the five-step Final Verification Gate in the public-beta closure plan.
+This entry records fresh results for the current local source state and audits
+the committed branch candidate separately. Because the tested packages have
+overlapping worktree changes, these results are not represented as a pristine
+HEAD reproduction.
+
+**Focused closure evidence**
+
+```text
+API 13-file closure suite -> 225 pass, 0 fail, 621 expect() calls, 13 files
+custom-hostname Worker -> 13 pass, 0 fail, 1 suite
+@kortix/sdk four-file suite -> 72 pass, 0 fail, 282 expect() calls, 4 files
+Web five-file module suite -> 34 pass, 0 fail, 146 expect() calls, 5 files
+Desktop full -> Node 54 pass, 0 fail, 3 suites
+                Bun 123 pass, 0 fail, 239 expect() calls, 10 files
+```
+
+**Broader package evidence**
+
+```text
+API typecheck -> exit 0
+@kortix/sdk typecheck, including examples -> exit 0
+Web typecheck -> exit 0
+API full -> 3775 pass, 14 skip, 0 fail, 11837 expect() calls, 425 files
+@kortix/sdk full -> 1176 pass, 0 fail, 5520 expect() calls, 89 files
+@kortix/sdk packed install/import/construct smoke -> exit 0
+Web full -> 1236 pass, 0 fail, 3927 expect() calls, 177 files
+```
+
+The 14 API skips are real PostgreSQL integration tests and were not executed by
+the default full-suite gate. No failing test was skipped, weakened, or filtered.
+
+**Static security and candidate-boundary evidence**
+
+```text
+iframe forbidden-sandbox scan -> no matches
+Desktop legacy-target scan -> no matches
+module-facing provider-detail scan -> no matches
+git diff --check -> exit 0 (line-ending warnings only)
+candidate 36a3152b..HEAD -> 25 commits, 107 files changed,
+                              13501 insertions, 545 deletions
+candidate risky-path scan -> no .env, key, certificate, installer, archive,
+                             dist, or Terraform state paths
+protected 2026-08-01 plan -> exactly one untracked file; absent from HEAD,
+                              candidate history, and candidate diff
+git index -> empty
+```
+
+The branch is 18 commits ahead of its configured upstream, while the closure
+plan's older verification base spans 25 commits. The worktree also contains
+pre-existing and subsequent modified/untracked work; it was not staged and is
+not represented as a clean closure-only tree. No commit, push, PR, merge, npm
+publication, secret installation, DNS change, deployment, or release was made.
+
+Local code/source readiness is **YES** for the locally verifiable OpenOPC module
+public-beta closure scope. The exact deployment candidate is not yet frozen as a
+single commit and must reproduce these gates after it is frozen. Public-beta
+production readiness is **NOT YET**:
+wildcard DNS/certificate validation, Worker/API deployment, real immutable
+release-origin routing, production secrets/configuration, a reviewed real
+`sandboxed-web` module, live NewAPI calls, controlled Z-Pay, Desktop rebuild and
+signing/publication/install validation, and Git publication remain separately
+authorized post-deployment work on the same candidate commit.
+
+---
+
+### 2026-08-05 - OpenOPC candidate-freeze preparation (Codex, COMPLETED)
+
+Prepared the next local public-beta step without staging or committing. The
+repository's known historical object gap was reproduced and repaired first so
+candidate history and protected-path audits no longer terminate on a missing
+tree.
+
+**Git integrity and SSH evidence**
+
+```text
+known missing object -> tree 8f1519aa from commit 6a8c5a65
+pre-repair cat-file -> exit 1
+pre-repair fsck -> exit 2; one broken link and one missing tree
+HTTPS fetch -> connection timeout; no worktree effect
+github.com SSH config -> ready via ssh.github.com:443
+github.com SSH authentication -> account maheshenga recognized
+ordinary SSH fetch -> exit 0, but negotiation did not resend the tree
+SSH fetch --refetch -> exit 0
+post-repair cat-file -> exit 0
+post-repair git fsck --full --no-reflogs -> exit 0, zero issues
+```
+
+The SSH skill required configuration and authentication checks before the
+one-shot fetch. Those checks did not access private-key file contents; they used
+only configuration, file existence, public fingerprint, known-host, and
+authentication results. The configured `openopc` remote URL was not changed;
+only the object database and `FETCH_HEAD` were updated.
+
+**Candidate partition evidence**
+
+```text
+HEAD -> 4e827cf685b195a1b913fc1f6f0bb89426554dce
+branch -> design/desktop-release-deferred, 18 commits ahead of upstream
+pre-plan worktree -> 74 tracked changes, 26 untracked paths, empty index
+literal completed-plan mapping -> 51 paths mapped, 49 require manual review
+protected 2026-08-01 plan -> untracked, zero entries in complete Git history
+```
+
+CodeGraph was available and showed the package-upload submission transport is
+wired into the Web submission page and covered by the SDK transport tests. The
+Codebase Memory plugin had no index for this repository, so no repository index
+was created or modified.
+
+Added
+`docs/superpowers/plans/2026-08-05-openopc-public-beta-candidate-freeze.md`
+with separate OpenOPC core, hermetic API-test support, and quarantine groups.
+The plan prohibits broad staging and records the clean-worktree reproduction
+gate required after an exact candidate SHA exists.
+
+Local source readiness remains **YES**. Exact candidate readiness remains
+**NOT YET** because candidate composition, staging, commits, and clean-SHA gate
+reproduction require explicit authorization. Public-beta production readiness
+also remains **NOT YET**. No file was staged or committed, and no push, PR,
+merge, npm publication, deployment, DNS, Desktop release, or live AI/payment
+operation was performed.
+
+---
+
+### 2026-08-05 - OpenOPC local candidate freeze (Codex, IN PROGRESS)
+
+The user explicitly authorized local candidate commits under the freeze plan,
+with push and deployment prohibited. Created two reviewed source commits without
+using broad staging:
+
+```text
+ea657fe83 fix(api): stabilize the hermetic default suite
+  -> 29 files, 509 insertions, 95 deletions
+28aeaa10a feat(openopc): complete the developer module workflow
+  -> 47 files, 4119 insertions, 535 deletions
+```
+
+The API support commit added no focused/skipped tests or timeout relaxation. Its
+one credential-pattern scan hit was a teardown assignment that restores an
+original environment value; no credential literal was present. The OpenOPC
+commit had zero credential-pattern additions, zero quarantined paths, and zero
+protected-path entries. The bootstrap discovery request alone uses a wildcard
+before the parent origin is known; host responses use the exact module origin,
+capability requests use the validated host origin, and module CORS deletes the
+credentials header.
+
+Admin/i18n, Starter/schema, Sandbox, enterprise deployment documentation,
+comment-only account-limit edits, and the protected `2026-08-01` plan remain
+outside the candidate and unchanged in the root worktree. No push, PR, merge,
+npm publication, deployment, DNS, Desktop release, or live AI/payment operation
+was performed.
+
+Exact candidate readiness remains **NOT YET** until the plans/evidence commit is
+created and the resulting HEAD reproduces the required gates from an isolated
+clean worktree.
+
+---
+
+### 2026-08-05 - OpenOPC exact candidate reproduction (Codex, BLOCKED)
+
+Created and tested local candidate
+`c27ab28ff4fde96addfc491dfcf6ba9850c1787f` in an isolated detached worktree.
+The candidate contains four local commits and remains unpushed and undeployed.
+
+```text
+ea657fe83 fix(api): stabilize the hermetic default suite
+28aeaa10a feat(openopc): complete the developer module workflow
+2c084a2a0 docs(openopc): record candidate freeze evidence
+c27ab28ff test(desktop): normalize workflow line endings
+```
+
+The last commit fixes a clean Windows checkout regression: the Desktop policy
+test previously split YAML only on LF, while the detached worktree checked the
+workflow out with CRLF. The one-file fix normalizes repository-file newlines;
+Desktop then passed Node `54/0` and Bun `123/0` in the exact candidate worktree.
+
+**Exact candidate evidence**
+
+```text
+tools -> Node v22.23.2; pnpm 8.11.0; Bun 1.3.14; Playwright 1.61.1
+offline frozen install -> exit 0
+focused API -> 225 pass, 0 fail, 621 expect() calls, 13 files
+custom-hostname Worker -> 13 pass, 0 fail, 1 suite
+focused SDK -> 72 pass, 0 fail, 282 expect() calls, 4 files
+focused Web -> 34 pass, 0 fail, 146 expect() calls, 5 files
+OpenOPC SDK -> 35 pass, 0 fail, 120 expect() calls, 5 files
+Desktop -> Node 54 pass; Bun 123 pass, 239 expect() calls, 10 files
+API/SDK/Web/OpenOPC SDK typechecks -> exit 0
+OpenOPC SDK build and both packed install/import smokes -> exit 0
+SDK full after packed-bundle generation -> 1176 pass, 0 skip, 0 fail,
+                                           5520 expect() calls, 89 files
+Web full -> 1236 pass, 0 fail, 3920 expect() calls, 177 files
+browser smoke -> allowed/attacker/direct-domain flows pass; cleanup ok
+static provider/origin/sandbox and risky-path scans -> zero matches
+candidate diff check -> exit 0; 85 files, 9247 insertions, 636 deletions
+Git fsck -> exit 0; dangling objects only, no broken or missing objects
+```
+
+The standard API full command remains red at `3771 pass / 14 skip / 4 fail /
+11825 expect() calls / 425 files`. The 14 skips are the known real PostgreSQL
+integration tests. The four failures map exactly to five paths frozen under
+Task 5 quarantine: the Windows Slack filename fix, manifest Studio permissions,
+the retired hosted-vendor enterprise text, and the Starter reference plus its
+generated embedding. Running the three failing files in the preserved root
+worktree, where those changes exist, passes `53/0/245`.
+
+Those five files remain unstaged and outside the candidate. Exact candidate
+readiness remains **NOT YET** pending explicit authorization to reclassify them
+or acceptance of a candidate with a red standard API gate. The isolated
+worktree is intentionally retained for the revised-SHA rerun. No push, PR,
+merge, npm publication, deployment, DNS change, Desktop release, or live
+AI/payment operation was performed.
+
+---
+
+### 2026-08-05 - OpenOPC final local candidate reproduction (Codex, COMPLETED)
+
+The user authorized the next frozen-plan step. Reclassified only the quarantined
+paths whose direct regression guards proved they were candidate dependencies,
+then closed two Windows clean-checkout newline failures and one non-hermetic
+marketplace fetch path. The final local candidate is:
+
+```text
+f1f2c665fa22470b8d4969358ad258006b0194b9
+```
+
+**Local candidate commits**
+
+```text
+ea657fe83 fix(api): stabilize the hermetic default suite
+28aeaa10a feat(openopc): complete the developer module workflow
+2c084a2a0 docs(openopc): record candidate freeze evidence
+c27ab28ff test(desktop): normalize workflow line endings
+ea640e0a7 fix(platform): close candidate regression gates
+1f0af7682 fix(starter): normalize embedded snapshot line endings
+aea872f28 chore(schema): sync grantable studio actions
+af77216b8 fix(web): sync studio action catalog
+4fa65152e test(schema): normalize generated file line endings
+1177d7224 chore(git): pin generated snapshots to lf
+f1f2c665f fix(api): keep marketplace fetches hermetic
+```
+
+**Exact candidate evidence**
+
+```text
+tools -> Node v22.23.2; pnpm 8.11.0; Bun 1.3.14; Playwright 1.61.1
+offline frozen install -> exit 0
+API closure -> 225 pass, 0 fail, 621 expect() calls, 13 files
+reclassified API regressions -> 53 pass, 0 fail, 245 expect() calls, 3 files
+marketplace transport -> 13 pass, 0 fail, 127 expect() calls; case 2.29ms
+custom-hostname Worker -> 13 pass, 0 fail
+SDK focused -> 72 pass, 0 fail, 282 expect() calls, 4 files
+Web focused -> 34 pass, 0 fail, 146 expect() calls, 5 files
+OpenOPC SDK -> 35 pass, 0 fail, 120 expect() calls, 5 files
+Desktop -> Node 54 pass; Bun 123 pass, 239 expect() calls, 10 files
+Starter -> 38 pass, 0 fail, 624 expect() calls, 5 files
+manifest schema -> 316 pass, 0 fail, 490 expect() calls, 7 files
+Web action catalog -> 14 pass, 0 fail, 101 expect() calls, 1 file
+API/SDK/Web/OpenOPC/Starter/manifest typechecks -> exit 0
+SDK bundles and OpenOPC build -> exit 0
+SDK and OpenOPC packed install/import/construct smokes -> exit 0
+API full -> 3775 pass, 14 PostgreSQL skips, 0 fail,
+            11837 expect() calls, 425 files
+SDK full -> 1176 pass, 0 fail, 5520 expect() calls, 89 files
+Web full -> 1236 pass, 0 fail, 3927 expect() calls, 177 files
+browser smoke -> allowed/attacker/direct-domain flows pass; cleanup ok
+Starter/schema generators -> reproducible with clean tracked status
+forbidden and risky-path scans -> zero matches
+candidate diff -> 11 commits, 99 files, 9341 insertions, 661 deletions
+Git fsck -> exit 0; dangling objects only, no missing/broken objects
+isolated candidate worktrees -> removed after exact-path validation
+```
+
+The first API full run on the penultimate candidate had one external-registry
+test hit the unchanged five-second timeout. An isolated rerun reproduced it.
+The external README/file readers were bypassing the already injectable fetch
+transport and therefore reached the real network. Both reads now use the
+existing `githubLoaderOptions.fetchImpl`; no test assertion, timeout, or skip
+was changed. The exact final candidate passed the unchanged standard command.
+
+The protected `2026-08-01` plan is absent from HEAD, the candidate diff, the
+index, and complete Git history. Other root-worktree changes remain preserved
+and unstaged. Exact local candidate readiness is **YES** for the SHA above.
+Production public-beta readiness remains **NOT YET** pending separately
+authorized push/review/merge, publication, DNS/certificate, deployment,
+production configuration, real module routing, live AI/payment validation, and
+Desktop release checks. No push, PR, merge, npm publication, deployment, DNS
+change, Desktop release, or live provider operation was performed.

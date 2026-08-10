@@ -203,4 +203,68 @@ describe('module service capability Drizzle repository', () => {
       expect.stringContaining('module_service_audit_events'),
     ]);
   });
+
+  test('maps prefixed PostgreSQL rows and normalizes timestamp text', async () => {
+    const postgresTimestamp = '2026-08-01 00:00:00+00';
+    const fixture = databaseFixture([
+      [
+        {
+          grant_grant_id: GRANT_ID,
+          grant_account_id: ACCOUNT_ID,
+          grant_project_id: PROJECT_ID,
+          grant_installation_id: INSTALLATION_ID,
+          grant_release_id: RELEASE_ID,
+          grant_consent_id: CONSENT_ID,
+          grant_service: 'ai',
+          grant_operations: ['models.read'],
+          grant_token_hash: TOKEN_HASH,
+          grant_expires_at: '2026-08-01 00:05:00+00',
+          grant_revoked_at: null,
+          grant_created_at: postgresTimestamp,
+          consent_consent_id: CONSENT_ID,
+          consent_account_id: ACCOUNT_ID,
+          consent_project_id: PROJECT_ID,
+          consent_installation_id: INSTALLATION_ID,
+          consent_release_id: RELEASE_ID,
+          consent_install_revision: 4,
+          consent_service: 'ai',
+          consent_operations: ['models.read'],
+          consent_consent_digest: `sha256:${'c'.repeat(64)}`,
+          consent_accepted_by: USER_ID,
+          consent_accepted_at: postgresTimestamp,
+          consent_revoked_by: null,
+          consent_revoked_at: null,
+          installation_account_id: ACCOUNT_ID,
+          installation_project_id: PROJECT_ID,
+          installation_installation_id: INSTALLATION_ID,
+          installation_install_revision: 4,
+          installation_release_id: RELEASE_ID,
+          installation_module_id: manifest.id,
+          installation_module_version: manifest.version,
+          installation_installation_status: 'active',
+          installation_release_status: 'published',
+          installation_signature_algorithm: 'ed25519',
+          installation_signature: `base64url:${'b'.repeat(86)}`,
+          installation_signed_at: postgresTimestamp,
+          installation_manifest: manifest,
+        },
+      ],
+    ]);
+    const repository = createDrizzleModuleServiceCapabilityRepository(fixture.database);
+
+    const authorization = await repository.getAuthorization(GRANT_ID);
+
+    expect(authorization).toMatchObject({
+      grant: {
+        grantId: GRANT_ID,
+        service: 'ai',
+        expiresAt: '2026-08-01T00:05:00.000Z',
+        createdAt: NOW,
+      },
+      consent: { service: 'ai', acceptedAt: NOW },
+      installation: { signedAt: NOW },
+    });
+    expect(fixture.queries[0]?.sql).toContain('module_service_capability_grants capability_grant');
+    expect(fixture.queries[0]?.sql).not.toMatch(/\bgrant\./);
+  });
 });

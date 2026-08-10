@@ -220,7 +220,8 @@ export function createMemoryStudioRepository(
       if (existing) {
         if (
           existing.project_id !== input.project_id ||
-          existing.request_hash !== input.request_hash
+          existing.request_hash !== input.request_hash ||
+          (existing.module_service_grant_id ?? null) !== (input.module_service_grant_id ?? null)
         ) {
           return { created: false, mismatch: true };
         }
@@ -241,6 +242,7 @@ export function createMemoryStudioRepository(
         project_id: input.project_id,
         actor_user_id: input.actor_user_id,
         actor_type: input.actor_type,
+        module_service_grant_id: input.module_service_grant_id ?? null,
         capability: input.capability,
         provider_config_id: input.provider_config_id,
         provider: provider.provider,
@@ -397,10 +399,21 @@ export function createMemoryStudioRepository(
       return { outcome: 'finalized' as const, asset };
     },
 
-    async listAssets(projectId, limit, cursor) {
+    async listAssets(projectId, limit, cursor, filter) {
       const after = cursor ? Number(cursor) : 0;
       const all = [...assets.values()]
         .filter((asset) => asset.project_id === projectId)
+        .filter(
+          (asset) =>
+            filter?.source_job_id === undefined || asset.source_job_id === filter.source_job_id,
+        )
+        .filter(
+          (asset) =>
+            filter?.source === undefined ||
+            (filter.source === 'generated'
+              ? asset.source_job_id !== null
+              : asset.source_job_id === null),
+        )
         .sort((left, right) => right.created_at.localeCompare(left.created_at));
       const page = all.slice(after, after + limit);
       return {
@@ -413,7 +426,82 @@ export function createMemoryStudioRepository(
       const asset = assets.get(assetId);
       return asset?.project_id === projectId ? asset : null;
     },
+
+    async updateDirectAssetMetadata(input) {
+      const asset = assets.get(input.asset_id);
+      if (
+        !asset ||
+        asset.account_id !== input.account_id ||
+        asset.project_id !== input.project_id ||
+        asset.source_job_id !== null ||
+        !metadataIncludes(asset.metadata, input.expected_metadata) ||
+        Object.hasOwn(asset.metadata, input.forbidden_metadata_key)
+      ) {
+        return null;
+      }
+      const updated = { ...asset, metadata: { ...asset.metadata, ...input.metadata_patch } };
+      assets.set(asset.asset_id, updated);
+      return updated;
+    },
+
+    async requestDirectAssetDeletion(input) {
+      const asset = assets.get(input.asset_id);
+      if (
+        !asset ||
+        asset.account_id !== input.account_id ||
+        asset.project_id !== input.project_id ||
+        asset.source_job_id !== null ||
+        !metadataIncludes(asset.metadata, input.expected_metadata)
+      ) {
+        return { outcome: 'not_found' as const };
+      }
+      const alreadyRequested = metadataIncludes(asset.metadata, input.deletion_marker);
+      if (
+        !alreadyRequested &&
+        [...jobs.values()].some(
+          (job) =>
+            job.account_id === input.account_id &&
+            job.project_id === input.project_id &&
+            (job.status === 'queued' || job.status === 'running') &&
+            job.input.image.reference_asset_ids.includes(input.asset_id),
+        )
+      ) {
+        return { outcome: 'in_use' as const };
+      }
+      const updated = alreadyRequested
+        ? asset
+        : { ...asset, metadata: { ...asset.metadata, ...input.deletion_metadata } };
+      assets.set(asset.asset_id, updated);
+      return { outcome: 'requested' as const, asset: updated };
+    },
+
+    async deleteRequestedDirectAsset(input) {
+      const asset = assets.get(input.asset_id);
+      if (
+        !asset ||
+        asset.account_id !== input.account_id ||
+        asset.project_id !== input.project_id ||
+        asset.source_job_id !== null ||
+        asset.object_key !== input.object_key ||
+        !metadataIncludes(asset.metadata, input.expected_metadata)
+      ) {
+        return false;
+      }
+      assets.delete(asset.asset_id);
+      for (const [uploadId, upload] of uploads) {
+        if (upload.asset_id === asset.asset_id)
+          uploads.set(uploadId, { ...upload, asset_id: null });
+      }
+      return true;
+    },
   };
+}
+
+function metadataIncludes(
+  metadata: Record<string, unknown>,
+  expected: Record<string, string>,
+): boolean {
+  return Object.entries(expected).every(([key, value]) => metadata[key] === value);
 }
 
 function assertCurrentProductionBinding(

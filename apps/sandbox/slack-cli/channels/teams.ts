@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { ExecutorError, createExecutorClient } from '../../../../packages/executor-sdk/src/index';
 import {
   CliError,
@@ -70,7 +70,7 @@ async function sendFile(filePath: string, description?: string) {
     );
   }
   const data = readFileSync(filePath);
-  const filename = filePath.split('/').pop() || 'file';
+  const filename = basename(filePath) || 'file';
   const r = await kortixPost<{ ok?: boolean; uploadId?: string }>(
     `/projects/${projectId}/channels/teams/file/upload`,
     {

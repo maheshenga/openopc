@@ -2,11 +2,13 @@ import type { StudioAsset, StudioErrorCode, StudioUpload } from '@kortix/api-con
 import {
   StudioImageValidationError,
   type ValidatedStudioImage,
+  createStudioImageThumbnail,
   validateStudioImage,
 } from '@kortix/studio-adapters';
 import {
   type StudioObjectMetadata,
   type StudioObjectStore,
+  StudioObjectStoreError,
   type StudioReferenceAssetResolver,
   StudioStorageUnavailableError,
   type StudioStoredObject,
@@ -17,6 +19,12 @@ import type { StudioCreateUploadInput, StudioRepository } from './types';
 const SIGNED_URL_TTL_SECONDS = 15 * 60;
 const PENDING_UPLOAD_TTL_SECONDS = 30 * 60;
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
+const THUMBNAIL_CACHE_MAX_AGE_SECONDS = SIGNED_URL_TTL_SECONDS;
+const THUMBNAIL_PRESET_DIMENSIONS = {
+  small: 256,
+  medium: 512,
+  large: 1024,
+} as const;
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -39,6 +47,33 @@ export class StudioStorageServiceError extends Error {
 export interface StudioSignedDownload {
   asset_id: string;
   signed_download_url: string;
+  expires_at: string;
+}
+
+export interface StudioDirectAssetInput {
+  accountId: string;
+  projectId: string;
+  actorUserId: string | null;
+  bytes: Uint8Array;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  metadata: Record<string, string>;
+}
+
+export interface StudioReadAssetResult {
+  asset: StudioAsset;
+  bytes: Uint8Array;
+}
+
+export type StudioAssetThumbnailPreset = keyof typeof THUMBNAIL_PRESET_DIMENSIONS;
+
+export interface StudioAssetThumbnailUrl {
+  asset_id: string;
+  preset: StudioAssetThumbnailPreset;
+  signed_download_url: string;
+  mime_type: 'image/webp';
+  width: number;
+  height: number;
+  size_bytes: number;
   expires_at: string;
 }
 
@@ -127,6 +162,301 @@ export class StudioStorageService {
     } catch {
       return false;
     }
+  }
+
+  async createDirectAsset(input: StudioDirectAssetInput): Promise<StudioAsset> {
+    if (!(input.bytes instanceof Uint8Array) || input.bytes.byteLength === 0) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    if (input.bytes.byteLength > MAX_IMAGE_BYTES) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_TOO_LARGE');
+    }
+    let image: ValidatedStudioImage;
+    try {
+      image = await validateStudioImage({ bytes: input.bytes, mimeType: input.mimeType });
+    } catch (error) {
+      if (error instanceof StudioImageValidationError) {
+        throw new StudioStorageServiceError(error.code);
+      }
+      throw error;
+    }
+    const extension = IMAGE_EXTENSIONS[image.mimeType];
+    if (!extension) throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    await this.input.store.assertReady();
+    const uploadId = this.randomUUID();
+    const objectKey =
+      `accounts/${input.accountId}/projects/${input.projectId}` +
+      `/uploads/${uploadId}/source.${extension}`;
+    const checksum = new Bun.CryptoHasher('sha256').update(input.bytes).digest('hex');
+    const expiresAt = new Date(
+      this.now().getTime() + PENDING_UPLOAD_TTL_SECONDS * 1_000,
+    ).toISOString();
+    await this.input.repository.createPendingUpload({
+      account_id: input.accountId,
+      project_id: input.projectId,
+      actor_user_id: input.actorUserId,
+      upload_id: uploadId,
+      object_key: objectKey,
+      declared_mime_type: image.mimeType,
+      expected_size_bytes: input.bytes.byteLength,
+      expected_checksum_sha256: checksum,
+      expires_at: expiresAt,
+    });
+    try {
+      await runStorageDriverOperation(() =>
+        this.input.store.putObject({
+          key: objectKey,
+          body: byteStream(input.bytes),
+          content_type: image.mimeType,
+          size_bytes: input.bytes.byteLength,
+          checksum_sha256: checksum,
+          metadata: { ...input.metadata },
+          if_none_match: '*',
+        }),
+      );
+    } catch (error) {
+      await this.input.store.deleteObject({ key: objectKey }).catch(() => undefined);
+      throw error;
+    }
+    let result: Awaited<ReturnType<StudioRepository['finalizeUploadRecord']>>;
+    try {
+      result = await this.input.repository.finalizeUploadRecord({
+        account_id: input.accountId,
+        project_id: input.projectId,
+        upload_id: uploadId,
+        object_key: objectKey,
+        bucket: this.input.store.namespace,
+        mime_type: image.mimeType,
+        checksum_sha256: checksum,
+        size_bytes: input.bytes.byteLength,
+        width: image.width,
+        height: image.height,
+        metadata: { ...input.metadata },
+      });
+    } catch (error) {
+      await this.input.store.deleteObject({ key: objectKey }).catch(() => undefined);
+      throw error;
+    }
+    if (result.outcome === 'finalized') return result.asset;
+    await this.input.store.deleteObject({ key: objectKey }).catch(() => undefined);
+    if (result.outcome === 'expired') {
+      throw new StudioStorageServiceError('STUDIO_UPLOAD_EXPIRED');
+    }
+    throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+  }
+
+  async readAsset(input: {
+    accountId: string;
+    projectId: string;
+    assetId: string;
+  }): Promise<StudioReadAssetResult | null> {
+    const asset = await this.input.repository.getAsset(input.projectId, input.assetId);
+    const keyPrefix = `accounts/${input.accountId}/projects/${input.projectId}/`;
+    const extension = asset ? IMAGE_EXTENSIONS[asset.mime_type] : undefined;
+    if (!asset || asset.account_id !== input.accountId) return null;
+    if (
+      asset.kind !== 'image' ||
+      !extension ||
+      asset.bucket !== this.input.store.namespace ||
+      !isSafeProjectObjectKey(asset.object_key, keyPrefix) ||
+      !Number.isSafeInteger(asset.size_bytes) ||
+      asset.size_bytes <= 0 ||
+      asset.size_bytes > MAX_IMAGE_BYTES ||
+      !/^[a-f0-9]{64}$/.test(asset.checksum_sha256)
+    ) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    await this.input.store.assertReady();
+    let stored: StudioStoredObject;
+    try {
+      stored = await this.input.store.getObject({ key: asset.object_key });
+    } catch (error) {
+      if (error instanceof StudioObjectStoreError && error.code === 'NOT_FOUND') {
+        throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+      }
+      if (error instanceof StudioStorageUnavailableError) throw error;
+      throw new StudioStorageUnavailableError();
+    }
+    if (
+      stored.namespace !== this.input.store.namespace ||
+      stored.key !== asset.object_key ||
+      stored.content_type !== asset.mime_type ||
+      stored.size_bytes !== asset.size_bytes ||
+      stored.checksum_sha256 !== asset.checksum_sha256
+    ) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    const bytes = await readObjectBody(stored.body, MAX_IMAGE_BYTES);
+    const checksum = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+    if (bytes.byteLength !== asset.size_bytes || checksum !== asset.checksum_sha256) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    let image: ValidatedStudioImage;
+    try {
+      image = await validateStudioImage({ bytes, mimeType: asset.mime_type });
+    } catch (error) {
+      if (error instanceof StudioImageValidationError) {
+        throw new StudioStorageServiceError(error.code);
+      }
+      throw error;
+    }
+    if (image.width !== asset.width || image.height !== asset.height) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    return { asset, bytes };
+  }
+
+  async deleteAssetObject(input: {
+    accountId: string;
+    projectId: string;
+    asset: StudioAsset;
+  }): Promise<void> {
+    const { asset } = input;
+    const keyPrefix = `accounts/${input.accountId}/projects/${input.projectId}/`;
+    if (
+      asset.account_id !== input.accountId ||
+      asset.project_id !== input.projectId ||
+      asset.bucket !== this.input.store.namespace ||
+      !isSafeProjectObjectKey(asset.object_key, keyPrefix) ||
+      !Number.isSafeInteger(asset.size_bytes) ||
+      asset.size_bytes <= 0 ||
+      asset.size_bytes > MAX_IMAGE_BYTES ||
+      !/^[a-f0-9]{64}$/.test(asset.checksum_sha256)
+    ) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    await this.input.store.assertReady();
+    let stored: StudioObjectMetadata;
+    try {
+      stored = await this.input.store.headObject({ key: asset.object_key });
+    } catch (error) {
+      if (error instanceof StudioObjectStoreError && error.code === 'NOT_FOUND') return;
+      if (error instanceof StudioStorageUnavailableError) throw error;
+      throw new StudioStorageUnavailableError();
+    }
+    if (
+      stored.namespace !== this.input.store.namespace ||
+      stored.key !== asset.object_key ||
+      stored.content_type !== asset.mime_type ||
+      stored.size_bytes !== asset.size_bytes ||
+      stored.checksum_sha256 !== asset.checksum_sha256 ||
+      !stored.etag
+    ) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+    try {
+      await this.input.store.deleteObject({ key: asset.object_key, if_match: stored.etag });
+    } catch (error) {
+      if (error instanceof StudioObjectStoreError && error.code === 'NOT_FOUND') return;
+      if (error instanceof StudioObjectStoreError && error.code === 'PRECONDITION_FAILED') {
+        throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+      }
+      if (error instanceof StudioStorageUnavailableError) throw error;
+      throw new StudioStorageUnavailableError();
+    }
+  }
+
+  async createThumbnailUrl(input: {
+    accountId: string;
+    projectId: string;
+    assetId: string;
+    preset: StudioAssetThumbnailPreset;
+  }): Promise<StudioAssetThumbnailUrl | null> {
+    const dimension = THUMBNAIL_PRESET_DIMENSIONS[input.preset];
+    if (!dimension) throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    const asset = await this.input.repository.getAsset(input.projectId, input.assetId);
+    const keyPrefix = `accounts/${input.accountId}/projects/${input.projectId}/`;
+    const extension = asset ? IMAGE_EXTENSIONS[asset.mime_type] : undefined;
+    if (!asset || asset.account_id !== input.accountId) return null;
+    if (
+      asset.kind !== 'image' ||
+      !extension ||
+      asset.bucket !== this.input.store.namespace ||
+      !isSafeProjectObjectKey(asset.object_key, keyPrefix) ||
+      !Number.isSafeInteger(asset.size_bytes) ||
+      asset.size_bytes <= 0 ||
+      asset.size_bytes > MAX_IMAGE_BYTES ||
+      !/^[a-f0-9]{64}$/.test(asset.checksum_sha256)
+    ) {
+      throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+    }
+
+    await this.input.store.assertReady();
+    const objectKey = thumbnailObjectKey(input, asset.checksum_sha256);
+    const expectedMetadata = {
+      'studio-thumbnail-source-checksum': asset.checksum_sha256,
+      'studio-thumbnail-preset': input.preset,
+    };
+    let metadata = await this.readThumbnailMetadata(objectKey, expectedMetadata);
+    if (!metadata) {
+      const source = await this.readAsset({
+        accountId: input.accountId,
+        projectId: input.projectId,
+        assetId: input.assetId,
+      });
+      if (!source) return null;
+      const thumbnail = await createStudioImageThumbnail({
+        bytes: source.bytes,
+        mimeType: source.asset.mime_type as 'image/png' | 'image/jpeg' | 'image/webp',
+        maxDimension: dimension,
+      }).catch((error) => {
+        if (error instanceof StudioImageValidationError) {
+          throw new StudioStorageServiceError(error.code);
+        }
+        throw error;
+      });
+      const checksum = new Bun.CryptoHasher('sha256').update(thumbnail.bytes).digest('hex');
+      const thumbnailMetadata = {
+        ...expectedMetadata,
+        'studio-thumbnail-width': String(thumbnail.width),
+        'studio-thumbnail-height': String(thumbnail.height),
+      };
+      try {
+        metadata = await runStorageDriverOperation(() =>
+          this.input.store.putObject({
+            key: objectKey,
+            body: byteStream(thumbnail.bytes),
+            content_type: thumbnail.mimeType,
+            size_bytes: thumbnail.bytes.byteLength,
+            checksum_sha256: checksum,
+            metadata: thumbnailMetadata,
+            if_none_match: '*',
+          }),
+        ).then((stored) => ({
+          size_bytes: stored.size_bytes,
+          checksum_sha256: stored.checksum_sha256,
+          width: thumbnail.width,
+          height: thumbnail.height,
+        }));
+      } catch (error) {
+        if (!(error instanceof StudioStorageUnavailableError)) throw error;
+        metadata = await this.readThumbnailMetadata(objectKey, expectedMetadata);
+        if (!metadata) throw error;
+      }
+    }
+    if (!metadata) throw new StudioStorageServiceError('STUDIO_ASSET_INVALID');
+
+    const cacheControl = `private, max-age=${THUMBNAIL_CACHE_MAX_AGE_SECONDS}, immutable`;
+    const signedDownloadUrl = await runStorageDriverOperation(() =>
+      this.input.store.createSignedDownloadUrl({
+        key: objectKey,
+        filename: `${asset.asset_id}-${input.preset}.webp`,
+        expires_in_seconds: SIGNED_URL_TTL_SECONDS,
+        content_disposition: 'inline',
+        content_type: 'image/webp',
+        cache_control: cacheControl,
+      }),
+    );
+    return {
+      asset_id: asset.asset_id,
+      preset: input.preset,
+      signed_download_url: signedDownloadUrl,
+      mime_type: 'image/webp',
+      width: metadata.width,
+      height: metadata.height,
+      size_bytes: metadata.size_bytes,
+      expires_at: new Date(this.now().getTime() + SIGNED_URL_TTL_SECONDS * 1_000).toISOString(),
+    };
   }
 
   async createUpload(input: StudioCreateUploadInput): Promise<StudioUpload> {
@@ -298,6 +628,54 @@ export class StudioStorageService {
       expires_at: new Date(this.now().getTime() + SIGNED_URL_TTL_SECONDS * 1_000).toISOString(),
     };
   }
+
+  private async readThumbnailMetadata(
+    objectKey: string,
+    expectedMetadata: Record<string, string>,
+  ): Promise<{
+    size_bytes: number;
+    checksum_sha256: string;
+    width: number;
+    height: number;
+  } | null> {
+    let stored: StudioObjectMetadata;
+    try {
+      stored = await this.input.store.headObject({ key: objectKey });
+    } catch (error) {
+      if (error instanceof StudioObjectStoreError && error.code === 'NOT_FOUND') return null;
+      if (error instanceof StudioStorageUnavailableError) throw error;
+      throw new StudioStorageUnavailableError();
+    }
+    if (
+      stored.namespace !== this.input.store.namespace ||
+      stored.key !== objectKey ||
+      stored.content_type !== 'image/webp' ||
+      stored.size_bytes <= 0 ||
+      stored.size_bytes > MAX_IMAGE_BYTES ||
+      !/^[a-f0-9]{64}$/.test(stored.checksum_sha256) ||
+      Object.entries(expectedMetadata).some(([key, value]) => stored.metadata[key] !== value)
+    ) {
+      return null;
+    }
+    const width = Number(stored.metadata['studio-thumbnail-width']);
+    const height = Number(stored.metadata['studio-thumbnail-height']);
+    if (
+      !Number.isSafeInteger(width) ||
+      !Number.isSafeInteger(height) ||
+      width < 1 ||
+      height < 1 ||
+      width > 1024 ||
+      height > 1024
+    ) {
+      return null;
+    }
+    return {
+      size_bytes: stored.size_bytes,
+      checksum_sha256: stored.checksum_sha256,
+      width,
+      height,
+    };
+  }
 }
 
 function attachmentFilename(asset: StudioAsset): string {
@@ -314,6 +692,16 @@ function attachmentFilename(asset: StudioAsset): string {
   if (sanitized) return sanitized;
   const extension = IMAGE_EXTENSIONS[asset.mime_type] ?? 'bin';
   return `${asset.asset_id}.${extension}`;
+}
+
+function thumbnailObjectKey(
+  input: { accountId: string; projectId: string; assetId: string; preset: string },
+  checksum: string,
+): string {
+  return (
+    `accounts/${input.accountId}/projects/${input.projectId}` +
+    `/thumbnails/${input.assetId}/${checksum}/${input.preset}.webp`
+  );
 }
 
 function isSafeProjectObjectKey(key: string, expectedPrefix: string): boolean {

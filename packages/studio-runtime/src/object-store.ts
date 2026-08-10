@@ -68,6 +68,9 @@ export interface StudioSignedUploadRequest {
 export interface StudioSignedDownloadInput extends StudioObjectRef {
   filename: string;
   expires_in_seconds: number;
+  content_disposition?: 'attachment' | 'inline';
+  content_type?: string;
+  cache_control?: string;
 }
 
 export interface StudioObjectStore {
@@ -262,6 +265,9 @@ export class InMemoryStudioObjectStore implements StudioObjectStore {
     const query = new URLSearchParams({
       filename: input.filename,
       ttl: String(input.expires_in_seconds),
+      disposition: input.content_disposition ?? 'attachment',
+      ...(input.content_type ? { content_type: input.content_type } : {}),
+      ...(input.cache_control ? { cache_control: input.cache_control } : {}),
     });
     return `memory://${encodeURIComponent(this.namespace)}/${encodeObjectKey(input.key)}?${query}`;
   }

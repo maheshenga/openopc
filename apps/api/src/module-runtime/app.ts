@@ -3,11 +3,8 @@ import { z } from 'zod';
 
 import { PROJECT_ACTIONS } from '../iam/actions';
 import { makeOpenApiApp } from '../openapi';
+import { isoTimestamp, nullableIsoTimestamp } from '../shared/iso-timestamp';
 import type { AppEnv } from '../types';
-import {
-  RuntimeArtifactAccessError,
-  type RuntimeArtifactService,
-} from './runtime-artifacts';
 import {
   type ModuleExecution,
   ModuleExecutionError,
@@ -21,6 +18,7 @@ import {
   ModuleRunnerProtocolError,
   type RunnerRegistrationIdentity,
 } from './runner-protocol';
+import { RuntimeArtifactAccessError, type RuntimeArtifactService } from './runtime-artifacts';
 
 type LoadedProject = { row: { accountId: string; projectId: string }; userId: string };
 
@@ -74,10 +72,10 @@ function executionWire(value: ModuleExecution) {
     release_id: value.releaseId,
     state: value.state,
     kill_switch_generation: value.killSwitchGeneration,
-    deadline_at: value.deadlineAt,
-    created_at: value.createdAt,
-    updated_at: value.updatedAt,
-    terminal_at: value.terminalAt,
+    deadline_at: isoTimestamp(value.deadlineAt, 'module execution deadline_at'),
+    created_at: isoTimestamp(value.createdAt, 'module execution created_at'),
+    updated_at: isoTimestamp(value.updatedAt, 'module execution updated_at'),
+    terminal_at: nullableIsoTimestamp(value.terminalAt, 'module execution terminal_at'),
   };
 }
 
@@ -108,7 +106,7 @@ function eventWire(value: ModuleExecutionEvent) {
     sequence: value.sequence,
     event_type: value.eventType,
     payload: value.payload,
-    created_at: value.createdAt,
+    created_at: isoTimestamp(value.createdAt, 'module execution event created_at'),
   };
 }
 

@@ -461,6 +461,48 @@ describe('developer module artifact service', () => {
     expect(memoryStore.hasUpload(upload.upload_url)).toBe(true);
   });
 
+  test('reports package upload availability from the fail-closed trust predicate', async () => {
+    const repository = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
+    const store = createMemoryDeveloperArtifactStore().store;
+    let disabledProbeCalls = 0;
+
+    const disabled = new DeveloperModuleArtifactService({
+      repository,
+      store,
+      codeModulesEnabled: false,
+      trustInfrastructureReady: async () => {
+        disabledProbeCalls += 1;
+        return true;
+      },
+    });
+    const notReady = new DeveloperModuleArtifactService({
+      repository,
+      store,
+      codeModulesEnabled: true,
+      trustInfrastructureReady: async () => false,
+    });
+    const throwing = new DeveloperModuleArtifactService({
+      repository,
+      store,
+      codeModulesEnabled: true,
+      trustInfrastructureReady: async () => {
+        throw new Error('readiness dependency failed');
+      },
+    });
+    const ready = new DeveloperModuleArtifactService({
+      repository,
+      store,
+      codeModulesEnabled: true,
+      trustInfrastructureReady: async () => true,
+    });
+
+    await expect(disabled.isPackageUploadAvailable()).resolves.toBe(false);
+    expect(disabledProbeCalls).toBe(0);
+    await expect(notReady.isPackageUploadAvailable()).resolves.toBe(false);
+    await expect(throwing.isPackageUploadAvailable()).resolves.toBe(false);
+    await expect(ready.isPackageUploadAvailable()).resolves.toBe(true);
+  });
+
   test('requires a ready trust worker even when code-bearing modules are enabled', async () => {
     const repository = createMemoryDeveloperModuleArtifactRepository({ now: () => NOW });
     const memoryStore = createMemoryDeveloperArtifactStore();

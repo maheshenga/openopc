@@ -6,6 +6,96 @@ export interface AllowEntry {
 
 export const uncoveredAllow: AllowEntry[] = [
   {
+    method: "GET",
+    path: "/v1/admin/developer/applications",
+    reason: "existing admin developer application read surface; covered by admin contract tests and intentionally outside the public ke2e catalog",
+  },
+  {
+    method: "GET",
+    path: "/v1/admin/developer/applications/:*",
+    reason: "existing admin developer application detail surface; covered by admin contract tests and intentionally outside the public ke2e catalog",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-host/platform/releases/:*",
+    reason: "existing module-host platform release lookup; covered by host/release contract tests and intentionally outside the public ke2e catalog",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-host/platform/releases/:*/*",
+    reason: "existing module-host platform release asset lookup; covered by host/release contract tests and intentionally outside the public ke2e catalog",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-services/ai/images/models",
+    reason: "module capability-token API; covered by the dedicated SDK, route, grant-revalidation, and browser-bootstrap suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "POST",
+    path: "/v1/module-services/ai/images/estimates",
+    reason: "module capability-token API; covered by the dedicated SDK, route, grant-revalidation, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "POST",
+    path: "/v1/module-services/ai/images/jobs",
+    reason: "module capability-token API; covered by idempotency, grant binding, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-services/ai/images/jobs/:*",
+    reason: "module capability-token API; covered by grant-isolation, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-services/ai/images/jobs/:*/events",
+    reason: "module capability-token API; covered by cursor, fallback, redaction, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-services/ai/images/jobs/:*/outputs",
+    reason: "module capability-token API; covered by direct output pagination, grant-isolation, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "POST",
+    path: "/v1/module-services/ai/images/jobs/:*/cancel",
+    reason: "module capability-token API; covered by terminal-state, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "POST",
+    path: "/v1/module-services/ai/images/assets",
+    reason: "module capability-token multipart API; covered by MIME, size, storage-integrity, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-services/ai/images/assets",
+    reason: "module capability-token API; covered by pagination, grant-isolation, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-services/ai/images/assets/:*/preview-url",
+    reason: "module capability-token API; covered by signed-URL validation, grant-isolation, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-services/ai/images/assets/:*/thumbnail-url",
+    reason: "module capability-token API; covered by bounded derivative generation, private cache semantics, grant-isolation, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "GET",
+    path: "/v1/module-services/ai/images/assets/:*/download",
+    reason: "module capability-token API; covered by byte-integrity, grant-isolation, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "POST",
+    path: "/v1/module-services/ai/images/assets/:*/delete",
+    reason: "module capability-token API; covered by the stable fail-closed SDK and route contract until deletion policy and ke2e capability issuance are available",
+  },
+  {
+    method: "POST",
+    path: "/v1/module-services/ai/images/assets/:*/retention",
+    reason: "module capability-token API; covered by the stable fail-closed SDK and route contract until retention mutation and ke2e capability issuance are available",
+  },
+  {
     method: "PUT",
     path: "/v1/executor/projects/:*/connectors/:*/sensitive",
     reason:

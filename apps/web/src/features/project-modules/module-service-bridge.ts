@@ -1,10 +1,30 @@
 import type { OpenOpcServiceName, OpenOpcServiceOperation } from './client';
 
+export {
+  OpenOpcBrowserCapabilityTokenProtocolError,
+  createOpenOpcBrowserCapabilityTokenAdapter,
+  createSandboxModuleServiceTokenAdapter,
+} from '@openopc/developer-sdk';
+export type {
+  OpenOpcBrowserCapabilityTokenAdapterOptions,
+  OpenOpcBrowserCapabilityTokenEvent,
+  OpenOpcBrowserCapabilityTokenEventTarget,
+  OpenOpcBrowserCapabilityTokenGetter,
+  OpenOpcBrowserCapabilityTokenHostWindow,
+  OpenOpcBrowserCapabilityTokenRequest,
+  OpenOpcBrowserCapabilityTokenRequestOptions,
+  OpenOpcBrowserCapabilityTokenResponse,
+  SandboxModuleServiceAdapterEvent,
+  SandboxModuleServiceAdapterEventTarget,
+  SandboxModuleServiceHostWindow,
+  SandboxModuleServiceTokenAdapterOptions,
+} from '@openopc/developer-sdk';
+
 const REQUEST_TYPE = 'openopc.module-service.token.request' as const;
 const RESPONSE_TYPE = 'openopc.module-service.token.response' as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SERVICE_OPERATIONS: Record<OpenOpcServiceName, readonly OpenOpcServiceOperation[]> = {
-  ai: ['models.read', 'text.generate', 'text.stream'],
+  ai: ['models.read', 'text.generate', 'text.stream', 'image.generate'],
   payment: ['orders.create', 'orders.read', 'refunds.create'],
 };
 
@@ -77,30 +97,6 @@ function isRequest(value: unknown): value is ModuleServiceTokenRequest {
     (value.service === 'ai' || value.service === 'payment') &&
     typeof value.operation === 'string' &&
     SERVICE_OPERATIONS[value.service].includes(value.operation as never)
-  );
-}
-
-function isServiceOperation(service: unknown, operation: unknown): service is OpenOpcServiceName {
-  return (
-    (service === 'ai' || service === 'payment') &&
-    typeof operation === 'string' &&
-    SERVICE_OPERATIONS[service].includes(operation as never)
-  );
-}
-
-function isResponse(value: unknown, requestId: string): value is ModuleServiceTokenResponse {
-  if (!isRecord(value)) return false;
-  const keys = Object.keys(value).sort();
-  if (keys.join(',') !== 'expiresAt,requestId,token,type') return false;
-  return (
-    value.type === RESPONSE_TYPE &&
-    value.requestId === requestId &&
-    typeof value.token === 'string' &&
-    value.token.startsWith('v4.public.') &&
-    value.token.length <= 8_192 &&
-    !/\s/.test(value.token) &&
-    typeof value.expiresAt === 'string' &&
-    Number.isFinite(Date.parse(value.expiresAt))
   );
 }
 
@@ -223,97 +219,6 @@ export function createModuleServiceBridge(
       );
       return true;
     },
-  };
-}
-
-export interface SandboxModuleServiceAdapterEvent {
-  origin: string;
-  source: unknown;
-  data: unknown;
-}
-
-export interface SandboxModuleServiceAdapterEventTarget {
-  addEventListener(
-    type: 'message',
-    listener: (event: SandboxModuleServiceAdapterEvent) => void,
-  ): void;
-  removeEventListener(
-    type: 'message',
-    listener: (event: SandboxModuleServiceAdapterEvent) => void,
-  ): void;
-}
-
-export interface SandboxModuleServiceHostWindow {
-  postMessage(message: ModuleServiceTokenRequest, targetOrigin: string): void;
-}
-
-export interface SandboxModuleServiceTokenAdapterOptions {
-  hostOrigin: string;
-  hostWindow: SandboxModuleServiceHostWindow;
-  eventTarget: SandboxModuleServiceAdapterEventTarget;
-  requestId?: () => string;
-  timeoutMs?: number;
-}
-
-/** Module-side adapter passed directly to @openopc/developer-sdk getCapabilityToken. */
-export function createSandboxModuleServiceTokenAdapter(
-  options: SandboxModuleServiceTokenAdapterOptions,
-): (input: {
-  service: OpenOpcServiceName;
-  operation: OpenOpcServiceOperation;
-}) => Promise<string> {
-  const hostOrigin = immutableOrigin(options.hostOrigin);
-  if (!hostOrigin) throw new Error('Module service host origin must be HTTPS');
-  const requestId = options.requestId ?? (() => globalThis.crypto.randomUUID());
-  const timeoutMs = options.timeoutMs ?? 10_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30_000) {
-    throw new Error('Module service token timeout is invalid');
-  }
-
-  return async (input) => {
-    if (!isServiceOperation(input.service, input.operation)) {
-      throw new Error('Module service operation is invalid');
-    }
-    const id = requestId();
-    if (!UUID_RE.test(id)) throw new Error('Module service request id is invalid');
-
-    return new Promise<string>((resolve, reject) => {
-      const timeout: { id?: ReturnType<typeof setTimeout> } = {};
-      const cleanup = () => {
-        if (timeout.id !== undefined) clearTimeout(timeout.id);
-        options.eventTarget.removeEventListener('message', listener);
-      };
-      const listener = (event: SandboxModuleServiceAdapterEvent) => {
-        if (
-          event.origin !== hostOrigin ||
-          event.source !== options.hostWindow ||
-          !isResponse(event.data, id)
-        ) {
-          return;
-        }
-        cleanup();
-        resolve(event.data.token);
-      };
-      options.eventTarget.addEventListener('message', listener);
-      timeout.id = setTimeout(() => {
-        cleanup();
-        reject(new Error('Module service token request timed out'));
-      }, timeoutMs);
-      try {
-        options.hostWindow.postMessage(
-          {
-            type: REQUEST_TYPE,
-            requestId: id,
-            service: input.service,
-            operation: input.operation,
-          },
-          hostOrigin,
-        );
-      } catch {
-        cleanup();
-        reject(new Error('Module service token request failed'));
-      }
-    });
   };
 }
 

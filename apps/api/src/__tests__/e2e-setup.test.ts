@@ -12,6 +12,7 @@
 import { describe, it, expect, beforeAll, afterAll, mock } from 'bun:test';
 import { Hono } from 'hono';
 import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { resolve } from 'path';
 
 mock.module('../middleware/auth', () => ({
@@ -24,7 +25,8 @@ mock.module('../middleware/auth', () => ({
 
 const { setupApp } = await import('../setup');
 
-const TEST_DIR = `/tmp/kortix-setup-test-${Date.now()}`;
+const ORIGINAL_CWD = process.cwd();
+const TEST_DIR = resolve(tmpdir(), `kortix-setup-test-${Date.now()}`);
 
 // ─── Test app factory ───────────────────────────────────────────────────────
 
@@ -55,6 +57,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+  process.chdir(ORIGINAL_CWD);
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
 

@@ -32,11 +32,13 @@ import {
   createDrizzleIntelligenceTaskStore,
   createStudioJobBridge,
 } from '../intelligence/task-service';
+import { createDrizzleModuleServiceCapabilityRepository } from '../module-services/capability-grants.drizzle';
 import { assertProjectCapability, loadProjectForUser } from '../projects/lib/access';
 import { db, hasDatabase } from '../shared/db';
 import { createStudioCredentialBindingExists } from './credential-existence';
 import {
   type StudioCredentialBindingExists,
+  type StudioModuleServiceGrantLoader,
   type StudioProjectRouteDeps,
   createStudioProjectRoutes,
 } from './index';
@@ -131,6 +133,7 @@ export type DefaultStudioProjectRoutesInput = {
   repository?: StudioRepository;
   recoveryRepository?: StudioRecoveryRepository;
   credentialBindingExists?: StudioCredentialBindingExists;
+  loadModuleServiceAuthorization?: StudioModuleServiceGrantLoader;
   loadProjectForUser?: NonNullable<StudioProjectRouteDeps['loadProjectForUser']>;
   assertProjectCapability?: NonNullable<StudioProjectRouteDeps['assertProjectCapability']>;
   assertAccountCapability?: NonNullable<StudioProjectRouteDeps['assertAccountCapability']>;
@@ -158,6 +161,15 @@ export type DefaultIntelligenceProjectRoutesInput = {
   agentTrustSource?: AgentTrustSource;
 };
 
+export type DefaultStudioModuleImageServices = {
+  enabled: boolean;
+  repository: StudioRepository;
+  storageService: StudioStorageService | null;
+  credentialBindingExists?: StudioCredentialBindingExists;
+  loadModuleServiceAuthorization?: StudioModuleServiceGrantLoader;
+  estimateSigningSecret: string;
+};
+
 type DefaultStudioFoundationInput = {
   env?: Record<string, string | undefined>;
   telemetry?: StudioTelemetry;
@@ -176,6 +188,10 @@ export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRout
         ? runtime.store
         : null;
   const recoveryRepository = input.recoveryRepository ?? recoveryRepositoryFrom(defaultRepository);
+  const moduleServiceRepository =
+    input.loadModuleServiceAuthorization || !isDatabaseLike(database)
+      ? undefined
+      : createDrizzleModuleServiceCapabilityRepository(database);
   const providerOriginValidator = createStudioProviderOriginValidator({
     resolve:
       input.resolveProviderHostname ??
@@ -211,6 +227,11 @@ export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRout
     credentialBindingExists: runtime.enabled
       ? (input.credentialBindingExists ?? createStudioCredentialBindingExists(database))
       : undefined,
+    loadModuleServiceAuthorization:
+      input.loadModuleServiceAuthorization ??
+      (moduleServiceRepository
+        ? moduleServiceRepository.getAuthorization.bind(moduleServiceRepository)
+        : undefined),
     loadProjectForUser: input.loadProjectForUser ?? loadProjectForUser,
     assertProjectCapability: input.assertProjectCapability ?? assertProjectCapability,
     assertAccountCapability:
@@ -228,6 +249,42 @@ export function createDefaultStudioProjectRoutes(input: DefaultStudioProjectRout
     estimateSigningSecret: config.API_KEY_SECRET,
     ...(telemetry ? { telemetry } : {}),
   });
+}
+
+export function createDefaultStudioModuleImageServices(
+  input: DefaultStudioProjectRoutesInput = {},
+): DefaultStudioModuleImageServices {
+  const { runtime, database, defaultRepository, repository } = assembleStudioRouteFoundation(
+    input,
+    { preferDefaultRuntime: true },
+  );
+  const telemetry = runtime.enabled ? (runtime.telemetry ?? input.telemetry) : input.telemetry;
+  const store =
+    runtime.enabled && telemetry && !runtime.telemetry
+      ? instrumentStudioObjectStore(runtime.store, 'api', telemetry)
+      : runtime.enabled
+        ? runtime.store
+        : null;
+  const moduleServiceRepository =
+    input.loadModuleServiceAuthorization || !isDatabaseLike(database)
+      ? undefined
+      : createDrizzleModuleServiceCapabilityRepository(database);
+  return {
+    enabled: runtime.enabled,
+    repository,
+    storageService: store
+      ? new StudioStorageService({ repository: defaultRepository, store })
+      : null,
+    credentialBindingExists: runtime.enabled
+      ? (input.credentialBindingExists ?? createStudioCredentialBindingExists(database))
+      : undefined,
+    loadModuleServiceAuthorization:
+      input.loadModuleServiceAuthorization ??
+      (moduleServiceRepository
+        ? moduleServiceRepository.getAuthorization.bind(moduleServiceRepository)
+        : undefined),
+    estimateSigningSecret: config.API_KEY_SECRET,
+  };
 }
 
 export function createDefaultIntelligenceProjectRoutes(

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { ModuleServiceCapabilityClaimsV1 } from '@kortix/api-contract';
 import type { AuthedPrincipal } from '@kortix/llm-gateway';
 
+import type { ManagedModel } from '../llm-gateway/models/managed-models';
 import {
   DEVELOPER_RUNTIME_TEST_PROFILE,
   RESTRICTED_RUNTIME_TEST_PROFILE,
@@ -38,6 +39,12 @@ const MANAGED_MODEL = {
   vision: false,
   limit: { context: 128_000, output: 16_000 },
 } as const;
+const VISION_MODEL = {
+  ...MANAGED_MODEL,
+  id: 'vision-model',
+  name: 'Vision Model',
+  vision: true,
+} as const;
 
 type AiOperation = 'models.read' | 'text.generate' | 'text.stream';
 
@@ -69,6 +76,7 @@ function fixture(input?: {
   newApiConfigured?: boolean;
   stream?: boolean;
   runtime?: ModuleAiDependencies['runtime'];
+  managedModels?: readonly ManagedModel[];
 }) {
   const operations = input?.operations ?? ['models.read', 'text.generate', 'text.stream'];
   const calls = {
@@ -91,6 +99,12 @@ function fixture(input?: {
               limit: { context: 128_000, output: 16_000 },
             },
             'anthropic/not-allowlisted': { name: 'Private BYOK Model' },
+            'vision-model': {
+              name: 'Vision Model',
+              vision: true,
+              attachment: true,
+              limit: { context: 128_000, output: 16_000 },
+            },
           },
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
@@ -131,7 +145,7 @@ function fixture(input?: {
       return PRINCIPAL;
     },
     gateway: () => gateway,
-    managedModels: [MANAGED_MODEL],
+    managedModels: input?.managedModels ?? [MANAGED_MODEL],
     newApiConfigured: () => input?.newApiConfigured ?? true,
     runtime: input?.runtime ?? DEVELOPER_RUNTIME_TEST_PROFILE,
   };
@@ -195,6 +209,7 @@ describe('module AI service facade', () => {
           reasoning: true,
           attachment: false,
           limit: { context: 128_000, output: 16_000 },
+          capabilities: { modalities: ['text'] },
         },
       ],
     });
@@ -242,6 +257,84 @@ describe('module AI service facade', () => {
     expect(calls.capabilityOperations).toHaveLength(0);
     expect(calls.principals).toHaveLength(0);
     expect(calls.chats).toHaveLength(0);
+  });
+
+  test('rejects malformed multimodal content before minting a capability', async () => {
+    const { app, calls } = fixture({ operations: ['text.generate'] });
+    const response = await app.request('/chat/completions', {
+      method: 'POST',
+      headers: { authorization: AUTHORIZATION, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'allowlisted-model',
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'image_url', image_url: { url: 'http://localhost/image.png' } }],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'MODULE_SERVICE_INPUT_INVALID' });
+    expect(calls.capabilityOperations).toHaveLength(0);
+    expect(calls.chats).toHaveLength(0);
+  });
+
+  test('publishes bounded vision capabilities and admits images only for vision models', async () => {
+    const { app, calls } = fixture({
+      operations: ['models.read', 'text.generate'],
+      managedModels: [VISION_MODEL],
+    });
+    const modelsResponse = await app.request('/models', {
+      headers: { authorization: AUTHORIZATION },
+    });
+    expect(modelsResponse.status).toBe(200);
+    expect(await modelsResponse.json()).toEqual({
+      data: [
+        expect.objectContaining({
+          id: 'vision-model',
+          capabilities: {
+            modalities: ['text', 'image'],
+            vision: {
+              max_images: 8,
+              max_bytes_per_image: 10 * 1024 * 1024,
+              max_total_bytes: 20 * 1024 * 1024,
+              accepted_mime_types: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+              purposes: ['vision'],
+            },
+            attachment: {
+              max_images: 8,
+              max_bytes_per_image: 10 * 1024 * 1024,
+              max_total_bytes: 20 * 1024 * 1024,
+              accepted_mime_types: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+              purposes: ['attachment'],
+            },
+          },
+        }),
+      ],
+    });
+
+    const response = await app.request('/chat/completions', {
+      method: 'POST',
+      headers: { authorization: AUTHORIZATION, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'vision-model',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'describe this' },
+              { type: 'image_url', image_url: { url: 'https://images.example.com/one.png' } },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(calls.capabilityOperations).toEqual(['models.read', 'text.generate']);
+    expect(calls.chats).toHaveLength(1);
   });
 
   test('forwards a non-stream request through the principal-aware gateway', async () => {

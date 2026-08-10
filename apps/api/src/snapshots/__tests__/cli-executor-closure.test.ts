@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Scope guard for the in-sandbox `kortix executor` fingerprint (templates.ts
@@ -78,7 +78,7 @@ function isHashed(abs: string): boolean {
   const rel = relative(CLI_SRC, abs);
   return HASHED_CLOSURE.some((entry) => {
     const norm = normalize(entry);
-    return rel === norm || rel.startsWith(`${norm}/`);
+    return rel === norm || rel.startsWith(`${norm}${sep}`);
   });
 }
 
@@ -91,7 +91,7 @@ describe('kortix executor fingerprint closure', () => {
     }
     const uncovered = closure
       .filter((f) => !isHashed(f))
-      .map((f) => relative(CLI_SRC, f))
+      .map((f) => relative(CLI_SRC, f).split(sep).join('/'))
       .sort();
     // If this fails, the executor now depends on a file that isn't fingerprinted:
     // a change to it would ship a stale binary under an unchanged snapshot name.

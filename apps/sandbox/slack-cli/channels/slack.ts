@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
 // The published Kortix Executor SDK — baked into the sandbox at the mirrored
 // path (/opt/kortix/packages/executor-sdk). Using it here both keeps the shim's
 // gateway calls clean AND dogfoods the SDK in a real in-sandbox consumer.
@@ -200,7 +201,7 @@ async function send(opts: {
   if (opts.file) {
     if (!existsSync(opts.file)) throw new CliError(`File not found: ${opts.file}`);
     const fileData = readFileSync(opts.file);
-    const fileName = opts.file.split('/').pop() || 'file';
+    const fileName = basename(opts.file) || 'file';
     // Upload via the server-side proxy — the bot token stays on the server (the
     // 3-step external-upload + form-encoding can't ride the JSON Executor gateway).
     const projectId = kortixProjectId();

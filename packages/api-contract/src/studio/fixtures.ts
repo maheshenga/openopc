@@ -190,6 +190,7 @@ export function studioJobFixture(overrides: Partial<StudioJob> = {}): StudioJob 
     project_id: STUDIO_FIXTURE_PROJECT_ID,
     actor_user_id: STUDIO_FIXTURE_USER_ID,
     actor_type: 'user',
+    module_service_grant_id: null,
     capability: 'image.generate',
     provider_config_id: STUDIO_FIXTURE_PROVIDER_CONFIG_ID,
     provider: 'openai-compatible',

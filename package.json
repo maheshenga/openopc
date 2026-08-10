@@ -48,7 +48,8 @@
     "migrate:status": "pnpm --filter @kortix/db migrate:status",
     "migrate:create": "node-pg-migrate create -m packages/db/migrations -j sql --migration-filename-format utc",
     "migrate:generate": "pnpm --filter @kortix/db migrate:generate",
-    "migrate:lint": "pnpm --filter @kortix/db migrate:lint"
+    "migrate:lint": "pnpm --filter @kortix/db migrate:lint",
+    "module:qa-host": "bun scripts/module-qa-host.ts"
   },
   "devDependencies": {
     "@clack/prompts": "^0.7.0",

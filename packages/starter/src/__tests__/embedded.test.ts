@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
+import { buildEmbeddedSnapshot, normalizeTemplateText } from '../../scripts/generate-embedded';
 import embeddedStarter from '../embedded.generated.json' with { type: 'json' };
-import { buildEmbeddedSnapshot } from '../../scripts/generate-embedded';
 
 /**
  * Guards against a stale committed snapshot. The compiled `kortix` binary
@@ -10,6 +10,10 @@ import { buildEmbeddedSnapshot } from '../../scripts/generate-embedded';
  * content. Regenerate with `bun run scripts/generate-embedded.ts`.
  */
 describe('embedded starter snapshot', () => {
+  test('normalizes platform line endings for deterministic snapshots', () => {
+    expect(normalizeTemplateText('alpha\r\nbeta\rgamma\n')).toBe('alpha\nbeta\ngamma\n');
+  });
+
   test('is in sync with the on-disk template tree', () => {
     const fresh = buildEmbeddedSnapshot();
     expect(embeddedStarter).toEqual(fresh as typeof embeddedStarter);
@@ -19,9 +23,7 @@ describe('embedded starter snapshot', () => {
     const gkw = (embeddedStarter as Record<string, { files: { path: string }[] }>)[
       'general-knowledge-worker'
     ];
-    const skillFiles = gkw.files.filter((f) =>
-      f.path.startsWith('.kortix/opencode/skills/'),
-    );
+    const skillFiles = gkw.files.filter((f) => f.path.startsWith('.kortix/opencode/skills/'));
     expect(skillFiles.length).toBeGreaterThan(0);
   });
 

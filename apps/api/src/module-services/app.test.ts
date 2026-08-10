@@ -48,7 +48,7 @@ function consent(): ModuleServiceConsent {
     operations: ['models.read', 'text.generate'],
     consentDigest: `sha256:${'a'.repeat(64)}`,
     acceptedBy: USER_ID,
-    acceptedAt: NOW,
+    acceptedAt: '2026-08-01 08:00:00+08',
     revokedBy: null,
     revokedAt: null,
   };
@@ -146,7 +146,7 @@ function appWith(input?: { brokerAvailable?: boolean }) {
                   service: 'ai',
                   operations: ['models.read'],
                   tokenHash: `sha256:${'c'.repeat(64)}`,
-                  expiresAt: '2026-08-01T00:05:00.000Z',
+                  expiresAt: '2026-08-01 08:05:00+08',
                   revokedAt: null,
                   createdAt: NOW,
                 },

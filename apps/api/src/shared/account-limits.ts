@@ -47,7 +47,7 @@ async function resolveAccountLimitInfo(accountId: string): Promise<AccountLimitI
     // number of rows still carry a stale tier='free' — the seat-billing
     // migration set billing_model='per_seat' without backfilling tier. Deriving
     // the paid tier from billing_model + an active subscription here means stale
-    // tier data can't mis-gate paying teams as free (e.g. the 1-project cap),
+    // tier data can't mis-gate paying teams as free (e.g. the free-project cap),
     // and it self-heals every tier-based limit (projects, sessions, rate).
     if (
       !isPaidTier(tier) &&

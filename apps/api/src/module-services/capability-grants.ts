@@ -273,6 +273,67 @@ function assertDeclaredOperations(
   }
 }
 
+export function isModuleServiceAuthorizationValid(input: {
+  authorization: {
+    grant: ModuleServiceCapabilityGrant;
+    consent: ModuleServiceConsent;
+    installation: ModuleServiceInstallationContext;
+  };
+  accountId: string;
+  projectId: string;
+  service: OpenOpcServiceName;
+  operation: OpenOpcServiceOperation;
+  now: Date;
+}): boolean {
+  const { grant, consent, installation } = input.authorization;
+  const expiresAt = Date.parse(grant.expiresAt);
+  if (
+    grant.accountId !== input.accountId ||
+    grant.projectId !== input.projectId ||
+    grant.service !== input.service ||
+    !grant.operations.includes(input.operation) ||
+    grant.revokedAt !== null ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= input.now.getTime()
+  ) {
+    return false;
+  }
+  if (
+    grant.consentId !== consent.consentId ||
+    consent.accountId !== input.accountId ||
+    consent.projectId !== input.projectId ||
+    consent.installationId !== grant.installationId ||
+    consent.releaseId !== grant.releaseId ||
+    consent.installRevision !== installation.installRevision ||
+    consent.service !== input.service ||
+    consent.revokedAt !== null ||
+    !consent.operations.includes(input.operation)
+  ) {
+    return false;
+  }
+  if (
+    installation.accountId !== input.accountId ||
+    installation.projectId !== input.projectId ||
+    installation.installationId !== grant.installationId ||
+    installation.releaseId !== grant.releaseId ||
+    installation.installationStatus !== 'active' ||
+    installation.releaseStatus !== 'published' ||
+    installation.signatureAlgorithm !== 'ed25519' ||
+    !installation.signature ||
+    !/^base64url:[A-Za-z0-9_-]{86}$/.test(installation.signature) ||
+    !installation.signedAt ||
+    installation.manifest.id !== installation.moduleId ||
+    installation.manifest.version !== installation.moduleVersion
+  ) {
+    return false;
+  }
+  try {
+    return moduleServiceOperations(installation.manifest, input.service).includes(input.operation);
+  } catch {
+    return false;
+  }
+}
+
 export function hashModuleServiceCapabilityToken(token: string): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(token).digest('hex')}`;
 }

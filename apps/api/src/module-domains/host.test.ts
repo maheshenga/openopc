@@ -264,10 +264,10 @@ describe('module platform static host', () => {
     expect(await response.text()).toContain('<title>Weather</title>');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
-    expect(response.headers.get('content-security-policy')).toContain(
-      'frame-ancestors https://app.openopc.example',
-    );
-    expect(response.headers.get('content-security-policy')).toContain("connect-src 'self'");
+    const csp = response.headers.get('content-security-policy');
+    expect(csp).toContain("connect-src 'self' https://app.openopc.example");
+    expect(csp).toContain('frame-ancestors https://app.openopc.example');
+    expect(csp).not.toMatch(/new-api|z-pay|alipay|wechat|\*/i);
   });
 
   test("uses frame-ancestors 'none' when no configured frontend origin is valid", async () => {
@@ -281,7 +281,9 @@ describe('module platform static host', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    const csp = response.headers.get('content-security-policy');
+    expect(csp).toContain("connect-src 'self';");
+    expect(csp).toContain("frame-ancestors 'none'");
   });
 
   test('rejects a missing worker key and a configured key that is too short', async () => {

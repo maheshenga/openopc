@@ -3,7 +3,10 @@ import type { Database } from '@kortix/db';
 import { PgDialect } from 'drizzle-orm/pg-core';
 
 import type { DeveloperModulePaymentOrder } from './orders';
-import { createDrizzleDeveloperModulePaymentRepository } from './orders.drizzle';
+import {
+  createDrizzleDeveloperModulePaymentRepository,
+  mapDeveloperModulePaymentOrder,
+} from './orders.drizzle';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
 const PROJECT_ID = '20000000-0000-4000-a000-000000000001';
@@ -57,6 +60,33 @@ const order: DeveloperModulePaymentOrder = {
 };
 
 describe('developer module payment Drizzle repository', () => {
+  test('normalizes PostgreSQL timestamps before returning a public payment order', () => {
+    expect(
+      mapDeveloperModulePaymentOrder({
+        order_id: ORDER_ID,
+        account_id: ACCOUNT_ID,
+        project_id: PROJECT_ID,
+        installation_id: INSTALLATION_ID,
+        release_id: RELEASE_ID,
+        module_id: 'example.weather-station',
+        provider: 'zpay',
+        provider_order_id: null,
+        merchant_order_no: 'OPC202608010000000000000000001',
+        amount_minor: 567,
+        currency: 'CNY',
+        product_name: 'OpenOPC module purchase',
+        status: 'checkout_issued',
+        idempotency_key: 'checkout-00000001',
+        checkout: null,
+        provider_failure_code: null,
+        expires_at: '2026-08-01 00:15:00+00',
+        paid_at: null,
+        created_at: '2026-08-01 00:00:00+00',
+        updated_at: '2026-08-01 00:00:00+00',
+      }),
+    ).toEqual(order);
+  });
+
   test('reserves a new tenant-scoped idempotency record before provider initiation', async () => {
     const fixture = databaseFixture([[order]]);
     const repository = createDrizzleDeveloperModulePaymentRepository(fixture.database);
@@ -145,7 +175,19 @@ describe('developer module payment Drizzle repository', () => {
       requestedAt: NOW,
       resolvedAt: null,
     };
-    const fixture = databaseFixture([[{ ...order, status: 'paid' }], [refund]]);
+    const rawRefund = {
+      refund_id: REFUND_ID,
+      order_id: ORDER_ID,
+      account_id: ACCOUNT_ID,
+      amount_minor: 567,
+      idempotency_key: 'refund-000000001',
+      provider_result: null,
+      status: 'refund_requested',
+      requested_by: refund.requestedBy,
+      requested_at: '2026-08-01 00:00:00+00',
+      resolved_at: null,
+    };
+    const fixture = databaseFixture([[{ ...order, status: 'paid' }], [rawRefund]]);
     const repository = createDrizzleDeveloperModulePaymentRepository(fixture.database);
     await expect(
       repository.reserveRefund({

@@ -22,18 +22,45 @@ let setAgentResult: { ok: true } | { ok: false; reason: 'no_binding' | 'unknown_
 let setModelResult = true;
 const setAgentCalls: Array<string | null> = [];
 const setModelCalls: Array<string | null> = [];
+const pickerModels = [
+  { id: 'anthropic/claude-opus-4-8', label: 'Claude Opus 4.8', hint: 'Most capable' },
+  { id: 'openai/gpt-5.5', label: 'GPT-5.5', hint: 'OpenAI flagship' },
+];
 mock.module('../channels/slack/selection', () => ({
   currentChannelSelection: async () => selection,
   setChannelAgent: async (_ctx: unknown, a: string | null) => { setAgentCalls.push(a); return setAgentResult; },
   setChannelModel: async (_ctx: unknown, m: string | null) => { setModelCalls.push(m); return setModelResult; },
   listProjectAgents: async () => [{ name: 'reviewer', description: 'Reviews code', mode: null }],
-  RECOMMENDED_MODELS: [
-    { id: 'anthropic/claude-opus-4-8', label: 'Claude Opus 4.8', hint: 'Most capable' },
-    { id: 'openai/gpt-5.5', label: 'GPT-5.5', hint: 'OpenAI flagship' },
-  ],
-  isValidModelId: (s: string) => { const i = s.indexOf('/'); return i > 0 && i < s.length - 1 && !/\s/.test(s); },
-  modelLabel: (id: string) => (id === 'anthropic/claude-opus-4-8' ? 'Claude Opus 4.8' : id),
   setChannelConversationPolicy: async () => undefined,
+}));
+mock.module('../channels/slack/model-gate', () => ({
+  channelModelContext: async () => {
+    const current = selection as { projectId?: string } | null;
+    return current?.projectId
+      ? {
+          projectId: current.projectId,
+          accountId: 'a1',
+          ownerUserId: 'u1',
+          freeManagedOnly: false,
+        }
+      : null;
+  },
+}));
+mock.module('../llm-gateway/models/picker', () => ({
+  listPickerModels: async () => ({
+    models: pickerModels,
+    projectDefault: { model: null, source: 'platform', label: null },
+  }),
+  labelForModelRef: (id: string) =>
+    id === 'anthropic/claude-opus-4-8' ? 'Claude Opus 4.8' : id,
+}));
+mock.module('../llm-gateway/resolution/default-model', () => ({
+  isModelServableForAccount: async ({ model }: { model: string }) =>
+    pickerModels.some((entry) => entry.id === model),
+  resolveEffectiveModel: async ({ explicit }: { explicit?: string | null }) => ({
+    model: explicit ?? null,
+    source: explicit ? 'explicit' : 'platform',
+  }),
 }));
 
 // Identity layer — kept out of the db chain so it doesn't disturb dbResults
@@ -79,12 +106,12 @@ beforeEach(() => {
 });
 
 describe('help', () => {
-  test('lists the new agents / models / session commands', async () => {
+  test('lists the agent / model / sessions shortcuts', async () => {
     const resp = await handleSlashCommand('help', '', ctx);
     const txt = allText(resp);
-    expect(txt).toContain('agents');
-    expect(txt).toContain('models');
-    expect(txt).toContain('session');
+    expect(txt).toContain('/kortix agent');
+    expect(txt).toContain('/kortix model');
+    expect(txt).toContain('/kortix sessions');
   });
 });
 
@@ -121,25 +148,25 @@ describe('identity feature gated OFF', () => {
 });
 
 describe('/kortix models', () => {
-  test('renders a picker of recommended models + a project-default reset', async () => {
+  test('renders the served-model picker + a project-default reset', async () => {
     selection = { projectId: 'p1', agentName: null, opencodeModel: 'anthropic/claude-opus-4-8' };
     const resp = await handleSlashCommand('models', '', ctx);
     const ids = actionIds(resp);
     expect(ids).toContain('set_model_default');
     expect(ids).toContain('set_model_anthropic/claude-opus-4-8');
     // current model is marked
-    expect(allText(resp)).toContain('✓ ');
+    expect(allText(resp)).toContain('Current');
   });
   test('unbound channel → prompts to switch', async () => {
     selection = null;
     const resp = await handleSlashCommand('models', '', ctx);
-    expect(allText(resp)).toContain('No project bound');
+    expect(allText(resp)).toContain('No project is connected');
   });
 });
 
 describe('/kortix model <id>', () => {
   test('rejects a malformed id without writing', async () => {
-    const resp = await handleSlashCommand('model', 'not-a-model', ctx);
+    const resp = await handleSlashCommand('model', 'not a model', ctx);
     expect(resp.text).toContain("doesn't look like a model id");
     expect(setModelCalls.length).toBe(0);
   });
@@ -156,7 +183,7 @@ describe('/kortix model <id>', () => {
   test('unbound channel → prompts to switch, no write', async () => {
     selection = null;
     const resp = await handleSlashCommand('model', 'anthropic/claude-opus-4-8', ctx);
-    expect(resp.text).toContain('Bind a project first');
+    expect(resp.text).toContain('Connect a project first');
     expect(setModelCalls.length).toBe(0);
   });
 });

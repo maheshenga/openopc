@@ -58,6 +58,31 @@ export interface DeveloperApplicationPolicyAcceptance {
   accepted_at: string;
 }
 
+export interface DeveloperApplicationAdminListItem {
+  application: DeveloperApplication;
+  organization: DeveloperOrganization;
+}
+
+export interface DeveloperApplicationAdminPage {
+  applications: DeveloperApplicationAdminListItem[];
+  next_cursor: string | null;
+}
+
+export interface DeveloperApplicationAdminDetail extends DeveloperApplicationAdminListItem {
+  policy_acceptances: DeveloperApplicationPolicyAcceptance[];
+  history: DeveloperApplicationAuditEvent[];
+}
+
+export interface DeveloperApplicationAdminCursor {
+  updatedAt: string;
+  applicationId: string;
+}
+
+export interface DeveloperApplicationAdminRepositoryPage {
+  applications: DeveloperApplicationAdminListItem[];
+  hasMore: boolean;
+}
+
 export type DeveloperApplicationMutationFailure = 'not_found' | 'conflict' | 'invalid_state';
 
 export type DeveloperApplicationMutation<T> =
@@ -99,6 +124,12 @@ export interface DeveloperApplicationRepository {
     accountId: string,
     userId: string,
   ): Promise<readonly DeveloperApplicationPolicyAcceptance[]>;
+  adminList(input: {
+    state: DeveloperApplicationState;
+    limit: number;
+    cursor: DeveloperApplicationAdminCursor | null;
+  }): Promise<DeveloperApplicationAdminRepositoryPage>;
+  adminGet(applicationId: string): Promise<DeveloperApplicationAdminListItem | null>;
 }
 
 export type DeveloperApplicationErrorCode =
@@ -188,6 +219,35 @@ function mutationValue<T>(result: DeveloperApplicationMutation<T>): T {
 
 function validIdentity(...values: string[]): boolean {
   return values.every((value) => UUID_RE.test(value));
+}
+
+function encodeAdminCursor(value: DeveloperApplicationAdminCursor): string {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+function decodeAdminCursor(value: string | null | undefined): DeveloperApplicationAdminCursor | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed).sort().join(',') !== 'applicationId,updatedAt' ||
+      typeof (parsed as { updatedAt?: unknown }).updatedAt !== 'string' ||
+      !Number.isFinite(Date.parse((parsed as { updatedAt: string }).updatedAt)) ||
+      new Date((parsed as { updatedAt: string }).updatedAt).toISOString() !==
+        (parsed as { updatedAt: string }).updatedAt ||
+      typeof (parsed as { applicationId?: unknown }).applicationId !== 'string' ||
+      !UUID_RE.test((parsed as { applicationId: string }).applicationId)
+    ) {
+      fail('DEVELOPER_APPLICATION_INPUT_INVALID', 400);
+    }
+    return parsed as DeveloperApplicationAdminCursor;
+  } catch (error) {
+    if (error instanceof DeveloperApplicationError) throw error;
+    fail('DEVELOPER_APPLICATION_INPUT_INVALID', 400);
+  }
 }
 
 export class DeveloperApplicationService {
@@ -307,6 +367,59 @@ export class DeveloperApplicationService {
           now: now.toISOString(),
         }),
       );
+    } catch (error) {
+      if (error instanceof DeveloperApplicationError) throw error;
+      fail('DEVELOPER_APPLICATION_DEPENDENCY_UNAVAILABLE', 503);
+    }
+  }
+
+  async adminList(
+    input: { state?: DeveloperApplicationState; limit?: number; cursor?: string | null } = {},
+  ): Promise<DeveloperApplicationAdminPage> {
+    const state = input.state ?? 'submitted';
+    if (!DEVELOPER_APPLICATION_STATES.includes(state)) {
+      fail('DEVELOPER_APPLICATION_INPUT_INVALID', 400);
+    }
+    const limit = Math.min(Math.max(Math.trunc(input.limit ?? 50), 1), 100);
+    try {
+      const page = await this.input.repository.adminList({
+        state,
+        limit,
+        cursor: decodeAdminCursor(input.cursor),
+      });
+      const last = page.applications.at(-1)?.application;
+      return {
+        applications: clone(page.applications),
+        next_cursor:
+          page.hasMore && last
+            ? encodeAdminCursor({ updatedAt: last.updated_at, applicationId: last.application_id })
+            : null,
+      };
+    } catch (error) {
+      if (error instanceof DeveloperApplicationError) throw error;
+      fail('DEVELOPER_APPLICATION_DEPENDENCY_UNAVAILABLE', 503);
+    }
+  }
+
+  async adminGet(input: { applicationId: string }): Promise<DeveloperApplicationAdminDetail> {
+    if (!validIdentity(input.applicationId)) {
+      fail('DEVELOPER_APPLICATION_INPUT_INVALID', 400);
+    }
+    try {
+      const item = await this.input.repository.adminGet(input.applicationId);
+      if (!item) fail('DEVELOPER_APPLICATION_NOT_FOUND', 404);
+      const [policyAcceptances, history] = await Promise.all([
+        this.input.repository.listPolicyAcceptances(
+          item.application.account_id,
+          item.application.created_by,
+        ),
+        this.input.repository.getAuditHistory(item.application.application_id),
+      ]);
+      return {
+        ...clone(item),
+        policy_acceptances: clone([...policyAcceptances]),
+        history: clone([...history]),
+      };
     } catch (error) {
       if (error instanceof DeveloperApplicationError) throw error;
       fail('DEVELOPER_APPLICATION_DEPENDENCY_UNAVAILABLE', 503);
@@ -542,6 +655,45 @@ export function createMemoryDeveloperApplicationRepository(input?: {
         .filter((row) => row.account_id === accountId && row.user_id === userId)
         .sort((left, right) => left.policy.localeCompare(right.policy))
         .map((row) => clone(row));
+    },
+
+    async adminList({ state, limit, cursor }) {
+      const ordered = [...applications.values()]
+        .filter((application) => application.state === state)
+        .sort(
+          (left, right) =>
+            right.updated_at.localeCompare(left.updated_at) ||
+            right.application_id.localeCompare(left.application_id),
+        )
+        .filter(
+          (application) =>
+            !cursor ||
+            application.updated_at < cursor.updatedAt ||
+            (application.updated_at === cursor.updatedAt &&
+              application.application_id < cursor.applicationId),
+        );
+      const page = ordered.slice(0, limit);
+      return {
+        applications: page.map((application) => {
+          const organization = organizations.get(application.organization_id);
+          if (!organization || organization.account_id !== application.account_id) {
+            throw new Error('DEVELOPER_APPLICATION_ORGANIZATION_INCONSISTENT');
+          }
+          return {
+            application: clone(application),
+            organization: clone(organization),
+          };
+        }),
+        hasMore: ordered.length > limit,
+      };
+    },
+
+    async adminGet(applicationId) {
+      const application = applications.get(applicationId);
+      if (!application) return null;
+      const organization = organizations.get(application.organization_id);
+      if (!organization || organization.account_id !== application.account_id) return null;
+      return { application: clone(application), organization: clone(organization) };
     },
   };
 }

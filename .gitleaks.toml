@@ -54,3 +54,13 @@ paths = [
 regexes = [
   '''EC_prime256v1''',
 ]
+
+[[allowlists]]
+description = "Deterministic unit-test tunnel signing fixture from the historical test runner; it is not a credential. Keep the path and literal exact so real secrets remain blocked."
+condition = "AND"
+paths = [
+  '''apps/api/scripts/test-runner\.mjs$''',
+]
+regexes = [
+  '''test-tunnel-signing-secret-at-least-32-bytes''',
+]

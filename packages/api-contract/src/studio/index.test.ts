@@ -52,7 +52,10 @@ const newStudioErrorCodes = [
   'STUDIO_BILLING_INCIDENT_REQUIRED',
   'STUDIO_SUBMISSION_CONFIRMED_NOT_CREATED',
   'STUDIO_SUBMISSION_OUTCOME_UNRESOLVED_EXPIRED',
+  'STUDIO_MODULE_SERVICE_GRANT_INVALID',
 ] as const satisfies readonly StudioErrorCode[];
+
+const MODULE_SERVICE_GRANT_ID = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff';
 
 describe('studio phase 1 contracts', () => {
   test('advertises only executable image generation and the five public job states', () => {
@@ -111,6 +114,35 @@ describe('studio phase 1 contracts', () => {
     ).not.toThrow();
     expect(StudioErrorCodeSchema.safeParse('STUDIO_IDEMPOTENCY_MISMATCH').success).toBe(true);
     expect(StudioErrorCodeSchema.safeParse('STUDIO_VIDEO_NOT_IN_PHASE_1').success).toBe(false);
+  });
+
+  test('models a module service grant independently from an account token', () => {
+    expect(
+      StudioCreateJobRequestSchema.strict().parse({
+        ...studioCreateJobRequestFixture(),
+        module_service_grant_id: MODULE_SERVICE_GRANT_ID,
+      }).module_service_grant_id,
+    ).toBe(MODULE_SERVICE_GRANT_ID);
+
+    expect(
+      StudioJobSchema.strict().parse({
+        ...studioJobFixture(),
+        actor_type: 'module',
+        module_service_grant_id: MODULE_SERVICE_GRANT_ID,
+      }),
+    ).toMatchObject({
+      actor_type: 'module',
+      module_service_grant_id: MODULE_SERVICE_GRANT_ID,
+    });
+  });
+
+  test('rejects PostgreSQL timestamp text at the public contract boundary', () => {
+    expect(
+      StudioJobSchema.safeParse({
+        ...studioJobFixture(),
+        created_at: '2026-08-01 00:00:00+00',
+      }).success,
+    ).toBe(false);
   });
 
   test('requires browser-safe signed upload headers', () => {

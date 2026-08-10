@@ -1224,6 +1224,67 @@ export function createPostgresStudioCredentialValidator(client: StudioSqlClient)
   };
 }
 
+export function createPostgresStudioModuleServiceGrantValidator(client: StudioSqlClient) {
+  return async (input: {
+    grantId: string;
+    accountId: string;
+    projectId: string;
+    operation: 'image.generate';
+    now: Date;
+  }): Promise<boolean> => {
+    const rows = await client.unsafe(
+      `
+      SELECT 1
+      FROM kortix.module_service_capability_grants capability_grant
+      JOIN kortix.project_module_service_consents consent
+        ON consent.consent_id = capability_grant.consent_id
+       AND consent.account_id = capability_grant.account_id
+       AND consent.project_id = capability_grant.project_id
+       AND consent.installation_id = capability_grant.installation_id
+       AND consent.release_id = capability_grant.release_id
+       AND consent.service = capability_grant.service
+      JOIN kortix.project_module_installations installation
+        ON installation.installation_id = capability_grant.installation_id
+       AND installation.account_id = capability_grant.account_id
+       AND installation.project_id = capability_grant.project_id
+      JOIN kortix.developer_module_releases release
+        ON release.release_id = capability_grant.release_id
+       AND release.account_id = capability_grant.account_id
+      WHERE capability_grant.grant_id = $1::uuid
+        AND capability_grant.account_id = $2::uuid
+        AND capability_grant.project_id = $3::uuid
+        AND capability_grant.service = 'ai'
+        AND capability_grant.operations @> $4::jsonb
+        AND capability_grant.revoked_at IS NULL
+        AND capability_grant.expires_at > $5::timestamptz
+        AND consent.revoked_at IS NULL
+        AND consent.install_revision = installation.install_revision
+        AND consent.release_id = installation.active_release_id
+        AND consent.service = 'ai'
+        AND consent.operations @> $4::jsonb
+        AND installation.status = 'active'
+        AND installation.active_release_id = capability_grant.release_id
+        AND release.status = 'published'
+        AND release.signature_algorithm = 'ed25519'
+        AND release.signature IS NOT NULL
+        AND release.signed_at IS NOT NULL
+        AND release.manifest ->> 'id' = installation.module_id
+        AND release.manifest ->> 'version' = installation.active_version
+        AND release.manifest -> 'openopc' -> 'services' -> 'ai' -> 'operations' @> $4::jsonb
+      LIMIT 1
+    `,
+      [
+        input.grantId,
+        input.accountId,
+        input.projectId,
+        JSON.stringify([input.operation]),
+        input.now.toISOString(),
+      ],
+    );
+    return rows.length > 0;
+  };
+}
+
 function mapJob(row: Record<string, unknown>): StudioWorkerJob {
   return {
     jobId: String(row.job_id),
@@ -1232,6 +1293,7 @@ function mapJob(row: Record<string, unknown>): StudioWorkerJob {
     actorUserId: nullableString(row.actor_user_id),
     actorType: String(row.actor_type) as StudioWorkerJob['actorType'],
     actingTokenId: nullableString(row.acting_token_id),
+    moduleServiceGrantId: nullableString(row.module_service_grant_id),
     agentName: nullableString(row.agent_name),
     sessionId: nullableString(row.session_id),
     capability: 'image.generate',

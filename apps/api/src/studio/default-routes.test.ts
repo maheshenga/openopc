@@ -697,6 +697,41 @@ describe('Studio API runtime assembly', () => {
     expect(createJobCalls).toBe(0);
   });
 
+  test('fails closed for module jobs when no database-backed grant loader is available', async () => {
+    const repository = createMemoryStudioRepository({ providers: [fakeProvider] });
+    const app = mountDefaultRoutes(
+      defaultRouteInput({
+        env: enabledEnv({ fake: true, openai: false }),
+        repository,
+        database: {},
+      }),
+    );
+    const estimateResponse = await estimate(app, FAKE_PROVIDER_ID);
+    expect(estimateResponse.status).toBe(200);
+    const estimateBody = (await estimateResponse.json()) as Record<string, string>;
+
+    const response = await app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        capability: 'image.generate',
+        provider_config_id: FAKE_PROVIDER_ID,
+        model: 'fake/image-v1',
+        input: imageInput,
+        estimate_id: estimateBody.estimate_id,
+        estimate_token: estimateBody.estimate_token,
+        idempotency_key: 'module-grant-loader-unavailable-0001',
+        request_hash: estimateBody.input_hash,
+        module_service_grant_id: '98000000-0000-4000-8000-000000000001',
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      code: 'STUDIO_MODULE_SERVICE_GRANT_INVALID',
+    });
+  });
+
   test('filters persisted OpenAI-compatible providers when the production provider is disabled', async () => {
     const { repository, providerId } = await createOpenAiRepository({
       kind: 'secret',

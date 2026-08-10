@@ -3,6 +3,64 @@ import { createStudioSubmissionAuthorization } from './authorization';
 import { createMemoryStudioWorkerRepository } from './memory-repository';
 
 describe('Studio submission authorization', () => {
+  test('revalidates a module service grant immediately before provider access', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const grantId = '66666666-6666-4666-8666-666666666666';
+    const job = repository.seedJob({
+      actorType: 'module',
+      actingTokenId: null,
+      moduleServiceGrantId: grantId,
+    } as never);
+    const validations: unknown[] = [];
+    const authorization = createStudioSubmissionAuthorization({
+      loadToken: async () => null,
+      validateModuleServiceGrant: async (input) => {
+        validations.push(input);
+        return false;
+      },
+      authorizeProjectAction: async () => true,
+      now: () => new Date('2026-07-15T10:00:00.000Z'),
+    });
+
+    expect(await authorization.revalidate(job)).toMatchObject({
+      authorized: false,
+      code: 'STUDIO_MODULE_SERVICE_GRANT_REVOKED',
+    });
+    expect(validations).toEqual([
+      {
+        grantId,
+        accountId: job.accountId,
+        projectId: job.projectId,
+        operation: 'image.generate',
+        now: new Date('2026-07-15T10:00:00.000Z'),
+      },
+    ]);
+  });
+
+  test('rejects a module actor that reuses acting_token_id', async () => {
+    const repository = createMemoryStudioWorkerRepository();
+    const job = repository.seedJob({
+      actorType: 'module',
+      actingTokenId: '11111111-1111-4111-8111-111111111111',
+      moduleServiceGrantId: '66666666-6666-4666-8666-666666666666',
+    } as never);
+    let tokenLoads = 0;
+    const authorization = createStudioSubmissionAuthorization({
+      loadToken: async () => {
+        tokenLoads += 1;
+        return null;
+      },
+      validateModuleServiceGrant: async () => true,
+      authorizeProjectAction: async () => true,
+    });
+
+    expect(await authorization.revalidate(job)).toMatchObject({
+      authorized: false,
+      code: 'STUDIO_MODULE_SERVICE_GRANT_REVOKED',
+    });
+    expect(tokenLoads).toBe(0);
+  });
+
   test('revalidates active token, both Studio actions, and the Secret grant', async () => {
     const repository = createMemoryStudioWorkerRepository();
     const job = repository.seedJob({

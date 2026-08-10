@@ -46,7 +46,7 @@ test('runtime profile schemas accept only the protected public wire contract', (
   );
 });
 
-test('runtime profile status accepts both finite OpenOPC profile identities', () => {
+test('runtime profile status accepts each finite OpenOPC profile identity', () => {
   expect(
     ReleaseProfileStatusSchema.parse({
       ready: true,
@@ -69,6 +69,18 @@ test('runtime profile status accepts both finite OpenOPC profile identities', ()
     }),
   ).toThrow();
   expect(RestrictedRuntimeCapabilitySchema.safeParse('module.ai.gateway').success).toBe(true);
+
+  expect(
+    ReleaseProfileStatusSchema.parse({
+      ready: true,
+      ready_for: 'openopc-image-studio-developer-beta-v3',
+      release_profile_id: 'openopc-image-studio-developer-beta-v3',
+      release_profile_digest: `sha256:${'c'.repeat(64)}`,
+    }),
+  ).toMatchObject({
+    ready_for: 'openopc-image-studio-developer-beta-v3',
+    release_profile_id: 'openopc-image-studio-developer-beta-v3',
+  });
 });
 
 test('v1 disabled-state evidence covers the developer AI gateway capability', () => {

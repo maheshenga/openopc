@@ -98,7 +98,7 @@ export function createUnitTestEnvironment(baseEnvironment = process.env, options
     FRONTEND_URL: 'http://localhost:3000',
     RECALL_BASE_URL: 'http://127.0.0.1:9000',
     INTERNAL_SERVICE_KEY: 'test-internal-service-key-at-least-32-bytes',
-    TUNNEL_SIGNING_SECRET: 'test-tunnel-signing-secret-at-least-32-bytes',
+    TUNNEL_SIGNING_SECRET: 'test-test-test-test-test-test-test-test',
     ALLOWED_SANDBOX_PROVIDERS: 'daytona',
     DAYTONA_API_KEY: 'test-daytona-api-key',
     DAYTONA_SERVER_URL: 'http://127.0.0.1:3001',

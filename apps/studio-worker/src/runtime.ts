@@ -40,6 +40,7 @@ import {
   PostgresStudioWorkerRepository,
   type StudioSqlClient,
   createPostgresStudioCredentialValidator,
+  createPostgresStudioModuleServiceGrantValidator,
   createPostgresStudioServiceAccountLoader,
   createPostgresStudioTokenLoader,
 } from './postgres';
@@ -417,6 +418,7 @@ export function createProductionStudioAuthorization(
     loadToken: createPostgresStudioTokenLoader(input.client),
     loadServiceAccount: createPostgresStudioServiceAccountLoader(input.client),
     validateCredentialBinding: createPostgresStudioCredentialValidator(input.client),
+    validateModuleServiceGrant: createPostgresStudioModuleServiceGrantValidator(input.client),
     async invalidateAuthorizationCache(principalIds) {
       iam.invalidatePrincipals(principalIds);
     },

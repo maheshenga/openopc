@@ -17,6 +17,10 @@ export const OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_ID =
   'openopc-web-desktop-developer-beta-v2' as const satisfies OpenOpcReleaseProfileId;
 export const OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_DIGEST =
   OPENOPC_RELEASE_PROFILE_DIGESTS[OPENOPC_WEB_DESKTOP_DEVELOPER_BETA_PROFILE_ID];
+export const OPENOPC_IMAGE_STUDIO_DEVELOPER_BETA_PROFILE_ID =
+  'openopc-image-studio-developer-beta-v3' as const satisfies OpenOpcReleaseProfileId;
+export const OPENOPC_IMAGE_STUDIO_DEVELOPER_BETA_PROFILE_DIGEST =
+  OPENOPC_RELEASE_PROFILE_DIGESTS[OPENOPC_IMAGE_STUDIO_DEVELOPER_BETA_PROFILE_ID];
 
 const PROFILE_CAPABILITIES: Readonly<
   Record<OpenOpcReleaseProfileId, readonly RestrictedRuntimeCapability[]>
@@ -32,6 +36,12 @@ const PROFILE_CAPABILITIES: Readonly<
     'module.app.render',
     'module.ai.gateway',
     'commerce.purchase',
+  ],
+  [OPENOPC_IMAGE_STUDIO_DEVELOPER_BETA_PROFILE_ID]: [
+    'module.wasi.execute',
+    'module.app.render',
+    'module.ai.gateway',
+    'studio.image.generate',
   ],
 };
 

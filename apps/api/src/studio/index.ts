@@ -20,6 +20,10 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { canonicalStudioRequestHash } from '../../../../packages/studio-runtime/src/idempotency';
 import { ACCOUNT_ACTIONS, PROJECT_ACTIONS } from '../iam/actions';
+import {
+  type ModuleServiceCapabilityRepository,
+  isModuleServiceAuthorizationValid,
+} from '../module-services/capability-grants';
 import type { AppEnv } from '../types';
 import {
   type UnsignedStudioEstimate,
@@ -31,13 +35,13 @@ import {
   type StudioEstimateResolutionError,
   resolveStudioEstimate,
 } from './estimates';
-import { StudioRecoveryServiceError } from './recovery';
+import type { StudioTelemetry } from './metrics';
 import type { StudioProviderConfigService } from './providers';
+import { StudioRecoveryServiceError } from './recovery';
 import { createMemoryStudioRepository } from './repositories/memory';
 import { type StudioStorageService, StudioStorageServiceError } from './storage';
 import { isStudioRepositoryError } from './types';
 import type { StudioLoadedProject, StudioRepository } from './types';
-import type { StudioTelemetry } from './metrics';
 
 export { createMemoryStudioRepository } from './repositories/memory';
 export type { StudioRepository } from './types';
@@ -81,6 +85,10 @@ export type StudioCredentialBindingExists = (input: {
   binding: StudioCredentialBinding;
 }) => Promise<boolean>;
 
+export type StudioModuleServiceGrantLoader = NonNullable<
+  ModuleServiceCapabilityRepository['getAuthorization']
+>;
+
 export type StudioProjectRouteDeps = {
   repository?: StudioRepository;
   loadProjectForUser?: LoadProjectForUser;
@@ -90,6 +98,7 @@ export type StudioProjectRouteDeps = {
   storageService?: StudioStorageService;
   recoveryService?: StudioRecoveryExecutor;
   credentialBindingExists?: StudioCredentialBindingExists;
+  loadModuleServiceAuthorization?: StudioModuleServiceGrantLoader;
   estimateSigningSecret?: string;
   telemetry?: StudioTelemetry;
 };
@@ -247,6 +256,18 @@ function studioActorContext(
   };
 }
 
+function moduleGrantError(c: Context<AppEnv>, unavailable = false) {
+  return c.json(
+    {
+      error: unavailable
+        ? 'Module service grant validation is unavailable'
+        : 'Module service grant is invalid, revoked, expired, or outside the installed release',
+      code: 'STUDIO_MODULE_SERVICE_GRANT_INVALID' as const,
+    },
+    unavailable ? 503 : 403,
+  );
+}
+
 export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}) {
   if (
     !inputDeps.repository ||
@@ -265,6 +286,7 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
     storageService: inputDeps.storageService,
     recoveryService: inputDeps.recoveryService,
     credentialBindingExists: inputDeps.credentialBindingExists,
+    loadModuleServiceAuthorization: inputDeps.loadModuleServiceAuthorization,
     estimateSigningSecret: inputDeps.estimateSigningSecret,
     telemetry: inputDeps.telemetry,
   };
@@ -506,12 +528,35 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
     });
     if (parsed.data.request_hash !== expectedHash) return idempotencyMismatch(c);
 
+    const moduleGrantId = parsed.data.module_service_grant_id ?? null;
+    if (moduleGrantId) {
+      if (!deps.loadModuleServiceAuthorization) return moduleGrantError(c, true);
+      const authorization = await deps.loadModuleServiceAuthorization(moduleGrantId);
+      if (
+        !authorization ||
+        !isModuleServiceAuthorizationValid({
+          authorization,
+          accountId: loaded.row.accountId,
+          projectId,
+          service: 'ai',
+          operation: 'image.generate',
+          now: new Date(),
+        })
+      ) {
+        return moduleGrantError(c);
+      }
+    }
+
     const replay = await deps.repository.findJobByIdempotency(
       loaded.row.accountId,
       parsed.data.idempotency_key,
     );
     if (replay) {
-      if (replay.project_id !== projectId || replay.request_hash !== expectedHash) {
+      if (
+        replay.project_id !== projectId ||
+        replay.request_hash !== expectedHash ||
+        (replay.module_service_grant_id ?? null) !== moduleGrantId
+      ) {
         return idempotencyMismatch(c);
       }
       return c.json(replay, 200);
@@ -571,7 +616,14 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
       ...verifiedEstimate.claims.estimate,
       estimate_token: parsed.data.estimate_token,
     };
-    const actorContext = studioActorContext(c);
+    const actorContext = moduleGrantId
+      ? {
+          actor_type: 'module' as const,
+          acting_token_id: null,
+          agent_name: null,
+          session_id: null,
+        }
+      : studioActorContext(c);
     let result: Awaited<ReturnType<StudioRepository['createJob']>>;
     try {
       result = await deps.repository.createJob(
@@ -581,6 +633,7 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
           project_id: projectId,
           actor_user_id: loaded.userId,
           ...actorContext,
+          module_service_grant_id: moduleGrantId,
           parent_job_id: null,
         },
         resolution.value.provider,
@@ -673,15 +726,17 @@ export function createStudioProjectRoutes(inputDeps: StudioProjectRouteDeps = {}
     if (!parsed.success) return badRequest(c, parsed.error.flatten());
     const actor = studioActorContext(c);
     try {
-      return c.json(await deps.recoveryService.recover({
-        accountId: loaded.row.accountId,
-        projectId,
-        jobId: c.req.param('jobId'),
-        actorUserId: loaded.userId,
-        actorType: actor.actor_type,
-        actingTokenId: actor.acting_token_id,
-        request: parsed.data,
-      }));
+      return c.json(
+        await deps.recoveryService.recover({
+          accountId: loaded.row.accountId,
+          projectId,
+          jobId: c.req.param('jobId'),
+          actorUserId: loaded.userId,
+          actorType: actor.actor_type as 'user' | 'agent' | 'system',
+          actingTokenId: actor.acting_token_id,
+          request: parsed.data,
+        }),
+      );
     } catch (error) {
       return recoveryErrorResponse(c, error);
     }

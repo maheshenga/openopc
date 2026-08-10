@@ -544,9 +544,17 @@ describe('S3StudioObjectStore', () => {
       filename: '..\\unsafe\r\n"file.png',
       expires_in_seconds: 5_000,
     });
+    await store.createSignedDownloadUrl({
+      key: 'file.png',
+      filename: 'thumb.webp',
+      expires_in_seconds: 900,
+      content_disposition: 'inline',
+      content_type: 'image/webp',
+      cache_control: 'private, max-age=900, immutable',
+    });
 
-    expect(calls.map((call) => call.client)).toEqual([signingClient, signingClient]);
-    expect(calls.map((call) => call.expiresIn)).toEqual([60, 900]);
+    expect(calls.map((call) => call.client)).toEqual([signingClient, signingClient, signingClient]);
+    expect(calls.map((call) => call.expiresIn)).toEqual([60, 900, 900]);
     expect((calls[0]?.command as PutObjectCommand).input).toMatchObject({
       Bucket: 'configured-private-bucket',
       Key: 'fixed-prefix/file.png',
@@ -561,6 +569,11 @@ describe('S3StudioObjectStore', () => {
     expect(disposition).not.toContain('\n');
     expect(disposition).not.toContain('\\');
     expect(disposition).not.toContain('"file.png');
+    expect((calls[2]?.command as GetObjectCommand).input).toMatchObject({
+      ResponseContentDisposition: 'inline',
+      ResponseContentType: 'image/webp',
+      ResponseCacheControl: 'private, max-age=900, immutable',
+    });
   });
 
   test('truncates long Unicode attachment filenames without splitting surrogate pairs', async () => {

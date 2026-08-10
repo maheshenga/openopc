@@ -16,7 +16,11 @@ import {
 } from '@kortix/sdk';
 
 export type OpenOpcServiceName = 'ai' | 'payment';
-export type OpenOpcAiServiceOperation = 'models.read' | 'text.generate' | 'text.stream';
+export type OpenOpcAiServiceOperation =
+  | 'models.read'
+  | 'text.generate'
+  | 'text.stream'
+  | 'image.generate';
 export type OpenOpcPaymentServiceOperation = 'orders.create' | 'orders.read' | 'refunds.create';
 export type OpenOpcServiceOperation = OpenOpcAiServiceOperation | OpenOpcPaymentServiceOperation;
 
@@ -58,7 +62,7 @@ export interface ModuleServiceCapabilityTokenResponse {
 }
 
 const SERVICE_OPERATIONS: Record<OpenOpcServiceName, readonly OpenOpcServiceOperation[]> = {
-  ai: ['models.read', 'text.generate', 'text.stream'],
+  ai: ['models.read', 'text.generate', 'text.stream', 'image.generate'],
   payment: ['orders.create', 'orders.read', 'refunds.create'],
 };
 

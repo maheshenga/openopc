@@ -154,6 +154,7 @@ export type OpenOpcModuleServiceOperation =
   | 'models.read'
   | 'text.generate'
   | 'text.stream'
+  | 'image.generate'
   | 'orders.create'
   | 'orders.read'
   | 'refunds.create';

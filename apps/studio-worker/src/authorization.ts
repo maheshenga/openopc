@@ -41,6 +41,13 @@ export interface StudioSubmissionAuthorizationDeps {
     projectId: string;
     binding: StudioCredentialBinding;
   }): Promise<boolean>;
+  validateModuleServiceGrant?(input: {
+    grantId: string;
+    accountId: string;
+    projectId: string;
+    operation: 'image.generate';
+    now: Date;
+  }): Promise<boolean>;
   invalidateAuthorizationCache?(principalIds: string[]): Promise<void>;
   authorizeProjectAction(input: {
     userId: string;
@@ -84,6 +91,32 @@ export function createStudioSubmissionAuthorization(
         );
       }
       const now = (deps.now ?? (() => new Date()))();
+      if (job.actorType === 'module') {
+        if (!job.moduleServiceGrantId || job.actingTokenId) {
+          return denied(
+            'STUDIO_MODULE_SERVICE_GRANT_REVOKED',
+            'A module Studio job must use a current module service grant and no account token',
+          );
+        }
+        const grantValid = await deps.validateModuleServiceGrant?.({
+          grantId: job.moduleServiceGrantId,
+          accountId: job.accountId,
+          projectId: job.projectId,
+          operation: 'image.generate',
+          now,
+        });
+        if (!grantValid) {
+          return denied(
+            'STUDIO_MODULE_SERVICE_GRANT_REVOKED',
+            'The module service grant, consent, installation, or release is no longer valid',
+          );
+        }
+      } else if (job.moduleServiceGrantId) {
+        return denied(
+          'STUDIO_MODULE_SERVICE_GRANT_REVOKED',
+          'A non-module Studio job cannot carry a module service grant',
+        );
+      }
       let token: StudioWorkerTokenRow | null = null;
       if (job.actingTokenId) {
         token = await deps.loadToken(job.actingTokenId);

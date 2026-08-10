@@ -68,6 +68,10 @@ function uniqueConstraintNames(table: any): string[] {
   return getTableConfig(table).uniqueConstraints.map((constraint: any) => constraint.name);
 }
 
+function foreignKeyNames(table: any): string[] {
+  return getTableConfig(table).foreignKeys.map((foreignKey: any) => foreignKey.getName());
+}
+
 function checkConstraintNames(table: any): string[] {
   return getTableConfig(table).checks.map((constraint: any) => constraint.name);
 }
@@ -464,6 +468,7 @@ describe('studio durable schema', () => {
       'idx_studio_jobs_claimable',
       'idx_studio_jobs_provider_handle',
       'idx_studio_jobs_parent_job',
+      'idx_studio_jobs_module_service_grant',
       'idx_studio_jobs_idempotency',
     ]));
     expect(indexNames(studioJobAttempts)).toContain('idx_studio_job_attempts_submission_key');
@@ -472,6 +477,13 @@ describe('studio durable schema', () => {
     expect(indexNames(studioCreditReservations)).toContain(
       'idx_studio_credit_reservations_active_account',
     );
+  });
+
+  test('persists the module service grant independently from acting_token_id', () => {
+    expect(columnNames(studioJobs)).toEqual(
+      expect.arrayContaining(['acting_token_id', 'module_service_grant_id']),
+    );
+    expect(foreignKeyNames(studioJobs)).toContain('studio_jobs_module_service_grant_fk');
   });
 });
 

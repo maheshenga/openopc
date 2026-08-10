@@ -8,6 +8,7 @@ import {
   moduleServiceAuditEvents,
   moduleServiceCapabilityGrants,
   projectModuleServiceConsents,
+  studioJobs,
 } from './schema/kortix';
 
 function columnNames(table: PgTable): string[] {
@@ -114,6 +115,21 @@ test('binds consents to exact account, project, installation, and release identi
   expect(
     checkSql(projectModuleServiceConsents, 'project_module_service_consents_revision_check'),
   ).toMatch(/install_revision" > 0/);
+});
+
+test('binds Studio module jobs to the grant identity without reusing account tokens', () => {
+  expect(columnNames(studioJobs)).toContain('module_service_grant_id');
+  expect(foreignKeys(studioJobs)).toEqual(
+    expect.arrayContaining([
+      {
+        name: 'studio_jobs_module_service_grant_fk',
+        columns: ['module_service_grant_id'],
+        foreignColumns: ['grant_id'],
+        foreignTable: 'module_service_capability_grants',
+        onDelete: 'no action',
+      },
+    ]),
+  );
 });
 
 test('stores only capability token hashes with bounded operation sets and expiry', () => {
@@ -227,4 +243,17 @@ test('adds an idempotent, service-only migration without raw token storage', () 
   expect(migration).toMatch(/REVOKE ALL[\s\S]*FROM PUBLIC, anon, authenticated, service_role/);
   expect(migration).not.toMatch(/\btoken\b(?!_hash)/i);
   expect(migration).not.toMatch(/GRANT .* TO (?:anon|authenticated)/i);
+});
+
+test('adds the Studio grant link and image generation operation in a forward migration', () => {
+  const migration = readFileSync(
+    join(import.meta.dir, '..', 'migrations', '20260806120000000_studio_module_service_grants.sql'),
+    'utf8',
+  );
+
+  expect(migration).toContain('ADD COLUMN IF NOT EXISTS module_service_grant_id uuid');
+  expect(migration).toContain('studio_jobs_module_service_grant_fk');
+  expect(migration).toContain("'image.generate'");
+  expect(migration).toContain('studio_jobs_module_actor_check');
+  expect(migration).not.toMatch(/\bgrant\b\s*FROM/i);
 });

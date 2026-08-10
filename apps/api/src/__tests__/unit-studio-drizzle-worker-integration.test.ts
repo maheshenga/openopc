@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { createDrizzleStudioRepository } from '../studio/repositories/drizzle';
 
 const JOB_ID = '11111111-1111-4111-8111-111111111111';
 const ACCOUNT_ID = '22222222-2222-4222-8222-222222222222';
 const PROJECT_ID = '33333333-3333-4333-8333-333333333333';
 const PROVIDER_ID = '44444444-4444-4444-8444-444444444444';
+const MODULE_GRANT_ID = '88888888-8888-4888-8888-888888888888';
 
 function jobRow(status: 'queued' | 'running' | 'cancelled' = 'queued') {
   return {
@@ -244,6 +246,113 @@ describe('Studio Drizzle repository worker integration', () => {
 
     expect(executeCalls).toBe(1);
     expect(result).toMatchObject({ created: true, job: { job_id: JOB_ID, status: 'queued' } });
+  });
+
+  test('atomically attaches a module grant after the legacy reservation RPC creates a row', async () => {
+    let selectCalls = 0;
+    let transactionCalls = 0;
+    const queries: Array<{ sql: string; params: unknown[] }> = [];
+    const moduleRow = {
+      ...jobRow(),
+      actorType: 'module',
+      actingTokenId: null,
+      moduleServiceGrantId: MODULE_GRANT_ID,
+    };
+    const transactionClient = {
+      execute: async (query: unknown) => {
+        const compiled = new PgDialect().sqlToQuery(query as never);
+        queries.push({ sql: compiled.sql.toLowerCase(), params: [...compiled.params] });
+        return queries.length === 1
+          ? [{ result: { success: true, idempotent: false, job_id: JOB_ID } }]
+          : [{ module_service_grant_id: MODULE_GRANT_ID }];
+      },
+    };
+    const db = {
+      select: () => selectChain(selectCalls++ === 0 ? [] : [moduleRow]),
+      transaction: async (callback: (tx: typeof transactionClient) => Promise<unknown>) => {
+        transactionCalls += 1;
+        return callback(transactionClient);
+      },
+      execute: async () => {
+        throw new Error('module reservation must use a transaction');
+      },
+      insert: () => {
+        throw new Error('createJob must not directly insert studio_jobs');
+      },
+      update: () => {
+        throw new Error('module identity must be updated by the transaction');
+      },
+    };
+    const repository = createDrizzleStudioRepository(db as never);
+
+    const result = await repository.createJob(
+      {
+        ...createJobInputFixture(),
+        actor_type: 'module',
+        acting_token_id: null,
+        module_service_grant_id: MODULE_GRANT_ID,
+      },
+      providerFixture(),
+      estimateFixture(),
+    );
+
+    expect(transactionCalls).toBe(1);
+    expect(queries[0]?.params[3]).toBe('user');
+    expect(queries[0]?.params).not.toContain(MODULE_GRANT_ID);
+    expect(queries[1]?.params).toContain(MODULE_GRANT_ID);
+    expect(result).toMatchObject({
+      created: true,
+      job: {
+        job_id: JOB_ID,
+        actor_type: 'module',
+        module_service_grant_id: MODULE_GRANT_ID,
+      },
+    });
+  });
+
+  test('does not rewrite a concurrent idempotent user row as a module job', async () => {
+    let selectCalls = 0;
+    let transactionCalls = 0;
+    let transactionQueryCount = 0;
+    const userRow = { ...jobRow(), actorType: 'user', moduleServiceGrantId: null };
+    const transactionClient = {
+      execute: async () => {
+        transactionQueryCount += 1;
+        return [{ result: { success: true, idempotent: true, job_id: JOB_ID } }];
+      },
+    };
+    const db = {
+      select: () => selectChain(selectCalls++ === 0 ? [] : [userRow]),
+      transaction: async (callback: (tx: typeof transactionClient) => Promise<unknown>) => {
+        transactionCalls += 1;
+        return callback(transactionClient);
+      },
+      execute: async () => {
+        throw new Error('module reservation must use a transaction');
+      },
+      insert: () => {
+        throw new Error('unexpected insert');
+      },
+      update: () => {
+        throw new Error('unexpected update');
+      },
+    };
+    const repository = createDrizzleStudioRepository(db as never);
+
+    const result = await repository.createJob(
+      {
+        ...createJobInputFixture(),
+        actor_type: 'module',
+        acting_token_id: null,
+        module_service_grant_id: MODULE_GRANT_ID,
+      },
+      providerFixture(),
+      estimateFixture(),
+    );
+
+    expect(transactionCalls).toBe(1);
+    expect(transactionQueryCount).toBe(1);
+    expect(result).toEqual({ created: false, mismatch: true });
   });
 
   test('binds the exact production provider and pricing snapshot to the 21-argument RPC', async () => {

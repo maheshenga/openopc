@@ -21,6 +21,108 @@ const PNG = Uint8Array.from(
 const PNG_CHECKSUM = new Bun.CryptoHasher('sha256').update(PNG).digest('hex');
 
 describe('Studio storage service', () => {
+  test('creates and reads a direct tenant asset with verified bytes and metadata', async () => {
+    const repository = createMemoryStudioRepository({ now: () => NOW.toISOString() });
+    const store = new InMemoryStudioObjectStore({ namespace: 'private-studio', ready: true });
+    const service = new StudioStorageService({
+      repository,
+      store,
+      now: () => NOW,
+      randomUUID: () => UPLOAD_ID,
+    });
+
+    const asset = await service.createDirectAsset({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      actorUserId: ACTOR_USER_ID,
+      bytes: PNG,
+      mimeType: 'image/png',
+      metadata: { source: 'module-upload' },
+    });
+
+    expect(asset).toMatchObject({
+      account_id: ACCOUNT_ID,
+      project_id: PROJECT_ID,
+      mime_type: 'image/png',
+      checksum_sha256: PNG_CHECKSUM,
+      size_bytes: PNG.byteLength,
+      width: 1,
+      height: 1,
+      metadata: { source: 'module-upload' },
+    });
+    await expect(
+      service.readAsset({ accountId: ACCOUNT_ID, projectId: PROJECT_ID, assetId: asset.asset_id }),
+    ).resolves.toEqual({ asset, bytes: PNG });
+    await expect(
+      service.readAsset({
+        accountId: '10000000-0000-4000-a000-000000000009',
+        projectId: PROJECT_ID,
+        assetId: asset.asset_id,
+      }),
+    ).resolves.toBeNull();
+
+    let sourceReads = 0;
+    const getObject = store.getObject.bind(store);
+    store.getObject = async (input) => {
+      sourceReads += 1;
+      return getObject(input);
+    };
+    const thumbnail = await service.createThumbnailUrl({
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      assetId: asset.asset_id,
+      preset: 'small',
+    });
+    expect(thumbnail).toMatchObject({
+      asset_id: asset.asset_id,
+      preset: 'small',
+      mime_type: 'image/webp',
+      width: 1,
+      height: 1,
+      size_bytes: expect.any(Number),
+    });
+    expect(thumbnail?.signed_download_url).toContain('disposition=inline');
+    expect(thumbnail?.signed_download_url).toContain('cache_control=private');
+    expect(sourceReads).toBe(1);
+    await expect(
+      service.createThumbnailUrl({
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        assetId: asset.asset_id,
+        preset: 'small',
+      }),
+    ).resolves.toEqual(thumbnail);
+    expect(sourceReads).toBe(1);
+  });
+
+  test('removes a direct-upload object when repository finalization fails', async () => {
+    const repository = createMemoryStudioRepository({ now: () => NOW.toISOString() });
+    repository.finalizeUploadRecord = async () => {
+      throw new Error('simulated finalize failure');
+    };
+    const store = new InMemoryStudioObjectStore({ namespace: 'private-studio', ready: true });
+    const service = new StudioStorageService({
+      repository,
+      store,
+      now: () => NOW,
+      randomUUID: () => UPLOAD_ID,
+    });
+    const objectKey =
+      `accounts/${ACCOUNT_ID}/projects/${PROJECT_ID}` + `/uploads/${UPLOAD_ID}/source.png`;
+
+    await expect(
+      service.createDirectAsset({
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        actorUserId: ACTOR_USER_ID,
+        bytes: PNG,
+        mimeType: 'image/png',
+        metadata: {},
+      }),
+    ).rejects.toThrow('simulated finalize failure');
+    await expect(store.getObject({ key: objectKey })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
   test('creates a tenant-scoped upload with a browser-executable request that is never persisted', async () => {
     const repository = createMemoryStudioRepository({ now: () => NOW.toISOString() });
     const store = new InMemoryStudioObjectStore({ namespace: 'private-studio', ready: true });

@@ -3,6 +3,7 @@ import {
   PostgresStudioMaintenanceRepository,
   PostgresStudioWorkerRepository,
   createPostgresStudioCredentialValidator,
+  createPostgresStudioModuleServiceGrantValidator,
 } from './postgres';
 
 describe('PostgresStudioWorkerRepository', () => {
@@ -266,6 +267,36 @@ describe('PostgresStudioWorkerRepository', () => {
     expect(queries[1]?.text).toContain("profile.status = 'active'");
     expect(queries[1]?.text).toContain('JOIN kortix.executor_credentials credential');
     expect(queries[1]?.text).toContain("btrim(credential.value_enc) <> ''");
+  });
+
+  test('revalidates the module grant, consent, installation revision, release, and manifest in PostgreSQL', async () => {
+    const queries: Array<{ text: string; values: unknown[] }> = [];
+    const validator = createPostgresStudioModuleServiceGrantValidator({
+      unsafe: async (text, values = []) => {
+        queries.push({ text, values });
+        return [{ exists: 1 }];
+      },
+    });
+
+    await expect(
+      validator({
+        grantId: '66666666-6666-4666-8666-666666666666',
+        accountId: '44444444-4444-4444-8444-444444444444',
+        projectId: '55555555-5555-4555-8555-555555555555',
+        operation: 'image.generate',
+        now: new Date('2026-07-15T10:00:00.000Z'),
+      }),
+    ).resolves.toBe(true);
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0]?.text).toContain('module_service_capability_grants capability_grant');
+    expect(queries[0]?.text).toContain('capability_grant.revoked_at IS NULL');
+    expect(queries[0]?.text).toContain('consent.install_revision = installation.install_revision');
+    expect(queries[0]?.text).toContain("installation.status = 'active'");
+    expect(queries[0]?.text).toContain("release.status = 'published'");
+    expect(queries[0]?.text).toContain("release.signature_algorithm = 'ed25519'");
+    expect(queries[0]?.text).toContain("release.manifest -> 'openopc'");
+    expect(queries[0]?.values).toContain('["image.generate"]');
   });
 
   test('commits the provider handle and provider-submitted event in one owner-fenced statement', async () => {

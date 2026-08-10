@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash, createPublicKey } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { type Server as HttpsServer, createServer } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,7 @@ const MODULE_ORIGIN = `https://r-${RELEASE_ID}.modules.openopc.test`;
 const ATTACKER_ORIGIN = 'https://attacker.openopc.test';
 const CUSTOM_ORIGIN = 'https://module.customer.example';
 const SERVICE_PATH = '/v1/module-services/ai/models';
+const STREAM_PATH = '/v1/module-services/ai/chat/completions';
 const PREFLIGHT_PROBE_PATH = '/v1/module-services/preflight-probe';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -70,6 +72,7 @@ const counts = {
   preflight: 0,
   optionsProbes: 0,
   models: 0,
+  streams: 0,
   modelCookies: [] as string[],
   probeCookies: [] as string[],
   unexpected: [] as string[],
@@ -81,7 +84,7 @@ const corsHeaders = {
   vary: 'Origin',
 };
 
-function createTestCertificate(): { key: string; cert: string } {
+function createTestCertificate(): { key: string; cert: string; spki: string } {
   const keys = forge.pki.rsa.generateKeyPair(2048);
   const certificate = forge.pki.createCertificate();
   certificate.publicKey = keys.publicKey;
@@ -98,17 +101,22 @@ function createTestCertificate(): { key: string; cert: string } {
     },
   ]);
   certificate.sign(keys.privateKey, forge.md.sha256.create());
-  return {
-    key: forge.pki.privateKeyToPem(keys.privateKey),
-    cert: forge.pki.certificateToPem(certificate),
-  };
+  const cert = forge.pki.certificateToPem(certificate);
+  const spki = createHash('sha256')
+    .update(createPublicKey(cert).export({ format: 'der', type: 'spki' }))
+    .digest('base64');
+  return { key: forge.pki.privateKeyToPem(keys.privateKey), cert, spki };
 }
 
-function createServiceServer(): HttpsServer {
-  const server = createServer(createTestCertificate(), (request, response) => {
+function createServiceServer(certificate: {
+  key: string;
+  cert: string;
+  spki: string;
+}): HttpsServer {
+  const server = createServer(certificate, (request, response) => {
     const url = new URL(request.url ?? '/', PLATFORM_ORIGIN);
     if (
-      ![SERVICE_PATH, PREFLIGHT_PROBE_PATH].includes(url.pathname) ||
+      ![SERVICE_PATH, STREAM_PATH, PREFLIGHT_PROBE_PATH].includes(url.pathname) ||
       request.headers.origin !== MODULE_ORIGIN
     ) {
       counts.unexpected.push(`${request.method ?? 'UNKNOWN'} ${url.href}`);
@@ -117,13 +125,14 @@ function createServiceServer(): HttpsServer {
     }
 
     if (request.method === 'OPTIONS') {
-      if (url.pathname === SERVICE_PATH) {
+      if (url.pathname === SERVICE_PATH || url.pathname === STREAM_PATH) {
         counts.preflight += 1;
         const requestedHeaders = String(request.headers['access-control-request-headers'] ?? '')
           .toLowerCase()
           .split(/,\s*/);
         if (
-          request.headers['access-control-request-method'] !== 'GET' ||
+          request.headers['access-control-request-method'] !==
+            (url.pathname === SERVICE_PATH ? 'GET' : 'POST') ||
           !requestedHeaders.includes('authorization')
         ) {
           counts.unexpected.push('invalid automatic module-service preflight');
@@ -146,7 +155,7 @@ function createServiceServer(): HttpsServer {
       return;
     }
 
-    if (request.method === 'GET') {
+    if (request.method === 'GET' && url.pathname === SERVICE_PATH) {
       counts.models += 1;
       counts.modelCookies.push(request.headers.cookie ?? '');
       if (request.headers.authorization !== 'Bearer v4.public.browser-smoke') {
@@ -159,6 +168,24 @@ function createServiceServer(): HttpsServer {
           data: [{ id: 'approved-model', object: 'model', owned_by: 'openopc' }],
         }),
       );
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === STREAM_PATH) {
+      counts.streams += 1;
+      if (request.headers.authorization !== 'Bearer v4.public.browser-smoke') {
+        counts.unexpected.push('invalid stream authorization');
+        response.writeHead(401).end('Unauthorized');
+        return;
+      }
+      response.writeHead(200, { ...corsHeaders, 'content-type': 'text/event-stream' });
+      response.write('data: {"id":"browser-stream-1","choices":[{"delta":{"content":"ok"}}]}\n\n');
+      const timer = setTimeout(() => {
+        response.write('data: [DONE]\n\n');
+        response.end();
+      }, 5_000);
+      request.on('aborted', () => clearTimeout(timer));
+      response.on('close', () => clearTimeout(timer));
       return;
     }
 
@@ -229,7 +256,8 @@ async function installRoute(route: Route) {
   await route.fulfill({ status: 404, body: 'Not Found' });
 }
 
-const serviceServer = createServiceServer();
+const certificate = createTestCertificate();
+const serviceServer = createServiceServer(certificate);
 let browser: Browser | undefined;
 let context: BrowserContext | undefined;
 const pages: Page[] = [];
@@ -240,13 +268,11 @@ try {
   browser = await chromium.launch({
     args: [
       '--no-proxy-server',
-      '--ignore-certificate-errors',
-      '--allow-insecure-localhost',
+      `--ignore-certificate-errors-spki-list=${certificate.spki}`,
       '--disable-features=LocalNetworkAccessChecks',
     ],
   });
   context = await browser.newContext({
-    ignoreHTTPSErrors: true,
     serviceWorkers: 'block',
   });
   await context.grantPermissions(['local-network-access'], { origin: PLATFORM_ORIGIN });
@@ -258,7 +284,7 @@ try {
       url.pathname !== '/favicon.ico' &&
       !(
         url.origin === PLATFORM_ORIGIN &&
-        [SERVICE_PATH, PREFLIGHT_PROBE_PATH].includes(url.pathname)
+        [SERVICE_PATH, STREAM_PATH, PREFLIGHT_PROBE_PATH].includes(url.pathname)
       )
     ) {
       counts.unexpected.push(`${request.method()} ${request.url()}`);
@@ -298,9 +324,10 @@ try {
     ).__openOpcFixtureTokenRequests(),
   );
   assert(bootstrapRequests === 1, `expected one bootstrap request, got ${bootstrapRequests}`);
-  assert(tokenRequests === 1, `expected one token request, got ${tokenRequests}`);
+  assert(tokenRequests === 2, `expected two token requests, got ${tokenRequests}`);
   assert(counts.preflight === 0, `unexpected automatic preflight count ${counts.preflight}`);
   assert(counts.models === 1, `expected one model request, got ${counts.models}`);
+  assert(counts.streams === 1, `expected one stream request, got ${counts.streams}`);
   assert(counts.modelCookies[0] === '', 'module-service request sent a cookie');
   assert(counts.optionsProbes === 1, `expected one OPTIONS probe, got ${counts.optionsProbes}`);
   assert(counts.probeCookies[0] === '', 'OPTIONS probe sent a cookie');
@@ -312,7 +339,9 @@ try {
     ).__openOpcFixtureCleanup(),
   );
   await page.locator('body[data-cleanup="ok"]').waitFor();
-  console.log('allowed flow: bootstrap=1 token=1 models=1 OPTIONS=1 cookies=0 cleanup=ok');
+  console.log(
+    'allowed flow: bootstrap=1 token=2 models=1 streams=1 OPTIONS=1 cookies=0 abort=ok cleanup=ok',
+  );
 
   const beforeDenied = {
     preflight: counts.preflight,

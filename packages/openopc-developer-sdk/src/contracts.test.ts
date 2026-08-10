@@ -10,6 +10,12 @@ import {
   ModuleServiceErrorResponseSchema,
 } from '@kortix/api-contract';
 import {
+  OpenOpcChatCompletionRequestSchema as PlatformChatRequestSchema,
+  OPENOPC_IMAGE_ERROR_CODES as PlatformImageErrorCodes,
+  OpenOpcImageModelSchema as PlatformImageModelSchema,
+  OpenOpcModelSchema as PlatformModelSchema,
+} from '@kortix/api-contract';
+import {
   ModuleServiceCapabilityRequestSchema as InternalCapabilitySchema,
   ModuleServiceErrorResponseSchema as InternalErrorResponseSchema,
   ModulePaymentIdempotencyKeySchema as InternalIdempotencyKeySchema,
@@ -19,9 +25,17 @@ import {
   CreateDeveloperPaymentRefundInputSchema as InternalRefundInputSchema,
   DeveloperPaymentRefundViewSchema as InternalRefundViewSchema,
   OPENOPC_AI_SERVICE_OPERATIONS,
+  OPENOPC_IMAGE_ERROR_CODES,
   OPENOPC_PAYMENT_SERVICE_OPERATIONS,
   OPENOPC_SERVICE_NAMES,
   OPENOPC_SERVICE_OPERATIONS,
+  OpenOpcChatCompletionRequestSchema,
+  OpenOpcImageEventFailureModeSchema,
+  OpenOpcImageModelSchema,
+  OpenOpcImagePageInputSchema,
+  OpenOpcModelSchema,
+  openOpcImageEstimateRetryGuidance,
+  openOpcModelSupportsImagePurpose,
 } from './contracts';
 import {
   OPENOPC_AI_SERVICE_OPERATIONS as PublicAiOperations,
@@ -45,7 +59,12 @@ const ORDER_INPUT = {
 describe('OpenOPC public contracts', () => {
   test('exposes the exact service operation vocabulary', () => {
     expect(OPENOPC_SERVICE_NAMES).toEqual(['ai', 'payment']);
-    expect(OPENOPC_AI_SERVICE_OPERATIONS).toEqual(['models.read', 'text.generate', 'text.stream']);
+    expect(OPENOPC_AI_SERVICE_OPERATIONS).toEqual([
+      'models.read',
+      'text.generate',
+      'text.stream',
+      'image.generate',
+    ]);
     expect(OPENOPC_PAYMENT_SERVICE_OPERATIONS).toEqual([
       'orders.create',
       'orders.read',
@@ -59,6 +78,7 @@ describe('OpenOPC public contracts', () => {
     expect(PublicAiOperations).toEqual(OPENOPC_AI_SERVICE_OPERATIONS);
     expect(PublicPaymentOperations).toEqual(OPENOPC_PAYMENT_SERVICE_OPERATIONS);
     expect(PublicServiceOperations).toEqual(OPENOPC_SERVICE_OPERATIONS);
+    expect(OPENOPC_IMAGE_ERROR_CODES).toEqual(PlatformImageErrorCodes);
   });
 
   test('keeps payment and capability validation compatible with the platform contract', () => {
@@ -145,5 +165,101 @@ describe('OpenOPC public contracts', () => {
     expect(capability.operations).toEqual(['text.generate']);
     expect(paymentOperation).toBe('orders.read');
     expect(error.error).toBe('MODULE_SERVICE_UNAVAILABLE');
+  });
+
+  test('publishes provider-neutral multimodal parts and conservative model capabilities', () => {
+    const message = {
+      role: 'user' as const,
+      content: [
+        { type: 'text' as const, text: 'describe this' },
+        {
+          type: 'image_url' as const,
+          image_url: { url: 'https://images.example.com/photo.png', detail: 'auto' as const },
+        },
+      ],
+    };
+    expect(
+      OpenOpcChatCompletionRequestSchema.safeParse({ model: 'vision-model', messages: [message] })
+        .success,
+    ).toBe(true);
+    expect(
+      OpenOpcChatCompletionRequestSchema.safeParse({
+        model: 'vision-model',
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'image_url', image_url: { url: 'https://images.example.com/photo.png' } },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    const visionModel = {
+      id: 'vision-model',
+      object: 'model' as const,
+      owned_by: 'platform',
+      capabilities: {
+        modalities: ['text', 'image'] as const,
+        vision: {
+          max_images: 8,
+          max_bytes_per_image: 10 * 1024 * 1024,
+          max_total_bytes: 20 * 1024 * 1024,
+          accepted_mime_types: ['image/png'] as const,
+          purposes: ['vision'] as const,
+        },
+        attachment: {
+          max_images: 8,
+          max_bytes_per_image: 10 * 1024 * 1024,
+          max_total_bytes: 20 * 1024 * 1024,
+          accepted_mime_types: ['image/png'] as const,
+          purposes: ['attachment'] as const,
+        },
+      },
+    };
+    expect(OpenOpcModelSchema.safeParse(visionModel).success).toBe(true);
+    expect(PlatformModelSchema.safeParse(visionModel).success).toBe(true);
+    expect(openOpcModelSupportsImagePurpose(visionModel, 'vision')).toBe(true);
+    expect(openOpcModelSupportsImagePurpose(visionModel, 'attachment')).toBe(true);
+    expect(openOpcModelSupportsImagePurpose({ capabilities: undefined }, 'vision')).toBe(false);
+    const imageModel = {
+      id: 'image-model',
+      object: 'image.model',
+      owned_by: 'provider',
+      name: 'Provider image',
+      capabilities: {
+        prompt: { max_characters: 8000, max_negative_prompt_characters: 4000 },
+        reference_images: {
+          max_images: 0,
+          max_bytes_per_image: 50 * 1024 * 1024,
+          max_total_bytes: 50 * 1024 * 1024,
+          accepted_mime_types: ['image/png'],
+        },
+        output: {
+          min_images: 1,
+          max_images: 1,
+          max_bytes_per_image: 50 * 1024 * 1024,
+          accepted_mime_types: ['image/png'],
+          aspect_ratios: ['1:1'],
+          qualities: ['standard'],
+        },
+      },
+    };
+    expect(OpenOpcImageModelSchema.safeParse(imageModel).success).toBe(true);
+    expect(PlatformImageModelSchema.safeParse(imageModel).success).toBe(true);
+    expect(
+      PlatformChatRequestSchema.safeParse({ model: 'vision-model', messages: [message] }).success,
+    ).toBe(true);
+    expect(OpenOpcImageEventFailureModeSchema.parse('error')).toBe('error');
+    expect(OpenOpcImagePageInputSchema.parse({ cursor: null, limit: 100 })).toEqual({
+      cursor: null,
+      limit: 100,
+    });
+    expect(openOpcImageEstimateRetryGuidance('OPENOPC_IMAGE_INSUFFICIENT_CREDITS')).toEqual({
+      action: 'refresh-quota',
+      can_reestimate: true,
+      retry_same_estimate: false,
+    });
   });
 });

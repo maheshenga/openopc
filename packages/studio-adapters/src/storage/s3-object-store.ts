@@ -329,7 +329,12 @@ export class S3StudioObjectStore implements StudioObjectStore {
     const command = new GetObjectCommand({
       Bucket: this.namespace,
       Key: this.objectKey(input.key),
-      ResponseContentDisposition: attachmentContentDisposition(input.filename),
+      ResponseContentDisposition:
+        input.content_disposition === 'inline'
+          ? 'inline'
+          : attachmentContentDisposition(input.filename),
+      ...(input.content_type ? { ResponseContentType: input.content_type } : {}),
+      ...(input.cache_control ? { ResponseCacheControl: input.cache_control } : {}),
       ...this.expectedOwnerInput(),
     });
     return this.presign(command, input.expires_in_seconds);

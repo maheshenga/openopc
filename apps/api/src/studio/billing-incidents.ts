@@ -8,6 +8,7 @@ import {
 import { type Database, studioBillingIncidents } from '@kortix/db';
 import { and, eq } from 'drizzle-orm';
 import { canonicalStudioRequestHash } from '../../../../packages/studio-runtime/src/idempotency';
+import { isoTimestamp } from '../shared/iso-timestamp';
 
 export type StudioBillingIncidentLockedContext = {
   incident_id: string;
@@ -197,7 +198,7 @@ function serializeLockedIncident(
     status: incident.status as 'open' | 'resolved',
     verified_cost_credits: numericValue(incident.verifiedCostCredits),
     potential_liability_credits: numericValue(incident.potentialLiabilityCredits),
-    opened_at: timestampValue(incident.openedAt),
+    opened_at: isoTimestamp(incident.openedAt, 'Studio billing incident opened_at'),
     resolution: incident.resolution ?? null,
   };
 }
@@ -222,7 +223,7 @@ function serializeResolvedIncident(
     verified_cost_credits: context.verified_cost_credits,
     potential_liability_credits: context.potential_liability_credits,
     provider_liability_credits: resolution.provider_liability_credits,
-    resolved_at: timestampValue(incident.resolvedAt),
+    resolved_at: isoTimestamp(incident.resolvedAt, 'Studio billing incident resolved_at'),
     resolved_by_user_id: incident.resolvedByUserId,
   });
   if (!parsed.success) {
@@ -263,8 +264,4 @@ function numericValue(value: unknown): number {
     throw new StudioBillingIncidentServiceError('STUDIO_INTERNAL_ERROR', 500);
   }
   return parsed;
-}
-
-function timestampValue(value: Date | string): string {
-  return value instanceof Date ? value.toISOString() : value;
 }

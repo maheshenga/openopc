@@ -12,6 +12,7 @@ import {
 
 import { PROJECT_ACTIONS } from '../iam/actions';
 import { auth, errors, json, makeOpenApiApp } from '../openapi';
+import { isoTimestamp, nullableIsoTimestamp } from '../shared/iso-timestamp';
 import type { AppEnv } from '../types';
 import {
   type ModuleAiDependencies,
@@ -24,6 +25,8 @@ import {
   type ModuleServiceConsent,
   type ModuleServiceConsentManager,
 } from './capability-grants';
+import { type ModuleImageDependencies, createModuleImageRoutes } from './images';
+import { createRuntimeModuleImageDependencies } from './images-runtime';
 import {
   type ModulePaymentRouteDependencies,
   createModulePaymentRoutes,
@@ -67,8 +70,8 @@ const consentViewSchema = z.object({
   service: OpenOpcServiceNameSchema,
   operations: z.array(z.string()),
   consent_digest: z.string(),
-  accepted_at: z.string(),
-  revoked_at: z.string().nullable(),
+  accepted_at: z.string().datetime({ offset: true }),
+  revoked_at: z.string().datetime({ offset: true }).nullable(),
 });
 
 function consentView(consent: ModuleServiceConsent) {
@@ -80,8 +83,8 @@ function consentView(consent: ModuleServiceConsent) {
     service: consent.service,
     operations: [...consent.operations],
     consent_digest: consent.consentDigest,
-    accepted_at: consent.acceptedAt,
-    revoked_at: consent.revokedAt,
+    accepted_at: isoTimestamp(consent.acceptedAt, 'module service consent accepted_at'),
+    revoked_at: nullableIsoTimestamp(consent.revokedAt, 'module service consent revoked_at'),
   };
 }
 
@@ -268,7 +271,7 @@ export function createModuleServiceProjectRoutes(
         201: json(
           z.object({
             token: z.string(),
-            expires_at: z.string(),
+            expires_at: z.string().datetime({ offset: true }),
             grant_id: z.string().uuid(),
           }),
           'Issued module service capability',
@@ -308,7 +311,10 @@ export function createModuleServiceProjectRoutes(
         return context.json(
           {
             token: issued.token,
-            expires_at: issued.grant.expiresAt,
+            expires_at: isoTimestamp(
+              issued.grant.expiresAt,
+              'module service capability expires_at',
+            ),
             grant_id: issued.grant.grantId,
           },
           201,
@@ -327,8 +333,10 @@ export function createModuleServiceProjectRoutes(
 export function createModuleServicesApp(
   aiDependencies: ModuleAiDependencies = createRuntimeModuleAiDependencies(),
   paymentDependencies: ModulePaymentRouteDependencies = createRuntimeModulePaymentDependencies(),
+  imageDependencies: ModuleImageDependencies = createRuntimeModuleImageDependencies(),
 ) {
   const app = makeOpenApiApp<AppEnv>();
+  app.route('/ai/images', createModuleImageRoutes(imageDependencies));
   app.route('/ai', createModuleAiRoutes(aiDependencies));
   app.route('/payments', createModulePaymentRoutes(paymentDependencies));
   return app;

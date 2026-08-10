@@ -36,8 +36,9 @@ export type StudioWorkerJob = {
   accountId: string;
   projectId: string;
   actorUserId: string | null;
-  actorType: 'user' | 'agent' | 'system';
+  actorType: 'user' | 'agent' | 'system' | 'module';
   actingTokenId: string | null;
+  moduleServiceGrantId?: string | null;
   agentName: string | null;
   sessionId: string | null;
   capability: 'image.generate';

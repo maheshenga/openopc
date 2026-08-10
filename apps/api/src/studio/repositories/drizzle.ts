@@ -3,8 +3,8 @@ import {
   StudioCredentialBindingSchema,
   type StudioPricingCatalogEntry,
   StudioPricingCatalogEntrySchema,
-  StudioRecoveryResponseSchema,
   type StudioProviderConfig,
+  StudioRecoveryResponseSchema,
 } from '@kortix/api-contract';
 import {
   type Database,
@@ -19,13 +19,14 @@ import {
   studioProviderConfigs,
 } from '@kortix/db';
 import { openAiCompatibleImageDefinition } from '@kortix/studio-adapters';
-import { and, asc, desc, eq, gt, lt, sql } from 'drizzle-orm';
-import { StudioRepositoryError } from '../types';
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { isoTimestamp, nullableIsoTimestamp } from '../../shared/iso-timestamp';
 import {
-  StudioRecoveryServiceError,
   type StudioRecoveryLockedContext,
   type StudioRecoveryRepository,
+  StudioRecoveryServiceError,
 } from '../recovery';
+import { StudioRepositoryError } from '../types';
 import type {
   StudioCreateJobInput,
   StudioCreateJobResult,
@@ -115,15 +116,9 @@ function serializeProvider(row: ProviderRow): StudioProviderConfigWire | null {
     credential_binding: credential,
     capabilities: providerCapabilities(row),
     enabled: row.enabled === true,
-    created_at: row.createdAt ?? new Date(0).toISOString(),
-    updated_at: row.updatedAt ?? new Date(0).toISOString(),
+    created_at: isoTimestamp(row.createdAt ?? new Date(0), 'Studio provider created_at'),
+    updated_at: isoTimestamp(row.updatedAt ?? new Date(0), 'Studio provider updated_at'),
   };
-}
-
-function timestampValue(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value instanceof Date) return value.toISOString();
-  return new Date(String(value)).toISOString();
 }
 
 function serializePricing(row: PricingRow): StudioPricingCatalogEntry {
@@ -139,7 +134,7 @@ function serializePricing(row: PricingRow): StudioPricingCatalogEntry {
     version: row.version,
     active: row.active,
     created_by_user_id: row.createdByUserId ?? null,
-    created_at: timestampValue(row.createdAt),
+    created_at: isoTimestamp(row.createdAt, 'Studio pricing created_at'),
   });
 }
 
@@ -156,7 +151,7 @@ function serializeRawPricing(row: Record<string, unknown>): StudioPricingCatalog
     version: Number(row.version),
     active: row.active,
     created_by_user_id: row.created_by_user_id ?? null,
-    created_at: timestampValue(row.created_at),
+    created_at: isoTimestamp(row.created_at, 'Studio pricing created_at'),
   });
 }
 
@@ -217,8 +212,8 @@ function serializeRawProvider(
     capability_map: row.capability_map as Record<string, unknown>,
     version_token: versionToken,
     enabled: row.enabled === true,
-    created_at: timestampValue(row.created_at),
-    updated_at: timestampValue(row.updated_at),
+    created_at: isoTimestamp(row.created_at, 'Studio provider created_at'),
+    updated_at: isoTimestamp(row.updated_at, 'Studio provider updated_at'),
   };
 }
 
@@ -229,6 +224,7 @@ function serializeJob(row: JobRow): StudioJob {
     project_id: row.projectId,
     actor_user_id: row.actorUserId ?? null,
     actor_type: row.actorType as StudioJob['actor_type'],
+    module_service_grant_id: row.moduleServiceGrantId ?? null,
     capability: row.capability as StudioJob['capability'],
     provider_config_id: row.providerConfigId,
     provider: row.provider,
@@ -242,10 +238,10 @@ function serializeJob(row: JobRow): StudioJob {
     actual_credits: nullableNumberValue(row.actualCredits),
     error_code: (row.errorCode as StudioJob['error_code']) ?? null,
     error_message: row.errorMessage ?? null,
-    created_at: row.createdAt ?? new Date(0).toISOString(),
-    updated_at: row.updatedAt ?? new Date(0).toISOString(),
-    started_at: row.startedAt ?? null,
-    completed_at: row.completedAt ?? null,
+    created_at: isoTimestamp(row.createdAt ?? new Date(0), 'Studio job created_at'),
+    updated_at: isoTimestamp(row.updatedAt ?? new Date(0), 'Studio job updated_at'),
+    started_at: nullableIsoTimestamp(row.startedAt, 'Studio job started_at'),
+    completed_at: nullableIsoTimestamp(row.completedAt, 'Studio job completed_at'),
   };
 }
 
@@ -256,7 +252,7 @@ function serializeEvent(row: EventRow): StudioJobEvent {
     cursor: String(row.cursor),
     type: row.eventType as StudioJobEvent['type'],
     payload: row.payload ?? {},
-    created_at: row.createdAt ?? new Date(0).toISOString(),
+    created_at: isoTimestamp(row.createdAt ?? new Date(0), 'Studio event created_at'),
   };
 }
 
@@ -271,7 +267,7 @@ function serializePendingUpload(row: UploadRow): StudioPendingUploadRecord {
     declared_mime_type: row.declaredMimeType,
     expected_size_bytes: Number(row.expectedSizeBytes),
     expected_checksum_sha256: row.expectedChecksumSha256,
-    expires_at: row.expiresAt,
+    expires_at: isoTimestamp(row.expiresAt, 'Studio upload expires_at'),
     status: row.status as StudioPendingUploadRecord['status'],
   };
 }
@@ -287,7 +283,7 @@ function serializeRawPendingUpload(row: Record<string, unknown>): StudioPendingU
     declared_mime_type: String(row.declared_mime_type),
     expected_size_bytes: Number(row.expected_size_bytes),
     expected_checksum_sha256: String(row.expected_checksum_sha256),
-    expires_at: timestampValue(row.expires_at),
+    expires_at: isoTimestamp(row.expires_at, 'Studio reservation expires_at'),
     status: row.status as StudioPendingUploadRecord['status'],
   };
 }
@@ -307,7 +303,7 @@ function serializeAsset(row: AssetRow): StudioAsset {
     width: row.width ?? null,
     height: row.height ?? null,
     metadata: row.metadata ?? {},
-    created_at: row.createdAt ?? new Date(0).toISOString(),
+    created_at: isoTimestamp(row.createdAt ?? new Date(0), 'Studio asset created_at'),
   };
 }
 
@@ -326,8 +322,15 @@ function serializeRawAsset(row: Record<string, unknown>): StudioAsset {
     width: row.width === null ? null : Number(row.width),
     height: row.height === null ? null : Number(row.height),
     metadata: recordValue(row.metadata) ?? {},
-    created_at: timestampValue(row.created_at),
+    created_at: isoTimestamp(row.created_at, 'Studio asset created_at'),
   };
+}
+
+function metadataIncludes(
+  metadata: Record<string, unknown>,
+  expected: Record<string, string>,
+): boolean {
+  return Object.entries(expected).every(([key, value]) => metadata[key] === value);
 }
 
 function serializeRecoveryResult(value: unknown) {
@@ -368,14 +371,14 @@ function serializeRecoveryContext(input: {
     job_status: job.status,
     attempt_status: attempt.status,
     reservation_status: reservation.status,
-    reservation_created_at: timestampValue(reservation.createdAt),
-    reservation_expires_at: timestampValue(reservation.expiresAt),
-    job_available_at: job.availableAt ? timestampValue(job.availableAt) : null,
+    reservation_created_at: isoTimestamp(reservation.createdAt, 'Studio reservation created_at'),
+    reservation_expires_at: isoTimestamp(reservation.expiresAt, 'Studio reservation expires_at'),
+    job_available_at: nullableIsoTimestamp(job.availableAt, 'Studio job available_at'),
     cancellation_requested_at: job.cancellationRequestedAt
-      ? timestampValue(job.cancellationRequestedAt)
+      ? isoTimestamp(job.cancellationRequestedAt, 'Studio job cancellation_requested_at')
       : null,
     lease_owner: job.leaseOwner ?? null,
-    lease_expires_at: job.leaseExpiresAt ? timestampValue(job.leaseExpiresAt) : null,
+    lease_expires_at: nullableIsoTimestamp(job.leaseExpiresAt, 'Studio job lease_expires_at'),
     submission_key: attempt.submissionKey,
     provider_request_id: attempt.providerRequestId ?? null,
     provider_config_id: job.providerConfigId,
@@ -389,7 +392,7 @@ function serializeRecoveryContext(input: {
     current_attempt_usage: attempt.upstreamUsage ?? {},
     current_attempt_cost_credits: nullableNumberValue(attempt.upstreamCostCredits),
     current_attempt_cost_recorded_at: attempt.costRecordedAt
-      ? timestampValue(attempt.costRecordedAt)
+      ? isoTimestamp(attempt.costRecordedAt, 'Studio attempt cost_recorded_at')
       : null,
     current_attempt_cost_outcome: attempt.costOutcome ?? null,
     verified_attempt_cost_total: verifiedAttemptCostTotal,
@@ -451,17 +454,17 @@ export function createDrizzleStudioRecoveryRepository(db: Database): StudioRecov
       try {
         return await db.transaction(
           async (tx) => {
-          const [job] = await tx
-            .select()
-            .from(studioJobs)
-            .where(eq(studioJobs.jobId, input.job_id))
-            .for('update')
-            .limit(1);
-          if (!job || job.projectId !== input.project_id || job.accountId !== input.account_id) {
-            throw new StudioRecoveryServiceError('STUDIO_JOB_CONFLICT', 404);
-          }
+            const [job] = await tx
+              .select()
+              .from(studioJobs)
+              .where(eq(studioJobs.jobId, input.job_id))
+              .for('update')
+              .limit(1);
+            if (!job || job.projectId !== input.project_id || job.accountId !== input.account_id) {
+              throw new StudioRecoveryServiceError('STUDIO_JOB_CONFLICT', 404);
+            }
 
-          await tx.execute(sql`
+            await tx.execute(sql`
             SELECT pg_catalog.pg_advisory_xact_lock(
               pg_catalog.hashtextextended(
                 ${input.job_id}::uuid::text || pg_catalog.chr(31) || ${input.idempotency_key},
@@ -470,61 +473,64 @@ export function createDrizzleStudioRecoveryRepository(db: Database): StudioRecov
             )
           `);
 
-          const [existingRecovery] = await tx
-            .select()
-            .from(studioJobRecoveries)
-            .where(
-              and(
-                eq(studioJobRecoveries.jobId, input.job_id),
-                eq(studioJobRecoveries.idempotencyKey, input.idempotency_key),
-              ),
-            )
-            .for('update')
-            .limit(1);
-          if (existingRecovery) {
-            if (existingRecovery.requestHash !== input.request_hash) {
-              throw new StudioRecoveryServiceError('STUDIO_RECOVERY_CONFLICT', 409);
+            const [existingRecovery] = await tx
+              .select()
+              .from(studioJobRecoveries)
+              .where(
+                and(
+                  eq(studioJobRecoveries.jobId, input.job_id),
+                  eq(studioJobRecoveries.idempotencyKey, input.idempotency_key),
+                ),
+              )
+              .for('update')
+              .limit(1);
+            if (existingRecovery) {
+              if (existingRecovery.requestHash !== input.request_hash) {
+                throw new StudioRecoveryServiceError('STUDIO_RECOVERY_CONFLICT', 409);
+              }
+              return serializeRecoveryResult(existingRecovery.result);
             }
-            return serializeRecoveryResult(existingRecovery.result);
-          }
 
-          const attempts = await tx
-            .select()
-            .from(studioJobAttempts)
-            .where(
-              and(eq(studioJobAttempts.jobId, input.job_id), eq(studioJobAttempts.status, 'reconciling')),
-            )
-            .for('update');
-          if (attempts.length !== 1) throw recoveryJobConflict();
-          const attempt = attempts[0] as AttemptRow;
+            const attempts = await tx
+              .select()
+              .from(studioJobAttempts)
+              .where(
+                and(
+                  eq(studioJobAttempts.jobId, input.job_id),
+                  eq(studioJobAttempts.status, 'reconciling'),
+                ),
+              )
+              .for('update');
+            if (attempts.length !== 1) throw recoveryJobConflict();
+            const attempt = attempts[0] as AttemptRow;
 
-          const [reservation] = await tx
-            .select()
-            .from(studioCreditReservations)
-            .where(eq(studioCreditReservations.jobId, input.job_id))
-            .for('update')
-            .limit(1);
-          if (!reservation) throw recoveryJobConflict();
+            const [reservation] = await tx
+              .select()
+              .from(studioCreditReservations)
+              .where(eq(studioCreditReservations.jobId, input.job_id))
+              .for('update')
+              .limit(1);
+            if (!reservation) throw recoveryJobConflict();
 
-          const [costs] = await tx
-            .select({
-              total: sql<string>`COALESCE(SUM(${studioJobAttempts.upstreamCostCredits}), 0)`,
-            })
-            .from(studioJobAttempts)
-            .where(
-              and(
-                eq(studioJobAttempts.jobId, input.job_id),
-                sql`${studioJobAttempts.costRecordedAt} IS NOT NULL`,
-              ),
-            );
-          const context = serializeRecoveryContext({
-            job,
-            attempt,
-            reservation,
-            verifiedAttemptCostTotal: Number(costs?.total ?? 0),
-          });
-          const prepared = await prepare(context);
-          const resultRows = await tx.execute(sql`
+            const [costs] = await tx
+              .select({
+                total: sql<string>`COALESCE(SUM(${studioJobAttempts.upstreamCostCredits}), 0)`,
+              })
+              .from(studioJobAttempts)
+              .where(
+                and(
+                  eq(studioJobAttempts.jobId, input.job_id),
+                  sql`${studioJobAttempts.costRecordedAt} IS NOT NULL`,
+                ),
+              );
+            const context = serializeRecoveryContext({
+              job,
+              attempt,
+              reservation,
+              verifiedAttemptCostTotal: Number(costs?.total ?? 0),
+            });
+            const prepared = await prepare(context);
+            const resultRows = await tx.execute(sql`
             SELECT public.atomic_recover_studio_job(
               ${input.project_id}::uuid,
               ${input.job_id}::uuid,
@@ -543,12 +549,14 @@ export function createDrizzleStudioRecoveryRepository(db: Database): StudioRecov
               ${input.recovered_at}::timestamptz
             ) AS result
           `);
-          const rpc = rowsFromExecute(resultRows)[0]?.result as Record<string, unknown> | undefined;
-          if (!rpc) throw new StudioRecoveryServiceError('STUDIO_INTERNAL_ERROR', 500);
-          if (rpc.success === false || typeof rpc.code === 'string') {
-            throw mapRecoveryRpcCode(rpc.code);
-          }
-          return serializeRecoveryResult(rpc);
+            const rpc = rowsFromExecute(resultRows)[0]?.result as
+              | Record<string, unknown>
+              | undefined;
+            if (!rpc) throw new StudioRecoveryServiceError('STUDIO_INTERNAL_ERROR', 500);
+            if (rpc.success === false || typeof rpc.code === 'string') {
+              throw mapRecoveryRpcCode(rpc.code);
+            }
+            return serializeRecoveryResult(rpc);
           },
           { isolationLevel: 'read committed' },
         );
@@ -943,7 +951,8 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
       if (existing[0]) {
         if (
           existing[0].projectId !== input.project_id ||
-          existing[0].requestHash !== input.request_hash
+          existing[0].requestHash !== input.request_hash ||
+          (existing[0].moduleServiceGrantId ?? null) !== (input.module_service_grant_id ?? null)
         ) {
           return { created: false, mismatch: true };
         }
@@ -953,16 +962,30 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
         };
       }
 
+      if (input.module_service_grant_id && input.acting_token_id) {
+        throw new StudioRepositoryError(
+          'STUDIO_MODULE_SERVICE_GRANT_INVALID',
+          409,
+          'A module Studio job cannot use an account token as its acting identity',
+        );
+      }
+
       const reservationExpiresAt = new Date(
         Math.max(Date.now() + 24 * 60 * 60_000, Date.parse(estimate.expires_at)),
       ).toISOString();
-      const rpcRows = productionBinding
-        ? await db.execute(sql`
+      // The atomic reservation RPC predates module grants and cannot accept the
+      // grant column. Insert module jobs as a temporary user row, then switch
+      // actor identity and attach the grant inside this same transaction so the
+      // immediate actor CHECK never observes a module row without its grant.
+      const rpcActorType = input.module_service_grant_id ? 'user' : input.actor_type;
+      const reserveJob = (executor: Pick<Database, 'execute'>) =>
+        productionBinding
+          ? executor.execute(sql`
             SELECT public.atomic_create_studio_job(
               ${input.account_id}::uuid,
               ${input.project_id}::uuid,
               ${input.actor_user_id}::uuid,
-              ${input.actor_type},
+              ${rpcActorType},
               ${input.acting_token_id}::uuid,
               ${input.agent_name},
               ${input.session_id},
@@ -982,12 +1005,12 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
               ${reservationExpiresAt}::timestamptz
             ) AS result
           `)
-        : await db.execute(sql`
+          : executor.execute(sql`
             SELECT public.atomic_create_studio_job(
               ${input.account_id}::uuid,
               ${input.project_id}::uuid,
               ${input.actor_user_id}::uuid,
-              ${input.actor_type},
+              ${rpcActorType},
               ${input.acting_token_id}::uuid,
               ${input.agent_name},
               ${input.session_id},
@@ -1003,6 +1026,34 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
               ${reservationExpiresAt}::timestamptz
             ) AS result
           `);
+      const rpcRows = input.module_service_grant_id
+        ? await db.transaction(async (tx) => {
+            const result = await reserveJob(tx);
+            const candidate = rowsFromExecute(result)[0]?.result as
+              | Record<string, unknown>
+              | undefined;
+            if (candidate?.success === true && candidate.idempotent !== true) {
+              const updated = await tx.execute(sql`
+            UPDATE kortix.studio_jobs
+            SET module_service_grant_id = ${input.module_service_grant_id}::uuid,
+                acting_token_id = NULL,
+                agent_name = NULL,
+                session_id = NULL,
+                actor_type = 'module'
+            WHERE job_id = ${String(candidate.job_id)}::uuid
+              AND account_id = ${input.account_id}::uuid
+              AND project_id = ${input.project_id}::uuid
+              AND actor_type = 'user'
+              AND module_service_grant_id IS NULL
+            RETURNING module_service_grant_id
+          `);
+              if (rowsFromExecute(updated).length !== 1) {
+                throw new Error('Studio module job identity could not be persisted');
+              }
+            }
+            return result;
+          })
+        : await reserveJob(db);
       const rpc = rowsFromExecute(rpcRows)[0]?.result as Record<string, unknown> | undefined;
       if (!rpc || rpc.success !== true) {
         if (rpc?.code === 'idempotency_mismatch') {
@@ -1034,6 +1085,9 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
         .where(and(eq(studioJobs.projectId, input.project_id), eq(studioJobs.jobId, jobId)))
         .limit(1);
       if (!rows[0]) throw new Error('Studio job was created but could not be reloaded');
+      if ((rows[0].moduleServiceGrantId ?? null) !== (input.module_service_grant_id ?? null)) {
+        return { created: false, mismatch: true };
+      }
       const job = serializeJob(rows[0]);
       return { job, created: rpc.idempotent !== true };
     },
@@ -1302,9 +1356,14 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
       );
     },
 
-    async listAssets(projectId, limit, cursor) {
+    async listAssets(projectId, limit, cursor, filter) {
       const conditions = [eq(studioAssets.projectId, projectId)];
       if (cursor) conditions.push(lt(studioAssets.createdAt, cursor));
+      if (filter?.source_job_id) {
+        conditions.push(eq(studioAssets.sourceJobId, filter.source_job_id));
+      }
+      if (filter?.source === 'generated') conditions.push(isNotNull(studioAssets.sourceJobId));
+      if (filter?.source === 'uploaded') conditions.push(isNull(studioAssets.sourceJobId));
       const rows = await db
         .select()
         .from(studioAssets)
@@ -1325,6 +1384,86 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
         .where(and(eq(studioAssets.projectId, projectId), eq(studioAssets.assetId, assetId)))
         .limit(1);
       return rows[0] ? serializeAsset(rows[0]) : null;
+    },
+
+    async updateDirectAssetMetadata(input) {
+      const result = await db.execute(sql`
+        UPDATE kortix.studio_assets asset
+        SET metadata = asset.metadata || ${JSON.stringify(input.metadata_patch)}::jsonb,
+            updated_at = clock_timestamp()
+        WHERE asset.account_id = ${input.account_id}::uuid
+          AND asset.project_id = ${input.project_id}::uuid
+          AND asset.asset_id = ${input.asset_id}::uuid
+          AND asset.source_job_id IS NULL
+          AND asset.metadata @> ${JSON.stringify(input.expected_metadata)}::jsonb
+          AND NOT (asset.metadata ? ${input.forbidden_metadata_key})
+        RETURNING asset.*
+      `);
+      const row = rowsFromExecute(result)[0];
+      return row ? serializeRawAsset(row) : null;
+    },
+
+    async requestDirectAssetDeletion(input) {
+      const targetResult = await db.execute(sql`
+        SELECT pg_catalog.to_jsonb(asset) AS asset_row
+        FROM kortix.studio_assets asset
+        WHERE asset.account_id = ${input.account_id}::uuid
+          AND asset.project_id = ${input.project_id}::uuid
+          AND asset.asset_id = ${input.asset_id}::uuid
+          AND asset.source_job_id IS NULL
+        LIMIT 1
+      `);
+      const targetRow = recordValue(rowsFromExecute(targetResult)[0]?.asset_row);
+      if (!targetRow) return { outcome: 'not_found' as const };
+      const asset = serializeRawAsset(targetRow);
+      if (!metadataIncludes(asset.metadata, input.expected_metadata)) {
+        return { outcome: 'not_found' as const };
+      }
+      if (metadataIncludes(asset.metadata, input.deletion_marker)) {
+        return { outcome: 'requested' as const, asset };
+      }
+      const activeReference = await db.execute(sql`
+        SELECT 1
+        FROM kortix.studio_jobs job
+        WHERE job.account_id = ${input.account_id}::uuid
+          AND job.project_id = ${input.project_id}::uuid
+          AND job.status IN ('queued', 'running')
+          AND job.input -> 'image' -> 'reference_asset_ids'
+            @> ${JSON.stringify([input.asset_id])}::jsonb
+        LIMIT 1
+      `);
+      if (rowsFromExecute(activeReference).length === 1) {
+        return { outcome: 'in_use' as const };
+      }
+
+      const updatedResult = await db.execute(sql`
+        UPDATE kortix.studio_assets asset
+        SET metadata = asset.metadata || ${JSON.stringify(input.deletion_metadata)}::jsonb,
+            updated_at = clock_timestamp()
+        WHERE asset.account_id = ${input.account_id}::uuid
+          AND asset.project_id = ${input.project_id}::uuid
+          AND asset.asset_id = ${input.asset_id}::uuid
+          AND asset.source_job_id IS NULL
+          AND asset.metadata @> ${JSON.stringify(input.expected_metadata)}::jsonb
+        RETURNING asset.*
+      `);
+      const updated = rowsFromExecute(updatedResult)[0];
+      if (!updated) return { outcome: 'not_found' as const };
+      return { outcome: 'requested' as const, asset: serializeRawAsset(updated) };
+    },
+
+    async deleteRequestedDirectAsset(input) {
+      const result = await db.execute(sql`
+        DELETE FROM kortix.studio_assets asset
+        WHERE asset.account_id = ${input.account_id}::uuid
+          AND asset.project_id = ${input.project_id}::uuid
+          AND asset.asset_id = ${input.asset_id}::uuid
+          AND asset.source_job_id IS NULL
+          AND asset.object_key = ${input.object_key}
+          AND asset.metadata @> ${JSON.stringify(input.expected_metadata)}::jsonb
+        RETURNING asset.asset_id
+      `);
+      return rowsFromExecute(result).length === 1;
     },
   };
 }

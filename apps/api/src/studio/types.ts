@@ -26,12 +26,13 @@ export type StudioProviderConfigWire = StudioProviderConfig & {
   account_id: string;
 };
 
-export type StudioCreateJobInput = StudioCreateJobRequest & {
+export type StudioCreateJobInput = Omit<StudioCreateJobRequest, 'module_service_grant_id'> & {
   account_id: string;
   project_id: string;
   actor_user_id: string | null;
-  actor_type: 'user' | 'agent' | 'system';
+  actor_type: 'user' | 'agent' | 'system' | 'module';
   acting_token_id: string | null;
+  module_service_grant_id?: string | null;
   agent_name: string | null;
   session_id: string | null;
   parent_job_id: string | null;
@@ -61,6 +62,8 @@ export function isStudioRepositoryError(
     ((candidate.studioCode === 'STUDIO_INSUFFICIENT_CREDITS' && candidate.httpStatus === 402) ||
       ((candidate.studioCode === 'STUDIO_PROVIDER_CONFIG_STALE' ||
         candidate.studioCode === 'STUDIO_PRICING_STALE') &&
+        candidate.httpStatus === 409) ||
+      (candidate.studioCode === 'STUDIO_MODULE_SERVICE_GRANT_INVALID' &&
         candidate.httpStatus === 409)) &&
     typeof candidate.message === 'string'
   );
@@ -107,6 +110,18 @@ export type StudioFinalizeUploadRecordInput = {
 export type StudioFinalizeUploadRecordResult =
   | { outcome: 'finalized'; asset: StudioAsset }
   | { outcome: 'expired' | 'mismatch' | 'not_found' };
+
+export type StudioDirectAssetMutationScope = {
+  account_id: string;
+  project_id: string;
+  asset_id: string;
+  expected_metadata: Record<string, string>;
+};
+
+export type StudioDirectAssetDeletionRequestResult =
+  | { outcome: 'requested'; asset: StudioAsset }
+  | { outcome: 'in_use' }
+  | { outcome: 'not_found' };
 
 export type StudioCreatePricingInput = {
   account_id: string;
@@ -218,6 +233,27 @@ export interface StudioRepository extends StudioPricingRepository, StudioProvide
     projectId: string,
     limit: number,
     cursor?: string | null,
+    filter?: StudioAssetListFilter,
   ): Promise<{ items: StudioAsset[]; next_cursor: string | null }>;
   getAsset(projectId: string, assetId: string): Promise<StudioAsset | null>;
+  updateDirectAssetMetadata(
+    input: StudioDirectAssetMutationScope & {
+      metadata_patch: Record<string, unknown>;
+      forbidden_metadata_key: string;
+    },
+  ): Promise<StudioAsset | null>;
+  requestDirectAssetDeletion(
+    input: StudioDirectAssetMutationScope & {
+      deletion_marker: Record<string, string>;
+      deletion_metadata: Record<string, string>;
+    },
+  ): Promise<StudioDirectAssetDeletionRequestResult>;
+  deleteRequestedDirectAsset(
+    input: StudioDirectAssetMutationScope & { object_key: string },
+  ): Promise<boolean>;
 }
+
+export type StudioAssetListFilter = {
+  source_job_id?: string;
+  source?: 'generated' | 'uploaded';
+};

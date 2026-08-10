@@ -20,6 +20,14 @@ export class StudioImageValidationError extends Error {
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION = 16_384;
 const MAX_IMAGE_PIXELS = 100_000_000;
+const MAX_THUMBNAIL_BYTES = 8 * 1024 * 1024;
+
+export type StudioImageThumbnail = {
+  bytes: Uint8Array;
+  mimeType: 'image/webp';
+  width: number;
+  height: number;
+};
 
 export async function validateStudioImage(input: {
   bytes: Uint8Array;
@@ -74,6 +82,53 @@ export async function validateStudioImage(input: {
     height,
     sizeBytes: input.bytes.byteLength,
   };
+}
+
+export async function createStudioImageThumbnail(input: {
+  bytes: Uint8Array;
+  mimeType: StudioImageMimeType;
+  maxDimension: number;
+}): Promise<StudioImageThumbnail> {
+  if (
+    !Number.isSafeInteger(input.maxDimension) ||
+    input.maxDimension < 1 ||
+    input.maxDimension > 1024
+  ) {
+    throw new StudioImageValidationError('STUDIO_ASSET_INVALID');
+  }
+  try {
+    const output = await sharp(input.bytes, { limitInputPixels: MAX_IMAGE_PIXELS })
+      .rotate()
+      .resize({
+        width: input.maxDimension,
+        height: input.maxDimension,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: 82, effort: 4 })
+      .toBuffer({ resolveWithObject: true });
+    if (
+      output.data.byteLength < 1 ||
+      output.data.byteLength > MAX_THUMBNAIL_BYTES ||
+      !Number.isSafeInteger(output.info.width) ||
+      !Number.isSafeInteger(output.info.height) ||
+      output.info.width < 1 ||
+      output.info.height < 1 ||
+      output.info.width > input.maxDimension ||
+      output.info.height > input.maxDimension
+    ) {
+      throw new StudioImageValidationError('STUDIO_ASSET_TOO_LARGE');
+    }
+    return {
+      bytes: new Uint8Array(output.data),
+      mimeType: 'image/webp',
+      width: output.info.width,
+      height: output.info.height,
+    };
+  } catch (error) {
+    if (error instanceof StudioImageValidationError) throw error;
+    throw new StudioImageValidationError('STUDIO_ASSET_INVALID');
+  }
 }
 
 function detectImageMimeType(bytes: Uint8Array): StudioImageMimeType | null {

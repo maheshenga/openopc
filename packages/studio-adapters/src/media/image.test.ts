@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import sharp from 'sharp';
-import { validateStudioImage } from './image';
+import { createStudioImageThumbnail, validateStudioImage } from './image';
 
 async function imageBytes(format: 'png' | 'jpeg' | 'webp') {
   return new Uint8Array(
@@ -65,6 +65,21 @@ describe('validateStudioImage', () => {
     await expect(validateStudioImage({ bytes, mimeType: 'image/png' })).rejects.toMatchObject({
       code: 'STUDIO_ASSET_TOO_LARGE',
     });
+  });
+
+  test('creates a bounded WebP thumbnail without enlarging the source', async () => {
+    const bytes = await imageBytes('png');
+    const thumbnail = await createStudioImageThumbnail({
+      bytes,
+      mimeType: 'image/png',
+      maxDimension: 256,
+    });
+
+    expect(thumbnail).toMatchObject({ mimeType: 'image/webp', width: 2, height: 3 });
+    expect(thumbnail.bytes.byteLength).toBeGreaterThan(0);
+    await expect(
+      validateStudioImage({ bytes: thumbnail.bytes, mimeType: thumbnail.mimeType }),
+    ).resolves.toMatchObject({ width: 2, height: 3 });
   });
 
   test('rejects dimensions above 16,384 pixels', async () => {

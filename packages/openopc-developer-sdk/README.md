@@ -61,6 +61,29 @@ messages, or module-controlled storage.
 - `openopc.ai.chat.create(input)` creates a non-streaming completion.
 - `openopc.ai.chat.create({ ...input, stream: true })` returns an
   `AsyncIterable<OpenOpcChatChunk>`.
+- Chat messages accept typed `text` and `image_url` parts. Image URLs must use
+  HTTPS (or bounded image data URLs), and the public model capability describes
+  the accepted MIME types and image byte/count limits. Missing image capability
+  is treated as unsupported.
+- `openopc.ai.images.jobs.subscribe(jobId)` yields typed job/event updates,
+  including the current cursor, progress, retry scheduling, terminal events,
+  and `eventHistory`. It starts at `cursor: null` unless an initial event page
+  is supplied. Event history failures fall back to status polling by default;
+  pass `eventFailureMode: 'error'` to receive a typed
+  `OpenOpcImageEventHistoryError`. Abort and timeout always terminate the whole
+  subscription.
+- `openopc.ai.images.jobs.waitForTerminal(jobId)` consumes the same subscription
+  and returns the authoritative terminal job. `openopc.ai.images.assets.pages()`
+  stops only when `next_cursor` is `null` and rejects a repeated cursor;
+  `listAll()` de-duplicates repeated `asset_id` values across pages. Asset pages
+  accept `source: 'generated' | 'uploaded'` and `source_job_id`; successful jobs
+  also expose the equivalent direct `jobs.outputs(jobId)` page. Use
+  `assets.thumbnail(assetId, { preset })` for a private, short-lived WebP
+  derivative instead of downloading the original for list previews.
+- `openopc.ai.images.estimates.retryGuidance(error)` returns typed guidance for
+  expired estimates, quota changes, transient provider/storage failures, input
+  fixes, and settlement reconciliation. Clients must not retry the same estimate
+  automatically.
 
 The request cannot select a provider, base URL, API key, or custom
 authorization header. Provider credentials remain in the platform gateway.
@@ -102,6 +125,10 @@ set it on one request. Values must be between 1 ms and 10 minutes.
   violated the public protocol.
 - `OpenOpcModuleServiceError` contains a stable platform error `code` and HTTP
   `status` without exposing upstream provider details.
+- `OpenOpcImageEventHistoryError` means event history was unavailable and the
+  caller explicitly selected `eventFailureMode: 'error'`.
+- `OpenOpcImagePaginationError` means an asset page endpoint repeated a cursor;
+  the iterator stops instead of looping indefinitely.
 - `OpenOpcModuleRequestError` reports a provider-neutral lifecycle code:
   `OPENOPC_MODULE_REQUEST_ABORTED`, `OPENOPC_MODULE_REQUEST_TIMEOUT`, or
   `OPENOPC_MODULE_REQUEST_FAILED`.

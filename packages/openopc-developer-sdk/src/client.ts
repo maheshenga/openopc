@@ -1,4 +1,6 @@
 import {
+  type OpenOpcChatCompletionRequest as ContractOpenOpcChatCompletionRequest,
+  type OpenOpcModel as ContractOpenOpcModel,
   type CreateDeveloperPaymentOrderInput,
   CreateDeveloperPaymentOrderInputSchema,
   type CreateDeveloperPaymentOrderResult,
@@ -13,8 +15,49 @@ import {
   ModuleServiceCapabilityRequestSchema,
   type ModuleServiceErrorCode,
   ModuleServiceErrorResponseSchema,
+  OPENOPC_IMAGE_ASSET_MAX_BYTES,
+  OPENOPC_IMAGE_MIME_TYPES,
+  OpenOpcChatCompletionRequestSchema,
+  type OpenOpcImageAsset,
+  type OpenOpcImageAssetCreateMetadata,
+  OpenOpcImageAssetCreateMetadataSchema,
+  type OpenOpcImageAssetDeleteResult,
+  OpenOpcImageAssetDeleteResultSchema,
+  type OpenOpcImageAssetListInput,
+  OpenOpcImageAssetListInputSchema,
+  type OpenOpcImageAssetPage,
+  OpenOpcImageAssetPageSchema,
+  type OpenOpcImageAssetPreview,
+  OpenOpcImageAssetPreviewSchema,
+  OpenOpcImageAssetSchema,
+  type OpenOpcImageAssetThumbnail,
+  type OpenOpcImageAssetThumbnailInput,
+  OpenOpcImageAssetThumbnailInputSchema,
+  OpenOpcImageAssetThumbnailSchema,
+  type OpenOpcImageEstimate,
+  type OpenOpcImageEstimateCreateInput,
+  OpenOpcImageEstimateCreateInputSchema,
+  type OpenOpcImageEstimateRetryGuidance,
+  OpenOpcImageEstimateSchema,
+  type OpenOpcImageEventFailureMode,
+  OpenOpcImageEventFailureModeSchema,
+  type OpenOpcImageEventHistoryState,
+  type OpenOpcImageJob,
+  type OpenOpcImageJobCreateInput,
+  OpenOpcImageJobCreateInputSchema,
+  type OpenOpcImageJobEvent,
+  type OpenOpcImageJobEventPage,
+  OpenOpcImageJobEventPageSchema,
+  OpenOpcImageJobSchema,
+  type OpenOpcImageModelListResponse,
+  OpenOpcImageModelListResponseSchema,
+  type OpenOpcImagePageInput,
+  OpenOpcImagePageInputSchema,
+  type OpenOpcModelListResponse,
+  OpenOpcModelListResponseSchema,
   type OpenOpcServiceName,
   type OpenOpcServiceOperation,
+  openOpcImageEstimateRetryGuidance,
 } from './contracts.js';
 import { OpenOpcModuleRequestError, type OpenOpcModuleRequestErrorCode } from './errors.js';
 
@@ -29,6 +72,7 @@ const REQUEST_KEYS = new Set([
   'method',
   'path',
   'body',
+  'query',
   'idempotencyKey',
   'signal',
   'timeoutMs',
@@ -72,47 +116,44 @@ export interface OpenOpcModuleTransportRequest extends OpenOpcRequestOptions {
   method: 'GET' | 'POST';
   path: string;
   body?: unknown;
+  query?: Record<string, string | number | undefined>;
   idempotencyKey?: string;
 }
 
-export interface OpenOpcModel {
-  id: string;
-  object: 'model';
-  owned_by: string;
-  name?: string;
-  reasoning?: boolean;
-  tool_call?: boolean;
-  attachment?: boolean;
-  temperature?: boolean;
-  limit?: { context: number; output: number };
+export type OpenOpcModel = ContractOpenOpcModel;
+export type OpenOpcChatMessage = ContractOpenOpcChatCompletionRequest['messages'][number];
+export type OpenOpcChatCompletionRequest = ContractOpenOpcChatCompletionRequest;
+
+export interface OpenOpcImageAssetCreateInput extends OpenOpcImageAssetCreateMetadata {
+  file: Blob;
 }
 
-export interface OpenOpcChatMessage {
-  role: 'system' | 'developer' | 'user' | 'assistant' | 'tool';
-  content: string | readonly unknown[] | null;
-  name?: string;
-  tool_call_id?: string;
-  tool_calls?: readonly unknown[];
+export interface OpenOpcImageWaitUpdate {
+  job: OpenOpcImageJob;
+  event?: OpenOpcImageJobEvent;
+  progress?: number;
+  retryAfterMs?: number;
+  cursor: string | null;
+  eventHistory: OpenOpcImageEventHistoryState;
+  eventErrorCode?: 'OPENOPC_IMAGE_EVENT_HISTORY_UNAVAILABLE';
+  terminal: boolean;
 }
 
-export interface OpenOpcChatCompletionRequest {
-  model: string;
-  messages: readonly OpenOpcChatMessage[];
-  stream?: boolean;
-  temperature?: number;
-  top_p?: number;
-  max_tokens?: number;
-  max_completion_tokens?: number;
-  n?: number;
-  stop?: string | readonly string[] | null;
-  presence_penalty?: number;
-  frequency_penalty?: number;
-  seed?: number;
-  response_format?: Record<string, unknown>;
-  tools?: readonly unknown[];
-  tool_choice?: unknown;
-  user?: string;
-  metadata?: Record<string, unknown>;
+export interface OpenOpcImageWaitOptions extends OpenOpcRequestOptions {
+  cursor?: string | null;
+  pollIntervalMs?: number;
+  initialEventPage?: OpenOpcImageJobEventPage;
+  eventFailureMode?: OpenOpcImageEventFailureMode;
+  onEvent?: (event: OpenOpcImageJobEvent) => void;
+  onUpdate?: (update: OpenOpcImageWaitUpdate) => void;
+}
+
+export interface OpenOpcImageAssetCreateOptions extends OpenOpcRequestOptions {
+  metadata?: OpenOpcImageAssetCreateMetadata;
+}
+
+export interface OpenOpcImageAssetListAllOptions extends OpenOpcImageAssetListInput {
+  maxItems?: number;
 }
 
 export interface OpenOpcChatCompletion {
@@ -137,7 +178,7 @@ export interface OpenOpcChatChunk {
 
 export interface OpenOpcAiClient {
   models: {
-    list(options?: OpenOpcRequestOptions): Promise<{ data: OpenOpcModel[] }>;
+    list(options?: OpenOpcRequestOptions): Promise<OpenOpcModelListResponse>;
   };
   chat: {
     create(
@@ -148,6 +189,83 @@ export interface OpenOpcAiClient {
       input: OpenOpcChatCompletionRequest & { stream: true },
       options?: OpenOpcRequestOptions,
     ): Promise<AsyncIterable<OpenOpcChatChunk>>;
+  };
+  images: OpenOpcImageClient;
+}
+
+export interface OpenOpcImageClient {
+  models: {
+    list(options?: OpenOpcRequestOptions): Promise<OpenOpcImageModelListResponse>;
+  };
+  estimates: {
+    create(
+      input: OpenOpcImageEstimateCreateInput,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageEstimate>;
+    isExpired(estimate: OpenOpcImageEstimate, now?: Date): boolean;
+    retryGuidance(errorOrCode: unknown): OpenOpcImageEstimateRetryGuidance;
+  };
+  jobs: {
+    create(
+      input: OpenOpcImageJobCreateInput,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageJob>;
+    get(jobId: string, options?: OpenOpcRequestOptions): Promise<OpenOpcImageJob>;
+    events(
+      jobId: string,
+      input?: { cursor?: string | null; limit?: number },
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageJobEventPage>;
+    outputs(
+      jobId: string,
+      input?: OpenOpcImagePageInput,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageAssetPage>;
+    cancel(jobId: string, options?: OpenOpcRequestOptions): Promise<OpenOpcImageJob>;
+    subscribe(
+      jobId: string,
+      options?: OpenOpcImageWaitOptions,
+    ): AsyncIterable<OpenOpcImageWaitUpdate>;
+    waitForTerminal(jobId: string, options?: OpenOpcImageWaitOptions): Promise<OpenOpcImageJob>;
+  };
+  assets: {
+    create(
+      input: OpenOpcImageAssetCreateInput,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageAsset>;
+    create(
+      file: Blob,
+      metadata?: OpenOpcImageAssetCreateMetadata,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageAsset>;
+    list(
+      input?: OpenOpcImageAssetListInput,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageAssetPage>;
+    pages(
+      input?: OpenOpcImageAssetListInput,
+      options?: OpenOpcRequestOptions,
+    ): AsyncIterable<OpenOpcImageAssetPage>;
+    listAll(
+      input?: OpenOpcImageAssetListAllOptions,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageAsset[]>;
+    preview(assetId: string, options?: OpenOpcRequestOptions): Promise<OpenOpcImageAssetPreview>;
+    thumbnail(
+      assetId: string,
+      input?: OpenOpcImageAssetThumbnailInput,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageAssetThumbnail>;
+    download(assetId: string, options?: OpenOpcRequestOptions): Promise<Blob>;
+    delete(
+      assetId: string,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageAssetDeleteResult>;
+    setRetention(
+      assetId: string,
+      policy: 'temporary' | 'retained',
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageAsset>;
   };
 }
 
@@ -190,6 +308,30 @@ export class OpenOpcModuleServiceError extends Error {
   ) {
     super(code);
     this.name = 'OpenOpcModuleServiceError';
+  }
+}
+
+export type OpenOpcImageEventHistoryErrorCode = 'OPENOPC_IMAGE_EVENT_HISTORY_UNAVAILABLE';
+
+/** Event history could not be read and the caller opted out of polling fallback. */
+export class OpenOpcImageEventHistoryError extends Error {
+  readonly code: OpenOpcImageEventHistoryErrorCode = 'OPENOPC_IMAGE_EVENT_HISTORY_UNAVAILABLE';
+
+  constructor() {
+    super('OpenOPC image event history is unavailable');
+    this.name = 'OpenOpcImageEventHistoryError';
+  }
+}
+
+export type OpenOpcImagePaginationErrorCode = 'OPENOPC_IMAGE_PAGINATION_CURSOR_REPEATED';
+
+/** A page endpoint returned a cursor already consumed by this iterator. */
+export class OpenOpcImagePaginationError extends Error {
+  readonly code: OpenOpcImagePaginationErrorCode = 'OPENOPC_IMAGE_PAGINATION_CURSOR_REPEATED';
+
+  constructor() {
+    super('OpenOPC image pagination cursor repeated');
+    this.name = 'OpenOpcImagePaginationError';
   }
 }
 
@@ -371,6 +513,24 @@ function validateRequest(input: OpenOpcModuleTransportRequest): void {
   if (input.method === 'GET' && input.body !== undefined) {
     protocolError('OpenOPC module service request is invalid');
   }
+  if (input.query !== undefined) {
+    if (
+      !input.query ||
+      typeof input.query !== 'object' ||
+      Array.isArray(input.query) ||
+      Object.keys(input.query).some((key) => {
+        const value = input.query?.[key];
+        return (
+          !/^[A-Za-z0-9_.~-]{1,64}$/.test(key) ||
+          (value !== undefined &&
+            (typeof value !== 'string' || value.length > 2048) &&
+            (typeof value !== 'number' || !Number.isFinite(value)))
+        );
+      })
+    ) {
+      protocolError('OpenOPC module service query is invalid');
+    }
+  }
   if (
     input.idempotencyKey !== undefined &&
     (input.method !== 'POST' ||
@@ -395,28 +555,13 @@ function validateRequest(input: OpenOpcModuleTransportRequest): void {
 }
 
 function validateChatInput(input: OpenOpcChatCompletionRequest): void {
-  if (
-    !input ||
-    typeof input !== 'object' ||
-    Array.isArray(input) ||
-    Object.keys(input).some((key) => PROVIDER_SELECTION_KEYS.has(key)) ||
-    typeof input.model !== 'string' ||
-    input.model.length === 0 ||
-    input.model.length > 512 ||
-    input.model.trim() !== input.model ||
-    !Array.isArray(input.messages) ||
-    input.messages.length === 0 ||
-    input.messages.length > 1024 ||
-    (input.stream !== undefined && typeof input.stream !== 'boolean') ||
-    input.messages.some(
-      (message) =>
-        !message ||
-        typeof message !== 'object' ||
-        Array.isArray(message) ||
-        !['system', 'developer', 'user', 'assistant', 'tool'].includes(message.role) ||
-        !Object.hasOwn(message, 'content'),
-    )
-  ) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    protocolError('OpenOPC AI chat request is invalid');
+  }
+  if (Object.keys(input).some((key) => PROVIDER_SELECTION_KEYS.has(key))) {
+    protocolError('OpenOPC AI chat request is invalid');
+  }
+  if (!OpenOpcChatCompletionRequestSchema.safeParse(input).success) {
     protocolError('OpenOPC AI chat request is invalid');
   }
 }
@@ -451,6 +596,159 @@ async function readResponseText(response: Response, context: RequestContext): Pr
   } catch (error) {
     requestFailure(error, context);
   }
+}
+
+async function readResponseBlob(response: Response, context: RequestContext): Promise<Blob> {
+  try {
+    return await abortable(response.blob(), context);
+  } catch (error) {
+    requestFailure(error, context);
+  }
+}
+
+function validateResourceId(value: string, label: string): string {
+  if (
+    typeof value !== 'string' ||
+    value.length < 1 ||
+    value.length > 512 ||
+    /[\\/?#%]/.test(value) ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 0x20 || code === 0x7f;
+    })
+  ) {
+    protocolError(`OpenOPC image ${label} is invalid`);
+  }
+  return value;
+}
+
+function isBlobValue(value: unknown): value is Blob {
+  return typeof Blob !== 'undefined' && value instanceof Blob;
+}
+
+function validateImagePageInput(input: { cursor?: string | null; limit?: number } | undefined) {
+  if (input === undefined) return;
+  if (!OpenOpcImagePageInputSchema.safeParse(input).success) {
+    protocolError('OpenOPC image page input is invalid');
+  }
+}
+
+function validateImageAssetListInput(input: OpenOpcImageAssetListInput | undefined) {
+  if (input === undefined) return;
+  if (!OpenOpcImageAssetListInputSchema.safeParse(input).success) {
+    protocolError('OpenOPC image asset list input is invalid');
+  }
+}
+
+function validateImageWaitOptions(options: OpenOpcImageWaitOptions | undefined): void {
+  if (options === undefined) return;
+  if (
+    !options ||
+    typeof options !== 'object' ||
+    Array.isArray(options) ||
+    Object.keys(options).some(
+      (key) =>
+        ![
+          'signal',
+          'timeoutMs',
+          'cursor',
+          'pollIntervalMs',
+          'initialEventPage',
+          'eventFailureMode',
+          'onEvent',
+          'onUpdate',
+        ].includes(key),
+    )
+  ) {
+    protocolError('OpenOPC image wait options are invalid');
+  }
+  validateRequestOptions(options);
+  if (
+    options.cursor !== undefined &&
+    options.cursor !== null &&
+    (typeof options.cursor !== 'string' ||
+      options.cursor.length < 1 ||
+      options.cursor.length > 2048)
+  ) {
+    protocolError('OpenOPC image wait cursor is invalid');
+  }
+  if (
+    options.pollIntervalMs !== undefined &&
+    (!Number.isSafeInteger(options.pollIntervalMs) ||
+      options.pollIntervalMs < 50 ||
+      options.pollIntervalMs > 10_000)
+  ) {
+    protocolError('OpenOPC image wait interval is invalid');
+  }
+  if (
+    options.initialEventPage !== undefined &&
+    !OpenOpcImageJobEventPageSchema.safeParse(options.initialEventPage).success
+  ) {
+    protocolError('OpenOPC image initial event page is invalid');
+  }
+  if (options.cursor !== undefined && options.initialEventPage !== undefined) {
+    protocolError('OpenOPC image wait cursor is ambiguous');
+  }
+  if (
+    options.eventFailureMode !== undefined &&
+    !OpenOpcImageEventFailureModeSchema.safeParse(options.eventFailureMode).success
+  ) {
+    protocolError('OpenOPC image event failure mode is invalid');
+  }
+  if (options.onEvent !== undefined && typeof options.onEvent !== 'function') {
+    protocolError('OpenOPC image wait event callback is invalid');
+  }
+  if (options.onUpdate !== undefined && typeof options.onUpdate !== 'function') {
+    protocolError('OpenOPC image wait update callback is invalid');
+  }
+}
+
+function isTerminalImageJob(job: OpenOpcImageJob): boolean {
+  return ['succeeded', 'failed', 'cancelled'].includes(job.status);
+}
+
+function isTerminalImageEvent(event: OpenOpcImageJobEvent): boolean {
+  return ['succeeded', 'failed', 'cancelled'].includes(event.type);
+}
+
+function shouldFallbackFromImageEvents(error: unknown): boolean {
+  if (error instanceof OpenOpcModuleRequestError) {
+    return error.code === 'OPENOPC_MODULE_REQUEST_FAILED';
+  }
+  if (error instanceof OpenOpcModuleServiceError) {
+    return (
+      error.status >= 500 ||
+      error.code === 'OPENOPC_IMAGE_EVENT_CURSOR_EXPIRED' ||
+      error.code === 'OPENOPC_IMAGE_EVENT_HISTORY_UNAVAILABLE'
+    );
+  }
+  return false;
+}
+
+function imageEstimateIsExpired(estimate: OpenOpcImageEstimate, now = new Date()): boolean {
+  const parsed = OpenOpcImageEstimateSchema.safeParse(estimate);
+  if (!parsed.success || !(now instanceof Date) || Number.isNaN(now.getTime())) return true;
+  const expiresAt = Date.parse(parsed.data.expires_at);
+  return !Number.isFinite(expiresAt) || expiresAt <= now.getTime();
+}
+
+function sleepWithAbort(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new OpenOpcModuleRequestError('OPENOPC_MODULE_REQUEST_ABORTED'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      reject(new OpenOpcModuleRequestError('OPENOPC_MODULE_REQUEST_ABORTED'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 async function* parseEventStream(
@@ -570,25 +868,41 @@ export function createOpenOpcModuleClient(
           context,
         ),
       );
+      const isDownload = input.path.endsWith('/download');
       const headers = new Headers({
-        Accept: input.operation === 'text.stream' ? 'text/event-stream' : 'application/json',
+        Accept:
+          input.operation === 'text.stream'
+            ? 'text/event-stream'
+            : isDownload
+              ? 'image/*'
+              : 'application/json',
         Authorization: `Bearer ${token}`,
         ...(input.idempotencyKey ? { 'Idempotency-Key': input.idempotencyKey } : {}),
       });
-      let body: string | undefined;
+      let body: BodyInit | undefined;
       if (input.body !== undefined) {
-        headers.set('Content-Type', 'application/json');
-        try {
-          body = JSON.stringify(input.body);
-        } catch {
-          protocolError('OpenOPC module service request body is invalid');
+        if (typeof FormData !== 'undefined' && input.body instanceof FormData) {
+          body = input.body;
+        } else if (typeof Blob !== 'undefined' && input.body instanceof Blob) {
+          body = input.body;
+        } else {
+          headers.set('Content-Type', 'application/json');
+          try {
+            body = JSON.stringify(input.body);
+          } catch {
+            protocolError('OpenOPC module service request body is invalid');
+          }
+          if (body === undefined) protocolError('OpenOPC module service request body is invalid');
         }
-        if (body === undefined) protocolError('OpenOPC module service request body is invalid');
       }
 
+      const url = new URL(input.path, baseUrl);
+      for (const [key, value] of Object.entries(input.query ?? {})) {
+        if (value !== undefined) url.searchParams.set(key, String(value));
+      }
       const response = await abortable(
         Promise.resolve().then(() =>
-          requestFetch(new URL(input.path, baseUrl), {
+          requestFetch(url, {
             method: input.method,
             headers,
             body,
@@ -667,6 +981,639 @@ export function createOpenOpcModuleClient(
       ),
     );
   }
+
+  const listModels = async (options?: OpenOpcRequestOptions): Promise<OpenOpcModelListResponse> => {
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'models.read',
+          method: 'GET',
+          path: '/v1/module-services/ai/models',
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcModelListResponseSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC AI model response is invalid');
+    return parsed.data;
+  };
+
+  const listImageModels = async (
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageModelListResponse> => {
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'GET',
+          path: '/v1/module-services/ai/images/models',
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageModelListResponseSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image model response is invalid');
+    return parsed.data;
+  };
+
+  const createImageEstimate = async (
+    input: OpenOpcImageEstimateCreateInput,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageEstimate> => {
+    if (!OpenOpcImageEstimateCreateInputSchema.safeParse(input).success) {
+      protocolError('OpenOPC image estimate input is invalid');
+    }
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'POST',
+          path: '/v1/module-services/ai/images/estimates',
+          body: input,
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageEstimateSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image estimate response is invalid');
+    return parsed.data;
+  };
+
+  const createImageJob = async (
+    input: OpenOpcImageJobCreateInput,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageJob> => {
+    if (!OpenOpcImageJobCreateInputSchema.safeParse(input).success) {
+      protocolError('OpenOPC image job input is invalid');
+    }
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'POST',
+          path: '/v1/module-services/ai/images/jobs',
+          body: input,
+          idempotencyKey: input.idempotency_key,
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageJobSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image job response is invalid');
+    return parsed.data;
+  };
+
+  const getImageJob = async (
+    jobId: string,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageJob> => {
+    validateResourceId(jobId, 'job id');
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'GET',
+          path: `/v1/module-services/ai/images/jobs/${encodeURIComponent(jobId)}`,
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageJobSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image job response is invalid');
+    return parsed.data;
+  };
+
+  const getImageJobEvents = async (
+    jobId: string,
+    input?: OpenOpcImagePageInput,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageJobEventPage> => {
+    validateResourceId(jobId, 'job id');
+    validateImagePageInput(input);
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'GET',
+          path: `/v1/module-services/ai/images/jobs/${encodeURIComponent(jobId)}/events`,
+          query: {
+            cursor: input?.cursor ?? undefined,
+            limit: input?.limit,
+          },
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageJobEventPageSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image event response is invalid');
+    return parsed.data;
+  };
+
+  const getImageJobOutputs = async (
+    jobId: string,
+    input?: OpenOpcImagePageInput,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageAssetPage> => {
+    validateResourceId(jobId, 'job id');
+    validateImagePageInput(input);
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'GET',
+          path: `/v1/module-services/ai/images/jobs/${encodeURIComponent(jobId)}/outputs`,
+          query: {
+            cursor: input?.cursor ?? undefined,
+            limit: input?.limit,
+          },
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageAssetPageSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image job outputs response is invalid');
+    return parsed.data;
+  };
+
+  const cancelImageJob = async (
+    jobId: string,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageJob> => {
+    validateResourceId(jobId, 'job id');
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'POST',
+          path: `/v1/module-services/ai/images/jobs/${encodeURIComponent(jobId)}/cancel`,
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageJobSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image job response is invalid');
+    return parsed.data;
+  };
+
+  const subscribeToImageJob = async function* (
+    jobId: string,
+    options?: OpenOpcImageWaitOptions,
+  ): AsyncIterable<OpenOpcImageWaitUpdate> {
+    validateResourceId(jobId, 'job id');
+    validateImageWaitOptions(options);
+    const waitTimeoutMs = options?.timeoutMs ?? 300_000;
+    const pollIntervalMs = options?.pollIntervalMs ?? 500;
+    const eventFailureMode = options?.eventFailureMode ?? 'fallback-to-polling';
+    const waitController = new AbortController();
+    let timedOut = false;
+    let cleaned = false;
+    const callerSignal = options?.signal;
+    if (callerSignal?.aborted) {
+      throw new OpenOpcModuleRequestError('OPENOPC_MODULE_REQUEST_ABORTED');
+    }
+    const onCallerAbort = () => waitController.abort();
+    const timer = setTimeout(() => {
+      timedOut = true;
+      waitController.abort();
+    }, waitTimeoutMs);
+    callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      clearTimeout(timer);
+      callerSignal?.removeEventListener('abort', onCallerAbort);
+    };
+    const startedAt = Date.now();
+    const requestOptions = (): OpenOpcRequestOptions => {
+      const remaining = waitTimeoutMs - (Date.now() - startedAt);
+      if (remaining <= 0) {
+        timedOut = true;
+        waitController.abort();
+      }
+      return {
+        signal: waitController.signal,
+        timeoutMs: Math.min(MAX_REQUEST_TIMEOUT_MS, Math.max(1, remaining)),
+      };
+    };
+    let eventHistory: OpenOpcImageEventHistoryState = 'available';
+    let cursor = options?.cursor ?? null;
+    const seenEventIds = new Set<string>();
+    let pendingRetryAfterMs = 0;
+    let job: OpenOpcImageJob;
+
+    const emit = (input: {
+      job: OpenOpcImageJob;
+      event?: OpenOpcImageJobEvent;
+      progress?: number;
+      retryAfterMs?: number;
+      eventErrorCode?: 'OPENOPC_IMAGE_EVENT_HISTORY_UNAVAILABLE';
+    }): OpenOpcImageWaitUpdate => {
+      const update: OpenOpcImageWaitUpdate = {
+        job: input.job,
+        ...(input.event ? { event: input.event } : {}),
+        ...(input.progress !== undefined ? { progress: input.progress } : {}),
+        ...(input.retryAfterMs !== undefined ? { retryAfterMs: input.retryAfterMs } : {}),
+        cursor,
+        eventHistory,
+        ...(input.eventErrorCode ? { eventErrorCode: input.eventErrorCode } : {}),
+        terminal:
+          isTerminalImageJob(input.job) ||
+          Boolean(input.event && isTerminalImageEvent(input.event)),
+      };
+      options?.onUpdate?.(update);
+      return update;
+    };
+
+    const acceptEvent = (event: OpenOpcImageJobEvent): boolean => {
+      if (event.job_id !== jobId) protocolError('OpenOPC image event job id is invalid');
+      if (seenEventIds.has(event.event_id)) return false;
+      seenEventIds.add(event.event_id);
+      cursor = event.cursor;
+      options?.onEvent?.(event);
+      return true;
+    };
+
+    try {
+      job = await getImageJob(jobId, requestOptions());
+      const initialEventPage = options?.initialEventPage;
+      if (initialEventPage) {
+        for (const event of initialEventPage.items) {
+          if (!acceptEvent(event)) continue;
+          if (event.type === 'retry-scheduled') {
+            pendingRetryAfterMs = Math.max(pendingRetryAfterMs, event.retry_after_ms ?? 0);
+          }
+          yield emit({
+            job,
+            event,
+            ...(event.type === 'progress' ? { progress: event.progress } : {}),
+            ...(event.type === 'retry-scheduled'
+              ? { retryAfterMs: event.retry_after_ms ?? 0 }
+              : {}),
+          });
+        }
+        cursor = initialEventPage.next_cursor ?? cursor;
+      }
+      yield emit({ job });
+      while (!isTerminalImageJob(job)) {
+        let retryAfterMs = pendingRetryAfterMs;
+        pendingRetryAfterMs = 0;
+        if (eventHistory === 'available') {
+          try {
+            const page = await getImageJobEvents(jobId, { cursor, limit: 100 }, requestOptions());
+            for (const event of page.items) {
+              if (!acceptEvent(event)) continue;
+              if (event.type === 'progress') {
+                yield emit({ job, event, progress: event.progress });
+              } else if (event.type === 'retry-scheduled') {
+                retryAfterMs = Math.max(retryAfterMs, event.retry_after_ms ?? 0);
+                yield emit({ job, event, retryAfterMs });
+              } else {
+                yield emit({ job, event });
+              }
+            }
+            cursor = page.next_cursor ?? page.items[page.items.length - 1]?.cursor ?? cursor;
+          } catch (error) {
+            if (!shouldFallbackFromImageEvents(error)) throw error;
+            if (eventFailureMode === 'error') throw new OpenOpcImageEventHistoryError();
+            eventHistory = 'unavailable';
+            yield emit({
+              job,
+              eventErrorCode: 'OPENOPC_IMAGE_EVENT_HISTORY_UNAVAILABLE',
+            });
+          }
+        }
+        job = await getImageJob(jobId, requestOptions());
+        yield emit({ job });
+        if (isTerminalImageJob(job)) break;
+        await sleepWithAbort(Math.max(pollIntervalMs, retryAfterMs), waitController.signal);
+      }
+    } catch (error) {
+      if (timedOut) {
+        throw new OpenOpcModuleRequestError('OPENOPC_MODULE_REQUEST_TIMEOUT');
+      }
+      throw error;
+    } finally {
+      cleanup();
+    }
+  };
+
+  const waitForImageJobTerminal = async (
+    jobId: string,
+    options?: OpenOpcImageWaitOptions,
+  ): Promise<OpenOpcImageJob> => {
+    let terminalJob: OpenOpcImageJob | undefined;
+    for await (const update of subscribeToImageJob(jobId, options)) {
+      if (isTerminalImageJob(update.job)) terminalJob = update.job;
+    }
+    if (!terminalJob) throw new OpenOpcModuleRequestError('OPENOPC_MODULE_REQUEST_FAILED');
+    return terminalJob;
+  };
+
+  const createImageAsset = async (
+    inputOrFile: OpenOpcImageAssetCreateInput | Blob,
+    metadataOrOptions?: OpenOpcImageAssetCreateMetadata | OpenOpcRequestOptions,
+    maybeOptions?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageAsset> => {
+    const isBlobInput = isBlobValue(inputOrFile);
+    let file: Blob;
+    let metadata: OpenOpcImageAssetCreateMetadata | undefined;
+    let optionsForRequest: OpenOpcRequestOptions | undefined;
+    if (isBlobInput) {
+      file = inputOrFile;
+      const candidate = metadataOrOptions as Record<string, unknown> | undefined;
+      const candidateIsOptions =
+        candidate !== undefined &&
+        Object.keys(candidate).every((key) => ['signal', 'timeoutMs'].includes(key));
+      metadata = candidateIsOptions
+        ? undefined
+        : ((metadataOrOptions ?? {}) as OpenOpcImageAssetCreateMetadata);
+      optionsForRequest = candidateIsOptions
+        ? (metadataOrOptions as OpenOpcRequestOptions)
+        : maybeOptions;
+    } else {
+      const assetInput = inputOrFile as OpenOpcImageAssetCreateInput;
+      file = assetInput.file;
+      metadata = assetInput;
+      optionsForRequest = metadataOrOptions as OpenOpcRequestOptions | undefined;
+    }
+    const fileMimeType = isBlobValue(file) ? file.type.split(';')[0]?.toLowerCase() : '';
+    if (
+      !isBlobValue(file) ||
+      file.size < 1 ||
+      file.size > OPENOPC_IMAGE_ASSET_MAX_BYTES ||
+      !OPENOPC_IMAGE_MIME_TYPES.includes(fileMimeType as (typeof OPENOPC_IMAGE_MIME_TYPES)[number])
+    ) {
+      protocolError('OpenOPC image asset file is invalid');
+    }
+    const parsedMetadata = OpenOpcImageAssetCreateMetadataSchema.safeParse({
+      filename:
+        metadata?.filename ??
+        (typeof File !== 'undefined' && file instanceof File && file.name ? file.name : 'asset'),
+      metadata: metadata?.metadata,
+      retention: metadata?.retention,
+    });
+    if (!parsedMetadata.success) protocolError('OpenOPC image asset metadata is invalid');
+    const form = new FormData();
+    form.append('file', file, parsedMetadata.data.filename);
+    form.append('filename', parsedMetadata.data.filename);
+    if (parsedMetadata.data.metadata !== undefined) {
+      try {
+        form.append('metadata', JSON.stringify(parsedMetadata.data.metadata));
+      } catch {
+        protocolError('OpenOPC image asset metadata is invalid');
+      }
+    }
+    if (parsedMetadata.data.retention !== undefined)
+      form.append('retention', parsedMetadata.data.retention);
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'POST',
+          path: '/v1/module-services/ai/images/assets',
+          body: form,
+        },
+        optionsForRequest,
+      ),
+    );
+    const parsed = OpenOpcImageAssetSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image asset response is invalid');
+    return parsed.data;
+  };
+
+  const listImageAssets = async (
+    input?: OpenOpcImageAssetListInput,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageAssetPage> => {
+    validateImageAssetListInput(input);
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'GET',
+          path: '/v1/module-services/ai/images/assets',
+          query: {
+            cursor: input?.cursor ?? undefined,
+            limit: input?.limit,
+            source_job_id: input?.source_job_id,
+            source: input?.source,
+          },
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageAssetPageSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image asset response is invalid');
+    return parsed.data;
+  };
+
+  const imageAssetPages = async function* (
+    input?: OpenOpcImageAssetListInput,
+    options?: OpenOpcRequestOptions,
+  ): AsyncIterable<OpenOpcImageAssetPage> {
+    if (input !== undefined) validateImageAssetListInput(input);
+    let cursor: string | null = input?.cursor ?? null;
+    const visitedCursors = new Set<string>();
+    if (cursor !== null) visitedCursors.add(cursor);
+    for (;;) {
+      const page = await listImageAssets(
+        {
+          cursor,
+          limit: input?.limit,
+          source_job_id: input?.source_job_id,
+          source: input?.source,
+        },
+        options,
+      );
+      yield page;
+      if (!page.next_cursor) return;
+      if (visitedCursors.has(page.next_cursor)) throw new OpenOpcImagePaginationError();
+      visitedCursors.add(page.next_cursor);
+      cursor = page.next_cursor;
+    }
+  };
+
+  const listAllImageAssets = async (
+    input?: OpenOpcImageAssetListAllOptions,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageAsset[]> => {
+    if (
+      input !== undefined &&
+      (!input ||
+        typeof input !== 'object' ||
+        Array.isArray(input) ||
+        Object.keys(input).some(
+          (key) => !['cursor', 'limit', 'source_job_id', 'source', 'maxItems'].includes(key),
+        ))
+    ) {
+      protocolError('OpenOPC image asset list options are invalid');
+    }
+    if (
+      input?.maxItems !== undefined &&
+      (!Number.isSafeInteger(input.maxItems) || input.maxItems < 1 || input.maxItems > 10_000)
+    ) {
+      protocolError('OpenOPC image asset maxItems is invalid');
+    }
+    const pageInput: OpenOpcImageAssetListInput | undefined = input
+      ? {
+          cursor: input.cursor,
+          limit: input.limit,
+          source_job_id: input.source_job_id,
+          source: input.source,
+        }
+      : undefined;
+    if (pageInput !== undefined) validateImageAssetListInput(pageInput);
+    const maxItems = input?.maxItems ?? 10_000;
+    const assets: OpenOpcImageAsset[] = [];
+    const seenAssetIds = new Set<string>();
+    for await (const page of imageAssetPages(pageInput, options)) {
+      for (const asset of page.items) {
+        if (seenAssetIds.has(asset.asset_id)) continue;
+        seenAssetIds.add(asset.asset_id);
+        assets.push(asset);
+        if (assets.length >= maxItems) break;
+      }
+      if (assets.length >= maxItems) break;
+    }
+    return assets;
+  };
+
+  const previewImageAsset = async (
+    assetId: string,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageAssetPreview> => {
+    validateResourceId(assetId, 'asset id');
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'GET',
+          path: `/v1/module-services/ai/images/assets/${encodeURIComponent(assetId)}/preview-url`,
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageAssetPreviewSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image asset preview response is invalid');
+    return parsed.data;
+  };
+
+  const thumbnailImageAsset = async (
+    assetId: string,
+    input?: OpenOpcImageAssetThumbnailInput,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageAssetThumbnail> => {
+    validateResourceId(assetId, 'asset id');
+    const parsedInput = OpenOpcImageAssetThumbnailInputSchema.safeParse(input ?? {});
+    if (!parsedInput.success) protocolError('OpenOPC image asset thumbnail input is invalid');
+    const query = parsedInput.data.preset ? { preset: parsedInput.data.preset } : undefined;
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'GET',
+          path: `/v1/module-services/ai/images/assets/${encodeURIComponent(assetId)}/thumbnail-url`,
+          query,
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageAssetThumbnailSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image asset thumbnail response is invalid');
+    return parsed.data;
+  };
+
+  const downloadImageAsset = async (
+    assetId: string,
+    options?: OpenOpcRequestOptions,
+  ): Promise<Blob> => {
+    validateResourceId(assetId, 'asset id');
+    const sent = await send(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'GET',
+          path: `/v1/module-services/ai/images/assets/${encodeURIComponent(assetId)}/download`,
+        },
+        options,
+      ),
+    );
+    try {
+      const blob = await readResponseBlob(sent.response, sent.context);
+      const contentType = (blob.type || sent.response.headers.get('content-type') || '')
+        .split(';')[0]
+        .toLowerCase();
+      if (
+        blob.size > OPENOPC_IMAGE_ASSET_MAX_BYTES ||
+        !OPENOPC_IMAGE_MIME_TYPES.includes(contentType as (typeof OPENOPC_IMAGE_MIME_TYPES)[number])
+      ) {
+        protocolError('OpenOPC image asset download is invalid');
+      }
+      return blob;
+    } finally {
+      sent.context.cleanup();
+    }
+  };
+
+  const deleteImageAsset = async (
+    assetId: string,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageAssetDeleteResult> => {
+    validateResourceId(assetId, 'asset id');
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'POST',
+          path: `/v1/module-services/ai/images/assets/${encodeURIComponent(assetId)}/delete`,
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageAssetDeleteResultSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image asset delete response is invalid');
+    return parsed.data;
+  };
+
+  const setImageAssetRetention = async (
+    assetId: string,
+    policy: 'temporary' | 'retained',
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageAsset> => {
+    validateResourceId(assetId, 'asset id');
+    if (policy !== 'temporary' && policy !== 'retained') {
+      protocolError('OpenOPC image asset retention policy is invalid');
+    }
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'POST',
+          path: `/v1/module-services/ai/images/assets/${encodeURIComponent(assetId)}/retention`,
+          body: { policy },
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageAssetSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image asset response is invalid');
+    return parsed.data;
+  };
 
   const createPaymentOrder = async (
     input: CreateDeveloperPaymentOrderInput,
@@ -750,21 +1697,36 @@ export function createOpenOpcModuleClient(
   return {
     request,
     ai: {
-      models: {
-        list: (options?: OpenOpcRequestOptions) =>
-          request<{ data: OpenOpcModel[] }>(
-            withRequestOptions(
-              {
-                service: 'ai',
-                operation: 'models.read',
-                method: 'GET',
-                path: '/v1/module-services/ai/models',
-              },
-              options,
-            ),
-          ),
-      },
+      models: { list: listModels },
       chat: { create: createChat },
+      images: {
+        models: { list: listImageModels },
+        estimates: {
+          create: createImageEstimate,
+          isExpired: imageEstimateIsExpired,
+          retryGuidance: openOpcImageEstimateRetryGuidance,
+        },
+        jobs: {
+          create: createImageJob,
+          get: getImageJob,
+          events: getImageJobEvents,
+          outputs: getImageJobOutputs,
+          cancel: cancelImageJob,
+          subscribe: subscribeToImageJob,
+          waitForTerminal: waitForImageJobTerminal,
+        },
+        assets: {
+          create: createImageAsset,
+          list: listImageAssets,
+          pages: imageAssetPages,
+          listAll: listAllImageAssets,
+          preview: previewImageAsset,
+          thumbnail: thumbnailImageAsset,
+          download: downloadImageAsset,
+          delete: deleteImageAsset,
+          setRetention: setImageAssetRetention,
+        },
+      },
     },
     payments: {
       orders: {

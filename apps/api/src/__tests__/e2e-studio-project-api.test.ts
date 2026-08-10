@@ -16,6 +16,10 @@ const OTHER_PROVIDER_CONFIG_ID = '00000000-0000-4000-a000-000000000302';
 const ESTIMATE_SIGNING_SECRET = 'studio-test-estimate-signing-secret';
 const ACCOUNT_TOKEN_ID = '00000000-0000-4000-a000-000000000501';
 const SERVICE_ACCOUNT_ID = '00000000-0000-4000-a000-000000000502';
+const MODULE_GRANT_ID = '00000000-0000-4000-a000-000000000601';
+const MODULE_CONSENT_ID = '00000000-0000-4000-a000-000000000602';
+const MODULE_INSTALLATION_ID = '00000000-0000-4000-a000-000000000603';
+const MODULE_RELEASE_ID = '00000000-0000-4000-a000-000000000604';
 const PNG = Uint8Array.from(
   Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -42,6 +46,7 @@ type TestAuthContext = {
   sessionId?: string;
   agentGrant?: { agent: string } | null;
   createJobError?: Error;
+  moduleAuthorization?: unknown;
 };
 
 function createApp(auth: TestAuthContext = {}) {
@@ -87,6 +92,8 @@ function createApp(auth: TestAuthContext = {}) {
       assertedActions.push(action);
     },
     estimateSigningSecret: ESTIMATE_SIGNING_SECRET,
+    loadModuleServiceAuthorization: async (grantId) =>
+      grantId === MODULE_GRANT_ID ? ((auth.moduleAuthorization as never) ?? null) : null,
   });
   const app = new Hono();
   app.use('*', async (c, next) => {
@@ -105,6 +112,69 @@ function createApp(auth: TestAuthContext = {}) {
     return c.json({ error: true, message: (err as Error).message }, 500);
   });
   return { app, assertedActions, store, getCapturedCreateInput: () => capturedCreateInput };
+}
+
+function validModuleAuthorization() {
+  return {
+    grant: {
+      grantId: MODULE_GRANT_ID,
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      installationId: MODULE_INSTALLATION_ID,
+      releaseId: MODULE_RELEASE_ID,
+      consentId: MODULE_CONSENT_ID,
+      service: 'ai' as const,
+      operations: ['image.generate' as const],
+      tokenHash: `sha256:${'a'.repeat(64)}` as `sha256:${string}`,
+      expiresAt: '2099-01-01T00:05:00.000Z',
+      revokedAt: null,
+      createdAt: '2099-01-01T00:00:00.000Z',
+    },
+    consent: {
+      consentId: MODULE_CONSENT_ID,
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      installationId: MODULE_INSTALLATION_ID,
+      releaseId: MODULE_RELEASE_ID,
+      installRevision: 4,
+      service: 'ai' as const,
+      operations: ['image.generate' as const],
+      consentDigest: `sha256:${'b'.repeat(64)}` as `sha256:${string}`,
+      acceptedBy: USER_ID,
+      acceptedAt: '2099-01-01T00:00:00.000Z',
+      revokedBy: null,
+      revokedAt: null,
+    },
+    installation: {
+      accountId: ACCOUNT_ID,
+      projectId: PROJECT_ID,
+      installationId: MODULE_INSTALLATION_ID,
+      installRevision: 4,
+      releaseId: MODULE_RELEASE_ID,
+      moduleId: 'example.image-module',
+      moduleVersion: '1.0.0',
+      installationStatus: 'active' as const,
+      releaseStatus: 'published',
+      signatureAlgorithm: 'ed25519',
+      signature: `base64url:${'c'.repeat(86)}`,
+      signedAt: '2099-01-01T00:00:00.000Z',
+      manifest: {
+        schemaVersion: 3,
+        id: 'example.image-module',
+        version: '1.0.0',
+        publisher: { id: 'example-publisher' },
+        locales: ['en-US'],
+        compatibility: { platform: '>=1.0.0', registry: '>=3.0.0' },
+        execution: { mode: 'sandboxed-web', entry: 'dist/index.html' },
+        verification: { profile: 'sandboxed-web' },
+        capabilities: [{ id: 'example.image-module.generate', kind: 'ui' }],
+        openopc: {
+          sdkApiVersion: 'v1',
+          services: { ai: { operations: ['image.generate'] } },
+        },
+      },
+    },
+  };
 }
 
 async function createEstimate(app: Hono) {
@@ -320,6 +390,60 @@ describe('Studio project API', () => {
       expect(response.status).toBe(201);
       expect(harness.getCapturedCreateInput()).toMatchObject(testCase.expected);
     }
+  });
+
+  test('associates module jobs with a grant and never writes the grant into acting_token_id', async () => {
+    const harness = createApp({ moduleAuthorization: validModuleAuthorization() });
+    const estimate = await createEstimate(harness.app);
+    const response = await harness.app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        capability: 'image.generate',
+        provider_config_id: PROVIDER_CONFIG_ID,
+        model: 'fake/image-v1',
+        input: imageInput,
+        estimate_id: estimate.estimate_id,
+        estimate_token: estimate.estimate_token,
+        idempotency_key: 'studio-module-grant-job',
+        request_hash: estimate.input_hash,
+        module_service_grant_id: MODULE_GRANT_ID,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(harness.getCapturedCreateInput()).toMatchObject({
+      actor_type: 'module',
+      acting_token_id: null,
+      module_service_grant_id: MODULE_GRANT_ID,
+      agent_name: null,
+      session_id: null,
+    });
+    expect((await response.json()).module_service_grant_id).toBe(MODULE_GRANT_ID);
+  });
+
+  test('rejects an invalid module grant before creating a job', async () => {
+    const harness = createApp();
+    const estimate = await createEstimate(harness.app);
+    const response = await harness.app.request(`/v1/projects/${PROJECT_ID}/studio/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        capability: 'image.generate',
+        provider_config_id: PROVIDER_CONFIG_ID,
+        model: 'fake/image-v1',
+        input: imageInput,
+        estimate_id: estimate.estimate_id,
+        estimate_token: estimate.estimate_token,
+        idempotency_key: 'studio-module-invalid-grant-job',
+        request_hash: estimate.input_hash,
+        module_service_grant_id: MODULE_GRANT_ID,
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'STUDIO_MODULE_SERVICE_GRANT_INVALID' });
+    expect(harness.getCapturedCreateInput()).toBeNull();
   });
 
   test('maps insufficient reservation credits to the public 402 error contract', async () => {

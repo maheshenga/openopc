@@ -88,4 +88,19 @@ describe('loadRuntimeReleaseProfile', () => {
       }).ready,
     ).toBe(false);
   });
+
+  test('v3 combines sandboxed modules, the AI gateway, and Studio image generation', () => {
+    const runtime = loadRuntimeReleaseProfile({
+      OPENOPC_RELEASE_PROFILE_ID: 'openopc-image-studio-developer-beta-v3',
+      OPENOPC_RELEASE_PROFILE_DIGEST:
+        'sha256:184ef4c2d10b8fe311b3b764c96c371c02295a67b445b0c5538b01e627a7267f',
+    });
+
+    expect(runtime.ready).toBe(true);
+    expect(runtime.allows('module.wasi.execute')).toBe(true);
+    expect(runtime.allows('module.app.render')).toBe(true);
+    expect(runtime.allows('module.ai.gateway')).toBe(true);
+    expect(runtime.allows('studio.image.generate')).toBe(true);
+    expect(runtime.allows('commerce.purchase')).toBe(false);
+  });
 });

@@ -2255,6 +2255,7 @@ export const studioJobs = kortixSchema.table(
     actingTokenId: uuid('acting_token_id').references(() => accountTokens.tokenId, {
       onDelete: 'set null',
     }),
+    moduleServiceGrantId: uuid('module_service_grant_id'),
     agentName: text('agent_name'),
     sessionId: text('session_id').references(() => projectSessions.sessionId, {
       onDelete: 'set null',
@@ -2296,6 +2297,11 @@ export const studioJobs = kortixSchema.table(
     completedAt: timestamp('completed_at', { withTimezone: true, mode: 'string' }),
   },
   (table) => [
+    foreignKey({
+      columns: [table.moduleServiceGrantId],
+      foreignColumns: [moduleServiceCapabilityGrants.grantId],
+      name: 'studio_jobs_module_service_grant_fk',
+    }).onDelete('no action'),
     index('idx_studio_jobs_account_created').on(table.accountId, table.createdAt),
     index('idx_studio_jobs_project_created').on(table.projectId, table.createdAt),
     index('idx_studio_jobs_claimable')
@@ -2303,6 +2309,7 @@ export const studioJobs = kortixSchema.table(
       .where(sql`${table.status} in ('queued', 'running')`),
     index('idx_studio_jobs_provider_handle').on(table.provider, table.providerHandle),
     index('idx_studio_jobs_parent_job').on(table.parentJobId),
+    index('idx_studio_jobs_module_service_grant').on(table.moduleServiceGrantId),
     index('idx_studio_jobs_pricing_catalog').on(table.pricingCatalogId),
     uniqueIndex('idx_studio_jobs_idempotency').on(table.accountId, table.idempotencyKey),
     check('studio_jobs_pricing_snapshot_shape_check',
@@ -2320,6 +2327,19 @@ export const studioJobs = kortixSchema.table(
     ),
     check('studio_jobs_pricing_version_check',
       sql`${table.pricingVersion} IS NULL OR ${table.pricingVersion} > 0`,
+    ),
+    check(
+      'studio_jobs_module_actor_check',
+      sql`(
+        ${table.actorType} = 'module'
+        AND ${table.moduleServiceGrantId} IS NOT NULL
+        AND ${table.actingTokenId} IS NULL
+        AND ${table.agentName} IS NULL
+        AND ${table.sessionId} IS NULL
+      ) OR (
+        ${table.actorType} <> 'module'
+        AND ${table.moduleServiceGrantId} IS NULL
+      )`,
     ),
   ],
 );
@@ -8577,14 +8597,15 @@ export const projectModuleServiceConsents = kortixSchema.table(
       'project_module_service_consents_operations_check',
       sql`jsonb_typeof(${table.operations}) = 'array'
         AND (
-          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream"]'::jsonb)
+          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream","image.generate"]'::jsonb)
           OR (${table.service} = 'payment' AND ${table.operations} <@ '["orders.create","orders.read","refunds.create"]'::jsonb)
         )
-        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 6
+        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 7
         AND jsonb_array_length(${table.operations}) =
           (CASE WHEN ${table.operations} @> '["models.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.generate"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.stream"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["image.generate"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.create"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END)`,
@@ -8680,14 +8701,15 @@ export const moduleServiceCapabilityGrants = kortixSchema.table(
       'module_service_capability_grants_operations_check',
       sql`jsonb_typeof(${table.operations}) = 'array'
         AND (
-          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream"]'::jsonb)
+          (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream","image.generate"]'::jsonb)
           OR (${table.service} = 'payment' AND ${table.operations} <@ '["orders.create","orders.read","refunds.create"]'::jsonb)
         )
-        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 6
+        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 7
         AND jsonb_array_length(${table.operations}) =
           (CASE WHEN ${table.operations} @> '["models.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.generate"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.stream"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["image.generate"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.create"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END)`,
@@ -8772,7 +8794,7 @@ export const moduleServiceAuditEvents = kortixSchema.table(
     check(
       'module_service_audit_events_operation_check',
       sql`${table.operation} IS NULL
-        OR (${table.service} = 'ai' AND ${table.operation} IN ('models.read', 'text.generate', 'text.stream'))
+        OR (${table.service} = 'ai' AND ${table.operation} IN ('models.read', 'text.generate', 'text.stream', 'image.generate'))
         OR (${table.service} = 'payment' AND ${table.operation} IN ('orders.create', 'orders.read', 'refunds.create'))`,
     ),
     check(

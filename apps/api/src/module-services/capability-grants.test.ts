@@ -11,6 +11,7 @@ import {
   ModuleServiceConsentManager,
   type ModuleServiceInstallationContext,
   hashModuleServiceCapabilityToken,
+  isModuleServiceAuthorizationValid,
 } from './capability-grants';
 
 const ACCOUNT_ID = '10000000-0000-4000-a000-000000000001';
@@ -391,6 +392,72 @@ describe('module service capability broker', () => {
     await expect(broker.verify(issued.token, requireInput())).rejects.toMatchObject({
       code: 'MODULE_SERVICE_CAPABILITY_EXPIRED',
     });
+  });
+});
+
+describe('module service authorization boundary', () => {
+  async function authorizationFixture() {
+    const { broker, repository } = fixture();
+    await broker.issue(issueInput());
+    const authorization = await repository.getAuthorization(GRANT_ID);
+    if (!authorization) throw new Error('authorization fixture was not persisted');
+    return authorization;
+  }
+
+  test('accepts a current grant only when its consent, installation, release, and manifest agree', async () => {
+    const authorization = await authorizationFixture();
+
+    expect(
+      isModuleServiceAuthorizationValid({
+        authorization,
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        service: 'ai',
+        operation: 'models.read',
+        now: new Date(NOW),
+      }),
+    ).toBe(true);
+  });
+
+  test.each([
+    [
+      'consent identity',
+      (authorization: Awaited<ReturnType<typeof authorizationFixture>>) => {
+        authorization.consent.consentId = OTHER_CONSENT_ID;
+      },
+    ],
+    [
+      'grant expiry',
+      (authorization: Awaited<ReturnType<typeof authorizationFixture>>) => {
+        authorization.grant.expiresAt = 'not-a-timestamp';
+      },
+    ],
+    [
+      'installed manifest version',
+      (authorization: Awaited<ReturnType<typeof authorizationFixture>>) => {
+        authorization.installation.manifest.version = '9.9.9';
+      },
+    ],
+    [
+      'release signature',
+      (authorization: Awaited<ReturnType<typeof authorizationFixture>>) => {
+        authorization.installation.signature = 'base64url:invalid';
+      },
+    ],
+  ])('rejects a mismatched %s at execution boundaries', async (_label, mutate) => {
+    const authorization = await authorizationFixture();
+    mutate(authorization);
+
+    expect(
+      isModuleServiceAuthorizationValid({
+        authorization,
+        accountId: ACCOUNT_ID,
+        projectId: PROJECT_ID,
+        service: 'ai',
+        operation: 'models.read',
+        now: new Date(NOW),
+      }),
+    ).toBe(false);
   });
 });
 

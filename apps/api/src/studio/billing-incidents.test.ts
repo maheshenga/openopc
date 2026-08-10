@@ -114,8 +114,8 @@ describe('Studio billing incident resolution', () => {
       status: 'resolved',
       verifiedCostCredits: '2.0000',
       potentialLiabilityCredits: '6.0000',
-      openedAt: '2026-06-01T00:00:00.000Z',
-      resolvedAt: resolution.resolved_at,
+      openedAt: '2026-06-01 08:00:00+08',
+      resolvedAt: '2026-07-24 08:00:00+08',
       resolvedByUserId: USER_ID,
       resolution,
     };
@@ -154,6 +154,7 @@ describe('Studio billing incident resolution', () => {
       decision: 'confirm_not_created',
       evidence_reference: resolution.evidence_reference,
       provider_liability_credits: 0,
+      resolved_at: resolution.resolved_at,
     });
     await expect(
       repository.resolveLocked(

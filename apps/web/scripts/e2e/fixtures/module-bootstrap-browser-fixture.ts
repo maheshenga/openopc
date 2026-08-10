@@ -71,7 +71,7 @@ function startHost() {
     installationId: INSTALLATION_ID,
     releaseId: RELEASE_ID,
     installRevision: 1,
-    declaredServices: { ai: ['models.read'] },
+    declaredServices: { ai: ['models.read', 'text.stream'] },
     resolveCurrentState: async () => ({
       projectId: PROJECT_ID,
       installationId: INSTALLATION_ID,
@@ -108,6 +108,27 @@ async function startModule() {
   try {
     const openopc = await createOpenOpcBrowserModuleClient();
     const result = await openopc.ai.models.list();
+    const controller = new AbortController();
+    const stream = await openopc.ai.chat.create(
+      {
+        model: 'approved-model',
+        messages: [{ role: 'user', content: 'stream smoke' }],
+        stream: true,
+      },
+      { signal: controller.signal },
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+    const firstChunk = await iterator.next();
+    if (!firstChunk.value || firstChunk.value.id !== 'browser-stream-1') {
+      throw new Error('stream bootstrap chunk missing');
+    }
+    controller.abort();
+    try {
+      await iterator.next();
+      throw new Error('stream abort was not observed');
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== 'OpenOpcModuleRequestError') throw error;
+    }
     const probe = await fetch(PREFLIGHT_PROBE, {
       method: 'OPTIONS',
       headers: {

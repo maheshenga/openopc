@@ -175,6 +175,50 @@ describe('OpenOPC developer SDK transport', () => {
     expect(requests[0]?.init).toMatchObject({ method: 'GET', redirect: 'error' });
   });
 
+  test('invalidates and retries exactly once after an unauthorized response', async () => {
+    for (const status of [401, 403]) {
+      const tokens = ['v4.public.stale-token', 'v4.public.fresh-token'];
+      let tokenCalls = 0;
+      const invalidations: unknown[] = [];
+      const getCapabilityToken = Object.assign(
+        async () => tokens[tokenCalls++] ?? 'v4.public.unexpected-token',
+        {
+          invalidate(input: unknown) {
+            invalidations.push(input);
+          },
+        },
+      );
+      const requests: Array<{ authorization: string | null }> = [];
+      let fetchCalls = 0;
+      const client = createOpenOpcModuleClient({
+        baseUrl: 'https://platform.example.com',
+        getCapabilityToken,
+        fetch: async (_input, init) => {
+          requests.push({ authorization: new Headers(init?.headers).get('authorization') });
+          fetchCalls += 1;
+          return fetchCalls === 1
+            ? new Response('{}', { status })
+            : new Response('{}', { status: 200 });
+        },
+      });
+
+      await expect(
+        client.request({
+          service: 'ai',
+          operation: 'models.read',
+          method: 'GET',
+          path: '/v1/module-services/ai/models',
+        }),
+      ).resolves.toEqual({});
+      expect(tokenCalls).toBe(2);
+      expect(requests).toEqual([
+        { authorization: 'Bearer v4.public.stale-token' },
+        { authorization: 'Bearer v4.public.fresh-token' },
+      ]);
+      expect(invalidations).toEqual([{ service: 'ai', operation: 'models.read' }]);
+    }
+  });
+
   test('serializes JSON bodies without accepting arbitrary headers', async () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     let tokenCalls = 0;

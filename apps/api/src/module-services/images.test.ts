@@ -252,6 +252,16 @@ function fixture(
         expect(jobId).toBe(JOB_ID);
         return JOB;
       },
+      async listJobs(_scope, page) {
+        expect(page).toEqual({
+          cursor: 'previous-job',
+          limit: 25,
+          status: 'running',
+          created_after: '2026-08-07T00:00:00.000Z',
+          created_before: '2026-08-08T00:00:00.000Z',
+        });
+        return { items: [JOB], next_cursor: 'next-job' };
+      },
       async listEvents(_scope, jobId, page) {
         expect({ jobId, page }).toEqual({ jobId: JOB_ID, page: { cursor: '1', limit: 25 } });
         return {
@@ -287,6 +297,10 @@ function fixture(
       async listAssets(_scope, page) {
         expect(page.cursor).toBeNull();
         expect(page.limit).toBe(10);
+        if (page.source === undefined) {
+          expect(page.created_after).toBe('2026-08-07T00:00:00.000Z');
+          expect(page.created_before).toBe('2026-08-08T00:00:00.000Z');
+        }
         return { items: [ASSET], next_cursor: null };
       },
       async previewAsset() {
@@ -409,6 +423,13 @@ describe('module image service facade', () => {
     expect(read.status).toBe(200);
     expect(await read.json()).toEqual(JOB);
 
+    const jobs = await app.request(
+      '/jobs?cursor=previous-job&limit=25&status=running&created_after=2026-08-07T00:00:00.000Z&created_before=2026-08-08T00:00:00.000Z',
+      { headers },
+    );
+    expect(jobs.status).toBe(200);
+    expect(await jobs.json()).toEqual({ items: [JOB], next_cursor: 'next-job' });
+
     const events = await app.request(`/jobs/${JOB_ID}/events?cursor=1&limit=25`, { headers });
     expect(events.status).toBe(200);
     expect(await events.json()).toMatchObject({
@@ -435,7 +456,10 @@ describe('module image service facade', () => {
     expect(createdAsset.status).toBe(201);
     expect(await createdAsset.json()).toEqual(ASSET);
 
-    const assets = await app.request('/assets?limit=10', { headers });
+    const assets = await app.request(
+      '/assets?limit=10&created_after=2026-08-07T00:00:00.000Z&created_before=2026-08-08T00:00:00.000Z',
+      { headers },
+    );
     expect(assets.status).toBe(200);
     expect(await assets.json()).toEqual({ items: [ASSET], next_cursor: null });
 
@@ -449,6 +473,20 @@ describe('module image service facade', () => {
     );
     expect(invalidAssetFilter.status).toBe(400);
     expect(await invalidAssetFilter.json()).toEqual({ error: 'OPENOPC_IMAGE_VALIDATION_ERROR' });
+
+    const invalidJobRange = await app.request(
+      '/jobs?created_after=2026-08-08T09:00:00.000Z&created_before=2026-08-08T08:00:00.000Z',
+      { headers },
+    );
+    expect(invalidJobRange.status).toBe(400);
+    expect(await invalidJobRange.json()).toEqual({ error: 'OPENOPC_IMAGE_VALIDATION_ERROR' });
+
+    const invalidAssetRange = await app.request(
+      '/assets?created_after=2026-08-08T09:00:00.000Z&created_before=2026-08-08T08:00:00.000Z',
+      { headers },
+    );
+    expect(invalidAssetRange.status).toBe(400);
+    expect(await invalidAssetRange.json()).toEqual({ error: 'OPENOPC_IMAGE_VALIDATION_ERROR' });
 
     const preview = await app.request(`/assets/${ASSET_ID}/preview-url`, { headers });
     expect(preview.status).toBe(200);
@@ -470,9 +508,9 @@ describe('module image service facade', () => {
     expect(download.headers.get('content-type')).toBe('image/png');
     expect(new Uint8Array(await download.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
 
-    expect(calls.capability).toBe(14);
-    expect(calls.authorization).toBe(14);
-    expect(calls.operations).toEqual(Array(14).fill('image.generate'));
+    expect(calls.capability).toBe(17);
+    expect(calls.authorization).toBe(17);
+    expect(calls.operations).toEqual(Array(17).fill('image.generate'));
   });
 
   test('returns stable errors for unavailable storage policy mutations', async () => {

@@ -48,6 +48,10 @@ import {
   type OpenOpcImageJobEvent,
   type OpenOpcImageJobEventPage,
   OpenOpcImageJobEventPageSchema,
+  type OpenOpcImageJobListInput,
+  OpenOpcImageJobListInputSchema,
+  type OpenOpcImageJobPage,
+  OpenOpcImageJobPageSchema,
   OpenOpcImageJobSchema,
   type OpenOpcImageModelListResponse,
   OpenOpcImageModelListResponseSchema,
@@ -97,15 +101,23 @@ export interface OpenOpcRequestOptions {
   timeoutMs?: number;
 }
 
-export interface OpenOpcModuleClientOptions {
-  baseUrl: string;
-  getCapabilityToken(
+export interface OpenOpcCapabilityTokenGetter {
+  (
     input: {
       service: OpenOpcServiceName;
       operation: OpenOpcServiceOperation;
     },
     options?: Pick<OpenOpcRequestOptions, 'signal'>,
   ): Promise<string>;
+  invalidate?: (input: {
+    service: OpenOpcServiceName;
+    operation: OpenOpcServiceOperation;
+  }) => void;
+}
+
+export interface OpenOpcModuleClientOptions {
+  baseUrl: string;
+  getCapabilityToken: OpenOpcCapabilityTokenGetter;
   fetch?: OpenOpcModuleFetch;
   timeoutMs?: number;
 }
@@ -206,6 +218,10 @@ export interface OpenOpcImageClient {
     retryGuidance(errorOrCode: unknown): OpenOpcImageEstimateRetryGuidance;
   };
   jobs: {
+    list(
+      input?: OpenOpcImageJobListInput,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcImageJobPage>;
     create(
       input: OpenOpcImageJobCreateInput,
       options?: OpenOpcRequestOptions,
@@ -633,6 +649,13 @@ function validateImagePageInput(input: { cursor?: string | null; limit?: number 
   }
 }
 
+function validateImageJobListInput(input: OpenOpcImageJobListInput | undefined) {
+  if (input === undefined) return;
+  if (!OpenOpcImageJobListInputSchema.safeParse(input).success) {
+    protocolError('OpenOPC image job list input is invalid');
+  }
+}
+
 function validateImageAssetListInput(input: OpenOpcImageAssetListInput | undefined) {
   if (input === undefined) return;
   if (!OpenOpcImageAssetListInputSchema.safeParse(input).success) {
@@ -854,20 +877,6 @@ export function createOpenOpcModuleClient(
     );
     let handedOff = false;
     try {
-      const token = validateToken(
-        await abortable(
-          Promise.resolve().then(() =>
-            options.getCapabilityToken(
-              {
-                service: input.service,
-                operation: input.operation,
-              },
-              { signal: context.signal },
-            ),
-          ),
-          context,
-        ),
-      );
       const isDownload = input.path.endsWith('/download');
       const headers = new Headers({
         Accept:
@@ -876,7 +885,6 @@ export function createOpenOpcModuleClient(
             : isDownload
               ? 'image/*'
               : 'application/json',
-        Authorization: `Bearer ${token}`,
         ...(input.idempotencyKey ? { 'Idempotency-Key': input.idempotencyKey } : {}),
       });
       let body: BodyInit | undefined;
@@ -900,30 +908,72 @@ export function createOpenOpcModuleClient(
       for (const [key, value] of Object.entries(input.query ?? {})) {
         if (value !== undefined) url.searchParams.set(key, String(value));
       }
-      const response = await abortable(
-        Promise.resolve().then(() =>
-          requestFetch(url, {
-            method: input.method,
-            headers,
-            body,
-            signal: context.signal,
-            credentials: 'omit',
-            redirect: 'error',
-            referrerPolicy: 'no-referrer',
-          }),
+      let token = validateToken(
+        await abortable(
+          Promise.resolve().then(() =>
+            options.getCapabilityToken(
+              { service: input.service, operation: input.operation },
+              { signal: context.signal },
+            ),
+          ),
+          context,
         ),
-        context,
       );
-      if (!response.ok) {
-        const payload = parseJson(await readResponseText(response, context));
-        const parsed = ModuleServiceErrorResponseSchema.safeParse(payload);
-        if (!parsed.success) {
-          protocolError('OpenOPC module service returned an invalid error response');
+      for (let authAttempt = 0; authAttempt < 2; authAttempt += 1) {
+        headers.set('Authorization', `Bearer ${token}`);
+        const response = await abortable(
+          Promise.resolve().then(() =>
+            requestFetch(url, {
+              method: input.method,
+              headers,
+              body,
+              signal: context.signal,
+              credentials: 'omit',
+              redirect: 'error',
+              referrerPolicy: 'no-referrer',
+            }),
+          ),
+          context,
+        );
+        if ((response.status === 401 || response.status === 403) && authAttempt === 0) {
+          try {
+            options.getCapabilityToken.invalidate?.({
+              service: input.service,
+              operation: input.operation,
+            });
+          } catch {
+            // An optional cache invalidator must not prevent the one safe retry.
+          }
+          try {
+            await response.body?.cancel();
+          } catch {
+            // The unauthorized response is discarded before the retry.
+          }
+          token = validateToken(
+            await abortable(
+              Promise.resolve().then(() =>
+                options.getCapabilityToken(
+                  { service: input.service, operation: input.operation },
+                  { signal: context.signal },
+                ),
+              ),
+              context,
+            ),
+          );
+          continue;
         }
-        throw new OpenOpcModuleServiceError(parsed.data.error, response.status);
+        if (!response.ok) {
+          const payload = parseJson(await readResponseText(response, context));
+          const parsed = ModuleServiceErrorResponseSchema.safeParse(payload);
+          if (!parsed.success) {
+            protocolError('OpenOPC module service returned an invalid error response');
+          }
+          throw new OpenOpcModuleServiceError(parsed.data.error, response.status);
+        }
+        handedOff = true;
+        return { response, context };
       }
-      handedOff = true;
-      return { response, context };
+      throw new OpenOpcModuleRequestError('OPENOPC_MODULE_REQUEST_FAILED');
     } catch (error) {
       requestFailure(error, context);
     } finally {
@@ -1064,6 +1114,34 @@ export function createOpenOpcModuleClient(
     );
     const parsed = OpenOpcImageJobSchema.safeParse(value);
     if (!parsed.success) protocolError('OpenOPC image job response is invalid');
+    return parsed.data;
+  };
+
+  const listImageJobs = async (
+    input?: OpenOpcImageJobListInput,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcImageJobPage> => {
+    validateImageJobListInput(input);
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'ai',
+          operation: 'image.generate',
+          method: 'GET',
+          path: '/v1/module-services/ai/images/jobs',
+          query: {
+            cursor: input?.cursor ?? undefined,
+            limit: input?.limit,
+            status: input?.status,
+            created_after: input?.created_after,
+            created_before: input?.created_before,
+          },
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcImageJobPageSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC image job page response is invalid');
     return parsed.data;
   };
 
@@ -1407,6 +1485,8 @@ export function createOpenOpcModuleClient(
             limit: input?.limit,
             source_job_id: input?.source_job_id,
             source: input?.source,
+            created_after: input?.created_after,
+            created_before: input?.created_before,
           },
         },
         options,
@@ -1432,6 +1512,8 @@ export function createOpenOpcModuleClient(
           limit: input?.limit,
           source_job_id: input?.source_job_id,
           source: input?.source,
+          created_after: input?.created_after,
+          created_before: input?.created_before,
         },
         options,
       );
@@ -1453,7 +1535,16 @@ export function createOpenOpcModuleClient(
         typeof input !== 'object' ||
         Array.isArray(input) ||
         Object.keys(input).some(
-          (key) => !['cursor', 'limit', 'source_job_id', 'source', 'maxItems'].includes(key),
+          (key) =>
+            ![
+              'cursor',
+              'limit',
+              'source_job_id',
+              'source',
+              'created_after',
+              'created_before',
+              'maxItems',
+            ].includes(key),
         ))
     ) {
       protocolError('OpenOPC image asset list options are invalid');
@@ -1470,6 +1561,8 @@ export function createOpenOpcModuleClient(
           limit: input.limit,
           source_job_id: input.source_job_id,
           source: input.source,
+          created_after: input.created_after,
+          created_before: input.created_before,
         }
       : undefined;
     if (pageInput !== undefined) validateImageAssetListInput(pageInput);
@@ -1707,6 +1800,7 @@ export function createOpenOpcModuleClient(
           retryGuidance: openOpcImageEstimateRetryGuidance,
         },
         jobs: {
+          list: listImageJobs,
           create: createImageJob,
           get: getImageJob,
           events: getImageJobEvents,

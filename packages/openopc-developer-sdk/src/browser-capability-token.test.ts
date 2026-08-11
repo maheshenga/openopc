@@ -124,6 +124,156 @@ describe('OpenOPC browser capability-token adapter', () => {
     await expect(second).resolves.toBe('v4.public.second');
   });
 
+  test('coalesces sustained polling and refreshes only inside the expiry safety window', async () => {
+    const h = harness();
+    let next = 0;
+    let now = Date.parse('2026-08-01T00:00:00.000Z');
+    const adapter = createOpenOpcBrowserCapabilityTokenAdapter({
+      hostOrigin: 'https://app.openopc.example',
+      hostWindow: h.hostWindow,
+      eventTarget: h.eventTarget,
+      requestId: () => `50000000-0000-4000-8000-${(++next).toString().padStart(12, '0')}`,
+      now: () => now,
+      timeoutMs: 100,
+    });
+
+    const first = adapter({ service: 'ai', operation: 'models.read' });
+    const second = adapter({ service: 'ai', operation: 'models.read' });
+    expect(h.requests).toHaveLength(1);
+    for (const listener of h.listeners) {
+      listener({
+        origin: 'https://app.openopc.example',
+        source: h.hostWindow,
+        data: {
+          type: 'openopc.module-service.token.response',
+          requestId: '50000000-0000-4000-8000-000000000001',
+          token: 'v4.public.cached-token',
+          expiresAt: '2026-08-01T00:05:00.000Z',
+        },
+      });
+    }
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      'v4.public.cached-token',
+      'v4.public.cached-token',
+    ]);
+
+    for (let index = 0; index < 40; index += 1) {
+      await expect(adapter({ service: 'ai', operation: 'models.read' })).resolves.toBe(
+        'v4.public.cached-token',
+      );
+    }
+    expect(h.requests).toHaveLength(1);
+
+    now = Date.parse('2026-08-01T00:04:31.000Z');
+    const refreshed = adapter({ service: 'ai', operation: 'models.read' });
+    expect(h.requests).toHaveLength(2);
+    for (const listener of h.listeners) {
+      listener({
+        origin: 'https://app.openopc.example',
+        source: h.hostWindow,
+        data: {
+          type: 'openopc.module-service.token.response',
+          requestId: '50000000-0000-4000-8000-000000000002',
+          token: 'v4.public.refreshed-token',
+          expiresAt: '2026-08-01T00:09:31.000Z',
+        },
+      });
+    }
+    await expect(refreshed).resolves.toBe('v4.public.refreshed-token');
+  });
+
+  test('invalidates one operation without clearing another cached token', async () => {
+    const h = harness();
+    let next = 0;
+    const adapter = createOpenOpcBrowserCapabilityTokenAdapter({
+      hostOrigin: 'https://app.openopc.example',
+      hostWindow: h.hostWindow,
+      eventTarget: h.eventTarget,
+      requestId: () => `50000000-0000-4000-8000-${(++next).toString().padStart(12, '0')}`,
+      now: () => Date.parse('2026-08-01T00:00:00.000Z'),
+      timeoutMs: 100,
+    });
+    const first = adapter({ service: 'ai', operation: 'models.read' });
+    for (const listener of h.listeners) {
+      listener({
+        origin: 'https://app.openopc.example',
+        source: h.hostWindow,
+        data: {
+          type: 'openopc.module-service.token.response',
+          requestId: '50000000-0000-4000-8000-000000000001',
+          token: 'v4.public.models-token',
+          expiresAt: '2026-08-01T00:05:00.000Z',
+        },
+      });
+    }
+    await expect(first).resolves.toBe('v4.public.models-token');
+    const payment = adapter({ service: 'payment', operation: 'orders.read' });
+    for (const listener of h.listeners) {
+      listener({
+        origin: 'https://app.openopc.example',
+        source: h.hostWindow,
+        data: {
+          type: 'openopc.module-service.token.response',
+          requestId: '50000000-0000-4000-8000-000000000002',
+          token: 'v4.public.payment-token',
+          expiresAt: '2026-08-01T00:05:00.000Z',
+        },
+      });
+    }
+    await expect(payment).resolves.toBe('v4.public.payment-token');
+
+    adapter.invalidate?.({ service: 'ai', operation: 'models.read' });
+    const refreshed = adapter({ service: 'ai', operation: 'models.read' });
+    expect(h.requests).toHaveLength(3);
+    for (const listener of h.listeners) {
+      listener({
+        origin: 'https://app.openopc.example',
+        source: h.hostWindow,
+        data: {
+          type: 'openopc.module-service.token.response',
+          requestId: '50000000-0000-4000-8000-000000000003',
+          token: 'v4.public.models-token-2',
+          expiresAt: '2026-08-01T00:05:00.000Z',
+        },
+      });
+    }
+    await expect(refreshed).resolves.toBe('v4.public.models-token-2');
+    await expect(adapter({ service: 'payment', operation: 'orders.read' })).resolves.toBe(
+      'v4.public.payment-token',
+    );
+    expect(h.requests).toHaveLength(3);
+  });
+
+  test('maps a structured host rate-limit response to a stable retryable error', async () => {
+    const h = harness();
+    const adapter = createOpenOpcBrowserCapabilityTokenAdapter({
+      hostOrigin: 'https://app.openopc.example',
+      hostWindow: h.hostWindow,
+      eventTarget: h.eventTarget,
+      requestId: () => '50000000-0000-4000-8000-000000000009',
+      timeoutMs: 100,
+    });
+    const pending = adapter({ service: 'ai', operation: 'models.read' });
+    for (const listener of h.listeners) {
+      listener({
+        origin: 'https://app.openopc.example',
+        source: h.hostWindow,
+        data: {
+          type: 'openopc.module-service.token.error',
+          requestId: '50000000-0000-4000-8000-000000000009',
+          error: {
+            code: 'OPENOPC_MODULE_CAPABILITY_RATE_LIMITED',
+            retryAfterMs: 3210,
+          },
+        },
+      });
+    }
+    await expect(pending).rejects.toMatchObject({
+      code: 'OPENOPC_MODULE_CAPABILITY_RATE_LIMITED',
+      retryAfterMs: 3210,
+    });
+  });
+
   test('cleans up on timeout, postMessage failure, and invalid inputs', async () => {
     const h = harness();
     const adapter = createOpenOpcBrowserCapabilityTokenAdapter({

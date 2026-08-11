@@ -21,6 +21,7 @@ export function createRuntimeModuleImageDependencies(): ModuleImageDependencies 
             storageService: services.storageService,
             estimateSigningSecret: services.estimateSigningSecret,
             credentialBindingExists: services.credentialBindingExists,
+            loadModuleServiceAuthorization: services.loadModuleServiceAuthorization,
           })
         : null;
     return backend;
@@ -47,6 +48,7 @@ function createLazyModuleImageBackend(
     listModels: (scope) => requireBackend().listModels(scope),
     createEstimate: (scope, input) => requireBackend().createEstimate(scope, input),
     createJob: (scope, input) => requireBackend().createJob(scope, input),
+    listJobs: (scope, page) => requireBackend().listJobs(scope, page),
     getJob: (scope, jobId) => requireBackend().getJob(scope, jobId),
     listEvents: (scope, jobId, page) => requireBackend().listEvents(scope, jobId, page),
     listJobOutputs: (scope, jobId, page) => requireBackend().listJobOutputs(scope, jobId, page),

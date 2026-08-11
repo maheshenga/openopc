@@ -470,6 +470,13 @@ export const OpenOpcImageJobSchema = z
   })
   .strict();
 export type OpenOpcImageJob = z.infer<typeof OpenOpcImageJobSchema>;
+export const OpenOpcImageJobPageSchema = z
+  .object({
+    items: z.array(OpenOpcImageJobSchema).max(100),
+    next_cursor: z.string().min(1).max(2048).nullable(),
+  })
+  .strict();
+export type OpenOpcImageJobPage = z.infer<typeof OpenOpcImageJobPageSchema>;
 export const OpenOpcImageJobEventSchema = z
   .object({
     event_id: z.string().uuid(),
@@ -524,11 +531,33 @@ export const OpenOpcImagePageInputSchema = z
   })
   .strict();
 export type OpenOpcImagePageInput = z.infer<typeof OpenOpcImagePageInputSchema>;
+export const OpenOpcImageJobListInputSchema = OpenOpcImagePageInputSchema.extend({
+  status: OpenOpcImageJobStateSchema.optional(),
+  created_after: z.string().datetime({ offset: true }).optional(),
+  created_before: z.string().datetime({ offset: true }).optional(),
+})
+  .strict()
+  .superRefine((input, context) => {
+    if (
+      input.created_after !== undefined &&
+      input.created_before !== undefined &&
+      Date.parse(input.created_after) >= Date.parse(input.created_before)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['created_before'],
+        message: 'created_before must be later than created_after',
+      });
+    }
+  });
+export type OpenOpcImageJobListInput = z.infer<typeof OpenOpcImageJobListInputSchema>;
 export const OpenOpcImageAssetOriginSchema = z.enum(['generated', 'uploaded']);
 export type OpenOpcImageAssetOrigin = z.infer<typeof OpenOpcImageAssetOriginSchema>;
 export const OpenOpcImageAssetListInputSchema = OpenOpcImagePageInputSchema.extend({
   source_job_id: z.string().uuid().optional(),
   source: OpenOpcImageAssetOriginSchema.optional(),
+  created_after: z.string().datetime({ offset: true }).optional(),
+  created_before: z.string().datetime({ offset: true }).optional(),
 })
   .strict()
   .superRefine((input, context) => {
@@ -537,6 +566,17 @@ export const OpenOpcImageAssetListInputSchema = OpenOpcImagePageInputSchema.exte
         code: z.ZodIssueCode.custom,
         path: ['source'],
         message: 'uploaded assets cannot have a source job',
+      });
+    }
+    if (
+      input.created_after !== undefined &&
+      input.created_before !== undefined &&
+      Date.parse(input.created_after) >= Date.parse(input.created_before)
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['created_before'],
+        message: 'created_before must be later than created_after',
       });
     }
   });

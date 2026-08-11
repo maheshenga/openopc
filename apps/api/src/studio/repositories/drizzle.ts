@@ -11,6 +11,7 @@ import {
   studioAssetUploads,
   studioAssets,
   studioCreditReservations,
+  studioJobAssets,
   studioJobAttempts,
   studioJobEvents,
   studioJobRecoveries,
@@ -19,7 +20,7 @@ import {
   studioProviderConfigs,
 } from '@kortix/db';
 import { openAiCompatibleImageDefinition } from '@kortix/studio-adapters';
-import { and, asc, desc, eq, gt, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import { isoTimestamp, nullableIsoTimestamp } from '../../shared/iso-timestamp';
 import {
   type StudioRecoveryLockedContext,
@@ -35,6 +36,7 @@ import type {
   StudioProviderConfigWire,
   StudioRepository,
 } from '../types';
+import { decodeStudioKeysetCursor, encodeStudioKeysetCursor } from './keyset-cursor';
 
 type ProviderRow = typeof studioProviderConfigs.$inferSelect;
 type PricingRow = typeof studioPricingCatalog.$inferSelect;
@@ -1103,19 +1105,61 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
       return rows[0] ? serializeJob(rows[0]) : null;
     },
 
-    async listJobs(projectId, limit, cursor) {
+    async listJobs(projectId, limit, cursor, filter) {
       const conditions = [eq(studioJobs.projectId, projectId)];
-      if (cursor) conditions.push(lt(studioJobs.createdAt, cursor));
+      if (filter?.account_id) conditions.push(eq(studioJobs.accountId, filter.account_id));
+      if (filter?.actor_user_id) {
+        conditions.push(eq(studioJobs.actorUserId, filter.actor_user_id));
+      }
+      if (filter?.actor_type) conditions.push(eq(studioJobs.actorType, filter.actor_type));
+      if (filter?.capability) conditions.push(eq(studioJobs.capability, filter.capability));
+      if (filter?.status) conditions.push(eq(studioJobs.status, filter.status));
+      if (filter?.created_after) {
+        conditions.push(gte(studioJobs.createdAt, filter.created_after));
+      }
+      if (filter?.created_before) {
+        conditions.push(lt(studioJobs.createdAt, filter.created_before));
+      }
+      if (filter?.module_installation_id) {
+        conditions.push(sql`EXISTS (
+          SELECT 1
+          FROM kortix.module_service_capability_grants capability_grant
+          WHERE capability_grant.grant_id = ${studioJobs.moduleServiceGrantId}
+            AND capability_grant.account_id = ${studioJobs.accountId}
+            AND capability_grant.project_id = ${studioJobs.projectId}
+            AND capability_grant.installation_id = ${filter.module_installation_id}::uuid
+            AND capability_grant.service = 'ai'
+            AND capability_grant.operations @> '["image.generate"]'::jsonb
+        )`);
+      }
+      if (cursor) {
+        const decoded = decodeStudioKeysetCursor(cursor);
+        const keyset = decoded.id
+          ? or(
+              lt(studioJobs.createdAt, decoded.createdAt),
+              and(eq(studioJobs.createdAt, decoded.createdAt), lt(studioJobs.jobId, decoded.id)),
+            )
+          : lt(studioJobs.createdAt, decoded.createdAt);
+        if (keyset) conditions.push(keyset);
+      }
       const rows = await db
         .select()
         .from(studioJobs)
         .where(and(...conditions))
-        .orderBy(desc(studioJobs.createdAt))
+        .orderBy(desc(studioJobs.createdAt), desc(studioJobs.jobId))
         .limit(limit + 1);
-      const page = rows.slice(0, limit).map(serializeJob);
+      const pageRows = rows.slice(0, limit);
+      const page = pageRows.map(serializeJob);
+      const last = pageRows.at(-1);
       return {
         items: page,
-        next_cursor: rows.length > limit ? rows[limit].createdAt : null,
+        next_cursor:
+          rows.length > limit && last
+            ? encodeStudioKeysetCursor({
+                createdAt: isoTimestamp(last.createdAt, 'Studio job cursor created_at'),
+                id: last.jobId,
+              })
+            : null,
       };
     },
 
@@ -1190,7 +1234,50 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
       const page = rows.slice(0, 100).map(serializeEvent);
       return {
         items: page,
-        next_cursor: rows.length > 100 ? String(rows[100].cursor) : null,
+        next_cursor: rows.length > 100 ? (page.at(-1)?.cursor ?? null) : null,
+      };
+    },
+
+    async listJobAssets(projectId, jobId, role, limit, cursor) {
+      const conditions = [
+        eq(studioJobAssets.jobId, jobId),
+        eq(studioJobAssets.role, role),
+        eq(studioAssets.projectId, projectId),
+      ];
+      if (cursor) {
+        const decoded = decodeStudioKeysetCursor(cursor);
+        const keyset = decoded.id
+          ? or(
+              lt(studioJobAssets.createdAt, decoded.createdAt),
+              and(
+                eq(studioJobAssets.createdAt, decoded.createdAt),
+                lt(studioJobAssets.assetId, decoded.id),
+              ),
+            )
+          : lt(studioJobAssets.createdAt, decoded.createdAt);
+        if (keyset) conditions.push(keyset);
+      }
+      const rows = await db
+        .select({ asset: studioAssets, linkCreatedAt: studioJobAssets.createdAt })
+        .from(studioJobAssets)
+        .innerJoin(studioAssets, eq(studioAssets.assetId, studioJobAssets.assetId))
+        .where(and(...conditions))
+        .orderBy(desc(studioJobAssets.createdAt), desc(studioJobAssets.assetId))
+        .limit(limit + 1);
+      const pageRows = rows.slice(0, limit);
+      const last = pageRows.at(-1);
+      return {
+        items: pageRows.map((row) => serializeAsset(row.asset)),
+        next_cursor:
+          rows.length > limit && last
+            ? encodeStudioKeysetCursor({
+                createdAt: isoTimestamp(
+                  last.linkCreatedAt ?? last.asset.createdAt,
+                  'Studio job asset cursor created_at',
+                ),
+                id: last.asset.assetId,
+              })
+            : null,
       };
     },
 
@@ -1358,22 +1445,48 @@ export function createDrizzleStudioRepository(db: Database): StudioRepository {
 
     async listAssets(projectId, limit, cursor, filter) {
       const conditions = [eq(studioAssets.projectId, projectId)];
-      if (cursor) conditions.push(lt(studioAssets.createdAt, cursor));
+      if (cursor) {
+        const decoded = decodeStudioKeysetCursor(cursor);
+        const keyset = decoded.id
+          ? or(
+              lt(studioAssets.createdAt, decoded.createdAt),
+              and(
+                eq(studioAssets.createdAt, decoded.createdAt),
+                lt(studioAssets.assetId, decoded.id),
+              ),
+            )
+          : lt(studioAssets.createdAt, decoded.createdAt);
+        if (keyset) conditions.push(keyset);
+      }
       if (filter?.source_job_id) {
         conditions.push(eq(studioAssets.sourceJobId, filter.source_job_id));
       }
       if (filter?.source === 'generated') conditions.push(isNotNull(studioAssets.sourceJobId));
       if (filter?.source === 'uploaded') conditions.push(isNull(studioAssets.sourceJobId));
+      if (filter?.created_after) {
+        conditions.push(gte(studioAssets.createdAt, filter.created_after));
+      }
+      if (filter?.created_before) {
+        conditions.push(lt(studioAssets.createdAt, filter.created_before));
+      }
       const rows = await db
         .select()
         .from(studioAssets)
         .where(and(...conditions))
-        .orderBy(desc(studioAssets.createdAt))
+        .orderBy(desc(studioAssets.createdAt), desc(studioAssets.assetId))
         .limit(limit + 1);
-      const page = rows.slice(0, limit).map(serializeAsset);
+      const pageRows = rows.slice(0, limit);
+      const page = pageRows.map(serializeAsset);
+      const last = pageRows.at(-1);
       return {
         items: page,
-        next_cursor: rows.length > limit ? rows[limit].createdAt : null,
+        next_cursor:
+          rows.length > limit && last
+            ? encodeStudioKeysetCursor({
+                createdAt: isoTimestamp(last.createdAt, 'Studio asset cursor created_at'),
+                id: last.assetId,
+              })
+            : null,
       };
     },
 

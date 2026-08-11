@@ -167,6 +167,27 @@ describe('OpenOPC image SDK', () => {
     );
   });
 
+  test('lists module-owned jobs through the dedicated paginated endpoint', async () => {
+    const requests: string[] = [];
+    const { client } = createImageClient(async (input) => {
+      requests.push(String(input));
+      return new Response(JSON.stringify({ items: [job('running')], next_cursor: 'next-job' }));
+    });
+
+    await expect(
+      client.ai.images.jobs.list({
+        cursor: 'previous-job',
+        limit: 20,
+        status: 'running',
+        created_after: '2026-08-07T00:00:00.000Z',
+        created_before: '2026-08-08T00:00:00.000Z',
+      }),
+    ).resolves.toEqual({ items: [job('running')], next_cursor: 'next-job' });
+    expect(requests).toEqual([
+      'https://platform.example.com/v1/module-services/ai/images/jobs?cursor=previous-job&limit=20&status=running&created_after=2026-08-07T00%3A00%3A00.000Z&created_before=2026-08-08T00%3A00%3A00.000Z',
+    ]);
+  });
+
   test('waits with a cursor, emits progress and retry updates, and returns a terminal job', async () => {
     const requests: string[] = [];
     let reads = 0;
@@ -439,6 +460,8 @@ describe('OpenOPC image SDK', () => {
       limit: 1,
       source: 'generated',
       source_job_id: JOB_ID,
+      created_after: '2026-08-07T00:00:00.000Z',
+      created_before: '2026-08-08T00:00:00.000Z',
     });
     expect(filtered.items).toEqual([ASSET]);
     const outputPage = await client.ai.images.jobs.outputs(JOB_ID, { limit: 1 });
@@ -467,6 +490,8 @@ describe('OpenOPC image SDK', () => {
     const filteredUrl = new URL(filteredRequest?.url ?? 'https://invalid.test');
     expect(filteredUrl.searchParams.get('source_job_id')).toBe(JOB_ID);
     expect(filteredUrl.searchParams.get('source')).toBe('generated');
+    expect(filteredUrl.searchParams.get('created_after')).toBe('2026-08-07T00:00:00.000Z');
+    expect(filteredUrl.searchParams.get('created_before')).toBe('2026-08-08T00:00:00.000Z');
   });
 
   test('rejects a repeated asset cursor instead of looping forever', async () => {

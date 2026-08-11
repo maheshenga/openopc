@@ -22,6 +22,7 @@ export {
   type OpenOpcModuleClient,
   type OpenOpcModuleClientOptions,
   type OpenOpcModuleTransportRequest,
+  type OpenOpcCapabilityTokenGetter,
   type OpenOpcRequestOptions,
 } from './client.js';
 
@@ -101,6 +102,8 @@ export {
   OpenOpcImageJobCreateInputSchema,
   OpenOpcImageJobEventPageSchema,
   OpenOpcImageJobEventSchema,
+  OpenOpcImageJobListInputSchema,
+  OpenOpcImageJobPageSchema,
   OpenOpcImageJobSchema,
   OpenOpcImageJobStateSchema,
   OpenOpcImageMimeTypeSchema,
@@ -149,6 +152,8 @@ export type {
   OpenOpcImageJobCreateInput,
   OpenOpcImageJobEvent,
   OpenOpcImageJobEventPage,
+  OpenOpcImageJobListInput,
+  OpenOpcImageJobPage,
   OpenOpcImageJobState,
   OpenOpcImageMimeType,
   OpenOpcImageModel,
@@ -172,6 +177,7 @@ export type {
   OpenOpcBrowserCapabilityTokenAdapterOptions,
   OpenOpcBrowserCapabilityTokenEvent,
   OpenOpcBrowserCapabilityTokenEventTarget,
+  OpenOpcBrowserCapabilityTokenErrorResponse,
   OpenOpcBrowserCapabilityTokenGetter,
   OpenOpcBrowserCapabilityTokenHostWindow,
   OpenOpcBrowserCapabilityTokenRequest,

@@ -239,7 +239,7 @@ jobs:
       - name: Install test dependencies
         run: cd tests && bun install --frozen-lockfile
       - name: Download lane results
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: qa-nightly-*
           path: tests/test-results

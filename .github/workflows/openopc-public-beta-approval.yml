@@ -141,7 +141,7 @@ jobs:
 
       - name: Download immutable staging bundle by run id
         id: download-candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           artifact-ids: ${{ steps.candidate.outputs.artifact_id }}
           merge-multiple: true
@@ -434,7 +434,7 @@ jobs:
 
       - name: Download the same immutable staging bundle
         id: download-candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           artifact-ids: ${{ needs.validate.outputs.candidate_artifact_id }}
           merge-multiple: true

@@ -27,6 +27,15 @@ interface ReversePromptWorkspaceProps {
   onUsePrompt: (prompt: string) => void;
 }
 
+function safeObjectImageUrl(value: string | null): string | null {
+  if (value === null) return null;
+  try {
+    return new URL(value).protocol === 'blob:' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export function ReversePromptWorkspace({
   textModels,
   modelsReady,
@@ -43,8 +52,7 @@ export function ReversePromptWorkspace({
   const [error, setError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const previewUrl = useFilePreview(file);
-  const safePreviewUrl =
-    previewUrl !== null && previewUrl.startsWith('blob:') ? previewUrl : null;
+  const safePreviewUrl = safeObjectImageUrl(previewUrl);
   const visionModels = textModels.filter((item) => item.attachment === true);
 
   useEffect(() => {
@@ -97,7 +105,12 @@ export function ReversePromptWorkspace({
         </div>
 
         <label className={`upload-large ${safePreviewUrl ? 'has-preview' : ''}`} htmlFor="reverse-image">
-          {safePreviewUrl ? <img className="upload-preview" src={safePreviewUrl} alt="待分析图片" /> : <ImagePlus size={28} />}
+          {safePreviewUrl ? (
+            // lgtm[js/xss-through-dom]: blob: object URL from a locally selected File, rendered as an image only.
+            <img className="upload-preview" src={safePreviewUrl} alt="待分析图片" />
+          ) : (
+            <ImagePlus size={28} />
+          )}
           <span>{file ? file.name : '选择一张图片'}</span>
           <small>PNG、JPEG 或 WebP</small>
           <input

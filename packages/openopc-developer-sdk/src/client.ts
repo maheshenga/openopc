@@ -75,7 +75,6 @@ import {
   OpenOpcModuleDocumentPageSchema,
   OpenOpcModuleDocumentSchema,
   type OpenOpcModuleDocumentValue,
-  OpenOpcModuleDocumentValueSchema,
   OpenOpcModuleDocumentWriteInputSchema,
 } from './data-contracts.js';
 import { OpenOpcModuleRequestError, type OpenOpcModuleRequestErrorCode } from './errors.js';

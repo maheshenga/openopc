@@ -44,9 +44,14 @@ function randomUuid(): string {
   }
   const timestamp = Date.now().toString(16).padStart(12, '0').slice(-12);
   const counter = (fallbackIdCounter++ & 0xffff).toString(16).padStart(4, '0');
-  const entropy = Math.floor(Math.random() * 0xffffffff)
-    .toString(16)
-    .padStart(8, '0');
+  const entropyBytes = new Uint32Array(1);
+  try {
+    crypto.getRandomValues(entropyBytes);
+  } catch {
+    // Deterministic monotonic fallback; entity ids are not security tokens.
+    entropyBytes[0] = (fallbackIdCounter * 2654435761) >>> 0;
+  }
+  const entropy = (entropyBytes[0] >>> 0).toString(16).padStart(8, '0');
   return `${timestamp.slice(0, 8)}-${timestamp.slice(8)}-4${counter.slice(0, 3)}-8${counter.slice(3)}-${entropy}${timestamp.slice(0, 4)}`;
 }
 

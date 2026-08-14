@@ -20,6 +20,21 @@
 > service operations were migrated to the consolidated `image.generate` naming
 > scheme. Verified locally on the rebased base: 49 module tests, typecheck, and
 > production build all pass.
+>
+> **Execution record (2026-08-14, shipped and browser-verified):** merged to
+> `main` as `b4449232c2` via PR #16 (CI fully green; one CodeQL finding
+> dismissed as a false positive with the `blob:` scheme whitelist in place).
+> Task 5 browser steps 4/5 now verified against the merged module in real
+> Chromium 149 (headless, via the local module QA host at
+> `https://image.openopc.test`): all six workspaces render and switch, and both
+> 1280x900 and 390x844 viewports show no horizontal overflow
+> (`scrollWidth <= clientWidth`) with zero page errors. The first-party
+> embedded-browser smoke (bootstrap/token bridge, stream abort, CORS preflight,
+> cookie omission, attacker rejection, CSP) passed all three assertion groups.
+> Deploy Dev for the merged main succeeded; the `dev-latest` prerelease tag
+> points at `b4449232c2` (CLI version `dev.b4449232`). Remaining external
+> boundaries: real-provider generation, billing settlement, and platform GIF
+> persistence.
 
 - Work only in `E:/code/agentk/suna-openopc-module-dev` on `feature/openopc-module-dev`.
 - Do not modify the main worktree, another worktree, the OpenOPC SDK, API, host, manifest, deployment, or release files in this phase.

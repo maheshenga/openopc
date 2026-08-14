@@ -186,7 +186,7 @@ jobs:
             echo ""
             echo "Report: $url"
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: release-qa-report
@@ -249,7 +249,7 @@ jobs:
 
       - name: Upload authoritative signed trust evidence
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: module-beta-trust-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -262,7 +262,7 @@ jobs:
 
       - name: Upload failed trust acceptance diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: module-beta-trust-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: tests/module-beta/diagnostics/**

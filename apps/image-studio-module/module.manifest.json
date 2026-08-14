@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 3,
+  "id": "openopc.image-studio",
+  "version": "0.1.0",
+  "publisher": { "id": "openopc", "displayName": "OpenOPC" },
+  "locales": ["zh-CN", "en-US"],
+  "compatibility": { "platform": ">=1.0.0", "registry": ">=3.0.0" },
+  "execution": { "mode": "sandboxed-web", "entry": "dist/index.html" },
+  "verification": { "profile": "sandboxed-web" },
+  "capabilities": [
+    { "id": "openopc.image-studio.create", "kind": "ui" },
+    { "id": "openopc.image-studio.agent", "kind": "task" },
+    { "id": "openopc.image-studio.reverse-prompt", "kind": "task" },
+    { "id": "openopc.image-studio.gif", "kind": "task" },
+    { "id": "openopc.image-studio.jobs", "kind": "ui" },
+    { "id": "openopc.image-studio.assets", "kind": "ui" }
+  ],
+  "permissions": {
+    "actions": [],
+    "secrets": [],
+    "connectors": [],
+    "network": [],
+    "tools": [],
+    "writes": [],
+    "desktop": []
+  },
+  "ui": [{ "id": "image-studio", "surface": "page", "entry": "dist/index.html" }],
+  "openopc": {
+    "sdkApiVersion": "v1",
+    "catalog": { "labels": ["creative", "image", "studio"] },
+    "services": {
+      "ai": {
+        "operations": [
+          "image.generate",
+          "models.read",
+          "text.generate",
+          "text.stream"
+        ]
+      }
+    }
+  }
+}

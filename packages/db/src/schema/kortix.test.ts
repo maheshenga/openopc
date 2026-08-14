@@ -469,6 +469,7 @@ describe('studio durable schema', () => {
       'idx_studio_jobs_provider_handle',
       'idx_studio_jobs_parent_job',
       'idx_studio_jobs_module_service_grant',
+      'idx_studio_jobs_project_created_job',
       'idx_studio_jobs_idempotency',
     ]));
     expect(indexNames(studioJobAttempts)).toContain('idx_studio_job_attempts_submission_key');
@@ -476,6 +477,10 @@ describe('studio durable schema', () => {
     expect(indexNames(studioAssetUploads)).toContain('idx_studio_asset_uploads_expiry');
     expect(indexNames(studioCreditReservations)).toContain(
       'idx_studio_credit_reservations_active_account',
+    );
+    expect(indexNames(studioAssets)).toContain('idx_studio_assets_project_created_asset');
+    expect(indexNames(studioJobAssets)).toContain(
+      'idx_studio_job_assets_job_role_created_asset',
     );
   });
 

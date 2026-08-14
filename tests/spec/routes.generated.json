@@ -1,6 +1,6 @@
 {
   "generatedAt": "static",
-  "count": 612,
+  "count": 613,
   "routes": [
     {
       "method": "GET",
@@ -1155,16 +1155,20 @@
       "path": "/v1/module-services/ai/images/assets/:assetId/preview-url"
     },
     {
+      "method": "POST",
+      "path": "/v1/module-services/ai/images/assets/:assetId/retention"
+    },
+    {
       "method": "GET",
       "path": "/v1/module-services/ai/images/assets/:assetId/thumbnail-url"
     },
     {
       "method": "POST",
-      "path": "/v1/module-services/ai/images/assets/:assetId/retention"
+      "path": "/v1/module-services/ai/images/estimates"
     },
     {
-      "method": "POST",
-      "path": "/v1/module-services/ai/images/estimates"
+      "method": "GET",
+      "path": "/v1/module-services/ai/images/jobs"
     },
     {
       "method": "POST",

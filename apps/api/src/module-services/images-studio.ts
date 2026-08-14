@@ -13,6 +13,7 @@ import {
   type OpenOpcImageJobCreateInput,
   type OpenOpcImageJobEvent,
   type OpenOpcImageJobEventPage,
+  type OpenOpcImageJobPage,
   type OpenOpcImageModel,
   type OpenOpcImageModelListResponse,
   type StudioAsset,
@@ -42,7 +43,9 @@ import {
   type ModuleImageAssetUpload,
   type ModuleImageBackend,
   ModuleImageError,
+  type ModuleImageJobListPage,
   type ModuleImageScope,
+  type ModuleServiceAuthorization,
 } from './images';
 
 const ESTIMATE_TTL_MS = 15 * 60 * 1000;
@@ -71,6 +74,7 @@ export type StudioModuleImageBackendInput = {
       | { kind: 'secret'; identifier: string }
       | { kind: 'connector'; slug: string };
   }) => Promise<boolean>;
+  loadModuleServiceAuthorization?: (grantId: string) => Promise<ModuleServiceAuthorization | null>;
   now?: () => Date;
   randomUUID?: () => string;
 };
@@ -211,14 +215,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
       input.idempotency_key,
     );
     if (replay) {
-      if (
-        replay.account_id !== scope.claims.accountId ||
-        replay.project_id !== scope.claims.projectId ||
-        replay.actor_user_id !== scope.actorUserId ||
-        replay.actor_type !== 'module' ||
-        replay.module_service_grant_id !== scope.claims.grantId ||
-        replay.request_hash !== requestHash
-      ) {
+      if (!(await this.isOwnedJob(scope, replay)) || replay.request_hash !== requestHash) {
         throw new ModuleImageError('OPENOPC_IMAGE_ESTIMATE_INPUT_MISMATCH', 409);
       }
       return { job: publicJob(replay), created: false };
@@ -297,7 +294,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
       if (
         result.job.account_id !== scope.claims.accountId ||
         result.job.project_id !== scope.claims.projectId ||
-        result.job.module_service_grant_id !== scope.claims.grantId
+        !(await this.isOwnedJob(scope, result.job))
       ) {
         throw new ModuleImageError('OPENOPC_IMAGE_INTERNAL_ERROR', 500);
       }
@@ -311,6 +308,28 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
 
   async getJob(scope: ModuleImageScope, jobId: string): Promise<OpenOpcImageJob> {
     return publicJob(await this.requireOwnedJob(scope, jobId));
+  }
+
+  async listJobs(
+    scope: ModuleImageScope,
+    page: ModuleImageJobListPage,
+  ): Promise<OpenOpcImageJobPage> {
+    const source = await this.input.repository.listJobs(
+      scope.claims.projectId,
+      page.limit,
+      page.cursor,
+      {
+        account_id: scope.claims.accountId,
+        actor_user_id: scope.actorUserId,
+        actor_type: 'module',
+        capability: 'image.generate',
+        module_installation_id: scope.claims.installationId,
+        status: page.status,
+        created_after: page.created_after,
+        created_before: page.created_before,
+      },
+    );
+    return { items: source.items.map(publicJob), next_cursor: source.next_cursor };
   }
 
   async listEvents(
@@ -350,11 +369,19 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
     page: { cursor: string | null; limit: number },
   ): Promise<OpenOpcImageAssetPage> {
     await this.requireOwnedJob(scope, jobId);
-    return this.listAssets(scope, {
-      ...page,
-      source_job_id: jobId,
-      source: 'generated',
-    });
+    const source = await this.input.repository.listJobAssets(
+      scope.claims.projectId,
+      jobId,
+      'output',
+      page.limit,
+      page.cursor,
+    );
+    const items: OpenOpcImageAsset[] = [];
+    for (const asset of source.items) {
+      const context = await this.assetContext(scope, asset);
+      if (context) items.push(publicAsset(asset, context));
+    }
+    return { items, next_cursor: source.next_cursor };
   }
 
   async cancelJob(scope: ModuleImageScope, jobId: string): Promise<OpenOpcImageJob> {
@@ -366,7 +393,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
       scope.claims.projectId,
       jobId,
     );
-    if (!cancelled || cancelled.module_service_grant_id !== scope.claims.grantId) {
+    if (!cancelled || !(await this.isOwnedJob(scope, cancelled))) {
       throw new ModuleImageError('OPENOPC_IMAGE_JOB_NOT_CANCELLABLE', 409);
     }
     return publicJob(cancelled);
@@ -410,7 +437,12 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
       scope.claims.projectId,
       page.limit,
       page.cursor,
-      { source_job_id: page.source_job_id, source: page.source },
+      {
+        source_job_id: page.source_job_id,
+        source: page.source,
+        created_after: page.created_after,
+        created_before: page.created_before,
+      },
     );
     const items: OpenOpcImageAsset[] = [];
     for (const asset of source.items) {
@@ -422,7 +454,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
   }
 
   async previewAsset(scope: ModuleImageScope, assetId: string): Promise<OpenOpcImageAssetPreview> {
-    await this.requireOwnedAsset(scope, assetId);
+    await this.requireReadableAsset(scope, assetId);
     let signed: Awaited<ReturnType<StudioStorageService['createDownloadUrl']>>;
     try {
       signed = await this.input.storageService.createDownloadUrl({
@@ -451,7 +483,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
     assetId: string,
     preset: 'small' | 'medium' | 'large',
   ): Promise<OpenOpcImageAssetThumbnail> {
-    await this.requireOwnedAsset(scope, assetId);
+    await this.requireReadableAsset(scope, assetId);
     let signed: Awaited<ReturnType<StudioStorageService['createThumbnailUrl']>>;
     try {
       signed = await this.input.storageService.createThumbnailUrl({
@@ -487,7 +519,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
   }
 
   async downloadAsset(scope: ModuleImageScope, assetId: string): Promise<ModuleImageAssetDownload> {
-    const owned = await this.requireOwnedAsset(scope, assetId);
+    const readable = await this.requireReadableAsset(scope, assetId);
     let result: Awaited<ReturnType<StudioStorageService['readAsset']>>;
     try {
       result = await this.input.storageService.readAsset({
@@ -498,7 +530,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
     } catch (error) {
       throw storageError(error);
     }
-    if (!result || result.asset.asset_id !== owned.asset.asset_id) {
+    if (!result || result.asset.asset_id !== readable.asset.asset_id) {
       throw new ModuleImageError('OPENOPC_IMAGE_ASSET_NOT_FOUND', 404);
     }
     const mimeType = result.asset.mime_type;
@@ -508,7 +540,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
     return {
       bytes: result.bytes,
       mimeType: mimeType as ModuleImageAssetDownload['mimeType'],
-      filename: owned.filename,
+      filename: readable.filename,
     };
   }
 
@@ -516,6 +548,11 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
     scope: ModuleImageScope,
     assetId: string,
   ): Promise<OpenOpcImageAssetDeleteResult> {
+    const owned = await this.requireOwnedAsset(scope, assetId, true);
+    const ownerGrantId = owned.asset.metadata[MODULE_GRANT_METADATA];
+    if (owned.asset.source_job_id !== null || typeof ownerGrantId !== 'string') {
+      throw new ModuleImageError('OPENOPC_IMAGE_ASSET_NOT_DELETABLE', 409);
+    }
     const deletionMarker = { [MODULE_DELETION_STATE_METADATA]: MODULE_DELETION_REQUESTED };
     let requested: Awaited<ReturnType<StudioRepository['requestDirectAssetDeletion']>>;
     try {
@@ -523,7 +560,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
         account_id: scope.claims.accountId,
         project_id: scope.claims.projectId,
         asset_id: assetId,
-        expected_metadata: { [MODULE_GRANT_METADATA]: scope.claims.grantId },
+        expected_metadata: { [MODULE_GRANT_METADATA]: ownerGrantId },
         deletion_marker: deletionMarker,
         deletion_metadata: {
           ...deletionMarker,
@@ -560,7 +597,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
         project_id: scope.claims.projectId,
         asset_id: assetId,
         expected_metadata: {
-          [MODULE_GRANT_METADATA]: scope.claims.grantId,
+          [MODULE_GRANT_METADATA]: ownerGrantId,
           ...deletionMarker,
         },
         object_key: requested.asset.object_key,
@@ -577,10 +614,8 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
     policy: 'temporary' | 'retained',
   ): Promise<OpenOpcImageAsset> {
     const owned = await this.requireOwnedAsset(scope, assetId);
-    if (
-      owned.asset.source_job_id !== null ||
-      owned.asset.metadata[MODULE_GRANT_METADATA] !== scope.claims.grantId
-    ) {
+    const ownerGrantId = owned.asset.metadata[MODULE_GRANT_METADATA];
+    if (owned.asset.source_job_id !== null || typeof ownerGrantId !== 'string') {
       throw new ModuleImageError('OPENOPC_IMAGE_ASSET_NOT_DELETABLE', 409);
     }
     let updated: StudioAsset | null;
@@ -589,7 +624,7 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
         account_id: scope.claims.accountId,
         project_id: scope.claims.projectId,
         asset_id: assetId,
-        expected_metadata: { [MODULE_GRANT_METADATA]: scope.claims.grantId },
+        expected_metadata: { [MODULE_GRANT_METADATA]: ownerGrantId },
         metadata_patch: { [MODULE_RETENTION_METADATA]: policy },
         forbidden_metadata_key: MODULE_DELETION_STATE_METADATA,
       });
@@ -641,27 +676,87 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
 
   private async requireOwnedJob(scope: ModuleImageScope, jobId: string): Promise<StudioJob> {
     const job = await this.input.repository.getJob(scope.claims.projectId, jobId);
-    if (
-      !job ||
-      job.account_id !== scope.claims.accountId ||
-      job.project_id !== scope.claims.projectId ||
-      job.actor_type !== 'module' ||
-      job.module_service_grant_id !== scope.claims.grantId
-    ) {
+    if (!job || !(await this.isOwnedJob(scope, job))) {
       throw new ModuleImageError('OPENOPC_IMAGE_JOB_NOT_FOUND', 404);
     }
     return job;
   }
 
-  private async assertReferenceAssets(scope: ModuleImageScope, assetIds: readonly string[]) {
-    for (const assetId of assetIds) await this.requireOwnedAsset(scope, assetId);
+  private async isOwnedJob(scope: ModuleImageScope, job: StudioJob): Promise<boolean> {
+    return (
+      job.account_id === scope.claims.accountId &&
+      job.project_id === scope.claims.projectId &&
+      job.actor_user_id === scope.actorUserId &&
+      job.actor_type === 'module' &&
+      job.capability === 'image.generate' &&
+      typeof job.module_service_grant_id === 'string' &&
+      (await this.grantBelongsToScope(scope, job.module_service_grant_id))
+    );
   }
 
-  private async requireOwnedAsset(scope: ModuleImageScope, assetId: string) {
+  private async grantBelongsToScope(scope: ModuleImageScope, grantId: string): Promise<boolean> {
+    if (grantId === scope.claims.grantId) return true;
+    const authorization = await this.input.loadModuleServiceAuthorization?.(grantId);
+    return Boolean(
+      authorization &&
+        authorization.grant.accountId === scope.claims.accountId &&
+        authorization.grant.projectId === scope.claims.projectId &&
+        authorization.grant.installationId === scope.claims.installationId &&
+        authorization.grant.service === 'ai' &&
+        authorization.grant.operations.includes('image.generate') &&
+        authorization.consent.acceptedBy === scope.actorUserId &&
+        authorization.installation.installationId === scope.claims.installationId,
+    );
+  }
+
+  private async assertReferenceAssets(scope: ModuleImageScope, assetIds: readonly string[]) {
+    for (const assetId of assetIds) await this.requireReadableAsset(scope, assetId);
+  }
+
+  private async requireReadableAsset(scope: ModuleImageScope, assetId: string) {
     const asset = await this.input.repository.getAsset(scope.claims.projectId, assetId);
     const context = asset ? await this.assetContext(scope, asset) : null;
     if (!asset || !context) throw new ModuleImageError('OPENOPC_IMAGE_ASSET_NOT_FOUND', 404);
     return { asset, context, filename: assetFilename(asset) };
+  }
+
+  private async requireOwnedAsset(
+    scope: ModuleImageScope,
+    assetId: string,
+    allowDeletionRequested = false,
+  ) {
+    try {
+      const readable = await this.requireReadableAsset(scope, assetId);
+      if (!readable.context.deletable) {
+        throw new ModuleImageError('OPENOPC_IMAGE_ASSET_NOT_FOUND', 404);
+      }
+      return readable;
+    } catch (error) {
+      if (!allowDeletionRequested) throw error;
+      const asset = await this.input.repository.getAsset(scope.claims.projectId, assetId);
+      const grantId = asset?.metadata[MODULE_GRANT_METADATA];
+      if (
+        asset &&
+        asset.account_id === scope.claims.accountId &&
+        asset.metadata[MODULE_DELETION_STATE_METADATA] === MODULE_DELETION_REQUESTED &&
+        asset.source_job_id === null &&
+        typeof grantId === 'string' &&
+        (await this.grantBelongsToScope(scope, grantId))
+      ) {
+        return {
+          asset,
+          context: {
+            prompt: null,
+            retention: 'temporary' as const,
+            expiresAt: null,
+            deletable: true,
+            metadata: {},
+          },
+          filename: assetFilename(asset),
+        };
+      }
+      throw error;
+    }
   }
 
   private async publicOwnedAsset(scope: ModuleImageScope, asset: StudioAsset) {
@@ -687,28 +782,23 @@ export class StudioModuleImageBackend implements ModuleImageBackend {
       return null;
     }
     if (asset.metadata[MODULE_DELETION_STATE_METADATA] === MODULE_DELETION_REQUESTED) return null;
-    if (asset.metadata[MODULE_GRANT_METADATA] === scope.claims.grantId) {
+    const directGrantId = asset.metadata[MODULE_GRANT_METADATA];
+    const directOwner =
+      typeof directGrantId === 'string' && (await this.grantBelongsToScope(scope, directGrantId));
+    if (asset.source_job_id === null) {
       return {
         prompt: null,
         retention:
           asset.metadata[MODULE_RETENTION_METADATA] === 'temporary' ? 'temporary' : 'retained',
         expiresAt: null,
-        deletable: true,
-        metadata: parseUserMetadata(asset.metadata[MODULE_USER_METADATA]),
+        deletable: directOwner,
+        metadata: directOwner ? parseUserMetadata(asset.metadata[MODULE_USER_METADATA]) : {},
       };
     }
-    if (!asset.source_job_id) return null;
     const job = await this.input.repository.getJob(scope.claims.projectId, asset.source_job_id);
-    if (
-      !job ||
-      job.account_id !== scope.claims.accountId ||
-      job.actor_type !== 'module' ||
-      job.module_service_grant_id !== scope.claims.grantId
-    ) {
-      return null;
-    }
+    const generatedOwner = job ? await this.isOwnedJob(scope, job) : false;
     return {
-      prompt: job.input.image.prompt,
+      prompt: generatedOwner && job ? job.input.image.prompt : null,
       retention: 'retained',
       expiresAt: null,
       deletable: false,

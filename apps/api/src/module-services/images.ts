@@ -27,6 +27,10 @@ import {
   OpenOpcImageJobCreateInputSchema,
   type OpenOpcImageJobEventPage,
   OpenOpcImageJobEventPageSchema,
+  type OpenOpcImageJobListInput,
+  OpenOpcImageJobListInputSchema,
+  type OpenOpcImageJobPage,
+  OpenOpcImageJobPageSchema,
   OpenOpcImageJobSchema,
   type OpenOpcImageModelListResponse,
   OpenOpcImageModelListResponseSchema,
@@ -53,7 +57,7 @@ const MAX_METADATA_JSON_BYTES = 16 * 1024;
 const ResourceIdSchema = z.string().uuid();
 const RetentionRequestSchema = z.object({ policy: z.enum(['temporary', 'retained']) }).strict();
 
-type ModuleServiceAuthorization = NonNullable<
+export type ModuleServiceAuthorization = NonNullable<
   Awaited<ReturnType<ModuleServiceCapabilityRepository['getAuthorization']>>
 >;
 
@@ -77,7 +81,10 @@ export type ModuleImageAssetDownload = {
 };
 
 export type ModuleImageAssetListPage = Required<Pick<OpenOpcImagePageInput, 'cursor' | 'limit'>> &
-  Pick<OpenOpcImageAssetListInput, 'source_job_id' | 'source'>;
+  Pick<OpenOpcImageAssetListInput, 'source_job_id' | 'source' | 'created_after' | 'created_before'>;
+
+export type ModuleImageJobListPage = Required<Pick<OpenOpcImagePageInput, 'cursor' | 'limit'>> &
+  Pick<OpenOpcImageJobListInput, 'status' | 'created_after' | 'created_before'>;
 
 export interface ModuleImageBackend {
   listModels(scope: ModuleImageScope): Promise<OpenOpcImageModelListResponse>;
@@ -89,6 +96,7 @@ export interface ModuleImageBackend {
     scope: ModuleImageScope,
     input: OpenOpcImageJobCreateInput,
   ): Promise<{ job: OpenOpcImageJob; created: boolean }>;
+  listJobs(scope: ModuleImageScope, page: ModuleImageJobListPage): Promise<OpenOpcImageJobPage>;
   getJob(scope: ModuleImageScope, jobId: string): Promise<OpenOpcImageJob>;
   listEvents(
     scope: ModuleImageScope,
@@ -172,6 +180,19 @@ export function createModuleImageRoutes(dependencies: ModuleImageDependencies) {
         payload: parseBackendResponse(OpenOpcImageJobSchema, result.job),
         status: result.created ? 201 : 200,
       };
+    }),
+  );
+
+  app.get('/jobs', (context) =>
+    executeJson(context.req.header('authorization'), dependencies, async (scope, backend) => {
+      const page = parseJobPage(
+        context.req.query('cursor'),
+        context.req.query('limit'),
+        context.req.query('status'),
+        context.req.query('created_after'),
+        context.req.query('created_before'),
+      );
+      return parseBackendResponse(OpenOpcImageJobPageSchema, await backend.listJobs(scope, page));
     }),
   );
 
@@ -274,6 +295,8 @@ export function createModuleImageRoutes(dependencies: ModuleImageDependencies) {
         context.req.query('limit'),
         context.req.query('source_job_id'),
         context.req.query('source'),
+        context.req.query('created_after'),
+        context.req.query('created_before'),
       );
       return parseBackendResponse(
         OpenOpcImageAssetPageSchema,
@@ -458,25 +481,66 @@ function parsePage(
   return { cursor: parsed.data.cursor ?? null, limit: parsed.data.limit ?? 100 };
 }
 
-function parseAssetPage(
+function parseJobPage(
   cursor: string | undefined,
   rawLimit: string | undefined,
-  sourceJobId: string | undefined,
-  source: string | undefined,
-): ModuleImageAssetListPage {
+  status: string | undefined,
+  createdAfter: string | undefined,
+  createdBefore: string | undefined,
+): ModuleImageJobListPage {
   const numericLimit = rawLimit === undefined ? 100 : Number(rawLimit);
-  const parsed = OpenOpcImageAssetListInputSchema.safeParse({
+  const parsed = OpenOpcImageJobListInputSchema.safeParse({
     cursor: cursor ?? null,
     limit: numericLimit,
-    ...(sourceJobId ? { source_job_id: sourceJobId } : {}),
-    ...(source ? { source } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(createdAfter !== undefined ? { created_after: createdAfter } : {}),
+    ...(createdBefore !== undefined ? { created_before: createdBefore } : {}),
   });
   if (!parsed.success) throw new ModuleImageError('OPENOPC_IMAGE_VALIDATION_ERROR', 400);
   return {
     cursor: parsed.data.cursor ?? null,
     limit: parsed.data.limit ?? 100,
-    ...(parsed.data.source_job_id ? { source_job_id: parsed.data.source_job_id } : {}),
-    ...(parsed.data.source ? { source: parsed.data.source } : {}),
+    ...(parsed.data.status !== undefined ? { status: parsed.data.status } : {}),
+    ...(parsed.data.created_after !== undefined
+      ? { created_after: parsed.data.created_after }
+      : {}),
+    ...(parsed.data.created_before !== undefined
+      ? { created_before: parsed.data.created_before }
+      : {}),
+  };
+}
+
+function parseAssetPage(
+  cursor: string | undefined,
+  rawLimit: string | undefined,
+  sourceJobId: string | undefined,
+  source: string | undefined,
+  createdAfter: string | undefined,
+  createdBefore: string | undefined,
+): ModuleImageAssetListPage {
+  const numericLimit = rawLimit === undefined ? 100 : Number(rawLimit);
+  const parsed = OpenOpcImageAssetListInputSchema.safeParse({
+    cursor: cursor ?? null,
+    limit: numericLimit,
+    ...(sourceJobId !== undefined ? { source_job_id: sourceJobId } : {}),
+    ...(source !== undefined ? { source } : {}),
+    ...(createdAfter !== undefined ? { created_after: createdAfter } : {}),
+    ...(createdBefore !== undefined ? { created_before: createdBefore } : {}),
+  });
+  if (!parsed.success) throw new ModuleImageError('OPENOPC_IMAGE_VALIDATION_ERROR', 400);
+  return {
+    cursor: parsed.data.cursor ?? null,
+    limit: parsed.data.limit ?? 100,
+    ...(parsed.data.source_job_id !== undefined
+      ? { source_job_id: parsed.data.source_job_id }
+      : {}),
+    ...(parsed.data.source !== undefined ? { source: parsed.data.source } : {}),
+    ...(parsed.data.created_after !== undefined
+      ? { created_after: parsed.data.created_after }
+      : {}),
+    ...(parsed.data.created_before !== undefined
+      ? { created_before: parsed.data.created_before }
+      : {}),
   };
 }
 

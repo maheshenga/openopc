@@ -42,6 +42,11 @@ export const uncoveredAllow: AllowEntry[] = [
   },
   {
     method: "GET",
+    path: "/v1/module-services/ai/images/jobs",
+    reason: "module capability-token API; covered by repository-level actor and installation filtering, SDK, route, and real PostgreSQL pagination suites until ke2e can issue module capabilities",
+  },
+  {
+    method: "GET",
     path: "/v1/module-services/ai/images/jobs/:*",
     reason: "module capability-token API; covered by grant-isolation, SDK, route, and Studio backend suites until ke2e can issue module capabilities",
   },

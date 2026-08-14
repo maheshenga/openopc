@@ -15,10 +15,12 @@ import type {
   StudioProviderConfigWire,
   StudioRepository,
 } from '../types';
+import { decodeStudioKeysetCursor, encodeStudioKeysetCursor } from './keyset-cursor';
 
 type MemoryStudioRepositoryInput = {
   providers?: StudioProviderConfigWire[];
   pricing?: StudioPricingCatalogEntry[];
+  moduleServiceGrantInstallations?: Readonly<Record<string, string>>;
   now?: () => string;
 };
 
@@ -278,13 +280,50 @@ export function createMemoryStudioRepository(
       );
     },
 
-    async listJobs(projectId, limit, cursor) {
-      const after = cursor ? Number(cursor) : 0;
+    async listJobs(projectId, limit, cursor, filter) {
+      const createdAfter = filter?.created_after ? Date.parse(filter.created_after) : undefined;
+      const createdBefore = filter?.created_before ? Date.parse(filter.created_before) : undefined;
+      const after = cursor ? decodeStudioKeysetCursor(cursor) : null;
+      const afterCreatedAt = after ? Date.parse(after.createdAt) : null;
       const all = [...jobs.values()]
         .filter((job) => job.project_id === projectId)
-        .sort((left, right) => right.created_at.localeCompare(left.created_at));
-      const page = all.slice(after, after + limit);
-      const next = after + page.length < all.length ? String(after + page.length) : null;
+        .filter((job) => filter?.account_id === undefined || job.account_id === filter.account_id)
+        .filter(
+          (job) =>
+            filter?.actor_user_id === undefined || job.actor_user_id === filter.actor_user_id,
+        )
+        .filter((job) => filter?.actor_type === undefined || job.actor_type === filter.actor_type)
+        .filter((job) => filter?.capability === undefined || job.capability === filter.capability)
+        .filter((job) => filter?.status === undefined || job.status === filter.status)
+        .filter(
+          (job) =>
+            filter?.module_installation_id === undefined ||
+            (job.module_service_grant_id !== null &&
+              input.moduleServiceGrantInstallations?.[job.module_service_grant_id] ===
+                filter.module_installation_id),
+        )
+        .filter((job) => createdAfter === undefined || Date.parse(job.created_at) >= createdAfter)
+        .filter((job) => createdBefore === undefined || Date.parse(job.created_at) < createdBefore)
+        .filter(
+          (job) =>
+            !after ||
+            (afterCreatedAt !== null && Date.parse(job.created_at) < afterCreatedAt) ||
+            (after.id !== null &&
+              afterCreatedAt !== null &&
+              Date.parse(job.created_at) === afterCreatedAt &&
+              job.job_id < after.id),
+        )
+        .sort(
+          (left, right) =>
+            Date.parse(right.created_at) - Date.parse(left.created_at) ||
+            right.job_id.localeCompare(left.job_id),
+        );
+      const page = all.slice(0, limit);
+      const last = page.at(-1);
+      const next =
+        all.length > limit && last
+          ? encodeStudioKeysetCursor({ createdAt: last.created_at, id: last.job_id })
+          : null;
       return { items: page, next_cursor: next };
     },
 
@@ -319,6 +358,36 @@ export function createMemoryStudioRepository(
       const after = afterCursor ? Number(afterCursor) : 0;
       const page = (events.get(jobId) ?? []).filter((event) => Number(event.cursor) > after);
       return { items: page, next_cursor: null };
+    },
+
+    async listJobAssets(projectId, jobId, _role, limit, cursor) {
+      const after = cursor ? decodeStudioKeysetCursor(cursor) : null;
+      const afterCreatedAt = after ? Date.parse(after.createdAt) : null;
+      const all = [...assets.values()]
+        .filter((asset) => asset.project_id === projectId && asset.source_job_id === jobId)
+        .filter(
+          (asset) =>
+            !after ||
+            (afterCreatedAt !== null && Date.parse(asset.created_at) < afterCreatedAt) ||
+            (after.id !== null &&
+              afterCreatedAt !== null &&
+              Date.parse(asset.created_at) === afterCreatedAt &&
+              asset.asset_id < after.id),
+        )
+        .sort(
+          (left, right) =>
+            Date.parse(right.created_at) - Date.parse(left.created_at) ||
+            right.asset_id.localeCompare(left.asset_id),
+        );
+      const page = all.slice(0, limit);
+      const last = page.at(-1);
+      return {
+        items: page,
+        next_cursor:
+          all.length > limit && last
+            ? encodeStudioKeysetCursor({ createdAt: last.created_at, id: last.asset_id })
+            : null,
+      };
     },
 
     async createPendingUpload(input) {
@@ -400,7 +469,10 @@ export function createMemoryStudioRepository(
     },
 
     async listAssets(projectId, limit, cursor, filter) {
-      const after = cursor ? Number(cursor) : 0;
+      const createdAfter = filter?.created_after ? Date.parse(filter.created_after) : undefined;
+      const createdBefore = filter?.created_before ? Date.parse(filter.created_before) : undefined;
+      const after = cursor ? decodeStudioKeysetCursor(cursor) : null;
+      const afterCreatedAt = after ? Date.parse(after.createdAt) : null;
       const all = [...assets.values()]
         .filter((asset) => asset.project_id === projectId)
         .filter(
@@ -414,11 +486,34 @@ export function createMemoryStudioRepository(
               ? asset.source_job_id !== null
               : asset.source_job_id === null),
         )
-        .sort((left, right) => right.created_at.localeCompare(left.created_at));
-      const page = all.slice(after, after + limit);
+        .filter(
+          (asset) => createdAfter === undefined || Date.parse(asset.created_at) >= createdAfter,
+        )
+        .filter(
+          (asset) => createdBefore === undefined || Date.parse(asset.created_at) < createdBefore,
+        )
+        .filter(
+          (asset) =>
+            !after ||
+            (afterCreatedAt !== null && Date.parse(asset.created_at) < afterCreatedAt) ||
+            (after.id !== null &&
+              afterCreatedAt !== null &&
+              Date.parse(asset.created_at) === afterCreatedAt &&
+              asset.asset_id < after.id),
+        )
+        .sort(
+          (left, right) =>
+            Date.parse(right.created_at) - Date.parse(left.created_at) ||
+            right.asset_id.localeCompare(left.asset_id),
+        );
+      const page = all.slice(0, limit);
+      const last = page.at(-1);
       return {
         items: page,
-        next_cursor: after + page.length < all.length ? String(after + page.length) : null,
+        next_cursor:
+          all.length > limit && last
+            ? encodeStudioKeysetCursor({ createdAt: last.created_at, id: last.asset_id })
+            : null,
       };
     },
 

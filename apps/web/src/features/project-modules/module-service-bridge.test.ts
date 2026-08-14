@@ -126,8 +126,8 @@ describe('module service host bridge', () => {
     expect(JSON.stringify(responses)).not.toMatch(/account|provider|credential|new-api|z-pay/i);
   });
 
-  test('rejects foreign origins, invalid request ids, and requests beyond the per-installation limit', async () => {
-    const { bridge, calls, source } = createHarness({ maxRequestsPerMinute: 2 });
+  test('rejects foreign origins and invalid request ids, and explains per-installation rate limits', async () => {
+    const { bridge, calls, responses, source } = createHarness({ maxRequestsPerMinute: 2 });
 
     await expect(
       bridge.handleMessage({ ...request(source), origin: 'https://attacker.example' }),
@@ -149,9 +149,17 @@ describe('module service host bridge', () => {
       bridge.handleMessage({
         ...request(source, { requestId: '40000000-0000-4000-8000-000000000008' }),
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
 
     expect(calls).toHaveLength(2);
+    expect(responses.at(-1)).toEqual({
+      type: 'openopc.module-service.token.error',
+      requestId: '40000000-0000-4000-8000-000000000008',
+      error: {
+        code: 'OPENOPC_MODULE_CAPABILITY_RATE_LIMITED',
+        retryAfterMs: 60_000,
+      },
+    });
   });
 
   test('rejects a different window even when it shares the reviewed module origin', async () => {

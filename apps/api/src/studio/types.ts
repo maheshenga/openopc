@@ -212,6 +212,7 @@ export interface StudioRepository extends StudioPricingRepository, StudioProvide
     projectId: string,
     limit: number,
     cursor?: string | null,
+    filter?: StudioJobListFilter,
   ): Promise<{ items: StudioJob[]; next_cursor: string | null }>;
   getJob(projectId: string, jobId: string): Promise<StudioJob | null>;
   requestCancellation(projectId: string, jobId: string): Promise<StudioJob | null>;
@@ -220,6 +221,13 @@ export interface StudioRepository extends StudioPricingRepository, StudioProvide
     jobId: string,
     afterCursor?: string | null,
   ): Promise<{ items: StudioJobEvent[]; next_cursor: string | null }>;
+  listJobAssets(
+    projectId: string,
+    jobId: string,
+    role: string,
+    limit: number,
+    cursor?: string | null,
+  ): Promise<{ items: StudioAsset[]; next_cursor: string | null }>;
   createPendingUpload(input: StudioCreatePendingUploadInput): Promise<StudioPendingUploadRecord>;
   getUploadRecord(
     accountId: string,
@@ -256,4 +264,17 @@ export interface StudioRepository extends StudioPricingRepository, StudioProvide
 export type StudioAssetListFilter = {
   source_job_id?: string;
   source?: 'generated' | 'uploaded';
+  created_after?: string;
+  created_before?: string;
+};
+
+export type StudioJobListFilter = {
+  account_id?: string;
+  actor_user_id?: string;
+  actor_type?: StudioCreateJobInput['actor_type'];
+  capability?: StudioCreateJobInput['capability'];
+  module_installation_id?: string;
+  status?: StudioJob['status'];
+  created_after?: string;
+  created_before?: string;
 };

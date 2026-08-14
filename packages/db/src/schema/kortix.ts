@@ -2304,6 +2304,11 @@ export const studioJobs = kortixSchema.table(
     }).onDelete('no action'),
     index('idx_studio_jobs_account_created').on(table.accountId, table.createdAt),
     index('idx_studio_jobs_project_created').on(table.projectId, table.createdAt),
+    index('idx_studio_jobs_project_created_job').on(
+      table.projectId,
+      table.createdAt,
+      table.jobId,
+    ),
     index('idx_studio_jobs_claimable')
       .on(table.status, table.availableAt, table.leaseExpiresAt)
       .where(sql`${table.status} in ('queued', 'running')`),
@@ -3735,6 +3740,11 @@ export const studioAssets = kortixSchema.table(
   },
   (table) => [
     index('idx_studio_assets_project_created').on(table.projectId, table.createdAt),
+    index('idx_studio_assets_project_created_asset').on(
+      table.projectId,
+      table.createdAt,
+      table.assetId,
+    ),
     index('idx_studio_assets_source_job').on(table.sourceJobId),
     uniqueIndex('idx_studio_assets_object').on(table.bucket, table.objectKey),
   ],
@@ -3753,6 +3763,12 @@ export const studioJobAssets = kortixSchema.table(
   (table) => [
     primaryKey({ columns: [table.jobId, table.assetId, table.role] }),
     index('idx_studio_job_assets_asset').on(table.assetId),
+    index('idx_studio_job_assets_job_role_created_asset').on(
+      table.jobId,
+      table.role,
+      table.createdAt,
+      table.assetId,
+    ),
   ],
 );
 

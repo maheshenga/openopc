@@ -9,6 +9,8 @@ import {
   OpenOpcImageEstimateSchema,
   OpenOpcImageEventFailureModeSchema,
   OpenOpcImageJobEventSchema,
+  OpenOpcImageJobListInputSchema,
+  OpenOpcImageJobPageSchema,
   OpenOpcImageModelSchema,
   OpenOpcImagePageInputSchema,
   OpenOpcModelSchema,
@@ -187,6 +189,10 @@ describe('OpenOPC AI wire contracts', () => {
   });
 
   test('normalizes terminal event semantics and asset source/retention metadata', () => {
+    expect(OpenOpcImageJobPageSchema.parse({ items: [], next_cursor: null })).toEqual({
+      items: [],
+      next_cursor: null,
+    });
     expect(
       OpenOpcImageJobEventSchema.parse({
         event_id: '20000000-0000-4000-8000-000000000001',
@@ -228,11 +234,26 @@ describe('OpenOPC AI wire contracts', () => {
       limit: 100,
     });
     expect(
+      OpenOpcImageJobListInputSchema.parse({
+        status: 'running',
+        created_after: '2026-08-07T00:00:00.000Z',
+        created_before: '2026-08-08T00:00:00.000Z',
+      }),
+    ).toMatchObject({ status: 'running' });
+    expect(
+      OpenOpcImageJobListInputSchema.safeParse({
+        created_after: '2026-08-08T00:00:00.000Z',
+        created_before: '2026-08-07T00:00:00.000Z',
+      }).success,
+    ).toBe(false);
+    expect(
       OpenOpcImageAssetListInputSchema.parse({
         cursor: null,
         limit: 20,
         source: 'generated',
         source_job_id: '30000000-0000-4000-8000-000000000001',
+        created_after: '2026-08-07T00:00:00.000Z',
+        created_before: '2026-08-08T00:00:00.000Z',
       }),
     ).toMatchObject({ source: 'generated' });
     expect(OpenOpcImageAssetListInputSchema.parse({ source: 'uploaded' })).toEqual({

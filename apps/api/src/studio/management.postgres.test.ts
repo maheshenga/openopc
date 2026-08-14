@@ -234,12 +234,60 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
       CREATE TYPE kortix.studio_job_status AS ENUM (
         'queued', 'running', 'succeeded', 'failed', 'cancelled'
       );
+      CREATE TABLE kortix.module_service_capability_grants (
+        grant_id uuid PRIMARY KEY,
+        account_id uuid NOT NULL,
+        project_id uuid NOT NULL,
+        installation_id uuid NOT NULL,
+        service text NOT NULL,
+        operations jsonb NOT NULL
+      );
       CREATE TABLE kortix.studio_jobs (
         job_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         account_id uuid NOT NULL REFERENCES kortix.accounts(account_id),
         project_id uuid NOT NULL REFERENCES kortix.projects(project_id),
+        actor_user_id uuid,
+        actor_type text NOT NULL DEFAULT 'user',
+        acting_token_id uuid,
+        module_service_grant_id uuid,
+        agent_name text,
+        session_id text,
+        parent_job_id uuid,
+        capability text NOT NULL DEFAULT 'image.generate',
+        provider_config_id uuid NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001',
+        provider_config_version text,
+        pricing_catalog_id uuid,
+        pricing_version integer,
+        pricing_snapshot jsonb,
+        provider text NOT NULL DEFAULT 'fake',
+        model text NOT NULL DEFAULT 'fake/image-v1',
         status kortix.studio_job_status NOT NULL DEFAULT 'queued',
-        input jsonb NOT NULL DEFAULT '{}'::jsonb
+        input jsonb NOT NULL DEFAULT '{}'::jsonb,
+        idempotency_key text NOT NULL DEFAULT 'fixture-idempotency',
+        request_hash text NOT NULL DEFAULT 'fixture-request-hash',
+        attempt_count integer NOT NULL DEFAULT 0,
+        provider_handle text,
+        cancellation_requested_at timestamptz,
+        reserved_credits numeric(12,4) NOT NULL DEFAULT 0,
+        actual_credits numeric(12,4),
+        error_code text,
+        error_message text,
+        lease_owner text,
+        lease_expires_at timestamptz,
+        available_at timestamptz DEFAULT now(),
+        created_at timestamptz DEFAULT now(),
+        updated_at timestamptz DEFAULT now(),
+        started_at timestamptz,
+        completed_at timestamptz
+      );
+      CREATE TABLE kortix.studio_job_events (
+        event_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        job_id uuid NOT NULL REFERENCES kortix.studio_jobs(job_id) ON DELETE CASCADE,
+        cursor bigint NOT NULL,
+        event_type text NOT NULL,
+        payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        UNIQUE (job_id, cursor)
       );
       CREATE TABLE kortix.studio_assets (
         asset_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -278,6 +326,13 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
         finalized_asset_id uuid REFERENCES kortix.studio_assets(asset_id) ON DELETE SET NULL,
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE kortix.studio_job_assets (
+        job_id uuid NOT NULL REFERENCES kortix.studio_jobs(job_id) ON DELETE CASCADE,
+        asset_id uuid NOT NULL REFERENCES kortix.studio_assets(asset_id) ON DELETE CASCADE,
+        role text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (job_id, asset_id, role)
       );
       INSERT INTO kortix.accounts(account_id) VALUES ('${ACCOUNT_ID}'), ('${OTHER_ACCOUNT_ID}');
       INSERT INTO kortix.projects(project_id, account_id)
@@ -869,6 +924,231 @@ describe.skipIf(!dockerAvailable)('Studio management - real PostgreSQL', () => {
     expect(persistedUpload).toMatchObject({
       status: 'finalized',
       finalizedAssetId: first.asset_id,
+    });
+  }, 30_000);
+
+  test('does not drop equal-timestamp jobs, assets, or the event lookahead row', async () => {
+    if (!database) throw new Error('database fixture is unavailable');
+    const repository = createDrizzleStudioRepository(database);
+    const accountId = '10000000-0000-4000-a000-000000000099';
+    const projectId = '20000000-0000-4000-a000-000000000099';
+    const actorUserId = '30000000-0000-4000-a000-000000000099';
+    const jobIds = [
+      '88000000-0000-4000-a000-000000000001',
+      '88000000-0000-4000-a000-000000000002',
+      '88000000-0000-4000-a000-000000000003',
+    ];
+    const assetIds = [
+      '99000000-0000-4000-a000-000000000001',
+      '99000000-0000-4000-a000-000000000002',
+      '99000000-0000-4000-a000-000000000003',
+    ];
+    const createdAt = '2026-08-08T08:00:00.000Z';
+    const input = JSON.stringify({
+      capability: 'image.generate',
+      image: {
+        prompt: 'PostgreSQL pagination fixture',
+        reference_asset_ids: [],
+        aspect_ratio: '1:1',
+        quality: 'standard',
+        output_count: 1,
+      },
+    });
+    dockerPsql(`
+      INSERT INTO kortix.accounts(account_id) VALUES ('${accountId}');
+      INSERT INTO kortix.projects(project_id, account_id) VALUES ('${projectId}', '${accountId}');
+      INSERT INTO kortix.studio_jobs(
+        job_id, account_id, project_id, actor_user_id, actor_type, capability,
+        provider_config_id, provider, model, input, status, idempotency_key,
+        request_hash, created_at, updated_at
+      )
+      SELECT
+        job_id, '${accountId}', '${projectId}', '${actorUserId}', 'user', 'image.generate',
+        '00000000-0000-4000-8000-000000000001', 'fake', 'fake/image-v1',
+        '${input}'::jsonb, 'succeeded', 'pagination-' || ordinal, 'hash-' || ordinal,
+        '${createdAt}'::timestamptz, '${createdAt}'::timestamptz
+      FROM unnest(ARRAY['${jobIds.join("','")}']::uuid[]) WITH ORDINALITY AS fixture(job_id, ordinal);
+
+      INSERT INTO kortix.studio_assets(
+        asset_id, account_id, project_id, creator_user_id, source_job_id, kind,
+        mime_type, bucket, object_key, checksum_sha256, size_bytes, width, height,
+        metadata, visibility, created_at, updated_at
+      )
+      SELECT
+        asset_id, '${accountId}', '${projectId}', '${actorUserId}', NULL, 'image',
+        'image/png', 'pagination', 'asset-' || ordinal, repeat('a', 64), 1, 1, 1,
+        '{}'::jsonb, 'project', '${createdAt}'::timestamptz, '${createdAt}'::timestamptz
+      FROM unnest(ARRAY['${assetIds.join("','")}']::uuid[]) WITH ORDINALITY AS fixture(asset_id, ordinal);
+
+      INSERT INTO kortix.studio_job_assets(job_id, asset_id, role, created_at)
+      SELECT '${jobIds[0]}', asset_id, 'output', '${createdAt}'::timestamptz
+      FROM kortix.studio_assets
+      WHERE project_id = '${projectId}'::uuid
+      ORDER BY asset_id;
+
+      INSERT INTO kortix.studio_assets(
+        asset_id, account_id, project_id, creator_user_id, source_job_id, kind,
+        mime_type, bucket, object_key, checksum_sha256, size_bytes, width, height,
+        metadata, visibility, created_at, updated_at
+      ) VALUES
+        ('99000000-0000-4000-a000-000000000004', '${accountId}', '${projectId}',
+         '${actorUserId}', NULL, 'image', 'image/png', 'pagination', 'asset-before-window',
+         repeat('a', 64), 1, 1, 1, '{}'::jsonb, 'project',
+         '2026-08-08T07:59:59.999Z', '2026-08-08T07:59:59.999Z'),
+        ('99000000-0000-4000-a000-000000000005', '${accountId}', '${projectId}',
+         '${actorUserId}', NULL, 'image', 'image/png', 'pagination', 'asset-at-upper-bound',
+         repeat('a', 64), 1, 1, 1, '{}'::jsonb, 'project',
+         '2026-08-08T09:00:00.000Z', '2026-08-08T09:00:00.000Z');
+
+      INSERT INTO kortix.studio_job_events(job_id, cursor, event_type, payload, created_at)
+      SELECT '${jobIds[0]}', cursor, 'progress', jsonb_build_object('progress', cursor),
+             '${createdAt}'::timestamptz
+      FROM generate_series(1, 101) AS cursor;
+    `);
+
+    const firstJobs = await repository.listJobs(projectId, 2, null);
+    const secondJobs = await repository.listJobs(projectId, 2, firstJobs.next_cursor);
+    const assetFilter = {
+      source: 'uploaded' as const,
+      created_after: createdAt,
+      created_before: '2026-08-08T09:00:00.000Z',
+    };
+    const firstAssets = await repository.listAssets(projectId, 2, null, assetFilter);
+    const secondAssets = await repository.listAssets(
+      projectId,
+      2,
+      firstAssets.next_cursor,
+      assetFilter,
+    );
+    const firstOutputs = await repository.listJobAssets(projectId, jobIds[0], 'output', 2, null);
+    const secondOutputs = await repository.listJobAssets(
+      projectId,
+      jobIds[0],
+      'output',
+      2,
+      firstOutputs.next_cursor,
+    );
+    const firstEvents = await repository.listEvents(projectId, jobIds[0], null);
+    const secondEvents = await repository.listEvents(projectId, jobIds[0], firstEvents.next_cursor);
+    expect({
+      jobs: [...firstJobs.items, ...secondJobs.items].map((job) => job.job_id).sort(),
+      assets: [...firstAssets.items, ...secondAssets.items].map((asset) => asset.asset_id).sort(),
+      outputs: [...firstOutputs.items, ...secondOutputs.items]
+        .map((asset) => asset.asset_id)
+        .sort(),
+      events: [...firstEvents.items, ...secondEvents.items].map((event) => event.cursor),
+    }).toEqual({
+      jobs: [...jobIds].sort(),
+      assets: [...assetIds].sort(),
+      outputs: [...assetIds].sort(),
+      events: Array.from({ length: 101 }, (_value, index) => String(index + 1)),
+    });
+  }, 30_000);
+
+  test('filters module actor and installation before applying the page limit', async () => {
+    if (!database) throw new Error('database fixture is unavailable');
+    const repository = createDrizzleStudioRepository(database);
+    const accountId = '10000000-0000-4000-a000-000000000098';
+    const projectId = '20000000-0000-4000-a000-000000000098';
+    const actorUserId = '30000000-0000-4000-a000-000000000098';
+    const otherActorUserId = '30000000-0000-4000-a000-000000000097';
+    const installationId = '40000000-0000-4000-a000-000000000098';
+    const otherInstallationId = '40000000-0000-4000-a000-000000000097';
+    const grantId = '50000000-0000-4000-a000-000000000098';
+    const otherGrantId = '50000000-0000-4000-a000-000000000097';
+    const matchingJobIds = [
+      '87000000-0000-4000-a000-000000000001',
+      '87000000-0000-4000-a000-000000000002',
+      '87000000-0000-4000-a000-000000000003',
+    ];
+    const createdAt = '2026-08-08T08:00:00.000Z';
+    const input = JSON.stringify({
+      capability: 'image.generate',
+      image: {
+        prompt: 'PostgreSQL actor filtering fixture',
+        reference_asset_ids: [],
+        aspect_ratio: '1:1',
+        quality: 'standard',
+        output_count: 1,
+      },
+    });
+    dockerPsql(`
+      INSERT INTO kortix.accounts(account_id) VALUES ('${accountId}');
+      INSERT INTO kortix.projects(project_id, account_id) VALUES ('${projectId}', '${accountId}');
+      INSERT INTO kortix.module_service_capability_grants(
+        grant_id, account_id, project_id, installation_id, service, operations
+      ) VALUES
+        ('${grantId}', '${accountId}', '${projectId}', '${installationId}', 'ai', '["image.generate"]'),
+        ('${otherGrantId}', '${accountId}', '${projectId}', '${otherInstallationId}', 'ai', '["image.generate"]');
+
+      INSERT INTO kortix.studio_jobs(
+        job_id, account_id, project_id, actor_user_id, actor_type, module_service_grant_id,
+        capability, provider_config_id, provider, model, input, status, idempotency_key,
+        request_hash, created_at, updated_at
+      )
+      SELECT
+        job_id, '${accountId}', '${projectId}', '${actorUserId}', 'module', '${grantId}',
+        'image.generate', '00000000-0000-4000-8000-000000000001', 'fake', 'fake/image-v1',
+        '${input}'::jsonb, 'succeeded', 'matching-' || ordinal, 'matching-hash-' || ordinal,
+        '${createdAt}'::timestamptz, '${createdAt}'::timestamptz
+      FROM unnest(ARRAY['${matchingJobIds.join("','")}']::uuid[])
+        WITH ORDINALITY AS fixture(job_id, ordinal);
+
+      INSERT INTO kortix.studio_jobs(
+        job_id, account_id, project_id, actor_user_id, actor_type, module_service_grant_id,
+        capability, provider_config_id, provider, model, input, status, idempotency_key,
+        request_hash, created_at, updated_at
+      ) VALUES
+        ('89000000-0000-4000-a000-000000000001', '${accountId}', '${projectId}',
+         '${actorUserId}', 'user', NULL, 'image.generate',
+         '00000000-0000-4000-8000-000000000001', 'fake', 'fake/image-v1', '${input}'::jsonb,
+         'succeeded', 'newer-user', 'newer-user-hash', '2026-08-08T09:00:00Z', '2026-08-08T09:00:00Z'),
+        ('89000000-0000-4000-a000-000000000002', '${accountId}', '${projectId}',
+         '${otherActorUserId}', 'module', '${grantId}', 'image.generate',
+         '00000000-0000-4000-8000-000000000001', 'fake', 'fake/image-v1', '${input}'::jsonb,
+         'succeeded', 'newer-actor', 'newer-actor-hash', '2026-08-08T09:00:00Z', '2026-08-08T09:00:00Z'),
+        ('89000000-0000-4000-a000-000000000003', '${accountId}', '${projectId}',
+         '${actorUserId}', 'module', '${otherGrantId}', 'image.generate',
+         '00000000-0000-4000-8000-000000000001', 'fake', 'fake/image-v1', '${input}'::jsonb,
+         'succeeded', 'newer-installation', 'newer-installation-hash',
+         '2026-08-08T09:00:00Z', '2026-08-08T09:00:00Z'),
+        ('89000000-0000-4000-a000-000000000004', '${accountId}', '${projectId}',
+         '${actorUserId}', 'module', '${grantId}', 'image.generate',
+         '00000000-0000-4000-8000-000000000001', 'fake', 'fake/image-v1', '${input}'::jsonb,
+         'running', 'matching-wrong-status', 'matching-wrong-status-hash',
+         '2026-08-08T08:30:00Z', '2026-08-08T08:30:00Z'),
+        ('89000000-0000-4000-a000-000000000005', '${accountId}', '${projectId}',
+         '${actorUserId}', 'module', '${grantId}', 'image.generate',
+         '00000000-0000-4000-8000-000000000001', 'fake', 'fake/image-v1', '${input}'::jsonb,
+         'succeeded', 'matching-at-upper-bound', 'matching-at-upper-bound-hash',
+         '2026-08-08T09:00:00Z', '2026-08-08T09:00:00Z'),
+        ('89000000-0000-4000-a000-000000000006', '${accountId}', '${projectId}',
+         '${actorUserId}', 'module', '${grantId}', 'image.generate',
+         '00000000-0000-4000-8000-000000000001', 'fake', 'fake/image-v1', '${input}'::jsonb,
+         'succeeded', 'matching-before-window', 'matching-before-window-hash',
+         '2026-08-08T07:59:59Z', '2026-08-08T07:59:59Z');
+    `);
+
+    const filter = {
+      account_id: accountId,
+      actor_user_id: actorUserId,
+      actor_type: 'module' as const,
+      capability: 'image.generate' as const,
+      module_installation_id: installationId,
+      status: 'succeeded' as const,
+      created_after: createdAt,
+      created_before: '2026-08-08T09:00:00.000Z',
+    };
+    const first = await repository.listJobs(projectId, 2, null, filter);
+    const second = await repository.listJobs(projectId, 2, first.next_cursor, filter);
+    expect({
+      first: first.items.map((job) => job.job_id),
+      second: second.items.map((job) => job.job_id),
+      final_cursor: second.next_cursor,
+    }).toEqual({
+      first: [matchingJobIds[2], matchingJobIds[1]],
+      second: [matchingJobIds[0]],
+      final_cursor: null,
     });
   }, 30_000);
 });

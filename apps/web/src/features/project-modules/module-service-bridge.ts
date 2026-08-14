@@ -22,6 +22,7 @@ export type {
 
 const REQUEST_TYPE = 'openopc.module-service.token.request' as const;
 const RESPONSE_TYPE = 'openopc.module-service.token.response' as const;
+const ERROR_RESPONSE_TYPE = 'openopc.module-service.token.error' as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SERVICE_OPERATIONS: Record<OpenOpcServiceName, readonly OpenOpcServiceOperation[]> = {
   ai: ['models.read', 'text.generate', 'text.stream', 'image.generate'],
@@ -42,8 +43,21 @@ export interface ModuleServiceTokenResponse {
   expiresAt: string;
 }
 
+export interface ModuleServiceTokenErrorResponse {
+  type: typeof ERROR_RESPONSE_TYPE;
+  requestId: string;
+  error: {
+    code: 'OPENOPC_MODULE_CAPABILITY_RATE_LIMITED';
+    retryAfterMs: number;
+  };
+}
+
+export type ModuleServiceTokenMessage =
+  | ModuleServiceTokenResponse
+  | ModuleServiceTokenErrorResponse;
+
 export interface ModuleServiceMessageSource {
-  postMessage: (message: ModuleServiceTokenResponse, targetOrigin: string) => void;
+  postMessage: (message: ModuleServiceTokenMessage, targetOrigin: string) => void;
 }
 
 export interface ModuleServiceBridgeMessage {
@@ -191,7 +205,21 @@ export function createModuleServiceBridge(
       const issuedAt = now();
       const cutoff = issuedAt - 60_000;
       while (requestTimes[0] !== undefined && requestTimes[0] <= cutoff) requestTimes.shift();
-      if (requestTimes.length >= limit) return false;
+      if (requestTimes.length >= limit) {
+        const oldest = requestTimes[0] ?? issuedAt;
+        message.source.postMessage(
+          {
+            type: ERROR_RESPONSE_TYPE,
+            requestId: request.requestId,
+            error: {
+              code: 'OPENOPC_MODULE_CAPABILITY_RATE_LIMITED',
+              retryAfterMs: Math.max(0, Math.min(60_000, 60_000 - (issuedAt - oldest))),
+            },
+          },
+          moduleOrigin,
+        );
+        return true;
+      }
       requestTimes.push(issuedAt);
 
       let issued: { token: string; expiresAt: string };

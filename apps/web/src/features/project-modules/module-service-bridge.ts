@@ -1,9 +1,15 @@
+import {
+  OPENOPC_AI_SERVICE_OPERATIONS,
+  OPENOPC_DATA_SERVICE_OPERATIONS,
+  OPENOPC_PAYMENT_SERVICE_OPERATIONS,
+  OPENOPC_SETTINGS_SERVICE_OPERATIONS,
+} from '@openopc/developer-sdk';
 import type { OpenOpcServiceName, OpenOpcServiceOperation } from './client';
 
 export {
-  OpenOpcBrowserCapabilityTokenProtocolError,
   createOpenOpcBrowserCapabilityTokenAdapter,
   createSandboxModuleServiceTokenAdapter,
+  OpenOpcBrowserCapabilityTokenProtocolError,
 } from '@openopc/developer-sdk';
 export type {
   OpenOpcBrowserCapabilityTokenAdapterOptions,
@@ -25,8 +31,10 @@ const RESPONSE_TYPE = 'openopc.module-service.token.response' as const;
 const ERROR_RESPONSE_TYPE = 'openopc.module-service.token.error' as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SERVICE_OPERATIONS: Record<OpenOpcServiceName, readonly OpenOpcServiceOperation[]> = {
-  ai: ['models.read', 'text.generate', 'text.stream', 'image.generate'],
-  payment: ['orders.create', 'orders.read', 'refunds.create'],
+  ai: OPENOPC_AI_SERVICE_OPERATIONS,
+  payment: OPENOPC_PAYMENT_SERVICE_OPERATIONS,
+  data: OPENOPC_DATA_SERVICE_OPERATIONS,
+  settings: OPENOPC_SETTINGS_SERVICE_OPERATIONS,
 };
 
 export interface ModuleServiceTokenRequest {
@@ -108,7 +116,10 @@ function isRequest(value: unknown): value is ModuleServiceTokenRequest {
     value.type === REQUEST_TYPE &&
     typeof value.requestId === 'string' &&
     UUID_RE.test(value.requestId) &&
-    (value.service === 'ai' || value.service === 'payment') &&
+    (value.service === 'ai' ||
+      value.service === 'payment' ||
+      value.service === 'data' ||
+      value.service === 'settings') &&
     typeof value.operation === 'string' &&
     SERVICE_OPERATIONS[value.service].includes(value.operation as never)
   );

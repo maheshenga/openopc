@@ -4,7 +4,7 @@ import type { ModuleAppHostConfiguration } from '../module-domains/platform-host
 
 const RELEASE_LABEL_RE =
   /^r-([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/;
-const ALLOW_METHODS = 'GET, POST, OPTIONS';
+const ALLOW_METHODS = 'GET, POST, PUT, DELETE, OPTIONS';
 const ALLOW_HEADERS = 'Authorization, Content-Type, Idempotency-Key';
 
 export function canonicalModuleServiceBrowserOrigin(

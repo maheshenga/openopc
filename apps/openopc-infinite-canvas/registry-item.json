@@ -1,0 +1,155 @@
+{
+  "name": "infinite-canvas",
+  "type": "registry:module",
+  "title": "Infinite Canvas",
+  "description": "A sandboxed visual workspace for ecommerce and design workflows, adapted from tigerowo/infinite-canvas.",
+  "author": "tigerowo / OpenOPC",
+  "categories": ["ai-application", "design", "ecommerce"],
+  "dependencies": [],
+  "devDependencies": [],
+  "registryDependencies": [],
+  "files": [
+    { "path": "dist/LICENSE", "target": "dist/LICENSE", "type": "registry:file" },
+    {
+      "path": "dist/THIRD_PARTY_NOTICES.md",
+      "target": "dist/THIRD_PARTY_NOTICES.md",
+      "type": "registry:file"
+    },
+    { "path": "dist/UPSTREAM.md", "target": "dist/UPSTREAM.md", "type": "registry:file" },
+    {
+      "path": "dist/director/assets/index-1sHY9TaJ.css",
+      "target": "dist/director/assets/index-1sHY9TaJ.css",
+      "type": "registry:file"
+    },
+    {
+      "path": "dist/director/assets/index-CHMhBrQ3.js",
+      "target": "dist/director/assets/index-CHMhBrQ3.js",
+      "type": "registry:file"
+    },
+    {
+      "path": "dist/director/index.html",
+      "target": "dist/director/index.html",
+      "type": "registry:file"
+    },
+    {
+      "path": "dist/director/models/ue-mannequin-retopology.glb",
+      "target": "dist/director/models/ue-mannequin-retopology.glb",
+      "type": "registry:file"
+    },
+    {
+      "path": "dist/director/models/ue-mannequin-retopology.license.txt",
+      "target": "dist/director/models/ue-mannequin-retopology.license.txt",
+      "type": "registry:file"
+    },
+    { "path": "dist/index.html", "target": "dist/index.html", "type": "registry:file" },
+    { "path": "dist/main.css", "target": "dist/main.css", "type": "registry:file" },
+    { "path": "dist/main.js", "target": "dist/main.js", "type": "registry:file" }
+  ],
+  "module": {
+    "schemaVersion": 3,
+    "id": "openopc.infinite-canvas",
+    "version": "0.5.2-openopc.1",
+    "publisher": { "id": "openopc-community", "displayName": "OpenOPC Community" },
+    "locales": ["en", "zh-CN"],
+    "compatibility": { "platform": ">=1.0.0", "registry": ">=3.0.0" },
+    "execution": { "mode": "sandboxed-web", "entry": "dist/index.html" },
+    "verification": { "profile": "sandboxed-web" },
+    "capabilities": [
+      {
+        "id": "openopc.infinite-canvas.workspace",
+        "kind": "ui",
+        "assetKinds": ["audio/*", "image/*", "video/*"]
+      }
+    ],
+    "permissions": {},
+    "ui": [{ "id": "workspace", "surface": "page", "entry": "dist/index.html" }],
+    "openopc": {
+      "sdkApiVersion": "v1",
+      "catalog": { "labels": ["canvas", "design", "ecommerce", "h5"] },
+      "services": {
+        "ai": { "operations": ["image.generate", "models.read", "text.generate"] },
+        "data": {
+          "operations": ["documents.delete", "documents.list", "documents.read", "documents.write"]
+        },
+        "settings": { "operations": ["settings.read"] }
+      },
+      "settings": {
+        "fields": [
+          {
+            "key": "canvas.autosave",
+            "label": "自动同步",
+            "type": "boolean",
+            "description": "将画布自动同步到当前项目。",
+            "default": true
+          },
+          {
+            "key": "canvas.background",
+            "label": "默认背景",
+            "type": "select",
+            "description": "新画布使用的背景样式。",
+            "default": "dots",
+            "options": [
+              { "value": "dots", "label": "点阵" },
+              { "value": "lines", "label": "网格" },
+              { "value": "plain", "label": "纯色" }
+            ]
+          },
+          {
+            "key": "canvas.snap_size",
+            "label": "吸附步长",
+            "type": "number",
+            "description": "拖动节点时的网格吸附像素。",
+            "default": 8,
+            "min": 1,
+            "max": 64
+          },
+          {
+            "key": "generation.aspect_ratio",
+            "label": "默认图片比例",
+            "type": "select",
+            "default": "1:1",
+            "options": [
+              { "value": "1:1", "label": "1:1" },
+              { "value": "4:3", "label": "4:3" },
+              { "value": "3:4", "label": "3:4" },
+              { "value": "16:9", "label": "16:9" },
+              { "value": "9:16", "label": "9:16" }
+            ]
+          },
+          {
+            "key": "generation.image_quality",
+            "label": "图片质量",
+            "type": "select",
+            "default": "standard",
+            "options": [
+              { "value": "standard", "label": "标准" },
+              { "value": "high", "label": "高质量" }
+            ]
+          },
+          {
+            "key": "generation.output_count",
+            "label": "默认输出数量",
+            "type": "number",
+            "default": 1,
+            "min": 1,
+            "max": 8
+          },
+          {
+            "key": "workspace.compact_mode",
+            "label": "紧凑节点",
+            "type": "boolean",
+            "description": "减少节点内部留白。",
+            "default": false
+          },
+          {
+            "key": "workspace.show_image_info",
+            "label": "显示媒体信息",
+            "type": "boolean",
+            "description": "在媒体节点和检查器中显示尺寸与文件大小。",
+            "default": false
+          }
+        ]
+      }
+    }
+  }
+}

@@ -7,6 +7,7 @@ import {
   REGISTRY_MODULE_SCHEMA_VERSION,
   REGISTRY_MODULE_UI_SURFACES,
   REGISTRY_MODULE_VERIFICATION_PROFILES,
+  REGISTRY_OPENOPC_SETTING_FIELD_TYPES,
   type RegistryItem,
   type RegistryModuleManifest,
 } from './schema';
@@ -73,16 +74,34 @@ const PERMISSION_KEYS = new Set([
   'desktop',
 ]);
 const UI_KEYS = new Set(['id', 'surface', 'entry']);
-const OPENOPC_KEYS = new Set(['sdkApiVersion', 'catalog', 'services']);
+const OPENOPC_KEYS = new Set(['sdkApiVersion', 'catalog', 'services', 'settings']);
 const OPENOPC_CATALOG_KEYS = new Set(['labels']);
 const OPENOPC_SERVICE_KEYS = new Set(['operations']);
+const OPENOPC_SETTINGS_KEYS = new Set(['fields']);
+const OPENOPC_SETTING_FIELD_KEYS = new Set([
+  'key',
+  'label',
+  'type',
+  'description',
+  'default',
+  'required',
+  'min',
+  'max',
+  'options',
+]);
+const OPENOPC_SETTING_OPTION_KEYS = new Set(['value', 'label']);
 const OPENOPC_LABEL_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const OPENOPC_SETTING_KEY_RE = /^[a-z][a-z0-9_.-]{0,63}$/;
+const OPENOPC_SENSITIVE_SETTING_KEY_RE =
+  /(^|[._-])(api[_-]?key|token|secret|password|credential|authorization|cookie|provider|base[_-]?url|endpoint)([._-]|$)/i;
 const OPENOPC_SERVICE_OPERATIONS: Record<
   OpenOpcModuleServiceName,
   readonly OpenOpcModuleServiceOperation[]
 > = {
   ai: ['models.read', 'text.generate', 'text.stream', 'image.generate'],
   payment: ['orders.create', 'orders.read', 'refunds.create'],
+  data: ['documents.list', 'documents.read', 'documents.write', 'documents.delete'],
+  settings: ['settings.read'],
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -95,6 +114,22 @@ function isOneOf<T extends string>(values: readonly T[], value: unknown): value 
 
 function hasDuplicate(values: string[]): boolean {
   return new Set(values).size !== values.length;
+}
+
+function isOpenOpcSettingScalar(value: unknown): value is string | number | boolean | null {
+  return (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  );
+}
+
+function settingDefaultMatchesType(type: string, value: unknown): boolean {
+  if (value === null) return true;
+  if (type === 'boolean') return typeof value === 'boolean';
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value);
+  return typeof value === 'string' && value.length <= 65_536;
 }
 
 function isSafeRelativeEntry(value: string): boolean {
@@ -427,6 +462,140 @@ export function validateRegistryModuleManifest(
               })
             ) {
               error(`${basePath}.openopc.catalog.labels`, 'labels must be sorted');
+            }
+          }
+        }
+      }
+
+      if (openopc.settings !== undefined) {
+        if (!isRecord(openopc.settings)) {
+          error(`${basePath}.openopc.settings`, 'settings must be an object');
+        } else {
+          rejectUnknownKeys(
+            openopc.settings,
+            OPENOPC_SETTINGS_KEYS,
+            `${basePath}.openopc.settings`,
+          );
+          const fields = openopc.settings.fields;
+          if (!Array.isArray(fields) || fields.length === 0 || fields.length > 128) {
+            error(
+              `${basePath}.openopc.settings.fields`,
+              'fields must be a non-empty array with at most 128 values',
+            );
+          } else {
+            const keys: string[] = [];
+            fields.forEach((field, index) => {
+              const fieldPath = `${basePath}.openopc.settings.fields[${index}]`;
+              if (!isRecord(field)) {
+                error(fieldPath, 'setting field must be an object');
+                return;
+              }
+              rejectUnknownKeys(field, OPENOPC_SETTING_FIELD_KEYS, fieldPath);
+              const key = typeof field.key === 'string' ? field.key : '';
+              if (!OPENOPC_SETTING_KEY_RE.test(key) || OPENOPC_SENSITIVE_SETTING_KEY_RE.test(key)) {
+                error(`${fieldPath}.key`, 'setting key must be a non-sensitive lowercase key');
+              } else {
+                keys.push(key);
+              }
+              if (
+                typeof field.label !== 'string' ||
+                !field.label.trim() ||
+                field.label.length > 80
+              ) {
+                error(`${fieldPath}.label`, 'setting label must be a bounded non-empty string');
+              }
+              if (!isOneOf(REGISTRY_OPENOPC_SETTING_FIELD_TYPES, field.type)) {
+                error(
+                  `${fieldPath}.type`,
+                  `setting type must be one of: ${REGISTRY_OPENOPC_SETTING_FIELD_TYPES.join(', ')}`,
+                );
+              }
+              if (
+                field.description !== undefined &&
+                (typeof field.description !== 'string' || field.description.length > 240)
+              ) {
+                error(`${fieldPath}.description`, 'description must be at most 240 characters');
+              }
+              if (field.required !== undefined && typeof field.required !== 'boolean') {
+                error(`${fieldPath}.required`, 'required must be a boolean');
+              }
+              if (
+                field.default !== undefined &&
+                (!isOpenOpcSettingScalar(field.default) ||
+                  !settingDefaultMatchesType(String(field.type), field.default))
+              ) {
+                error(`${fieldPath}.default`, 'default does not match the setting type');
+              }
+              for (const bound of ['min', 'max'] as const) {
+                if (
+                  field[bound] !== undefined &&
+                  (field.type !== 'number' ||
+                    typeof field[bound] !== 'number' ||
+                    !Number.isFinite(field[bound]))
+                ) {
+                  error(`${fieldPath}.${bound}`, `${bound} is allowed only for finite numbers`);
+                }
+              }
+              if (
+                typeof field.min === 'number' &&
+                typeof field.max === 'number' &&
+                field.min > field.max
+              ) {
+                error(`${fieldPath}.min`, 'min must not exceed max');
+              }
+
+              if (field.type === 'select' || field.type === 'model-select') {
+                if (
+                  !Array.isArray(field.options) ||
+                  field.options.length === 0 ||
+                  field.options.length > 64
+                ) {
+                  error(`${fieldPath}.options`, 'select options must contain 1 to 64 values');
+                } else {
+                  const values: string[] = [];
+                  field.options.forEach((option, optionIndex) => {
+                    const optionPath = `${fieldPath}.options[${optionIndex}]`;
+                    if (!isRecord(option)) {
+                      error(optionPath, 'setting option must be an object');
+                      return;
+                    }
+                    rejectUnknownKeys(option, OPENOPC_SETTING_OPTION_KEYS, optionPath);
+                    if (
+                      typeof option.value !== 'string' ||
+                      !option.value ||
+                      option.value.length > 128
+                    ) {
+                      error(`${optionPath}.value`, 'option value must be a bounded string');
+                    } else {
+                      values.push(option.value);
+                    }
+                    if (
+                      typeof option.label !== 'string' ||
+                      !option.label.trim() ||
+                      option.label.length > 80
+                    ) {
+                      error(`${optionPath}.label`, 'option label must be a bounded string');
+                    }
+                  });
+                  if (hasDuplicate(values)) error(`${fieldPath}.options`, 'duplicate option value');
+                  if (typeof field.default === 'string' && !values.includes(field.default)) {
+                    error(`${fieldPath}.default`, 'select default must match an option');
+                  }
+                }
+              } else if (field.options !== undefined) {
+                error(`${fieldPath}.options`, 'options are allowed only for select settings');
+              }
+            });
+            if (hasDuplicate(keys)) {
+              error(`${basePath}.openopc.settings.fields`, 'duplicate setting key');
+            }
+            if (
+              keys.some((key, index) => {
+                const previous = keys[index - 1];
+                return previous !== undefined && key < previous;
+              })
+            ) {
+              error(`${basePath}.openopc.settings.fields`, 'setting keys must be sorted');
             }
           }
         }

@@ -72,6 +72,18 @@ describe('OpenOPC developer SDK transport', () => {
         fetch: null as never,
       }),
     ).toThrow(OpenOpcModuleProtocolError);
+    expect(() =>
+      createOpenOpcModuleClient({
+        baseUrl: 'https://platform.example.com',
+        getCapabilityToken: async () => 'v4.public.module-token',
+        context: {
+          projectId: 'not-a-uuid',
+          installationId: '30000000-0000-4000-8000-000000000003',
+          releaseId: '40000000-0000-4000-8000-000000000004',
+          installRevision: 1,
+        },
+      }),
+    ).toThrow(OpenOpcModuleProtocolError);
   });
 
   test('normalizes a request timeout and aborts the platform fetch', async () => {

@@ -63,13 +63,34 @@ import {
   type OpenOpcServiceOperation,
   openOpcImageEstimateRetryGuidance,
 } from './contracts.js';
+import {
+  type OpenOpcModuleDocument,
+  OpenOpcModuleDocumentDeleteInputSchema,
+  type OpenOpcModuleDocumentDeleteResult,
+  OpenOpcModuleDocumentDeleteResultSchema,
+  OpenOpcModuleDocumentKeySchema,
+  type OpenOpcModuleDocumentListInput,
+  OpenOpcModuleDocumentListInputSchema,
+  type OpenOpcModuleDocumentPage,
+  OpenOpcModuleDocumentPageSchema,
+  OpenOpcModuleDocumentSchema,
+  type OpenOpcModuleDocumentValue,
+  OpenOpcModuleDocumentWriteInputSchema,
+} from './data-contracts.js';
 import { OpenOpcModuleRequestError, type OpenOpcModuleRequestErrorCode } from './errors.js';
+import {
+  type OpenOpcEffectiveModuleSettings,
+  OpenOpcEffectiveModuleSettingsSchema,
+} from './settings-contracts.js';
 
 const MAX_TOKEN_LENGTH = 16_384;
-const MAX_RESPONSE_BYTES = 1024 * 1024;
+const MAX_RESPONSE_BYTES = 1 * 1024 * 1024;
+const MAX_DOCUMENT_RESPONSE_BYTES = 3 * 1024 * 1024;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_STREAM_TIMEOUT_MS = 300_000;
 const MAX_REQUEST_TIMEOUT_MS = 600_000;
+const MODULE_CONTEXT_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const REQUEST_KEYS = new Set([
   'service',
   'operation',
@@ -115,8 +136,16 @@ export interface OpenOpcCapabilityTokenGetter {
   }) => void;
 }
 
+export interface OpenOpcModuleContext {
+  readonly projectId: string;
+  readonly installationId: string;
+  readonly releaseId: string;
+  readonly installRevision: number;
+}
+
 export interface OpenOpcModuleClientOptions {
   baseUrl: string;
+  context?: OpenOpcModuleContext;
   getCapabilityToken: OpenOpcCapabilityTokenGetter;
   fetch?: OpenOpcModuleFetch;
   timeoutMs?: number;
@@ -125,7 +154,7 @@ export interface OpenOpcModuleClientOptions {
 export interface OpenOpcModuleTransportRequest extends OpenOpcRequestOptions {
   service: OpenOpcServiceName;
   operation: OpenOpcServiceOperation;
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   path: string;
   body?: unknown;
   query?: Record<string, string | number | undefined>;
@@ -304,10 +333,37 @@ export interface OpenOpcPaymentClient {
   };
 }
 
+export interface OpenOpcDataClient {
+  documents: {
+    list(
+      input?: OpenOpcModuleDocumentListInput,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcModuleDocumentPage>;
+    read(key: string, options?: OpenOpcRequestOptions): Promise<OpenOpcModuleDocument>;
+    write(
+      key: string,
+      input: { expected_revision: number | null; value: OpenOpcModuleDocumentValue },
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcModuleDocument>;
+    delete(
+      key: string,
+      expectedRevision: number,
+      options?: OpenOpcRequestOptions,
+    ): Promise<OpenOpcModuleDocumentDeleteResult>;
+  };
+}
+
+export interface OpenOpcSettingsClient {
+  read(options?: OpenOpcRequestOptions): Promise<OpenOpcEffectiveModuleSettings>;
+}
+
 export interface OpenOpcModuleClient {
+  readonly context: OpenOpcModuleContext | null;
   request<T = unknown>(input: OpenOpcModuleTransportRequest): Promise<T>;
   ai: OpenOpcAiClient;
   payments: OpenOpcPaymentClient;
+  data: OpenOpcDataClient;
+  settings: OpenOpcSettingsClient;
 }
 
 export class OpenOpcModuleProtocolError extends Error {
@@ -377,6 +433,27 @@ function validateTimeoutMs(value: unknown): void {
   ) {
     protocolError('OpenOPC module service request timeout is invalid');
   }
+}
+
+function validateModuleContext(value: unknown): value is OpenOpcModuleContext {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    protocolError('OpenOPC module client context is invalid');
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).sort().join(',') !== 'installRevision,installationId,projectId,releaseId' ||
+    typeof record.projectId !== 'string' ||
+    !MODULE_CONTEXT_UUID_RE.test(record.projectId) ||
+    typeof record.installationId !== 'string' ||
+    !MODULE_CONTEXT_UUID_RE.test(record.installationId) ||
+    typeof record.releaseId !== 'string' ||
+    !MODULE_CONTEXT_UUID_RE.test(record.releaseId) ||
+    !Number.isSafeInteger(record.installRevision) ||
+    (record.installRevision as number) <= 0
+  ) {
+    protocolError('OpenOPC module client context is invalid');
+  }
+  return true;
 }
 
 function validateRequestOptions(options: OpenOpcRequestOptions): void {
@@ -523,7 +600,7 @@ function validateRequest(input: OpenOpcModuleTransportRequest): void {
     service: input.service,
     operations: [input.operation],
   });
-  if (!capability.success || (input.method !== 'GET' && input.method !== 'POST')) {
+  if (!capability.success || !['GET', 'POST', 'PUT', 'DELETE'].includes(input.method)) {
     protocolError('OpenOPC module service request is invalid');
   }
   if (input.method === 'GET' && input.body !== undefined) {
@@ -554,8 +631,12 @@ function validateRequest(input: OpenOpcModuleTransportRequest): void {
   ) {
     protocolError('OpenOPC module service request is invalid');
   }
-  const expectedPrefix =
-    input.service === 'ai' ? '/v1/module-services/ai/' : '/v1/module-services/payments/';
+  const expectedPrefix = {
+    ai: '/v1/module-services/ai/',
+    payment: '/v1/module-services/payments/',
+    data: '/v1/module-services/data/',
+    settings: '/v1/module-services/settings/',
+  }[input.service];
   if (
     typeof input.path !== 'string' ||
     !input.path.startsWith(expectedPrefix) ||
@@ -595,8 +676,8 @@ function validateToken(token: string): string {
   return token;
 }
 
-function parseJson(text: string): unknown {
-  if (text.length > MAX_RESPONSE_BYTES) {
+function parseJson(text: string, maxBytes = MAX_RESPONSE_BYTES): unknown {
+  if (text.length > maxBytes) {
     protocolError('OpenOPC module service response is too large');
   }
   try {
@@ -857,6 +938,7 @@ export function createOpenOpcModuleClient(
   ) {
     protocolError('OpenOPC module client options are invalid');
   }
+  if (options.context !== undefined) validateModuleContext(options.context);
   validateTimeoutMs(options.timeoutMs);
   const baseUrl = normalizeBaseUrl(options.baseUrl);
   const requestFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -984,7 +1066,10 @@ export function createOpenOpcModuleClient(
   const request = async <T>(input: OpenOpcModuleTransportRequest): Promise<T> => {
     const sent = await send(input);
     try {
-      return parseJson(await readResponseText(sent.response, sent.context)) as T;
+      return parseJson(
+        await readResponseText(sent.response, sent.context),
+        input.service === 'data' ? MAX_DOCUMENT_RESPONSE_BYTES : MAX_RESPONSE_BYTES,
+      ) as T;
     } finally {
       sent.context.cleanup();
     }
@@ -1787,7 +1872,127 @@ export function createOpenOpcModuleClient(
     return parsed.data;
   };
 
+  const listDocuments = async (
+    input?: OpenOpcModuleDocumentListInput,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcModuleDocumentPage> => {
+    const parsedInput = OpenOpcModuleDocumentListInputSchema.safeParse(input ?? {});
+    if (!parsedInput.success) protocolError('OpenOPC module document list input is invalid');
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'data',
+          operation: 'documents.list',
+          method: 'GET',
+          path: '/v1/module-services/data/documents',
+          query: {
+            cursor: parsedInput.data.cursor ?? undefined,
+            limit: input?.limit,
+          },
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcModuleDocumentPageSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC module document page response is invalid');
+    return parsed.data;
+  };
+
+  const readDocument = async (
+    key: string,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcModuleDocument> => {
+    const parsedKey = OpenOpcModuleDocumentKeySchema.safeParse(key);
+    if (!parsedKey.success) protocolError('OpenOPC module document key is invalid');
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'data',
+          operation: 'documents.read',
+          method: 'GET',
+          path: '/v1/module-services/data/document',
+          query: { key: parsedKey.data },
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcModuleDocumentSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC module document response is invalid');
+    return parsed.data;
+  };
+
+  const writeDocument = async (
+    key: string,
+    input: { expected_revision: number | null; value: OpenOpcModuleDocumentValue },
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcModuleDocument> => {
+    const parsedInput = OpenOpcModuleDocumentWriteInputSchema.safeParse({ ...input, key });
+    if (!parsedInput.success) protocolError('OpenOPC module document write input is invalid');
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'data',
+          operation: 'documents.write',
+          method: 'PUT',
+          path: '/v1/module-services/data/document',
+          body: parsedInput.data,
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcModuleDocumentSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC module document response is invalid');
+    return parsed.data;
+  };
+
+  const deleteDocument = async (
+    key: string,
+    expectedRevision: number,
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcModuleDocumentDeleteResult> => {
+    const parsedInput = OpenOpcModuleDocumentDeleteInputSchema.safeParse({
+      key,
+      expected_revision: expectedRevision,
+    });
+    if (!parsedInput.success) protocolError('OpenOPC module document delete input is invalid');
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'data',
+          operation: 'documents.delete',
+          method: 'DELETE',
+          path: '/v1/module-services/data/document',
+          body: parsedInput.data,
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcModuleDocumentDeleteResultSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC module document delete response is invalid');
+    return parsed.data;
+  };
+
+  const readSettings = async (
+    options?: OpenOpcRequestOptions,
+  ): Promise<OpenOpcEffectiveModuleSettings> => {
+    const value = await request<unknown>(
+      withRequestOptions(
+        {
+          service: 'settings',
+          operation: 'settings.read',
+          method: 'GET',
+          path: '/v1/module-services/settings/',
+        },
+        options,
+      ),
+    );
+    const parsed = OpenOpcEffectiveModuleSettingsSchema.safeParse(value);
+    if (!parsed.success) protocolError('OpenOPC module settings response is invalid');
+    return parsed.data;
+  };
+
   return {
+    context: options.context ?? null,
     request,
     ai: {
       models: { list: listModels },
@@ -1829,5 +2034,14 @@ export function createOpenOpcModuleClient(
       },
       refunds: { create: createPaymentRefund },
     },
+    data: {
+      documents: {
+        list: listDocuments,
+        read: readDocument,
+        write: writeDocument,
+        delete: deleteDocument,
+      },
+    },
+    settings: { read: readSettings },
   };
 }

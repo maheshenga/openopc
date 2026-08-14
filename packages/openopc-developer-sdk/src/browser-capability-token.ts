@@ -1,12 +1,21 @@
-import type { OpenOpcServiceName, OpenOpcServiceOperation } from './contracts.js';
+import {
+  OPENOPC_AI_SERVICE_OPERATIONS,
+  OPENOPC_DATA_SERVICE_OPERATIONS,
+  OPENOPC_PAYMENT_SERVICE_OPERATIONS,
+  OPENOPC_SETTINGS_SERVICE_OPERATIONS,
+  type OpenOpcServiceName,
+  type OpenOpcServiceOperation,
+} from './contracts.js';
 import { OpenOpcModuleRequestError } from './errors.js';
 
 const REQUEST_TYPE = 'openopc.module-service.token.request' as const;
 const RESPONSE_TYPE = 'openopc.module-service.token.response' as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SERVICE_OPERATIONS: Record<OpenOpcServiceName, readonly OpenOpcServiceOperation[]> = {
-  ai: ['models.read', 'text.generate', 'text.stream', 'image.generate'],
-  payment: ['orders.create', 'orders.read', 'refunds.create'],
+  ai: OPENOPC_AI_SERVICE_OPERATIONS,
+  payment: OPENOPC_PAYMENT_SERVICE_OPERATIONS,
+  data: OPENOPC_DATA_SERVICE_OPERATIONS,
+  settings: OPENOPC_SETTINGS_SERVICE_OPERATIONS,
 };
 
 export interface OpenOpcBrowserCapabilityTokenRequest {
@@ -94,7 +103,7 @@ function immutableOrigin(value: string): string {
 
 function isServiceOperation(service: unknown, operation: unknown): service is OpenOpcServiceName {
   return (
-    (service === 'ai' || service === 'payment') &&
+    (service === 'ai' || service === 'payment' || service === 'data' || service === 'settings') &&
     typeof operation === 'string' &&
     SERVICE_OPERATIONS[service].includes(operation as OpenOpcServiceOperation)
   );

@@ -274,6 +274,63 @@ describe('OpenOPC browser capability-token adapter', () => {
     });
   });
 
+  test('posts data and settings operations without widening their service scope', async () => {
+    const h = harness();
+    let next = 6;
+    const adapter = createOpenOpcBrowserCapabilityTokenAdapter({
+      hostOrigin: 'https://app.openopc.example',
+      hostWindow: h.hostWindow,
+      eventTarget: h.eventTarget,
+      requestId: () => `50000000-0000-4000-8000-00000000000${next++}`,
+      timeoutMs: 100,
+    });
+    const dataRequest = adapter({ service: 'data', operation: 'documents.read' });
+    const settingsRequest = adapter({ service: 'settings', operation: 'settings.read' });
+
+    expect(h.requests).toEqual([
+      {
+        message: {
+          type: 'openopc.module-service.token.request',
+          requestId: '50000000-0000-4000-8000-000000000006',
+          service: 'data',
+          operation: 'documents.read',
+        },
+        targetOrigin: 'https://app.openopc.example',
+      },
+      {
+        message: {
+          type: 'openopc.module-service.token.request',
+          requestId: '50000000-0000-4000-8000-000000000007',
+          service: 'settings',
+          operation: 'settings.read',
+        },
+        targetOrigin: 'https://app.openopc.example',
+      },
+    ]);
+    for (const [requestId, token] of [
+      ['50000000-0000-4000-8000-000000000006', 'v4.public.data'],
+      ['50000000-0000-4000-8000-000000000007', 'v4.public.settings'],
+    ] as const) {
+      for (const listener of h.listeners) {
+        listener({
+          origin: 'https://app.openopc.example',
+          source: h.hostWindow,
+          data: {
+            type: 'openopc.module-service.token.response',
+            requestId,
+            token,
+            expiresAt: '2026-08-01T00:05:00.000Z',
+          },
+        });
+      }
+    }
+    await expect(dataRequest).resolves.toBe('v4.public.data');
+    await expect(settingsRequest).resolves.toBe('v4.public.settings');
+    await expect(
+      adapter({ service: 'settings', operation: 'documents.read' as never }),
+    ).rejects.toThrow('operation is invalid');
+  });
+
   test('cleans up on timeout, postMessage failure, and invalid inputs', async () => {
     const h = harness();
     const adapter = createOpenOpcBrowserCapabilityTokenAdapter({

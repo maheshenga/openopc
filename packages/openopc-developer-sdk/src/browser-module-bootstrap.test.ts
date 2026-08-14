@@ -9,6 +9,12 @@ import {
 
 const PLATFORM_ORIGIN = 'https://app.openopc.example';
 const REQUEST_ID = '10000000-0000-4000-8000-000000000001';
+const MODULE_CONTEXT = {
+  projectId: '20000000-0000-4000-8000-000000000002',
+  installationId: '30000000-0000-4000-8000-000000000003',
+  releaseId: '40000000-0000-4000-8000-000000000004',
+  installRevision: 7,
+} as const;
 
 test('discovers the parent origin and uses it for token and HTTP requests', async () => {
   const requests: Array<{ message: unknown; targetOrigin: string }> = [];
@@ -23,6 +29,7 @@ test('discovers the parent origin and uses it for token and HTTP requests', asyn
           type: 'openopc.module.bootstrap.response',
           requestId: REQUEST_ID,
           sdkApiVersion: 'v1',
+          context: MODULE_CONTEXT,
         },
       });
     });
@@ -39,6 +46,8 @@ test('discovers the parent origin and uses it for token and HTTP requests', asyn
 
   browser.answerNextToken('v4.public.test-token');
   await client.ai.models.list();
+
+  expect(client.context).toEqual(MODULE_CONTEXT);
 
   expect(requests[0]).toEqual({
     targetOrigin: '*',
@@ -65,6 +74,7 @@ test('ignores spoofed responses and cleans up after the exact response', async (
       type: 'openopc.module.bootstrap.response',
       requestId: REQUEST_ID,
       sdkApiVersion: 'v1',
+      context: MODULE_CONTEXT,
     },
   });
   expect(browser.listenerCount()).toBe(1);
@@ -76,6 +86,7 @@ test('ignores spoofed responses and cleans up after the exact response', async (
       type: 'openopc.module.bootstrap.response',
       requestId: REQUEST_ID,
       sdkApiVersion: 'v1',
+      context: MODULE_CONTEXT,
     },
   });
   await pending;
@@ -94,6 +105,7 @@ test('clears the bootstrap timer exactly once on success', async () => {
             type: 'openopc.module.bootstrap.response',
             requestId: REQUEST_ID,
             sdkApiVersion: 'v1',
+            context: MODULE_CONTEXT,
           },
         });
       });

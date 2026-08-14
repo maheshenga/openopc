@@ -7,8 +7,10 @@ import {
 import { createModuleCustomDomainProjectRoutes } from '../../module-domains/app';
 import {
   createModuleServiceProjectRoutes,
+  createModuleSettingsProjectRoutes,
   moduleServiceCapabilityBroker,
   moduleServiceConsentManager,
+  moduleSettingsService,
 } from '../../module-services';
 import { assertProjectCapability, loadProjectForUser } from '../lib/access';
 import { projectsApp } from '../lib/app';
@@ -32,6 +34,15 @@ projectsApp.route(
     assertProjectCapability,
     consentManager: moduleServiceConsentManager,
     capabilityBroker: moduleServiceCapabilityBroker,
+  }),
+);
+
+projectsApp.route(
+  '/',
+  createModuleSettingsProjectRoutes({
+    loadProjectForUser,
+    assertProjectCapability,
+    service: moduleSettingsService,
   }),
 );
 

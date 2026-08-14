@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const OPENOPC_SERVICE_NAMES = ['ai', 'payment'] as const;
+export const OPENOPC_SERVICE_NAMES = ['ai', 'payment', 'data', 'settings'] as const;
 export const OPENOPC_AI_SERVICE_OPERATIONS = [
   'models.read',
   'text.generate',
@@ -12,17 +12,32 @@ export const OPENOPC_PAYMENT_SERVICE_OPERATIONS = [
   'orders.read',
   'refunds.create',
 ] as const;
+export const OPENOPC_DATA_SERVICE_OPERATIONS = [
+  'documents.list',
+  'documents.read',
+  'documents.write',
+  'documents.delete',
+] as const;
+export const OPENOPC_SETTINGS_SERVICE_OPERATIONS = ['settings.read'] as const;
 export const OPENOPC_SERVICE_OPERATIONS = [
   ...OPENOPC_AI_SERVICE_OPERATIONS,
   ...OPENOPC_PAYMENT_SERVICE_OPERATIONS,
+  ...OPENOPC_DATA_SERVICE_OPERATIONS,
+  ...OPENOPC_SETTINGS_SERVICE_OPERATIONS,
 ] as const;
 
 export const OpenOpcServiceNameSchema = z.enum(OPENOPC_SERVICE_NAMES);
 export const OpenOpcAiServiceOperationSchema = z.enum(OPENOPC_AI_SERVICE_OPERATIONS);
 export const OpenOpcPaymentServiceOperationSchema = z.enum(OPENOPC_PAYMENT_SERVICE_OPERATIONS);
+export const OpenOpcDataServiceOperationSchema = z.enum(OPENOPC_DATA_SERVICE_OPERATIONS);
+export const OpenOpcSettingsServiceOperationSchema = z.enum(OPENOPC_SETTINGS_SERVICE_OPERATIONS);
 export const OpenOpcServiceOperationSchema = z.enum(OPENOPC_SERVICE_OPERATIONS);
 
 export type OpenOpcServiceName = z.infer<typeof OpenOpcServiceNameSchema>;
+export type OpenOpcAiServiceOperation = z.infer<typeof OpenOpcAiServiceOperationSchema>;
+export type OpenOpcPaymentServiceOperation = z.infer<typeof OpenOpcPaymentServiceOperationSchema>;
+export type OpenOpcDataServiceOperation = z.infer<typeof OpenOpcDataServiceOperationSchema>;
+export type OpenOpcSettingsServiceOperation = z.infer<typeof OpenOpcSettingsServiceOperationSchema>;
 export type OpenOpcServiceOperation = z.infer<typeof OpenOpcServiceOperationSchema>;
 
 function uniqueOperations<T extends z.ZodTypeAny>(schema: T) {
@@ -42,6 +57,8 @@ function uniqueOperations<T extends z.ZodTypeAny>(schema: T) {
 
 const AiServiceOperationsSchema = uniqueOperations(OpenOpcAiServiceOperationSchema);
 const PaymentServiceOperationsSchema = uniqueOperations(OpenOpcPaymentServiceOperationSchema);
+const DataServiceOperationsSchema = uniqueOperations(OpenOpcDataServiceOperationSchema);
+const SettingsServiceOperationsSchema = uniqueOperations(OpenOpcSettingsServiceOperationSchema);
 
 export const ModuleServiceCapabilityRequestSchema = z.discriminatedUnion('service', [
   z
@@ -54,6 +71,18 @@ export const ModuleServiceCapabilityRequestSchema = z.discriminatedUnion('servic
     .object({
       service: z.literal('payment'),
       operations: PaymentServiceOperationsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      service: z.literal('data'),
+      operations: DataServiceOperationsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      service: z.literal('settings'),
+      operations: SettingsServiceOperationsSchema,
     })
     .strict(),
 ]);
@@ -96,6 +125,10 @@ export const MODULE_SERVICE_ERROR_CODES = [
   'MODULE_SERVICE_CAPABILITY_SCOPE_MISMATCH',
   'MODULE_SERVICE_OPERATION_DENIED',
   'MODULE_SERVICE_CONFLICT',
+  'MODULE_DATA_DOCUMENT_NOT_FOUND',
+  'MODULE_DATA_STORAGE_UNAVAILABLE',
+  'MODULE_SETTINGS_INVALID',
+  'MODULE_SETTINGS_STORAGE_UNAVAILABLE',
   'MODULE_AI_PROVIDER_UNAVAILABLE',
   'MODULE_PAYMENT_IDEMPOTENCY_CONFLICT',
   'MODULE_PAYMENT_ORDER_NOT_FOUND',
@@ -162,6 +195,20 @@ export const ModuleServiceCapabilityClaimsV1Schema = z.discriminatedUnion('servi
       ...capabilityClaimsShape,
       service: z.literal('payment'),
       operations: PaymentServiceOperationsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...capabilityClaimsShape,
+      service: z.literal('data'),
+      operations: DataServiceOperationsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...capabilityClaimsShape,
+      service: z.literal('settings'),
+      operations: SettingsServiceOperationsSchema,
     })
     .strict(),
 ]);

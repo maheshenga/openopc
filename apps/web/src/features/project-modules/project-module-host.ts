@@ -57,6 +57,12 @@ export function attachProjectModuleHostBridge(input: {
         moduleOrigin: input.descriptor.origin,
         moduleSource: input.moduleSource,
         sdkApiVersion,
+        context: {
+          projectId: input.projectId,
+          installationId: input.descriptor.installation_id,
+          releaseId: input.descriptor.release_id,
+          installRevision: input.descriptor.install_revision,
+        },
       }),
     );
   }

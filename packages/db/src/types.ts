@@ -16,8 +16,8 @@ import type {
   chatInstalls,
   chatThreads,
   creditAccounts,
-  developerInvitations,
   developerApplications,
+  developerInvitations,
   developerModuleArtifactUploads,
   developerModuleArtifacts,
   developerModuleReleaseDistributionEvents,
@@ -54,18 +54,21 @@ import type {
   moduleRuntimeDescriptors,
   moduleServiceAuditEvents,
   moduleServiceCapabilityGrants,
+  policyAcceptances,
   projectGitConnections,
   projectGitCredentials,
   projectMembers,
   projectModuleConsentRevisions,
-  projectModuleServiceConsents,
+  projectModuleDocuments,
   projectModuleInstallationEvents,
   projectModuleInstallations,
+  projectModuleServiceConsents,
+  projectModuleSettingValues,
+  projectModuleSettings,
   projectSecrets,
   projectSessions,
   projectSnapshotBuilds,
   projects,
-  policyAcceptances,
   sandboxTemplates,
   sandboxes,
   sessionSandboxes,
@@ -215,6 +218,12 @@ export type ModuleRuntimeArtifact = typeof moduleRuntimeArtifacts.$inferSelect;
 export type NewModuleRuntimeArtifact = typeof moduleRuntimeArtifacts.$inferInsert;
 export type ProjectModuleConsentRevision = typeof projectModuleConsentRevisions.$inferSelect;
 export type NewProjectModuleConsentRevision = typeof projectModuleConsentRevisions.$inferInsert;
+export type ProjectModuleDocument = typeof projectModuleDocuments.$inferSelect;
+export type NewProjectModuleDocument = typeof projectModuleDocuments.$inferInsert;
+export type ProjectModuleSettings = typeof projectModuleSettings.$inferSelect;
+export type NewProjectModuleSettings = typeof projectModuleSettings.$inferInsert;
+export type ProjectModuleSettingValue = typeof projectModuleSettingValues.$inferSelect;
+export type NewProjectModuleSettingValue = typeof projectModuleSettingValues.$inferInsert;
 export type ProjectModuleServiceConsent = typeof projectModuleServiceConsents.$inferSelect;
 export type NewProjectModuleServiceConsent = typeof projectModuleServiceConsents.$inferInsert;
 export type ModuleServiceCapabilityGrant = typeof moduleServiceCapabilityGrants.$inferSelect;

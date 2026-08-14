@@ -25,6 +25,7 @@ import {
   type ModuleServiceConsent,
   type ModuleServiceConsentManager,
 } from './capability-grants';
+import { type ModuleDataRouteDependencies, createModuleDataRoutes } from './data';
 import { type ModuleImageDependencies, createModuleImageRoutes } from './images';
 import { createRuntimeModuleImageDependencies } from './images-runtime';
 import {
@@ -32,6 +33,7 @@ import {
   createModulePaymentRoutes,
   createRuntimeModulePaymentDependencies,
 } from './payments';
+import { type ModuleSettingsRouteDependencies, createModuleSettingsRoutes } from './settings';
 
 type LoadedProject = { row: { accountId: string; projectId: string }; userId: string };
 type LoadProjectForUser = (
@@ -334,10 +336,15 @@ export function createModuleServicesApp(
   aiDependencies: ModuleAiDependencies = createRuntimeModuleAiDependencies(),
   paymentDependencies: ModulePaymentRouteDependencies = createRuntimeModulePaymentDependencies(),
   imageDependencies: ModuleImageDependencies = createRuntimeModuleImageDependencies(),
+  dataDependencies?: ModuleDataRouteDependencies,
+  settingsDependencies?: ModuleSettingsRouteDependencies,
 ) {
   const app = makeOpenApiApp<AppEnv>();
   app.route('/ai/images', createModuleImageRoutes(imageDependencies));
   app.route('/ai', createModuleAiRoutes(aiDependencies));
   app.route('/payments', createModulePaymentRoutes(paymentDependencies));
+  if (dataDependencies) app.route('/data', createModuleDataRoutes(dataDependencies));
+  if (settingsDependencies)
+    app.route('/settings', createModuleSettingsRoutes(settingsDependencies));
   return app;
 }

@@ -22,6 +22,8 @@ export * from './intelligence';
 export * from './release-profile';
 export * from './module-services';
 export * from './openopc-ai';
+export * from './openopc-module-data';
+export * from './openopc-module-settings';
 
 /** Loose JSON object — jsonb metadata/config columns surfaced as-is. */
 export const JsonObjectSchema = z.record(z.string(), z.unknown());
@@ -82,11 +84,7 @@ export const ProjectRoleSchema = z.enum(PROJECT_ROLES);
 export type ProjectRole = z.infer<typeof ProjectRoleSchema>;
 
 /** Every sandbox provider the current platform can select or emit. */
-export const SANDBOX_PROVIDERS = [
-  'daytona',
-  'platinum',
-  'e2b',
-] as const;
+export const SANDBOX_PROVIDERS = ['daytona', 'platinum', 'e2b'] as const;
 export const SandboxProviderSchema = z.enum(SANDBOX_PROVIDERS);
 export type SandboxProvider = z.infer<typeof SandboxProviderSchema>;
 
@@ -302,8 +300,8 @@ export const SessionCreateInputSchema = z
     session_id: z
       .string()
       .regex(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-      'session_id must be an RFC 4122 v4 UUID',
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        'session_id must be an RFC 4122 v4 UUID',
       )
       .optional(),
     provider: SandboxProviderSchema.optional(),
@@ -321,8 +319,8 @@ export const SessionCreateInputSchema = z
     sessionId: z
       .string()
       .regex(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-      'sessionId must be an RFC 4122 v4 UUID',
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        'sessionId must be an RFC 4122 v4 UUID',
       )
       .optional(),
     branchAlreadyCreated: z.boolean().optional(),

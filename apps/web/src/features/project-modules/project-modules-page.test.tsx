@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
 import type { ProjectModuleInstallation, ProjectModuleInstallationEvent } from '@kortix/sdk';
+import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import {
@@ -241,5 +241,35 @@ describe('Project modules workbench', () => {
     expect(html).toContain('Payment service');
     expect(html).toContain('orders.create');
     expect(html).not.toContain('refunds.create');
+  });
+
+  test('renders platform-owned settings only for a signed non-sensitive definition', () => {
+    const html = renderView({
+      releases: RELEASES.map((release) =>
+        release.release_id === 'release-v2'
+          ? {
+              ...release,
+              manifest: {
+                schemaVersion: 3,
+                openopc: {
+                  sdkApiVersion: 'v1',
+                  settings: {
+                    fields: [
+                      {
+                        key: 'canvas.autosave',
+                        label: 'Autosave',
+                        type: 'boolean',
+                        default: true,
+                      },
+                    ],
+                  },
+                },
+              },
+            }
+          : release,
+      ),
+    });
+    expect(html).toContain('data-testid="module-settings"');
+    expect(html).toContain('Module settings');
   });
 });

@@ -14,15 +14,25 @@ import {
   rollbackProjectModule,
   updateProjectModule,
 } from '@kortix/sdk';
+import {
+  OPENOPC_AI_SERVICE_OPERATIONS,
+  OPENOPC_DATA_SERVICE_OPERATIONS,
+  OPENOPC_PAYMENT_SERVICE_OPERATIONS,
+  OPENOPC_SETTINGS_SERVICE_OPERATIONS,
+  type OpenOpcAiServiceOperation as SdkOpenOpcAiServiceOperation,
+  type OpenOpcDataServiceOperation as SdkOpenOpcDataServiceOperation,
+  type OpenOpcPaymentServiceOperation as SdkOpenOpcPaymentServiceOperation,
+  type OpenOpcServiceName as SdkOpenOpcServiceName,
+  type OpenOpcServiceOperation as SdkOpenOpcServiceOperation,
+  type OpenOpcSettingsServiceOperation as SdkOpenOpcSettingsServiceOperation,
+} from '@openopc/developer-sdk';
 
-export type OpenOpcServiceName = 'ai' | 'payment';
-export type OpenOpcAiServiceOperation =
-  | 'models.read'
-  | 'text.generate'
-  | 'text.stream'
-  | 'image.generate';
-export type OpenOpcPaymentServiceOperation = 'orders.create' | 'orders.read' | 'refunds.create';
-export type OpenOpcServiceOperation = OpenOpcAiServiceOperation | OpenOpcPaymentServiceOperation;
+export type OpenOpcServiceName = SdkOpenOpcServiceName;
+export type OpenOpcAiServiceOperation = SdkOpenOpcAiServiceOperation;
+export type OpenOpcPaymentServiceOperation = SdkOpenOpcPaymentServiceOperation;
+export type OpenOpcDataServiceOperation = SdkOpenOpcDataServiceOperation;
+export type OpenOpcSettingsServiceOperation = SdkOpenOpcSettingsServiceOperation;
+export type OpenOpcServiceOperation = SdkOpenOpcServiceOperation;
 
 export interface ModuleServiceDeclaration {
   service: OpenOpcServiceName;
@@ -61,9 +71,48 @@ export interface ModuleServiceCapabilityTokenResponse {
   grant_id: string;
 }
 
+export type ModuleSettingValue = string | number | boolean | null;
+export type ModuleSettingFieldType =
+  | 'boolean'
+  | 'number'
+  | 'select'
+  | 'model-select'
+  | 'text'
+  | 'textarea';
+
+export interface ModuleSettingOption {
+  value: string;
+  label: string;
+}
+
+export interface ModuleSettingField {
+  key: string;
+  label: string;
+  type: ModuleSettingFieldType;
+  description?: string;
+  default?: ModuleSettingValue;
+  required?: boolean;
+  min?: number;
+  max?: number;
+  options?: ModuleSettingOption[];
+}
+
+export interface ModuleSettingsDefinition {
+  fields: ModuleSettingField[];
+}
+
+export interface EffectiveModuleSettings {
+  schema_version: 1;
+  revision: number;
+  values: Record<string, ModuleSettingValue>;
+  loaded_at: string;
+}
+
 const SERVICE_OPERATIONS: Record<OpenOpcServiceName, readonly OpenOpcServiceOperation[]> = {
-  ai: ['models.read', 'text.generate', 'text.stream', 'image.generate'],
-  payment: ['orders.create', 'orders.read', 'refunds.create'],
+  ai: OPENOPC_AI_SERVICE_OPERATIONS,
+  payment: OPENOPC_PAYMENT_SERVICE_OPERATIONS,
+  data: OPENOPC_DATA_SERVICE_OPERATIONS,
+  settings: OPENOPC_SETTINGS_SERVICE_OPERATIONS,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -86,7 +135,7 @@ export function moduleServiceDeclarations(manifest: unknown): ModuleServiceDecla
   if (manifest.openopc.sdkApiVersion !== 'v1' || !isRecord(manifest.openopc.services)) return [];
 
   const declarations: ModuleServiceDeclaration[] = [];
-  for (const service of ['ai', 'payment'] as const) {
+  for (const service of ['ai', 'payment', 'data', 'settings'] as const) {
     const raw = manifest.openopc.services[service];
     if (!isRecord(raw) || !Array.isArray(raw.operations) || raw.operations.length === 0) continue;
     const allowed = new Set(SERVICE_OPERATIONS[service]);
@@ -100,6 +149,155 @@ export function moduleServiceDeclarations(manifest: unknown): ModuleServiceDecla
     declarations.push({ service, operations: [...unique] });
   }
   return declarations;
+}
+
+const MODULE_SETTING_TYPES = new Set<ModuleSettingFieldType>([
+  'boolean',
+  'number',
+  'select',
+  'model-select',
+  'text',
+  'textarea',
+]);
+const SENSITIVE_SETTING_KEY =
+  /(^|[._-])(api[_-]?key|token|secret|password|credential|authorization|cookie|provider|base[_-]?url|endpoint)([._-]|$)/i;
+
+function settingField(value: unknown): ModuleSettingField | null {
+  if (!isRecord(value)) return null;
+  const allowedKeys = new Set([
+    'key',
+    'label',
+    'type',
+    'description',
+    'default',
+    'required',
+    'min',
+    'max',
+    'options',
+  ]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return null;
+  const key = value.key;
+  const label = value.label;
+  const type = value.type;
+  if (
+    typeof key !== 'string' ||
+    !/^[a-z][a-z0-9_.-]{0,63}$/.test(key) ||
+    SENSITIVE_SETTING_KEY.test(key) ||
+    typeof label !== 'string' ||
+    label.trim().length === 0 ||
+    label.length > 120 ||
+    typeof type !== 'string' ||
+    !MODULE_SETTING_TYPES.has(type as ModuleSettingFieldType)
+  ) {
+    return null;
+  }
+  if (
+    value.description !== undefined &&
+    (typeof value.description !== 'string' || value.description.length > 500)
+  ) {
+    return null;
+  }
+  if (value.required !== undefined && typeof value.required !== 'boolean') {
+    return null;
+  }
+  const defaultValue = value.default;
+  if (
+    defaultValue !== undefined &&
+    defaultValue !== null &&
+    !['string', 'number', 'boolean'].includes(typeof defaultValue)
+  ) {
+    return null;
+  }
+  if (
+    (value.min !== undefined && (typeof value.min !== 'number' || !Number.isFinite(value.min))) ||
+    (value.max !== undefined && (typeof value.max !== 'number' || !Number.isFinite(value.max))) ||
+    (typeof value.min === 'number' && typeof value.max === 'number' && value.min > value.max)
+  ) {
+    return null;
+  }
+  const fieldType = type as ModuleSettingFieldType;
+  let options: ModuleSettingOption[] | undefined;
+  if (fieldType === 'select' || fieldType === 'model-select') {
+    if (!Array.isArray(value.options) || value.options.length === 0 || value.options.length > 128) {
+      return null;
+    }
+    options = [];
+    const seen = new Set<string>();
+    for (const option of value.options) {
+      if (
+        !isRecord(option) ||
+        Object.keys(option).sort().join(',') !== 'label,value' ||
+        typeof option.value !== 'string' ||
+        !option.value ||
+        option.value.length > 256 ||
+        typeof option.label !== 'string' ||
+        !option.label ||
+        option.label.length > 120 ||
+        seen.has(option.value)
+      ) {
+        return null;
+      }
+      seen.add(option.value);
+      options.push({ value: option.value, label: option.label });
+    }
+    if (defaultValue !== undefined && defaultValue !== null && !seen.has(String(defaultValue))) {
+      return null;
+    }
+  } else if (value.options !== undefined) {
+    return null;
+  }
+  if (fieldType === 'boolean' && defaultValue !== undefined && typeof defaultValue !== 'boolean') {
+    return null;
+  }
+  if (
+    fieldType === 'number' &&
+    defaultValue !== undefined &&
+    (typeof defaultValue !== 'number' ||
+      !Number.isFinite(defaultValue) ||
+      (typeof value.min === 'number' && defaultValue < value.min) ||
+      (typeof value.max === 'number' && defaultValue > value.max))
+  ) {
+    return null;
+  }
+  if (
+    (fieldType === 'text' || fieldType === 'textarea') &&
+    defaultValue !== undefined &&
+    defaultValue !== null &&
+    typeof defaultValue !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    key,
+    label,
+    type: fieldType,
+    ...(typeof value.description === 'string' ? { description: value.description } : {}),
+    ...(defaultValue !== undefined ? { default: defaultValue as ModuleSettingValue } : {}),
+    ...(typeof value.required === 'boolean' ? { required: value.required } : {}),
+    ...(typeof value.min === 'number' ? { min: value.min } : {}),
+    ...(typeof value.max === 'number' ? { max: value.max } : {}),
+    ...(options ? { options } : {}),
+  };
+}
+
+/** Read only non-sensitive settings declared by the signed v3 manifest. */
+export function moduleSettingsDefinition(manifest: unknown): ModuleSettingsDefinition | null {
+  if (!isRecord(manifest) || manifest.schemaVersion !== 3 || !isRecord(manifest.openopc)) {
+    return null;
+  }
+  if (manifest.openopc.sdkApiVersion !== 'v1' || !isRecord(manifest.openopc.settings)) {
+    return null;
+  }
+  const rawFields = manifest.openopc.settings.fields;
+  if (!Array.isArray(rawFields) || rawFields.length === 0 || rawFields.length > 128) return null;
+  const fields = rawFields.map(settingField);
+  if (fields.some((field) => field === null)) return null;
+  const typed = fields as ModuleSettingField[];
+  const keys = typed.map((field) => field.key);
+  if (new Set(keys).size !== keys.length || [...keys].sort().join('\0') !== keys.join('\0')) {
+    return null;
+  }
+  return { fields: structuredClone(typed) };
 }
 
 async function unwrapBackend<T>(
@@ -300,4 +498,50 @@ export async function issueProjectModuleServiceCapability(
     input,
   );
   return unwrapBackend(response, 'Failed to issue module service capability');
+}
+
+function isEffectiveModuleSettings(value: unknown): value is EffectiveModuleSettings {
+  if (!isRecord(value) || value.schema_version !== 1 || !Number.isSafeInteger(value.revision)) {
+    return false;
+  }
+  if (typeof value.loaded_at !== 'string' || !Number.isFinite(Date.parse(value.loaded_at))) {
+    return false;
+  }
+  if (!isRecord(value.values) || Object.keys(value.values).length > 128) return false;
+  return Object.entries(value.values).every(
+    ([key, settingValue]) =>
+      /^[a-z][a-z0-9_.-]{0,63}$/.test(key) &&
+      !SENSITIVE_SETTING_KEY.test(key) &&
+      (settingValue === null || ['string', 'number', 'boolean'].includes(typeof settingValue)),
+  );
+}
+
+export async function getProjectModuleSettings(
+  projectId: string,
+  installationId: string,
+  signal?: AbortSignal,
+): Promise<EffectiveModuleSettings> {
+  const response = await backendApi.get<EffectiveModuleSettings>(
+    `${moduleServicePath(projectId, installationId)}/settings`,
+    { signal },
+  );
+  const value = await unwrapBackend(response, 'Failed to read module settings');
+  if (!isEffectiveModuleSettings(value)) throw new Error('Module settings response is invalid');
+  return value;
+}
+
+export async function updateProjectModuleSettings(
+  projectId: string,
+  installationId: string,
+  input: { expected_revision: number; values: Record<string, ModuleSettingValue> },
+  signal?: AbortSignal,
+): Promise<EffectiveModuleSettings> {
+  const response = await backendApi.put<EffectiveModuleSettings>(
+    `${moduleServicePath(projectId, installationId)}/settings`,
+    input,
+    { signal },
+  );
+  const value = await unwrapBackend(response, 'Failed to update module settings');
+  if (!isEffectiveModuleSettings(value)) throw new Error('Module settings response is invalid');
+  return value;
 }

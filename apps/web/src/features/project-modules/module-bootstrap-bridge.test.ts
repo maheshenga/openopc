@@ -10,6 +10,12 @@ import {
 
 const MODULE_ORIGIN = 'https://r-40000000-0000-4000-a000-000000000004.modules.openopc.example';
 const REQUEST_ID = '10000000-0000-4000-8000-00000000000a';
+const MODULE_CONTEXT = {
+  projectId: '20000000-0000-4000-8000-000000000002',
+  installationId: '30000000-0000-4000-8000-000000000003',
+  releaseId: '40000000-0000-4000-8000-000000000004',
+  installRevision: 7,
+} as const;
 
 function createBridgeHarness() {
   const posted: Array<{ message: unknown; targetOrigin: string }> = [];
@@ -22,6 +28,7 @@ function createBridgeHarness() {
     moduleOrigin: MODULE_ORIGIN,
     moduleSource: source,
     sdkApiVersion: 'v1',
+    context: MODULE_CONTEXT,
   };
   return {
     posted,
@@ -51,6 +58,7 @@ test('responds only to the exact module origin and source', () => {
         type: 'openopc.module.bootstrap.response',
         requestId: REQUEST_ID,
         sdkApiVersion: 'v1',
+        context: MODULE_CONTEXT,
       },
     },
   ]);

@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  assertDeveloperModuleServiceNetworkPolicy,
   type DeveloperModuleVerificationClaim,
   DeveloperModuleVerificationService,
   type FinalizeVerificationInput,
+  assertDeveloperModuleServiceNetworkPolicy,
   createMemoryDeveloperModuleVerificationRepository,
 } from './verification';
 
@@ -147,6 +147,32 @@ describe('developer module verification lifecycle', () => {
       assertDeveloperModuleServiceNetworkPolicy(manifest as never, {
         newApiBaseUrl: 'https://newapi.example.test/v1',
         zPayBaseUrl: 'https://zpay.example.test',
+      }),
+    ).toThrow('DEVELOPER_VERIFICATION_RESULT_INVALID');
+  });
+
+  test('rejects provider origins for data and settings only modules', () => {
+    const manifest = {
+      schemaVersion: 3,
+      id: 'acme.canvas',
+      version: '1.0.0',
+      publisher: { id: 'acme' },
+      locales: ['en'],
+      compatibility: { platform: '^1.0.0' },
+      execution: { mode: 'sandboxed-web' },
+      openopc: {
+        sdkApiVersion: 'v1',
+        services: {
+          data: { operations: ['documents.read'] },
+          settings: { operations: ['settings.read'] },
+        },
+      },
+      permissions: { network: ['https://newapi.example.test'] },
+    } as const;
+
+    expect(() =>
+      assertDeveloperModuleServiceNetworkPolicy(manifest as never, {
+        newApiBaseUrl: 'https://newapi.example.test/v1',
       }),
     ).toThrow('DEVELOPER_VERIFICATION_RESULT_INVALID');
   });

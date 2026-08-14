@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import * as ModuleServices from './module-services';
 
 import {
   CreateDeveloperPaymentOrderInputSchema,
@@ -46,18 +47,60 @@ function claims(): ModuleServiceCapabilityClaimsV1 {
 }
 
 describe('module service wire contract', () => {
-  test('accepts only the six public operation identifiers', () => {
+  test('accepts only the provider-neutral public operation identifiers', () => {
+    expect(ModuleServices.OPENOPC_SERVICE_NAMES).toEqual(['ai', 'payment', 'data', 'settings']);
     for (const operation of [
       'models.read',
       'text.generate',
       'text.stream',
+      'image.generate',
       'orders.create',
       'orders.read',
       'refunds.create',
+      'documents.list',
+      'documents.read',
+      'documents.write',
+      'documents.delete',
+      'settings.read',
     ]) {
       expect(OpenOpcServiceOperationSchema.safeParse(operation).success).toBe(true);
     }
+    expect(ModuleServices.OPENOPC_DATA_SERVICE_OPERATIONS).toEqual([
+      'documents.list',
+      'documents.read',
+      'documents.write',
+      'documents.delete',
+    ]);
+    expect(ModuleServices.OPENOPC_SETTINGS_SERVICE_OPERATIONS).toEqual(['settings.read']);
     expect(OpenOpcServiceOperationSchema.safeParse('orders.close').success).toBe(false);
+  });
+
+  test('binds data and settings operations to their exact service', () => {
+    expect(
+      ModuleServiceCapabilityRequestSchema.safeParse({
+        service: 'data',
+        operations: ['documents.read', 'documents.write'],
+      }).success,
+    ).toBe(true);
+    expect(OpenOpcServiceOperationSchema.safeParse('assets.read').success).toBe(false);
+    expect(
+      ModuleServiceCapabilityRequestSchema.safeParse({
+        service: 'settings',
+        operations: ['settings.read'],
+      }).success,
+    ).toBe(true);
+    expect(
+      ModuleServiceCapabilityRequestSchema.safeParse({
+        service: 'data',
+        operations: ['settings.read'],
+      }).success,
+    ).toBe(false);
+    expect(
+      ModuleServiceCapabilityRequestSchema.safeParse({
+        service: 'settings',
+        operations: ['documents.read'],
+      }).success,
+    ).toBe(false);
   });
 
   test('rejects a payment operation requested through the AI service', () => {

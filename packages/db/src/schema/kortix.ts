@@ -8546,6 +8546,155 @@ export const projectModuleConsentRevisions = kortixSchema.table(
   ],
 );
 
+export const projectModuleDocuments = kortixSchema.table(
+  'project_module_documents',
+  {
+    documentId: uuid('document_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    documentKey: varchar('document_key', { length: 128 }).notNull(),
+    revision: integer('revision').default(1).notNull(),
+    value: jsonb('value').notNull().$type<unknown>(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'project_module_documents_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'project_module_documents_installation_identity_fk',
+    }).onDelete('cascade'),
+    uniqueIndex('project_module_documents_identity_unique').on(
+      table.installationId,
+      table.documentKey,
+    ),
+    index('idx_project_module_documents_account_project').on(
+      table.accountId,
+      table.projectId,
+      table.updatedAt,
+    ),
+    check(
+      'project_module_documents_key_check',
+      sql`${table.documentKey} ~ '^[a-z0-9][a-z0-9._/-]{0,127}$'
+        AND ${table.documentKey} !~ '(^|/)\\.\\.?(/|$)'
+        AND ${table.documentKey} !~ '//'`,
+    ),
+    check('project_module_documents_revision_check', sql`${table.revision} > 0`),
+    check('project_module_documents_value_check', sql`pg_column_size(${table.value}) <= 2000000`),
+  ],
+);
+
+export const projectModuleSettings = kortixSchema.table(
+  'project_module_settings',
+  {
+    settingsId: uuid('settings_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    revision: integer('revision').default(0).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'project_module_settings_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'project_module_settings_installation_identity_fk',
+    }).onDelete('cascade'),
+    uniqueIndex('project_module_settings_installation_unique').on(table.installationId),
+    index('idx_project_module_settings_account_project').on(table.accountId, table.projectId),
+    check('project_module_settings_revision_check', sql`${table.revision} >= 0`),
+  ],
+);
+
+export const projectModuleSettingValues = kortixSchema.table(
+  'project_module_setting_values',
+  {
+    settingId: uuid('setting_id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id').notNull(),
+    projectId: uuid('project_id').notNull(),
+    installationId: uuid('installation_id').notNull(),
+    settingKey: varchar('setting_key', { length: 64 }).notNull(),
+    value: jsonb('value').notNull().$type<string | number | boolean | null>(),
+    revision: integer('revision').default(1).notNull(),
+    updatedBy: uuid('updated_by').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.projectId, table.accountId],
+      foreignColumns: [projects.projectId, projects.accountId],
+      name: 'project_module_setting_values_project_account_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.installationId, table.projectId, table.accountId],
+      foreignColumns: [
+        projectModuleInstallations.installationId,
+        projectModuleInstallations.projectId,
+        projectModuleInstallations.accountId,
+      ],
+      name: 'project_module_setting_values_installation_identity_fk',
+    }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.accountId, table.updatedBy],
+      foreignColumns: [accountMembers.accountId, accountMembers.userId],
+      name: 'project_module_setting_values_updated_by_fk',
+    }).onDelete('restrict'),
+    uniqueIndex('project_module_setting_values_identity_unique').on(
+      table.installationId,
+      table.settingKey,
+    ),
+    index('idx_project_module_setting_values_account_project').on(
+      table.accountId,
+      table.projectId,
+      table.updatedAt,
+    ),
+    check(
+      'project_module_setting_values_key_check',
+      sql`${table.settingKey} ~ '^[a-z][a-z0-9_.-]{0,63}$'
+        AND ${table.settingKey} !~* '(^|[._-])(api[_-]?key|token|secret|password|credential|authorization|cookie|provider|base[_-]?url|endpoint)([._-]|$)'`,
+    ),
+    check('project_module_setting_values_revision_check', sql`${table.revision} > 0`),
+    check(
+      'project_module_setting_values_value_check',
+      sql`jsonb_typeof(${table.value}) IN ('string', 'number', 'boolean', 'null')
+        AND pg_column_size(${table.value}) <= 65536`,
+    ),
+  ],
+);
+
 export const projectModuleServiceConsents = kortixSchema.table(
   'project_module_service_consents',
   {
@@ -8607,7 +8756,7 @@ export const projectModuleServiceConsents = kortixSchema.table(
     ),
     check(
       'project_module_service_consents_service_check',
-      sql`${table.service} IN ('ai', 'payment')`,
+      sql`${table.service} IN ('ai', 'payment', 'data', 'settings')`,
     ),
     check(
       'project_module_service_consents_operations_check',
@@ -8615,8 +8764,10 @@ export const projectModuleServiceConsents = kortixSchema.table(
         AND (
           (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream","image.generate"]'::jsonb)
           OR (${table.service} = 'payment' AND ${table.operations} <@ '["orders.create","orders.read","refunds.create"]'::jsonb)
+          OR (${table.service} = 'data' AND ${table.operations} <@ '["documents.list","documents.read","documents.write","documents.delete"]'::jsonb)
+          OR (${table.service} = 'settings' AND ${table.operations} <@ '["settings.read"]'::jsonb)
         )
-        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 7
+        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 15
         AND jsonb_array_length(${table.operations}) =
           (CASE WHEN ${table.operations} @> '["models.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.generate"]'::jsonb THEN 1 ELSE 0 END
@@ -8624,7 +8775,12 @@ export const projectModuleServiceConsents = kortixSchema.table(
           + CASE WHEN ${table.operations} @> '["image.generate"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.create"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.read"]'::jsonb THEN 1 ELSE 0 END
-          + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END)`,
+          + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["documents.list"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["documents.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["documents.write"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["documents.delete"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["settings.read"]'::jsonb THEN 1 ELSE 0 END)`,
     ),
     check(
       'project_module_service_consents_digest_check',
@@ -8711,7 +8867,7 @@ export const moduleServiceCapabilityGrants = kortixSchema.table(
     index('idx_module_service_grants_identity_expiry').on(table.grantId, table.expiresAt),
     check(
       'module_service_capability_grants_service_check',
-      sql`${table.service} IN ('ai', 'payment')`,
+      sql`${table.service} IN ('ai', 'payment', 'data', 'settings')`,
     ),
     check(
       'module_service_capability_grants_operations_check',
@@ -8719,8 +8875,10 @@ export const moduleServiceCapabilityGrants = kortixSchema.table(
         AND (
           (${table.service} = 'ai' AND ${table.operations} <@ '["models.read","text.generate","text.stream","image.generate"]'::jsonb)
           OR (${table.service} = 'payment' AND ${table.operations} <@ '["orders.create","orders.read","refunds.create"]'::jsonb)
+          OR (${table.service} = 'data' AND ${table.operations} <@ '["documents.list","documents.read","documents.write","documents.delete"]'::jsonb)
+          OR (${table.service} = 'settings' AND ${table.operations} <@ '["settings.read"]'::jsonb)
         )
-        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 7
+        AND jsonb_array_length(${table.operations}) BETWEEN 1 AND 15
         AND jsonb_array_length(${table.operations}) =
           (CASE WHEN ${table.operations} @> '["models.read"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["text.generate"]'::jsonb THEN 1 ELSE 0 END
@@ -8728,7 +8886,12 @@ export const moduleServiceCapabilityGrants = kortixSchema.table(
           + CASE WHEN ${table.operations} @> '["image.generate"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.create"]'::jsonb THEN 1 ELSE 0 END
           + CASE WHEN ${table.operations} @> '["orders.read"]'::jsonb THEN 1 ELSE 0 END
-          + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END)`,
+          + CASE WHEN ${table.operations} @> '["refunds.create"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["documents.list"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["documents.read"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["documents.write"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["documents.delete"]'::jsonb THEN 1 ELSE 0 END
+          + CASE WHEN ${table.operations} @> '["settings.read"]'::jsonb THEN 1 ELSE 0 END)`,
     ),
     check(
       'module_service_capability_grants_token_hash_check',
@@ -8806,12 +8969,17 @@ export const moduleServiceAuditEvents = kortixSchema.table(
       table.createdAt,
     ),
     index('idx_module_service_audit_grant_created').on(table.grantId, table.createdAt),
-    check('module_service_audit_events_service_check', sql`${table.service} IN ('ai', 'payment')`),
+    check(
+      'module_service_audit_events_service_check',
+      sql`${table.service} IN ('ai', 'payment', 'data', 'settings')`,
+    ),
     check(
       'module_service_audit_events_operation_check',
       sql`${table.operation} IS NULL
         OR (${table.service} = 'ai' AND ${table.operation} IN ('models.read', 'text.generate', 'text.stream', 'image.generate'))
-        OR (${table.service} = 'payment' AND ${table.operation} IN ('orders.create', 'orders.read', 'refunds.create'))`,
+        OR (${table.service} = 'payment' AND ${table.operation} IN ('orders.create', 'orders.read', 'refunds.create'))
+        OR (${table.service} = 'data' AND ${table.operation} IN ('documents.list', 'documents.read', 'documents.write', 'documents.delete'))
+        OR (${table.service} = 'settings' AND ${table.operation} = 'settings.read')`,
     ),
     check(
       'module_service_audit_events_outcome_check',

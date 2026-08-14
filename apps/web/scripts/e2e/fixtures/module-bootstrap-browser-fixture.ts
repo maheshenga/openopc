@@ -9,6 +9,12 @@ import { attachModuleServiceBridge } from '../../../src/features/project-modules
 const PROJECT_ID = '10000000-0000-4000-8000-000000000001';
 const INSTALLATION_ID = '20000000-0000-4000-8000-000000000002';
 const RELEASE_ID = '40000000-0000-4000-a000-000000000004';
+const MODULE_CONTEXT = {
+  projectId: PROJECT_ID,
+  installationId: INSTALLATION_ID,
+  releaseId: RELEASE_ID,
+  installRevision: 1,
+} as const;
 const PLATFORM_ORIGIN = 'https://app.openopc.localhost';
 const MODULE_ORIGIN = `https://r-${RELEASE_ID}.modules.openopc.test`;
 const MODULE_PAGE = `${MODULE_ORIGIN}/fixture.html?role=module`;
@@ -63,6 +69,7 @@ function startHost() {
     moduleOrigin: MODULE_ORIGIN,
     moduleSource,
     sdkApiVersion: 'v1',
+    context: MODULE_CONTEXT,
   });
   const cleanupToken = attachModuleServiceBridge(tracked.target, {
     moduleOrigin: MODULE_ORIGIN,

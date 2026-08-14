@@ -43,6 +43,8 @@ export function ReversePromptWorkspace({
   const [error, setError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
   const previewUrl = useFilePreview(file);
+  const safePreviewUrl =
+    previewUrl !== null && previewUrl.startsWith('blob:') ? previewUrl : null;
   const visionModels = textModels.filter((item) => item.attachment === true);
 
   useEffect(() => {
@@ -94,8 +96,8 @@ export function ReversePromptWorkspace({
           <ScanSearch size={19} />
         </div>
 
-        <label className={`upload-large ${previewUrl ? 'has-preview' : ''}`} htmlFor="reverse-image">
-          {previewUrl ? <img className="upload-preview" src={previewUrl} alt="待分析图片" /> : <ImagePlus size={28} />}
+        <label className={`upload-large ${safePreviewUrl ? 'has-preview' : ''}`} htmlFor="reverse-image">
+          {safePreviewUrl ? <img className="upload-preview" src={safePreviewUrl} alt="待分析图片" /> : <ImagePlus size={28} />}
           <span>{file ? file.name : '选择一张图片'}</span>
           <small>PNG、JPEG 或 WebP</small>
           <input

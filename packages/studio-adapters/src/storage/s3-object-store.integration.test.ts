@@ -21,7 +21,7 @@ const runPrefix = `integration/${crypto.randomUUID()}`;
 const TEST_BYTES = new Uint8Array([137, 80, 78, 71]);
 const TEST_CHECKSUM_HEX = new Bun.CryptoHasher('sha256').update(TEST_BYTES).digest('hex');
 
-describe.skipIf(!integrationEnabled)('S3StudioObjectStore - real MinIO', () => {
+describe.skipIf(!integrationEnabled)('S3StudioObjectStore - real S3-compatible endpoint', () => {
   let adminClient: S3Client;
   let storeSequence = 0;
   const stores: S3StudioObjectStore[] = [];
@@ -47,7 +47,7 @@ describe.skipIf(!integrationEnabled)('S3StudioObjectStore - real MinIO', () => {
     }
   });
 
-  runStudioObjectStoreConformance('MinIO S3StudioObjectStore', () => {
+  runStudioObjectStoreConformance('S3-compatible S3StudioObjectStore', () => {
     storeSequence += 1;
     return createStore({
       config: storageConfig(`${runPrefix}/conformance-${storeSequence}`),
@@ -173,7 +173,7 @@ function endpointUrl(): URL {
 }
 
 function requiredEnvironmentValue(value: string | undefined): string {
-  if (!value) throw new Error('MinIO integration environment is incomplete');
+  if (!value) throw new Error('S3 integration environment is incomplete');
   return value;
 }
 
@@ -210,7 +210,7 @@ async function fetchWithoutSensitiveDiagnostics(
   try {
     return await fetch(url, init);
   } catch {
-    throw new Error('MinIO signed request failed');
+    throw new Error('S3 signed request failed');
   }
 }
 

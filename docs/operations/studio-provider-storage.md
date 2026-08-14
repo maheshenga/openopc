@@ -22,7 +22,7 @@ Alert on consecutive readiness failures, failed cleanup under `studio-smoke/`, w
 
 ## Protected smoke sequence
 
-Run the local/CI MinIO conformance first. GitHub CI starts the pinned MinIO target, waits for `/minio/health/live`, runs `s3-object-store.integration.test.ts`, and always removes the container. Locally, `scripts/ci-local.sh` reports the MinIO gate as skipped when Docker is unavailable; that is not CI approval.
+The required storage verification is the cloud storage compatibility smoke against the real target endpoint, run only from the protected operations environment (no local MinIO stand-in). The endpoint-driven S3 integration conformance (`s3-object-store.integration.test.ts`) additionally runs wherever `STUDIO_S3_INTEGRATION_URL` plus credentials are configured — including against the cloud OSS endpoint itself — and is skipped otherwise; CI never provisions an object store.
 
 Run the live provider smoke only from the protected operations environment:
 
@@ -81,7 +81,7 @@ The environment must also provide the configured S3 endpoint, bucket, region, an
 
 ## Canary, retention, and rollback
 
-Canary in this order: validate Secret/Connector references, run API and worker readiness, run MinIO conformance, run the provider smoke in the dedicated project, run the OSS smoke for the target endpoint, then allow a deliberately capped internal canary. Monitor job/asset/settlement events before each expansion. The hold policy for an unknown provider outcome is operational state, not general retention: issue a warning at 24 hours, escalate to critical at 7 days, and at 30 days `atomic_expire_studio_unknown_hold` automatically ends the hold and opens an incident. Task 14 owns audited incident resolution after that automatic transition. Send billing discrepancies to the billing-incident owner with redacted job and settlement identifiers; do not attempt manual credit mutation from the worker.
+Canary in this order: validate Secret/Connector references, run API and worker readiness, run the cloud storage compatibility smoke for the target endpoint, run the provider smoke in the dedicated project, then allow a deliberately capped internal canary. Monitor job/asset/settlement events before each expansion. The hold policy for an unknown provider outcome is operational state, not general retention: issue a warning at 24 hours, escalate to critical at 7 days, and at 30 days `atomic_expire_studio_unknown_hold` automatically ends the hold and opens an incident. Task 14 owns audited incident resolution after that automatic transition. Send billing discrepancies to the billing-incident owner with redacted job and settlement identifiers; do not attempt manual credit mutation from the worker.
 
 For an incident, disable the affected provider configuration first, stop the worker from claiming new jobs if storage is unavailable, preserve existing attempts and manifests, rotate compromised Secrets/Connectors, and roll back to the prior validated configuration. Delete an orphan only after all four checks pass: it is under the configured exact Studio prefix; it has no durable asset or manifest reference; every linked attempt is terminal and its retention threshold has passed; and a reviewed inventory records the current ETag/checksum used for the conditional delete. Reconcile through the approved exact-prefix tool; never bulk-delete a bucket. Recovery requests use the audited recovery flow and redacted evidence only.
 

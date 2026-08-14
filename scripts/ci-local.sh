@@ -84,25 +84,12 @@ run_intelligence_workflow_postgres() {
     src/intelligence/workflows/postgres.integration.test.ts
 }
 
-run_studio_minio_conformance() {
-  local container="kortix-studio-minio-local"
-  docker rm -f "$container" >/dev/null 2>&1 || true
-  cleanup_studio_minio() { docker rm -f "$container" >/dev/null 2>&1 || true; }
-  trap cleanup_studio_minio RETURN
-  docker run -d --name "$container" -p 9000:9000 \
-    -e MINIO_ROOT_USER=minioadmin \
-    -e MINIO_ROOT_PASSWORD=minioadmin \
-    -e MINIO_KMS_SECRET_KEY=studio-key:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
-    minio/minio:RELEASE.2025-04-22T22-12-26Z server /data >/dev/null
-  for _ in $(seq 1 30); do
-    curl --fail --silent --show-error http://127.0.0.1:9000/minio/health/live >/dev/null && break
-    sleep 1
-  done
-  curl --fail --silent --show-error http://127.0.0.1:9000/minio/health/live >/dev/null
-  STUDIO_S3_INTEGRATION_URL=http://127.0.0.1:9000 \
-    STUDIO_S3_ACCESS_KEY_ID=minioadmin \
-    STUDIO_S3_SECRET_ACCESS_KEY=minioadmin \
-    pnpm --filter @kortix/studio-adapters test src/storage/s3-object-store.integration.test.ts
+run_studio_s3_conformance() {
+  # Runs the endpoint-driven S3 integration suite against any configured
+  # S3-compatible endpoint (defaults to the cloud OSS target). Requires
+  # STUDIO_S3_INTEGRATION_URL + STUDIO_S3_ACCESS_KEY_ID +
+  # STUDIO_S3_SECRET_ACCESS_KEY in the environment.
+  pnpm --filter @kortix/studio-adapters test src/storage/s3-object-store.integration.test.ts
 }
 
 # ── ci.yml: per-app typecheck ─────────────────────────────────────────────────
@@ -141,11 +128,15 @@ pass "Intelligence API, MCP, A2A, and IAM acceptance" run_intelligence_protocol_
 pass "typecheck workspaces (ci.yml)" run_typechecks
 pass "lint: biome" pnpm lint:biome
 
+if [ -n "${STUDIO_S3_INTEGRATION_URL:-}" ]; then
+  pass "Studio S3 conformance (endpoint-driven)" run_studio_s3_conformance
+else
+  skip "Studio S3 conformance (endpoint-driven)" "STUDIO_S3_INTEGRATION_URL not configured; run against the cloud OSS endpoint in the protected environment"
+fi
+
 if docker_ok; then
-  pass "Studio MinIO S3 conformance (ci.yml)" run_studio_minio_conformance
   pass "Intelligence workflow PostgreSQL restart + concurrency" run_intelligence_workflow_postgres
 else
-  skip "Studio MinIO S3 conformance (ci.yml)" "Docker not running; GitHub CI treats this as required"
   skip "Intelligence workflow PostgreSQL restart + concurrency" "Docker not running; GitHub CI treats this as required"
 fi
 

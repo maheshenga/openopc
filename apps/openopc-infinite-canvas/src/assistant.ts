@@ -20,11 +20,25 @@ export interface AssistantEnvelope {
   actions: AssistantAction[];
 }
 
+let assistantIdCounter = 0;
+
 function id(prefix: string): string {
-  const uuid =
-    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  let uuid = '';
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      uuid = crypto.randomUUID();
+    }
+  } catch {
+    // Fall through to the secure-bytes fallback.
+  }
+  if (!uuid) {
+    try {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      uuid = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    } catch {
+      uuid = `${Date.now().toString(36)}-${(assistantIdCounter++).toString(36)}`;
+    }
+  }
   return `${prefix}-${uuid}`;
 }
 

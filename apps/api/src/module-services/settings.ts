@@ -17,7 +17,6 @@ import { PROJECT_ACTIONS } from '../iam/actions';
 import { makeOpenApiApp } from '../openapi';
 import type { AppEnv } from '../types';
 import { ModuleServiceCapabilityError } from './capability-grants';
-import { requireModuleServiceOperation } from './service-auth';
 
 type ErrorStatus = 400 | 401 | 403 | 404 | 409 | 503;
 type SettingsClaims = Extract<ModuleServiceCapabilityClaimsV1, { service: 'settings' }>;

@@ -143,7 +143,7 @@ async function blobDataUrl(blob: Blob): Promise<string> {
 
 export async function createPlatformBridge(signal: AbortSignal): Promise<PlatformBridge> {
   let client: OpenOpcModuleClient | null = null;
-  let status: PlatformStatus = 'connecting';
+  let status: PlatformStatus;
   let settings: OpenOpcEffectiveModuleSettings | null = FALLBACK_SETTINGS;
   let models: readonly OpenOpcModel[] = [];
   let errorMessage: string | null = null;

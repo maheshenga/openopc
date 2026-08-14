@@ -80,13 +80,12 @@ function scope(claims: DataClaims): ModuleDataScope {
 
 function keyFromContext(context: { req: { param(name: string): string } }): string | null {
   const raw = context.req.param('key');
-  let decoded = raw;
   try {
-    decoded = decodeURIComponent(raw);
+    const decoded = decodeURIComponent(raw);
+    return OpenOpcModuleDocumentKeySchema.safeParse(decoded).success ? decoded : null;
   } catch {
     return null;
   }
-  return OpenOpcModuleDocumentKeySchema.safeParse(decoded).success ? decoded : null;
 }
 
 function keyFromQuery(context: { req: { query(name: string): string | undefined } }):

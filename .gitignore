@@ -144,3 +144,7 @@ grafana-creds.txt
 botkube-communication.secret.yaml
 botkube-comm-real.yaml
 .env*
+
+# Upstream reference clone (provenance recorded in apps/openopc-infinite-canvas/UPSTREAM.md)
+.upstream-infinite-canvas/
+

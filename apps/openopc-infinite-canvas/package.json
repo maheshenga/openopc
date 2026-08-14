@@ -1,0 +1,27 @@
+{
+  "name": "@openopc/infinite-canvas-module",
+  "version": "0.5.2-openopc.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "format:check": "pnpm -w exec biome format apps/openopc-infinite-canvas/src apps/openopc-infinite-canvas/scripts",
+    "test": "bun test src",
+    "typecheck": "tsc --noEmit",
+    "validate:artifact": "bun run scripts/validate-artifact.ts"
+  },
+  "dependencies": {
+    "@openopc/developer-sdk": "workspace:*",
+    "fflate": "^0.8.3",
+    "lucide-react": "^0.479.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@kortix/registry": "workspace:*",
+    "@types/bun": "^1.3.12",
+    "@types/react": "^19.1.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.4.0"
+  }
+}

@@ -247,7 +247,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download desktop artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v8.0.1
         with:
           path: desktop-artifacts/
           pattern: desktop-*

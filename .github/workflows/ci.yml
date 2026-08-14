@@ -165,7 +165,7 @@ jobs:
       # classifier, checkov-gate the module, and assert the app bundle's migrate
       # service bootstraps the database before services roll.
       - name: Install Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
       - name: Terraform fmt + validate (enterprise appliance graph)

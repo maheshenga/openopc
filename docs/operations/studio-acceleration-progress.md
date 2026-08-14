@@ -740,3 +740,28 @@ validation, durable step and approval-resume handling, dispatch-attempt
 idempotency and unknown-result recovery, and complete readiness/deployment
 wiring remain open. Complete Task 8 and production readiness are therefore not
 claimed.
+
+## Cloud Storage Providers Continuation
+
+**Updated:** 2026-08-14
+
+On current main (c95508aba4), the remaining Task 9/10 boxes of the
+provider-storage implementation plan were verified and checked, and the cloud
+storage smoke was generalized to a validated three-provider profile matrix.
+
+- Real pinned-MinIO S3 conformance: 8/8 tests, 54 assertions (signed
+  upload/download, checksum and size rejection, conditional create/delete,
+  bounded prefix listing, private objects).
+- studio-adapters: 129 unit tests and typecheck pass; studio-worker: 190 tests
+  (including 14 new smoke-policy tests) and typecheck pass.
+- API Studio focused suite remains CI-verified (local boot requires the absent
+  dotenvx private key).
+- New: apps/studio-worker/src/smoke/s3-cloud-smoke.ts owns the provider profile
+  matrix (aliyun-oss path-style-required + AES256/aws:kms + optional owner
+  checks; tencent-cos either style + no SSE header; cloudflare-r2
+  virtual-host-only + no SSE header) with exact-prefix discipline;
+  scripts/s3-cloud-smoke.ts is the guarded CLI; aliyun-oss-smoke.ts superseded.
+- Still pending a protected environment with real credentials: live provider
+  smoke and the per-cloud smoke runs (commands in
+  docs/operations/studio-provider-storage.md). Studio production enablement
+  remains disabled.

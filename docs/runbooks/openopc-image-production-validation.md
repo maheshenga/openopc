@@ -70,11 +70,12 @@ signed download, and settled actual credits within the configured limit. Inspect
 the retained evidence through the dedicated project lifecycle; do not delete or
 reuse another tenant's rows.
 
-For object storage backed by Alibaba OSS, run the separately guarded smoke after
-the provider gate:
+For object storage backed by a supported cloud, run the separately guarded smoke
+after the provider gate (profile matrix and commands in
+`docs/operations/studio-provider-storage.md`):
 
 ```powershell
-bun apps/studio-worker/scripts/aliyun-oss-smoke.ts
+bun apps/studio-worker/scripts/s3-cloud-smoke.ts
 ```
 
 The dedicated prefix must be empty after cleanup. Record the provider, worker,

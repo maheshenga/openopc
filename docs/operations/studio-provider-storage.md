@@ -37,19 +37,47 @@ pnpm --filter @kortix/studio-worker exec bun scripts/live-provider-smoke.ts
 
 It requires a dedicated project/provider configuration, a dedicated read-only smoke database identity, one output, one submission, and one active process. It asserts one job, provider submission, persisted staging manifest, asset, billing settlement, signed download, and redaction scan. Durable billing evidence is intentionally retained: the explicit confirmation acknowledges that the dedicated project lifecycle, rather than the script, owns its cleanup.
 
-Run Alibaba Cloud OSS compatibility only with an exact dedicated `studio-smoke/...` prefix:
+Run the cloud storage compatibility smoke only with an exact dedicated `studio-smoke/...` prefix and exactly one armed target gate. The shared script `apps/studio-worker/scripts/s3-cloud-smoke.ts` owns a validated provider profile matrix (see `apps/studio-worker/src/smoke/s3-cloud-smoke.ts`):
+
+| Target | Gate env | Path-style | SSE allowed | Owner check |
+| --- | --- | --- | --- | --- |
+| Alibaba Cloud OSS | `STUDIO_ALIYUN_OSS_SMOKE=true` | required true | `AES256` / `aws:kms` | optional |
+| Tencent COS | `STUDIO_TENCENT_COS_SMOKE=true` | either | `none` (SSE-COS is operator-verified per bucket) | forbidden |
+| Cloudflare R2 | `STUDIO_CLOUDFLARE_R2_SMOKE=true` | required false (virtual-host only) | `none` (encrypted at rest) | forbidden |
 
 ```bash
+# Alibaba Cloud OSS
 STUDIO_ALIYUN_OSS_SMOKE=true \
 STUDIO_OBJECT_STORE_MODE=s3 \
 STUDIO_OBJECT_STORE_PREFIX=studio \
-STUDIO_ALIYUN_OSS_SMOKE_PREFIX=studio/studio-smoke/change-123 \
-STUDIO_ALIYUN_OSS_CLEANUP_CONFIRMATION=EXACT_PREFIX_ONLY \
+STUDIO_S3_SMOKE_PREFIX=studio/studio-smoke/change-123 \
+STUDIO_S3_SMOKE_CLEANUP_CONFIRMATION=EXACT_PREFIX_ONLY \
 STUDIO_S3_FORCE_PATH_STYLE=true \
-pnpm --filter @kortix/studio-worker exec bun scripts/aliyun-oss-smoke.ts
+STUDIO_S3_SSE=AES256 \
+pnpm --filter @kortix/studio-worker exec bun scripts/s3-cloud-smoke.ts
+
+# Tencent COS
+STUDIO_TENCENT_COS_SMOKE=true \
+STUDIO_OBJECT_STORE_MODE=s3 \
+STUDIO_OBJECT_STORE_PREFIX=studio \
+STUDIO_S3_SMOKE_PREFIX=studio/studio-smoke/change-123 \
+STUDIO_S3_SMOKE_CLEANUP_CONFIRMATION=EXACT_PREFIX_ONLY \
+STUDIO_S3_FORCE_PATH_STYLE=true \
+STUDIO_S3_SSE=none \
+pnpm --filter @kortix/studio-worker exec bun scripts/s3-cloud-smoke.ts
+
+# Cloudflare R2
+STUDIO_CLOUDFLARE_R2_SMOKE=true \
+STUDIO_OBJECT_STORE_MODE=s3 \
+STUDIO_OBJECT_STORE_PREFIX=studio \
+STUDIO_S3_SMOKE_PREFIX=studio/studio-smoke/change-123 \
+STUDIO_S3_SMOKE_CLEANUP_CONFIRMATION=EXACT_PREFIX_ONLY \
+STUDIO_S3_FORCE_PATH_STYLE=false \
+STUDIO_S3_SSE=none \
+pnpm --filter @kortix/studio-worker exec bun scripts/s3-cloud-smoke.ts
 ```
 
-The environment must also provide the configured S3 endpoint, bucket, region, credentials, SSE/KMS settings, and optional owner-check capability. The smoke verifies direct and signed transfers, checksum, metadata, HTTPS, the configured path-style behavior, anonymous GET denial, and `HeadObject`-reported SSE/KMS state. It deletes only its exact prefix and confirms the prefix is empty. A failure blocks S3-driver approval for that endpoint; do not weaken conformance or replace it with a mock.
+The environment must also provide the configured S3 endpoint, bucket, region, and credentials, plus `STUDIO_S3_KMS_KEY_ID` for `aws:kms` and the optional owner-check settings on the OSS profile. The smoke verifies direct and signed transfers, checksum, metadata, HTTPS, the configured path-style behavior, anonymous GET denial, and — where the profile allows SSE — `HeadObject`-reported SSE/KMS state. It deletes only its exact prefix and confirms the prefix is empty. A failure blocks S3-driver approval for that endpoint; do not weaken conformance or replace it with a mock.
 
 ## Canary, retention, and rollback
 

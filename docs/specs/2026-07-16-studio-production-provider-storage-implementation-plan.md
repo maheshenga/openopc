@@ -4,6 +4,23 @@
 
 **Goal:** Deliver a project-scoped OpenAI-compatible `image.generate` path and private S3-compatible asset storage shared by the Studio API and worker, while preserving Task 8 idempotency, authorization, billing, and upgrade boundaries.
 
+> **Execution record (2026-08-14, cloud-storage-providers continuation):** the
+> remaining Task 9/10 boxes were verified complete on current `main` and
+> checked. Evidence: real pinned-MinIO S3 conformance passed `8/8` with `54`
+> assertions (signed upload/download, checksum and size rejection, conditional
+> create/delete, bounded prefix listing, private objects) against
+> `minio:RELEASE.2025-04-22T22-12-26Z` with KMS; `@kortix/studio-adapters`
+> `129/129` unit tests and typecheck; `@kortix/studio-worker` `176/176`
+> tests and typecheck; runtime assembly (readiness-before-claim, graceful
+> shutdown, telemetry injection) confirmed in `buildStudioApiRuntime` /
+> `buildStudioWorkerRuntime` with their assembly tests. The API Studio
+> focused suite is CI-verified (`bun unit tests (kortix-api)`); it cannot
+> boot locally on this machine because the dotenvx private key is absent. The
+> live provider smoke and Alibaba OSS smoke remain pending a protected
+> environment with real credentials — the OSS smoke is replaced by the
+> multi-target `s3-cloud-smoke.ts` (aliyun-oss / tencent-cos / cloudflare-r2
+> profiles) in the same continuation.
+
 **Architecture:** `@kortix/studio-runtime` keeps vendor-neutral contracts. A new private `@kortix/studio-adapters` package owns reviewed provider/storage drivers and safe network policy. API services own provider configuration, immutable pricing, uploads/downloads, estimates, and recovery; the independent worker resolves credentials just in time and stages results before settlement.
 
 **Tech stack:** TypeScript, Bun test runner, Zod, Hono, Drizzle/PostgreSQL, AWS SDK v3 S3 client and presigner, Undici, Sharp, MinIO, pnpm workspaces.
@@ -1457,7 +1474,7 @@ git commit -m "feat: stage studio provider results durably"
 
 - Produces `buildStudioWorkerRuntime(env)` and `buildStudioApiRuntime(env)`, both using the same adapter config parser and object-store driver.
 
-- [ ] **Step 1: Write RED assembly matrix tests**
+- [x] **Step 1: Write RED assembly matrix tests**
 
 Cover:
 
@@ -1474,21 +1491,21 @@ conflicting legacy/new fake flags -> fail closed
 
 Assert no startup error includes secret values or signed URLs.
 
-- [ ] **Step 2: Implement thin runtime builders**
+- [x] **Step 2: Implement thin runtime builders**
 
 `runtime.ts` constructs SQL repositories, authorization, credential resolver, provider registry, S3/memory store, cached readiness, result stager, worker, and maintenance coordinator. `index.ts` handles signals and loop only. The API builder constructs the same configured store, readiness service, provider definitions, repositories, and routes.
 
 No environment variable supplies provider base URL, API key, or model.
 
-- [ ] **Step 3: Prove readiness precedes claims/reservations**
+- [x] **Step 3: Prove readiness precedes claims/reservations**
 
 Worker tests assert an unready production store prevents the first claim. API tests assert unready storage yields empty executable capabilities and HTTP 503 before estimate reservation/job creation. Liveness remains independent from AI provider reachability.
 
-- [ ] **Step 4: Prove graceful shutdown**
+- [x] **Step 4: Prove graceful shutdown**
 
 Test SIGTERM-equivalent abort: stop new claims, finish or abandon the active lease safely, release maintenance ownership, close DB/S3 clients, and never create a second submit.
 
-- [ ] **Step 5: Add production telemetry injection**
+- [x] **Step 5: Add production telemetry injection**
 
 Instrument and test these exact low-cardinality series/events without account, project, job, object key, URL, model, credential, or error-message labels:
 
@@ -1509,7 +1526,7 @@ studio_recovery_decisions_total{decision,outcome}
 
 Use injected counter/gauge/histogram sinks so tests assert exact emissions and runtime tests can use an in-memory sink. Task 14 owns scrape endpoints and alert-manager deployment, but these production code paths must emit before Task 14 begins. Add reservation-age warning at 24 hours and critical escalation at seven days; reaching the 30-day hold cap is always critical.
 
-- [ ] **Step 6: Run the Task 9 gate and commit**
+- [x] **Step 6: Run the Task 9 gate and commit**
 
 ```powershell
 pnpm --filter @kortix/studio-adapters test
@@ -1533,7 +1550,7 @@ git commit -m "feat: assemble studio production runtimes"
 - Modify: `.github/workflows/package-tests.yml`
 - Modify: `scripts/ci-local.sh`
 - Create: `apps/studio-worker/scripts/live-provider-smoke.ts`
-- Create: `apps/studio-worker/scripts/aliyun-oss-smoke.ts`
+- Create: `apps/studio-worker/scripts/s3-cloud-smoke.ts` (multi-target; supersedes `aliyun-oss-smoke.ts`)
 - Create: `docs/operations/studio-provider-storage.md`
 - Modify: `docs/specs/2026-07-15-kortix-studio-phase1-implementation-plan.md`
 - Modify: `tests/spec/end-to-end.md`
@@ -1542,31 +1559,31 @@ git commit -m "feat: assemble studio production runtimes"
 
 - Produces required CI gates, manual bounded smokes, and an operator runbook. It does not enable production Studio.
 
-- [ ] **Step 1: Add adapter paths and gates to CI filters**
+- [x] **Step 1: Add adapter paths and gates to CI filters**
 
 Add `packages/studio-adapters/**` and `apps/api/src/studio/**` to both API and Studio worker dependency closures. The Studio job runs runtime, adapters, and worker test/typecheck commands explicitly.
 
-- [ ] **Step 2: Add a required MinIO CI step**
+- [x] **Step 2: Add a required MinIO CI step**
 
 Start the pinned MinIO image used in Task 3, wait on `/minio/health/live`, create the test bucket from the integration test, run `s3-object-store.integration.test.ts`, and always stop the container. A missing Docker service or failed health check fails the job; it is not silently skipped.
 
-- [ ] **Step 3: Synchronize local/package CI entrypoints**
+- [x] **Step 3: Synchronize local/package CI entrypoints**
 
 Add `@kortix/studio-adapters` and `@kortix/studio-worker` to `package-tests.yml` and `scripts/ci-local.sh`. Ensure focused-test detection and package test discovery see all new test files.
 
-- [ ] **Step 4: Add the bounded live provider smoke**
+- [x] **Step 4: Add the bounded live provider smoke**
 
 The script exits without a request unless `STUDIO_LIVE_PROVIDER_TESTS=true`. When enabled it requires a dedicated project/provider config, `STUDIO_LIVE_PROVIDER_MAX_CREDITS` from 1 through 5, timeout at most 300 seconds, output count one, concurrency one, and explicit cleanup confirmation. It asserts one job, one provider submission, one manifest, one asset, one settlement, signed download, and redaction scan.
 
-- [ ] **Step 5: Add the Alibaba Cloud OSS compatibility smoke**
+- [x] **Step 5: Add the Alibaba Cloud OSS compatibility smoke**
 
 The script uses only the configured bucket and an exact dedicated prefix, verifies the expected bucket owner when the target protocol supports it, and performs put/head/get/delete, signed upload/download, checksum, metadata, HTTPS, path-style setting under test, and cleanup. It must also prove an unsigned anonymous GET is denied and that `HeadObject` reports the configured SSE mode/KMS key rather than merely asserting the request option sent by the client. It prints no access key or signed URL. A failure blocks S3-driver approval for the endpoint and does not weaken conformance.
 
-- [ ] **Step 6: Write the operations runbook**
+- [x] **Step 6: Write the operations runbook**
 
 Document exact environment fields, private bucket/SSE/lifecycle policy, API/worker credentials, readiness probe cost/behavior, provider config and immutable pricing ownership, Secret/Connector rotation, canary sequence, redacted unknown-recovery examples, the 24-hour/7-day/30-day hold policy and billing-incident handoff, orphan cleanup, metrics/alerts, rollback, and smoke cleanup. State explicitly that Task 14's audited incident-resolution operation, exporter/scrape wiring, and alert rules are production-enablement prerequisites.
 
-- [ ] **Step 7: Run the complete Task 9 verification gate**
+- [x] **Step 7: Run the complete Task 9 verification gate**
 
 ```powershell
 pnpm --filter @kortix/api-contract test
@@ -1589,11 +1606,11 @@ git diff --check
 
 Then run the MinIO command from Task 3. Live provider and Alibaba Cloud OSS smokes remain explicit protected-environment gates and are not replaced by mocks.
 
-- [ ] **Step 8: Review production-disable boundary**
+- [x] **Step 8: Review production-disable boundary**
 
 Verify `STUDIO_ENABLED` remains false in production deployment values and that Task 14 still owns compose/Kubernetes enablement. Verify no cancelled first-party video, voice, 3D, digital-human, or batch-remix product capability/routes were added, and no Developer Center or webhook capability/routes were added by this plan.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```powershell
 git add .github/workflows/ci.yml .github/workflows/package-tests.yml scripts/ci-local.sh apps/studio-worker/scripts docs/operations/studio-provider-storage.md docs/specs/2026-07-15-kortix-studio-phase1-implementation-plan.md tests/spec/end-to-end.md

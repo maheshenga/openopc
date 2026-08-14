@@ -79,7 +79,7 @@ try {
     join(consumerDir, 'smoke.mjs'),
     [
       "import { OPENOPC_SERVICE_NAMES, OpenOpcBrowserModuleBootstrapProtocolError, OpenOpcModuleRequestError, createOpenOpcBrowserCapabilityTokenAdapter, createOpenOpcBrowserModuleClient, createOpenOpcModuleClient } from '@openopc/developer-sdk';",
-      "if (OPENOPC_SERVICE_NAMES.join(',') !== 'ai,payment') throw new Error('contracts missing');",
+      "if (OPENOPC_SERVICE_NAMES.join(',') !== 'ai,payment,data,settings') throw new Error('contracts missing');",
       "if (typeof createOpenOpcBrowserCapabilityTokenAdapter !== 'function') throw new Error('browser adapter missing');",
       "if (typeof createOpenOpcBrowserModuleClient !== 'function') throw new Error('browser module bootstrap missing');",
       "if (new OpenOpcBrowserModuleBootstrapProtocolError('test').name !== 'OpenOpcBrowserModuleBootstrapProtocolError') throw new Error('browser bootstrap error missing');",
@@ -87,6 +87,8 @@ try {
       "const client = createOpenOpcModuleClient({ baseUrl: 'https://platform.example.com', getCapabilityToken: async () => 'v4.public.smoke-token', fetch: async () => new Response('{}') });",
       "if (typeof client.ai.models.list !== 'function') throw new Error('AI facade missing');",
       "if (typeof client.payments.orders.create !== 'function') throw new Error('payment facade missing');",
+      "if (typeof client.data.documents.list !== 'function') throw new Error('data facade missing');",
+      "if (typeof client.settings.read !== 'function') throw new Error('settings facade missing');",
       "console.log('OK: @openopc/developer-sdk imports and constructs from the packed tarball');",
     ].join('\n'),
   );

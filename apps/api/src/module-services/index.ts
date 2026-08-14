@@ -10,8 +10,13 @@ import { createModuleServicesApp } from './app';
 import { createConfiguredModuleServiceCapabilityBroker } from './capability-config';
 import { ModuleServiceConsentManager } from './capability-grants';
 import { createDrizzleModuleServiceCapabilityRepository } from './capability-grants.drizzle';
+import type { ModuleDataRouteDependencies } from './data';
+import { createDrizzleModuleDataStore } from './data.drizzle';
 import { configureModulePaymentOrderService } from './payments';
 import { configureModuleServiceCapabilityBroker } from './service-auth';
+import { requireModuleServiceOperation } from './service-auth';
+import { type ModuleSettingsRouteDependencies, ModuleSettingsService } from './settings';
+import { createDrizzleModuleSettingsRepository } from './settings.drizzle';
 
 export * from './app';
 export * from './capability-config';
@@ -21,6 +26,10 @@ export * from './service-auth';
 export * from './payments';
 export * from './images';
 export * from './images-studio';
+export * from './data';
+export * from './data.drizzle';
+export * from './settings';
+export * from './settings.drizzle';
 
 export const moduleServiceCapabilityRepository = createDrizzleModuleServiceCapabilityRepository(db);
 export const moduleServiceConsentManager = new ModuleServiceConsentManager({
@@ -47,4 +56,28 @@ export const modulePaymentOrderService = new DeveloperModulePaymentOrderService(
 
 configureModulePaymentOrderService(modulePaymentOrderService);
 
-export const moduleServicesApp = createModuleServicesApp();
+export const moduleDataStore = createDrizzleModuleDataStore(db);
+export const moduleDataRouteDependencies: ModuleDataRouteDependencies = {
+  requireCapability: (authorization, operation) =>
+    requireModuleServiceOperation(authorization, { service: 'data', operation }) as never,
+  store: moduleDataStore,
+};
+export const moduleSettingsService = new ModuleSettingsService({
+  repository: createDrizzleModuleSettingsRepository(db),
+});
+export const moduleSettingsRouteDependencies: ModuleSettingsRouteDependencies = {
+  requireCapability: (authorization) =>
+    requireModuleServiceOperation(authorization, {
+      service: 'settings',
+      operation: 'settings.read',
+    }) as never,
+  service: moduleSettingsService,
+};
+
+export const moduleServicesApp = createModuleServicesApp(
+  undefined,
+  undefined,
+  undefined,
+  moduleDataRouteDependencies,
+  moduleSettingsRouteDependencies,
+);

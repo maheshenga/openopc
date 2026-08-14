@@ -99,6 +99,69 @@ describe('module service host bridge', () => {
     expect(source).toBeDefined();
   });
 
+  test('issues narrowly scoped data and settings capabilities', async () => {
+    const calls: ModuleServiceTokenIssueInput[] = [];
+    const responses: unknown[] = [];
+    const source = { postMessage: (payload: unknown) => responses.push(payload) };
+    const bridge = createModuleServiceBridge({
+      moduleOrigin: MODULE_ORIGIN,
+      moduleSource: source,
+      projectId: PROJECT_ID,
+      installationId: INSTALLATION_ID,
+      releaseId: RELEASE_ID,
+      installRevision: 7,
+      declaredServices: {
+        data: ['documents.read', 'documents.write'],
+        settings: ['settings.read'],
+      },
+      resolveCurrentState: async () => ({
+        projectId: PROJECT_ID,
+        installationId: INSTALLATION_ID,
+        releaseId: RELEASE_ID,
+        installRevision: 7,
+      }),
+      issueToken: async (input) => {
+        calls.push(input);
+        return { token: 'v4.public.short-lived', expiresAt: '2026-08-01T00:05:00.000Z' };
+      },
+      now: () => Date.parse('2026-08-01T00:00:00.000Z'),
+    });
+
+    await expect(
+      bridge.handleMessage(
+        request(source, {
+          service: 'data',
+          operation: 'documents.read',
+          requestId: '40000000-0000-4000-8000-000000000010',
+        }),
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      bridge.handleMessage(
+        request(source, {
+          service: 'settings',
+          operation: 'settings.read',
+          requestId: '40000000-0000-4000-8000-000000000011',
+        }),
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      bridge.handleMessage(
+        request(source, {
+          service: 'settings',
+          operation: 'documents.read' as never,
+          requestId: '40000000-0000-4000-8000-000000000012',
+        }),
+      ),
+    ).resolves.toBe(false);
+
+    expect(calls.map(({ service, operation }) => ({ service, operation }))).toEqual([
+      { service: 'data', operation: 'documents.read' },
+      { service: 'settings', operation: 'settings.read' },
+    ]);
+    expect(responses).toHaveLength(2);
+  });
+
   test('binds token issuance to host-owned project, installation, release, and revision state', async () => {
     const { bridge, calls, responses, source } = createHarness();
 

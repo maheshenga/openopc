@@ -17,9 +17,12 @@ export {
   type OpenOpcImagePaginationErrorCode,
   type OpenOpcImageWaitOptions,
   type OpenOpcImageWaitUpdate,
+  type OpenOpcDataClient,
   type OpenOpcModel,
   type OpenOpcPaymentClient,
+  type OpenOpcSettingsClient,
   type OpenOpcModuleClient,
+  type OpenOpcModuleContext,
   type OpenOpcModuleClientOptions,
   type OpenOpcModuleTransportRequest,
   type OpenOpcCapabilityTokenGetter,
@@ -42,13 +45,17 @@ export {
   ModuleServiceErrorResponseSchema,
   MODULE_SERVICE_ERROR_CODES,
   OpenOpcAiServiceOperationSchema,
+  OpenOpcDataServiceOperationSchema,
   OpenOpcPaymentServiceOperationSchema,
   OpenOpcServiceNameSchema,
   OpenOpcServiceOperationSchema,
+  OpenOpcSettingsServiceOperationSchema,
   OPENOPC_AI_SERVICE_OPERATIONS,
+  OPENOPC_DATA_SERVICE_OPERATIONS,
   OPENOPC_PAYMENT_SERVICE_OPERATIONS,
   OPENOPC_SERVICE_NAMES,
   OPENOPC_SERVICE_OPERATIONS,
+  OPENOPC_SETTINGS_SERVICE_OPERATIONS,
 } from './contracts.js';
 
 export type {
@@ -64,9 +71,11 @@ export type {
   ModuleServiceErrorCode,
   ModuleServiceErrorResponse,
   OpenOpcAiServiceOperation,
+  OpenOpcDataServiceOperation,
   OpenOpcPaymentServiceOperation,
   OpenOpcServiceName,
   OpenOpcServiceOperation,
+  OpenOpcSettingsServiceOperation,
 } from './contracts.js';
 
 export {
@@ -193,6 +202,9 @@ export {
   OpenOpcBrowserModuleBootstrapProtocolError,
   createOpenOpcBrowserModuleClient,
 } from './browser-module-bootstrap.js';
+
+export * from './data-contracts.js';
+export * from './settings-contracts.js';
 
 export type {
   OpenOpcBrowserModuleBootstrapRequest,

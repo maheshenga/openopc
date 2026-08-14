@@ -7,6 +7,7 @@ import {
 } from './browser-capability-token.js';
 import {
   type OpenOpcModuleClient,
+  type OpenOpcModuleContext,
   type OpenOpcModuleFetch,
   createOpenOpcModuleClient,
 } from './client.js';
@@ -37,6 +38,7 @@ export interface OpenOpcBrowserModuleBootstrapResponse {
   type: typeof RESPONSE_TYPE;
   requestId: string;
   sdkApiVersion: typeof SDK_API_VERSION;
+  context: OpenOpcModuleContext;
 }
 
 export interface OpenOpcBrowserModuleParentWindow extends OpenOpcBrowserCapabilityTokenHostWindow {
@@ -109,10 +111,27 @@ function isBootstrapResponse(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
-    Object.keys(record).sort().join(',') === 'requestId,sdkApiVersion,type' &&
+    Object.keys(record).sort().join(',') === 'context,requestId,sdkApiVersion,type' &&
     record.type === RESPONSE_TYPE &&
     record.requestId === requestId &&
-    record.sdkApiVersion === SDK_API_VERSION
+    record.sdkApiVersion === SDK_API_VERSION &&
+    isModuleContext(record.context)
+  );
+}
+
+function isModuleContext(value: unknown): value is OpenOpcModuleContext {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).sort().join(',') === 'installRevision,installationId,projectId,releaseId' &&
+    typeof record.projectId === 'string' &&
+    UUID_RE.test(record.projectId) &&
+    typeof record.installationId === 'string' &&
+    UUID_RE.test(record.installationId) &&
+    typeof record.releaseId === 'string' &&
+    UUID_RE.test(record.releaseId) &&
+    Number.isSafeInteger(record.installRevision) &&
+    (record.installRevision as number) > 0
   );
 }
 
@@ -159,7 +178,7 @@ function resolveBrowserWindow(candidate?: OpenOpcBrowserModuleWindow): OpenOpcBr
 function discoverPlatformOrigin(
   browserWindow: OpenOpcBrowserModuleWindow,
   options: OpenOpcBrowserModuleClientOptions,
-): Promise<string> {
+): Promise<{ origin: string; context: OpenOpcModuleContext }> {
   validateOptions(options);
   const requestId = (options.requestId ?? (() => globalThis.crypto.randomUUID()))();
   if (typeof requestId !== 'string' || !UUID_RE.test(requestId)) {
@@ -174,7 +193,7 @@ function discoverPlatformOrigin(
   }
 
   const timeoutMs = options.bootstrapTimeoutMs ?? DEFAULT_BOOTSTRAP_TIMEOUT_MS;
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<{ origin: string; context: OpenOpcModuleContext }>((resolve, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const cleanup = () => {
@@ -185,11 +204,11 @@ function discoverPlatformOrigin(
       browserWindow.removeEventListener('message', onMessage);
       options.signal?.removeEventListener('abort', onAbort);
     };
-    const finishResolve = (origin: string) => {
+    const finishResolve = (origin: string, context: OpenOpcModuleContext) => {
       if (settled) return;
       settled = true;
       cleanup();
-      resolve(origin);
+      resolve({ origin, context });
     };
     const finishReject = (error: Error) => {
       if (settled) return;
@@ -211,7 +230,7 @@ function discoverPlatformOrigin(
         finishProtocolError('OpenOPC browser bootstrap response is invalid');
         return;
       }
-      finishResolve(origin);
+      finishResolve(origin, event.data.context);
     };
 
     browserWindow.addEventListener('message', onMessage);
@@ -238,7 +257,7 @@ export async function createOpenOpcBrowserModuleClient(
 ): Promise<OpenOpcModuleClient> {
   validateOptions(options);
   const browserWindow = resolveBrowserWindow(options.window);
-  const platformOrigin = await discoverPlatformOrigin(browserWindow, options);
+  const { origin: platformOrigin, context } = await discoverPlatformOrigin(browserWindow, options);
   const getCapabilityToken = createOpenOpcBrowserCapabilityTokenAdapter({
     hostOrigin: platformOrigin,
     hostWindow: browserWindow.parent,
@@ -247,6 +266,7 @@ export async function createOpenOpcBrowserModuleClient(
   });
   return createOpenOpcModuleClient({
     baseUrl: platformOrigin,
+    context,
     getCapabilityToken,
     fetch: options.fetch,
     timeoutMs: options.timeoutMs,

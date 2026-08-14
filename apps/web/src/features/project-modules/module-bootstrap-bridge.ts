@@ -13,6 +13,14 @@ export interface ModuleBootstrapResponse {
   type: typeof RESPONSE_TYPE;
   requestId: string;
   sdkApiVersion: typeof SDK_API_VERSION;
+  context: ModuleBootstrapContext;
+}
+
+export interface ModuleBootstrapContext {
+  projectId: string;
+  installationId: string;
+  releaseId: string;
+  installRevision: number;
 }
 
 export interface ModuleBootstrapMessageSource {
@@ -29,6 +37,7 @@ export interface ModuleBootstrapBridgeOptions {
   moduleOrigin: string;
   moduleSource: ModuleBootstrapMessageSource;
   sdkApiVersion: typeof SDK_API_VERSION;
+  context: ModuleBootstrapContext;
 }
 
 export interface ModuleBootstrapBridge {
@@ -65,6 +74,22 @@ function isBootstrapRequest(value: unknown): value is ModuleBootstrapRequest {
   );
 }
 
+function isModuleContext(value: unknown): value is ModuleBootstrapContext {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    Object.keys(record).sort().join(',') === 'installRevision,installationId,projectId,releaseId' &&
+    typeof record.projectId === 'string' &&
+    UUID_RE.test(record.projectId) &&
+    typeof record.installationId === 'string' &&
+    UUID_RE.test(record.installationId) &&
+    typeof record.releaseId === 'string' &&
+    UUID_RE.test(record.releaseId) &&
+    Number.isSafeInteger(record.installRevision) &&
+    (record.installRevision as number) > 0
+  );
+}
+
 export function createModuleBootstrapBridge(
   options: ModuleBootstrapBridgeOptions,
 ): ModuleBootstrapBridge {
@@ -73,7 +98,8 @@ export function createModuleBootstrapBridge(
     !moduleOrigin ||
     !options.moduleSource ||
     typeof options.moduleSource.postMessage !== 'function' ||
-    options.sdkApiVersion !== SDK_API_VERSION
+    options.sdkApiVersion !== SDK_API_VERSION ||
+    !isModuleContext(options.context)
   ) {
     throw new Error('OpenOPC module bootstrap bridge options are invalid');
   }
@@ -92,6 +118,7 @@ export function createModuleBootstrapBridge(
           type: RESPONSE_TYPE,
           requestId: message.data.requestId,
           sdkApiVersion: options.sdkApiVersion,
+          context: options.context,
         },
         moduleOrigin,
       );

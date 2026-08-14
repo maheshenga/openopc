@@ -247,7 +247,8 @@ export function assertDeveloperModuleServiceNetworkPolicy(
   );
   const services = manifest.openopc.services;
   if (
-    (services?.ai || services?.payment) &&
+    services !== undefined &&
+    Object.keys(services).length > 0 &&
     [configuredOrigin(configured.newApiBaseUrl), configuredOrigin(configured.zPayBaseUrl)].some(
       (origin) => origin !== null && network.has(origin),
     )

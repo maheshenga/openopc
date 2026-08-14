@@ -111,7 +111,9 @@ test('binds consents to exact account, project, installation, and release identi
   );
   expect(
     checkSql(projectModuleServiceConsents, 'project_module_service_consents_operations_check'),
-  ).toMatch(/models[.]read[\s\S]*orders[.]create[\s\S]*jsonb_array_length/);
+  ).toMatch(
+    /models[.]read[\s\S]*orders[.]create[\s\S]*documents[.]read[\s\S]*settings[.]read[\s\S]*jsonb_array_length/,
+  );
   expect(
     checkSql(projectModuleServiceConsents, 'project_module_service_consents_revision_check'),
   ).toMatch(/install_revision" > 0/);
@@ -184,7 +186,7 @@ test('keeps module service audit events tenant-scoped, append-only, and cascade-
     indexColumns(moduleServiceAuditEvents, 'idx_module_service_audit_account_project'),
   ).toEqual(['account_id', 'project_id', 'created_at']);
   expect(checkSql(moduleServiceAuditEvents, 'module_service_audit_events_operation_check')).toMatch(
-    /models[.]read[\s\S]*refunds[.]create/,
+    /models[.]read[\s\S]*refunds[.]create[\s\S]*documents[.]read[\s\S]*settings[.]read/,
   );
   expect(foreignKeys(moduleServiceAuditEvents)).toEqual(
     expect.arrayContaining([

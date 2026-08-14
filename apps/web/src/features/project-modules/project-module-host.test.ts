@@ -138,6 +138,12 @@ describe('project module production host bridge', () => {
         type: 'openopc.module.bootstrap.response',
         requestId: BOOTSTRAP_REQUEST_ID,
         sdkApiVersion: 'v1',
+        context: {
+          projectId: PROJECT_ID,
+          installationId: INSTALLATION_ID,
+          releaseId: RELEASE_ID,
+          installRevision: 7,
+        },
       },
     });
 

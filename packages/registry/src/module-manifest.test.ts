@@ -58,10 +58,29 @@ const validV3Module = () => ({
     catalog: { labels: ['h5', 'weather'] },
     services: {
       ai: { operations: ['models.read', 'text.generate', 'text.stream'] },
+      data: { operations: ['documents.list', 'documents.read', 'documents.write'] },
       payment: { operations: ['orders.create', 'orders.read', 'refunds.create'] },
+      settings: { operations: ['settings.read'] },
+    },
+    settings: {
+      fields: [
+        { key: 'canvas.autosave', label: 'Autosave', type: 'boolean', default: true },
+        {
+          key: 'default_image_model',
+          label: 'Default image model',
+          type: 'model-select',
+          options: [{ value: 'platform/default-image', label: 'Platform default image model' }],
+        },
+      ],
     },
   },
 });
+
+function settingsField(module: ReturnType<typeof validV3Module>, index: number) {
+  const field = module.openopc.settings.fields[index];
+  if (!field) throw new Error(`missing settings fixture field ${index}`);
+  return field;
+}
 
 describe('registry module manifest', () => {
   test('accepts v3 services without changing capability ownership and exposes catalog helpers', () => {
@@ -81,12 +100,57 @@ describe('registry module manifest', () => {
       'text.generate',
       'text.stream',
     ]);
+    expect(moduleServiceOperations(typedModule, 'data')).toEqual([
+      'documents.list',
+      'documents.read',
+      'documents.write',
+    ]);
+    expect(moduleServiceOperations(typedModule, 'settings')).toEqual(['settings.read']);
 
     const labels = moduleCatalogLabels(typedModule);
     labels.push('mutated');
     const operations = moduleServiceOperations(typedModule, 'payment');
     expect(Object.isFrozen(operations)).toBe(true);
     expect(operations).toEqual(['orders.create', 'orders.read', 'refunds.create']);
+  });
+
+  test.each([
+    [
+      'secret field type',
+      (module: ReturnType<typeof validV3Module>) => {
+        settingsField(module, 0).type = 'secret';
+      },
+    ],
+    [
+      'credential-like key',
+      (module: ReturnType<typeof validV3Module>) => {
+        settingsField(module, 0).key = 'api_key';
+      },
+    ],
+    [
+      'provider field',
+      (module: ReturnType<typeof validV3Module>) => {
+        Object.assign(settingsField(module, 0), {
+          providerUrl: 'https://provider.example.com',
+        });
+      },
+    ],
+    [
+      'duplicate key',
+      (module: ReturnType<typeof validV3Module>) => {
+        settingsField(module, 1).key = 'canvas.autosave';
+      },
+    ],
+    [
+      'select without options',
+      (module: ReturnType<typeof validV3Module>) => {
+        settingsField(module, 0).type = 'select';
+      },
+    ],
+  ] as const)('rejects v3 settings %s', (_label, mutate) => {
+    const module = validV3Module();
+    mutate(module);
+    expect(validateRegistryModuleManifest(module).valid).toBe(false);
   });
 
   test('returns v2 category and no platform service operations for v2 manifests', () => {

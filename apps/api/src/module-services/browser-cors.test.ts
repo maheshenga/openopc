@@ -24,7 +24,7 @@ function createCorsHarness(includeReleaseInGlobal = false) {
         (includeReleaseInGlobal && origin === RELEASE_ORIGIN)
           ? origin
           : null,
-      allowMethods: ['GET', 'POST', 'OPTIONS'],
+      allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowHeaders: ['Authorization', 'Content-Type'],
       credentials: true,
     }),
@@ -47,7 +47,9 @@ test('allows only a canonical release origin on module-service routes', async ()
   expect(response.status).toBe(204);
   expect(response.headers.get('access-control-allow-origin')).toBe(RELEASE_ORIGIN);
   expect(response.headers.get('access-control-allow-credentials')).toBeNull();
-  expect(response.headers.get('access-control-allow-methods')).toBe('GET, POST, OPTIONS');
+  expect(response.headers.get('access-control-allow-methods')).toBe(
+    'GET, POST, PUT, DELETE, OPTIONS',
+  );
   expect(response.headers.get('access-control-allow-headers')).toBe(
     'Authorization, Content-Type, Idempotency-Key',
   );

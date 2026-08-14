@@ -5,7 +5,15 @@ import type {
   ProjectModuleInstallationEvent,
   ProjectModuleInstallationTransition,
 } from '@kortix/sdk';
-import { ExternalLink, History, PackageOpen, RotateCcw, ShieldCheck, Upload } from 'lucide-react';
+import {
+  ExternalLink,
+  History,
+  PackageOpen,
+  RotateCcw,
+  Settings2,
+  ShieldCheck,
+  Upload,
+} from 'lucide-react';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 
@@ -56,12 +64,18 @@ import { useProjectCan } from '@/lib/use-project-can';
 
 import type {
   ModuleServiceConsent,
+  ModuleSettingsDefinition,
   OpenOpcServiceName,
   OpenOpcServiceOperation,
   PublishedProjectModuleRelease,
 } from './client';
-import { isSandboxedWebModuleManifest, moduleServiceDeclarations } from './client';
+import {
+  isSandboxedWebModuleManifest,
+  moduleServiceDeclarations,
+  moduleSettingsDefinition,
+} from './client';
 import { ModuleServiceConsentDialog } from './module-service-consent-dialog';
+import { ModuleSettingsSheet } from './module-settings-sheet';
 import {
   projectModuleErrorCode,
   useGrantProjectModuleServiceConsent,
@@ -175,6 +189,11 @@ export function ProjectModulesView({
     operations: OpenOpcServiceOperation[];
     consent: ModuleServiceConsent | null;
   } | null>(null);
+  const [settingsTarget, setSettingsTarget] = useState<{
+    installation: ProjectModuleInstallation;
+    title: string;
+    definition: ModuleSettingsDefinition;
+  } | null>(null);
   const [updateSelection, setUpdateSelection] = useState<Record<string, string>>({});
   const [rollbackSelection, setRollbackSelection] = useState<Record<string, string>>({});
 
@@ -186,7 +205,7 @@ export function ProjectModulesView({
 
   if (state === 'loading') {
     return (
-      <main className="mx-auto flex min-h-80 max-w-6xl items-center justify-center gap-2 px-4 py-8 text-sm text-muted-foreground">
+      <main className="text-muted-foreground mx-auto flex min-h-80 max-w-6xl items-center justify-center gap-2 px-4 py-8 text-sm">
         <Loading />
         Loading installed modules...
       </main>
@@ -206,7 +225,7 @@ export function ProjectModulesView({
     <main className="mx-auto w-full max-w-6xl space-y-8 px-4 py-6 md:px-8">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+          <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
             Project runtime
           </p>
           <h1 className="mt-1 text-2xl font-semibold">Installed modules</h1>
@@ -265,6 +284,8 @@ export function ProjectModulesView({
                   (release) => release.release_id === installation.active_release_id,
                 );
                 const services = moduleServiceDeclarations(activeRelease?.manifest);
+                const settingsDefinition = moduleSettingsDefinition(activeRelease?.manifest);
+                const moduleTitle = activeRelease?.item_name ?? installation.module_id;
                 const consents = serviceConsentsByInstallation[installation.installation_id] ?? [];
                 return (
                   <TableRow key={installation.installation_id}>
@@ -288,9 +309,15 @@ export function ProjectModulesView({
                             const serviceKey = `${installation.installation_id}:${service}`;
                             const hasActiveConsent = consent?.revoked_at === null;
                             return (
-                              <div key={service} className="border-l-2 border-border pl-2 text-xs">
+                              <div key={service} className="border-border border-l-2 pl-2 text-xs">
                                 <p className="font-medium">
-                                  {service === 'ai' ? 'AI service' : 'Payment service'}
+                                  {service === 'ai'
+                                    ? 'AI service'
+                                    : service === 'payment'
+                                      ? 'Payment service'
+                                      : service === 'data'
+                                        ? 'Project data'
+                                        : 'Module settings'}
                                 </p>
                                 <p className="text-muted-foreground">{operations.join(', ')}</p>
                                 <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -361,6 +388,24 @@ export function ProjectModulesView({
                               <ExternalLink className="size-3.5 shrink-0" />
                               Open module
                             </Link>
+                          </Button>
+                        ) : null}
+                        {projectId && active && settingsDefinition ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            data-testid="module-settings"
+                            onClick={() =>
+                              setSettingsTarget({
+                                installation,
+                                title: moduleTitle,
+                                definition: settingsDefinition,
+                              })
+                            }
+                          >
+                            <Settings2 />
+                            Module settings
                           </Button>
                         ) : null}
                         <Button
@@ -537,7 +582,7 @@ export function ProjectModulesView({
             {(historyByInstallation[historyInstallationId ?? ''] ?? []).map((event) => (
               <div
                 key={event.installation_event_id}
-                className="border-l-2 border-border pl-3 text-sm"
+                className="border-border border-l-2 pl-3 text-sm"
               >
                 <p className="font-medium">
                   {event.action} / {event.to_release_id}
@@ -578,6 +623,20 @@ export function ProjectModulesView({
               serviceConsentTarget.service,
             );
             setServiceConsentTarget(null);
+          }}
+        />
+      ) : null}
+
+      {settingsTarget && projectId ? (
+        <ModuleSettingsSheet
+          open
+          projectId={projectId}
+          installationId={settingsTarget.installation.installation_id}
+          moduleTitle={settingsTarget.title}
+          definition={settingsTarget.definition}
+          canWrite={canWrite && settingsTarget.installation.status === 'active'}
+          onOpenChange={(open) => {
+            if (!open) setSettingsTarget(null);
           }}
         />
       ) : null}
@@ -666,8 +725,8 @@ export function ProjectModulesPage({ projectId }: { projectId: string }) {
   const [mutationHistoryByInstallation, setMutationHistoryByInstallation] = useState<
     Readonly<Record<string, readonly ProjectModuleInstallationEvent[]>>
   >({});
-  const modules = modulesQuery.data ?? [];
-  const releases = releasesQuery.data ?? [];
+  const modules = useMemo(() => modulesQuery.data ?? [], [modulesQuery.data]);
+  const releases = useMemo(() => releasesQuery.data ?? [], [releasesQuery.data]);
   const historyQueries = useProjectModuleHistories(
     projectId,
     modules,

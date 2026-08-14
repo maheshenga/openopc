@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import * as PlatformContracts from '@kortix/api-contract';
 import {
   CreateDeveloperPaymentOrderInputSchema,
   CreateDeveloperPaymentOrderResultSchema,
@@ -15,6 +16,7 @@ import {
   OpenOpcImageModelSchema as PlatformImageModelSchema,
   OpenOpcModelSchema as PlatformModelSchema,
 } from '@kortix/api-contract';
+import * as InternalContracts from './contracts';
 import {
   ModuleServiceCapabilityRequestSchema as InternalCapabilitySchema,
   ModuleServiceErrorResponseSchema as InternalErrorResponseSchema,
@@ -37,6 +39,7 @@ import {
   openOpcImageEstimateRetryGuidance,
   openOpcModelSupportsImagePurpose,
 } from './contracts';
+import * as PublicSdk from './index';
 import {
   OPENOPC_AI_SERVICE_OPERATIONS as PublicAiOperations,
   OPENOPC_PAYMENT_SERVICE_OPERATIONS as PublicPaymentOperations,
@@ -58,7 +61,7 @@ const ORDER_INPUT = {
 
 describe('OpenOPC public contracts', () => {
   test('exposes the exact service operation vocabulary', () => {
-    expect(OPENOPC_SERVICE_NAMES).toEqual(['ai', 'payment']);
+    expect(OPENOPC_SERVICE_NAMES).toEqual(['ai', 'payment', 'data', 'settings']);
     expect(OPENOPC_AI_SERVICE_OPERATIONS).toEqual([
       'models.read',
       'text.generate',
@@ -70,15 +73,69 @@ describe('OpenOPC public contracts', () => {
       'orders.read',
       'refunds.create',
     ]);
+    expect(InternalContracts.OPENOPC_DATA_SERVICE_OPERATIONS).toEqual([
+      'documents.list',
+      'documents.read',
+      'documents.write',
+      'documents.delete',
+    ]);
+    expect(InternalContracts.OPENOPC_SETTINGS_SERVICE_OPERATIONS).toEqual(['settings.read']);
+    expect(PublicSdk.OPENOPC_DATA_SERVICE_OPERATIONS).toEqual(
+      InternalContracts.OPENOPC_DATA_SERVICE_OPERATIONS,
+    );
+    expect(PublicSdk.OPENOPC_SETTINGS_SERVICE_OPERATIONS).toEqual(
+      InternalContracts.OPENOPC_SETTINGS_SERVICE_OPERATIONS,
+    );
     expect(OPENOPC_SERVICE_OPERATIONS).toEqual([
       ...OPENOPC_AI_SERVICE_OPERATIONS,
       ...OPENOPC_PAYMENT_SERVICE_OPERATIONS,
+      ...InternalContracts.OPENOPC_DATA_SERVICE_OPERATIONS,
+      ...InternalContracts.OPENOPC_SETTINGS_SERVICE_OPERATIONS,
     ]);
     expect(PublicServiceNames).toEqual(OPENOPC_SERVICE_NAMES);
     expect(PublicAiOperations).toEqual(OPENOPC_AI_SERVICE_OPERATIONS);
     expect(PublicPaymentOperations).toEqual(OPENOPC_PAYMENT_SERVICE_OPERATIONS);
     expect(PublicServiceOperations).toEqual(OPENOPC_SERVICE_OPERATIONS);
     expect(OPENOPC_IMAGE_ERROR_CODES).toEqual(PlatformImageErrorCodes);
+  });
+
+  test('publishes platform-compatible module data and settings schemas', () => {
+    const sdk = PublicSdk as unknown as Record<
+      string,
+      { safeParse(value: unknown): { success: boolean } } | undefined
+    >;
+    const platform = PlatformContracts as unknown as Record<
+      string,
+      { safeParse(value: unknown): { success: boolean } } | undefined
+    >;
+    const documentInput = {
+      key: 'canvases/home',
+      expected_revision: null,
+      value: { nodes: [], edges: [] },
+    };
+    const settings = {
+      schema_version: 1,
+      revision: 1,
+      values: { 'canvas.autosave': true },
+      loaded_at: '2026-08-11T08:00:00.000Z',
+    };
+
+    expect(sdk.OpenOpcModuleDocumentWriteInputSchema).toBeDefined();
+    expect(sdk.OpenOpcEffectiveModuleSettingsSchema).toBeDefined();
+    if (
+      !sdk.OpenOpcModuleDocumentWriteInputSchema ||
+      !sdk.OpenOpcEffectiveModuleSettingsSchema ||
+      !platform.OpenOpcModuleDocumentWriteInputSchema ||
+      !platform.OpenOpcEffectiveModuleSettingsSchema
+    ) {
+      return;
+    }
+    expect(sdk.OpenOpcModuleDocumentWriteInputSchema.safeParse(documentInput).success).toBe(
+      platform.OpenOpcModuleDocumentWriteInputSchema.safeParse(documentInput).success,
+    );
+    expect(sdk.OpenOpcEffectiveModuleSettingsSchema.safeParse(settings).success).toBe(
+      platform.OpenOpcEffectiveModuleSettingsSchema.safeParse(settings).success,
+    );
   });
 
   test('keeps payment and capability validation compatible with the platform contract', () => {

@@ -149,7 +149,7 @@ export type RegistryModuleVerificationProfile =
 export type RegistryModuleCapabilityKind = (typeof REGISTRY_MODULE_CAPABILITY_KINDS)[number];
 export type RegistryModuleUiSurfaceKind = (typeof REGISTRY_MODULE_UI_SURFACES)[number];
 
-export type OpenOpcModuleServiceName = 'ai' | 'payment';
+export type OpenOpcModuleServiceName = 'ai' | 'payment' | 'data' | 'settings';
 export type OpenOpcModuleServiceOperation =
   | 'models.read'
   | 'text.generate'
@@ -157,16 +157,53 @@ export type OpenOpcModuleServiceOperation =
   | 'image.generate'
   | 'orders.create'
   | 'orders.read'
-  | 'refunds.create';
+  | 'refunds.create'
+  | 'documents.list'
+  | 'documents.read'
+  | 'documents.write'
+  | 'documents.delete'
+  | 'settings.read';
 
 export interface OpenOpcModuleServiceDeclaration {
   operations: OpenOpcModuleServiceOperation[];
+}
+
+export const REGISTRY_OPENOPC_SETTING_FIELD_TYPES = [
+  'boolean',
+  'number',
+  'select',
+  'model-select',
+  'text',
+  'textarea',
+] as const;
+export type RegistryOpenOpcSettingFieldType = (typeof REGISTRY_OPENOPC_SETTING_FIELD_TYPES)[number];
+
+export interface RegistryOpenOpcSettingOption {
+  value: string;
+  label: string;
+}
+
+export interface RegistryOpenOpcSettingField {
+  key: string;
+  label: string;
+  type: RegistryOpenOpcSettingFieldType;
+  description?: string;
+  default?: string | number | boolean | null;
+  required?: boolean;
+  min?: number;
+  max?: number;
+  options?: RegistryOpenOpcSettingOption[];
+}
+
+export interface RegistryOpenOpcSettingsDeclaration {
+  fields: RegistryOpenOpcSettingField[];
 }
 
 export interface RegistryOpenOpcExtension {
   sdkApiVersion: 'v1';
   catalog?: { labels: string[] };
   services?: Partial<Record<OpenOpcModuleServiceName, OpenOpcModuleServiceDeclaration>>;
+  settings?: RegistryOpenOpcSettingsDeclaration;
 }
 
 export interface RegistryModulePublisher {

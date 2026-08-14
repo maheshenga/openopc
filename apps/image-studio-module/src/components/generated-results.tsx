@@ -44,6 +44,14 @@ export function useGeneratedImageUrls(results: readonly GeneratedImage[]): void 
   );
 }
 
+function isSafeObjectUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'blob:';
+  } catch {
+    return false;
+  }
+}
+
 export function useFilePreview(file: File | null): string | null {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -52,7 +60,7 @@ export function useFilePreview(file: File | null): string | null {
       return undefined;
     }
     const nextUrl = URL.createObjectURL(file);
-    setUrl(nextUrl);
+    setUrl(isSafeObjectUrl(nextUrl) ? nextUrl : null);
     return () => URL.revokeObjectURL(nextUrl);
   }, [file]);
   return url;

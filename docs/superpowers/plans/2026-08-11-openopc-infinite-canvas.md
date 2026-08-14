@@ -23,6 +23,18 @@
 > VERIFICATION.md). DB migration re-stamped to
 > `20260813120000000_openopc_module_data_settings.sql` to avoid the timestamp
 > collision with the keyset-pagination migration merged in #14.
+>
+> **Execution record (2026-08-14, shipped):** merged to `main` as `e111bfbdc6`
+> via PR #15 (CI fully green). The three shared SDK/host files were merged with
+> the #14 hardening behavior as the base (token cache, coalescing, invalidate,
+> structured rate-limit errors preserved; covered by the merged tests), and
+> response-size bounds are now per-service (images/chat 1 MB, module documents
+> 3 MB). The first-party embedded-browser smoke passed in real Chromium 149 on
+> the merged main (bootstrap/token bridge, stream abort, CORS preflight, cookie
+> omission, attacker rejection, CSP). Deploy Dev for the merged main succeeded;
+> the `dev-latest` prerelease tag points at `b4449232c2`. External
+> boundaries unchanged: real PostgreSQL migration application and real
+> provider/worker capability issuance remain recorded in VERIFICATION.md.
 
 ## Global Constraints
 

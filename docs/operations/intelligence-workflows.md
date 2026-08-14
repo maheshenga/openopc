@@ -30,7 +30,7 @@ Run the disposable PostgreSQL concurrency, lease-restart, approval, payload-inde
 RUN_INTEGRATION_TESTS=1 pnpm --filter kortix-api exec bun test src/intelligence/workflows/postgres.integration.test.ts
 ```
 
-The required object-store gate remains the pinned MinIO S3 conformance command in `.github/workflows/ci.yml`. The full package/typecheck gate is recorded in `docs/plans/2026-07-18-intelligence-workflow-evaluation-plan.md` Task 13.
+The required object-store gate is the cloud storage compatibility smoke against the real target endpoint (see `docs/operations/studio-provider-storage.md`); CI no longer provisions a local object store. The full package/typecheck gate is recorded in `docs/plans/2026-07-18-intelligence-workflow-evaluation-plan.md` Task 13.
 
 ## Telemetry
 

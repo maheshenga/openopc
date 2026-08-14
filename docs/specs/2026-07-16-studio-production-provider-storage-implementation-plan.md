@@ -6,20 +6,21 @@
 
 > **Execution record (2026-08-14, cloud-storage-providers continuation):** the
 > remaining Task 9/10 boxes were verified complete on current `main` and
-> checked. Evidence: real pinned-MinIO S3 conformance passed `8/8` with `54`
-> assertions (signed upload/download, checksum and size rejection, conditional
-> create/delete, bounded prefix listing, private objects) against
-> `minio:RELEASE.2025-04-22T22-12-26Z` with KMS; `@kortix/studio-adapters`
-> `129/129` unit tests and typecheck; `@kortix/studio-worker` `176/176`
-> tests and typecheck; runtime assembly (readiness-before-claim, graceful
+> checked. `@kortix/studio-adapters` `129/129` unit tests and typecheck;
+> `@kortix/studio-worker` `190/190` tests and typecheck (including 14
+> smoke-policy tests); runtime assembly (readiness-before-claim, graceful
 > shutdown, telemetry injection) confirmed in `buildStudioApiRuntime` /
 > `buildStudioWorkerRuntime` with their assembly tests. The API Studio
 > focused suite is CI-verified (`bun unit tests (kortix-api)`); it cannot
-> boot locally on this machine because the dotenvx private key is absent. The
-> live provider smoke and Alibaba OSS smoke remain pending a protected
-> environment with real credentials — the OSS smoke is replaced by the
-> multi-target `s3-cloud-smoke.ts` (aliyun-oss / tencent-cos / cloudflare-r2
-> profiles) in the same continuation.
+> boot locally on this machine because the dotenvx private key is absent.
+> Verification direction: the storage gate runs against the real cloud object
+> store (Alibaba OSS first); the MinIO conformance target was removed from CI
+> and local parity, and the endpoint-driven S3 integration suite runs only
+> where a real endpoint is configured. The live provider smoke and the
+> per-cloud smoke runs remain pending a protected environment with real
+> credentials — the OSS smoke is replaced by the multi-target
+> `s3-cloud-smoke.ts` (aliyun-oss / tencent-cos / cloudflare-r2 profiles) in
+> the same continuation.
 
 **Architecture:** `@kortix/studio-runtime` keeps vendor-neutral contracts. A new private `@kortix/studio-adapters` package owns reviewed provider/storage drivers and safe network policy. API services own provider configuration, immutable pricing, uploads/downloads, estimates, and recovery; the independent worker resolves credentials just in time and stages results before settlement.
 

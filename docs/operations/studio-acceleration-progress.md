@@ -749,9 +749,11 @@ On current main (c95508aba4), the remaining Task 9/10 boxes of the
 provider-storage implementation plan were verified and checked, and the cloud
 storage smoke was generalized to a validated three-provider profile matrix.
 
-- Real pinned-MinIO S3 conformance: 8/8 tests, 54 assertions (signed
-  upload/download, checksum and size rejection, conditional create/delete,
-  bounded prefix listing, private objects).
+- Direction: verification runs against the real cloud object store. The
+  required storage gate is the cloud storage compatibility smoke on the target
+  endpoint; CI no longer provisions a local MinIO target, and the
+  endpoint-driven S3 integration suite runs only where an endpoint is
+  configured (including the cloud OSS endpoint itself).
 - studio-adapters: 129 unit tests and typecheck pass; studio-worker: 190 tests
   (including 14 new smoke-policy tests) and typecheck pass.
 - API Studio focused suite remains CI-verified (local boot requires the absent
